@@ -27,6 +27,8 @@
   --ok: #2b8a3e;
   --ok-text: #236b31;
   --ok-soft: #e3f6e8;
+  --origin-claude: #d9480f;
+  --origin-codex: #2b8a3e;
   --on-accent: #ffffff;
   --accent-text: #3b5bdb;
   --on-ok: #000000;
@@ -40,6 +42,7 @@
     --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
     --ok: #8cc391; --ok-soft: #233526;
+    --origin-claude: #f08c4f; --origin-codex: #8cc391;
     --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
   }
 }
@@ -49,6 +52,7 @@
   --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
   --ok: #8cc391; --ok-soft: #233526;
+  --origin-claude: #f08c4f; --origin-codex: #8cc391;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
 }
 * { box-sizing: border-box; }
@@ -251,6 +255,10 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .icon-btn:focus-visible, .link-btn:focus-visible, button.chip:focus-visible, .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .session-group { margin-top: 8px; padding: 8px 0 0 12px; border-left: 2px solid var(--border); }
 .session-group.single { margin-top: 0; padding: 0; border-left: 0; }
+.session-group:not(.single).origin-claude { border-left-color: var(--origin-claude); }
+.session-group:not(.single).origin-codex { border-left-color: var(--origin-codex); }
+.session-group.single.origin-claude .session-context { border-left: 3px solid var(--origin-claude); }
+.session-group.single.origin-codex .session-context { border-left: 3px solid var(--origin-codex); }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
 .session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
 .session-group:not(.single) .session-body { padding-left: 12px; }
@@ -277,7 +285,12 @@ h3.sub .count { font-weight: normal; }
 .badge.new-mark { background: var(--accent); color: var(--on-accent); }
 .news { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 10px 0 4px; font-size: 13px; }
 .news-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent-text); }
-.news ul { margin: 4px 0 0; padding-left: 20px; }
+.news ul { margin: 4px 0 0; padding: 0; list-style: none; }
+.news li { position: relative; margin-left: 10px; padding-left: 10px; }
+.news li.origin-claude::before, .news li.origin-codex::before, .news li.origin-both::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; }
+.news li.origin-claude::before { background: var(--origin-claude); }
+.news li.origin-codex::before { background: var(--origin-codex); }
+.news li.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
 .prod-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text-2); font-size: 11px; white-space: nowrap; }
 .prs-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .pr-repo-title { margin: 0; color: var(--text); font-size: 14px; font-weight: 600; }
@@ -286,6 +299,11 @@ h3.sub .count { font-weight: normal; }
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
+.pr.origin-claude, .pr.origin-codex, .pr.origin-both { position: relative; padding-left: 10px; }
+.pr.origin-claude::before, .pr.origin-codex::before, .pr.origin-both::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.pr.origin-claude::before { background: var(--origin-claude); }
+.pr.origin-codex::before { background: var(--origin-codex); }
+.pr.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
 .pr .xr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 /* 文字は左の列の中で折り返し、操作は右の列に縦に積む。操作の幅で題が潰れないよう、行の中に操作を混ぜない。 */
 .pr-body { display: flex; gap: 12px; align-items: stretch; }
@@ -331,9 +349,15 @@ h3.sub .count { font-weight: normal; }
 .merge-confirm button:focus-visible, .merge-confirm input:focus-visible, .merge-btn:focus-visible, .conflict-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .merge-confirm button:disabled { cursor: wait; opacity: .65; }
 .pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
+.pr.origin-claude, .pr.origin-codex, .pr.origin-both { padding-left: 10px; }
 .merge-error { color: var(--danger); font-size: 12px; }
 .merged-list { margin-top: 6px; color: var(--text-2); font-size: 12px; }
 .merged-list .badge { margin-right: 4px; }
+.merged-list .badge.origin-claude, .merged-list .badge.origin-codex, .merged-list .badge.origin-both { position: relative; padding-left: 10px; }
+.merged-list .badge.origin-claude::before, .merged-list .badge.origin-codex::before, .merged-list .badge.origin-both::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; }
+.merged-list .badge.origin-claude::before { background: var(--origin-claude); }
+.merged-list .badge.origin-codex::before { background: var(--origin-codex); }
+.merged-list .badge.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
 .rounds { display: inline-flex; gap: 4px; }
 .rounds span { width: 22px; height: 6px; border-radius: 3px; background: var(--border); }
 .rounds span.used { background: var(--accent); }
@@ -2186,6 +2210,13 @@ function appendPullRequestConflictControls(actions, text, details, group, pullRe
   }
 }
 
+function providerOrigin(providers) {
+  const values = Array.isArray(providers) ? providers : typeof providers === 'string' ? [providers] : [];
+  const hasClaude = values.includes('claude');
+  const hasCodex = values.includes('codex');
+  return hasClaude && hasCodex ? 'both' : hasClaude ? 'claude' : hasCodex ? 'codex' : '';
+}
+
 function appendPullRequestTree(target, group, pullRequest) {
   const reservation = pullRequest.reservation || null;
   const queued = queuedPullRequestMerge(pullRequest);
@@ -2199,6 +2230,11 @@ function appendPullRequestTree(target, group, pullRequest) {
   const waiting = pullRequest.canMerge ? pullRequestMergeConditionWaits(pullRequest) : [];
   const conditionMet = pullRequest.canMerge === true && waiting.length === 0;
   const item = element('div', `pr ${reservation ? 'reserved' : conditionMet ? 'can-merge' : pullRequest.canMerge ? 'merge-pending' : ''}`.trim());
+  const origin = providerOrigin(pullRequest.providers);
+  if (origin) {
+    item.className = `${item.className} origin-${origin}`;
+    item.dataset.origin = origin;
+  }
   const line = element('div', 'pline');
   if (pullRequest.stackPosition?.total > 1) {
     const position = element('span', 'pos', `${pullRequest.stackPosition.depth}/${pullRequest.stackPosition.total}`);
@@ -2389,7 +2425,9 @@ function appendPullRequestBlock(target, group, withTag = false) {
   }
   if (Array.isArray(group.mergeHistory) && group.mergeHistory.length) {
     appendFoldedPrLine('merged', 'マージ済み (24 時間)', 'マージ済み', group.mergeHistory, (line, record) => {
-      const item = element('span', record.headMismatch === true ? 'badge long warn' : 'badge long mute');
+      const origin = providerOrigin(record.providers);
+      const item = element('span', `${record.headMismatch === true ? 'badge long warn' : 'badge long mute'} ${origin ? `origin-${origin}` : ''}`.trim());
+      if (origin) item.dataset.origin = origin;
       const link = element('a', '', `#${record.number}`);
       link.href = record.url;
       link.target = '_blank';
@@ -2410,7 +2448,9 @@ function appendPullRequestBlock(target, group, withTag = false) {
   const closed = group.merged.filter((pullRequest) => pullRequest.state === 'closed')
     .sort((a, b) => b.number - a.number);
   appendFoldedPrLine('closed', 'クローズ済み', 'クローズ済み', closed, (line, pullRequest) => {
-    const link = element('a', 'badge mute', `#${pullRequest.number}`);
+    const origin = providerOrigin(pullRequest.providers);
+    const link = element('a', `badge mute ${origin ? `origin-${origin}` : ''}`.trim(), `#${pullRequest.number}`);
+    if (origin) link.dataset.origin = origin;
     link.href = pullRequest.url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
@@ -3115,7 +3155,10 @@ function appendUnknownSessionControls(row, session) {
 }
 
 function sessionBlock(product, session, multipleSessions) {
+  const origin = session.provider === 'codex' ? 'codex' : 'claude';
   const block = element(multipleSessions ? 'section' : 'div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
+  block.className = `${block.className} origin-${origin}`;
+  block.dataset.origin = origin;
   if (multipleSessions) {
     const head = element('div', 'session-head');
     head.append(element('h3', '', sessionDisplayName(session)));
@@ -3124,7 +3167,11 @@ function sessionBlock(product, session, multipleSessions) {
   }
 
   const body = element('div', 'session-body');
-  if (!multipleSessions) body.append(element('div', 'session-tag session-context', sessionDisplayName(session)));
+  if (!multipleSessions) {
+    const context = element('div', 'session-tag session-context', sessionDisplayName(session));
+    context.dataset.origin = origin;
+    body.append(context);
+  }
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
   const hasEndedDecisions = !displayPreferences.hideFinished && session.decisions.some(isEndedDecision);
   const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
@@ -3290,7 +3337,12 @@ function sinceSeenBox(product, withProductTag) {
   seen.dataset.seen = product.key;
   header.append(seen);
   const list = element('ul');
-  for (const item of entry.items) list.append(element('li', '', item.text));
+  for (const item of entry.items) {
+    const origin = providerOrigin(item.providers ?? item.provider);
+    const row = element('li', origin ? `origin-${origin}` : '', item.text);
+    if (origin) row.dataset.origin = origin;
+    list.append(row);
+  }
   box.append(header, list);
   return box;
 }

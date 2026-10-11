@@ -228,6 +228,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     MERGED_VISIBLE_COUNT: 5,
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     element: fakeElement,
+    providerOrigin: () => '',
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
     durationAgoLabel: () => '少し前',
     absoluteTimeLabel: () => '10:00',
@@ -269,6 +270,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
   const mockReservationNotices = functionSource(mock, 'reservationNoticeRows');
   assert.ok(mockPr && mockReservationNotices);
   const mockContext = pageContext(mock, {
+    providerOrigin: () => '',
     ui: { dismissedMergeHistory: [], deletedClosedPrs: [], hideFinished: false, merged: { '2': { method: 'squash', at: '10:00', auto: false } }, expandedMerged: [], reservationNotices: {} },
     pullRequestMergeResults: new Map(),
     openPrs: () => [{ number: 1 }],
@@ -587,6 +589,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   assert.ok(webTree && webQueued);
   const webContext = pageContext(web, {
     element: fakeElement,
+    providerOrigin: () => '',
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
     pullRequestMergeKey: () => 'repo#1',
     pullRequestMergeConfirmations: new Map(),
@@ -659,6 +662,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   const mockItem = functionSource(mock, 'prItem');
   assert.ok(mockItem);
   const mockContext = pageContext(mock, {
+    providerOrigin: () => '',
     prKey: () => 'repo#1',
     mergeBlocker: () => 'GitHub のマージキュー',
     mergeOperationBlocker: () => null,
@@ -748,6 +752,7 @@ test('モックの予約チェックは PR 行にあり、確認欄は即時マ�
   const key = 'example/project#42';
   const context = pageContext(mock, {
     pullRequestMergeInFlight: new Set(),
+    providerOrigin: () => '',
     prKey: () => key,
     mergeOperationBlocker: () => null,
     mergeConditionWaits: () => ['CI 実行中'],
@@ -1000,6 +1005,7 @@ test('予約中の PR は状態チェックとマージ操作を出し、マー�
   const mergeKey = 'reservation-key';
   const context = pageContext(web, {
     displayPreferences: { mergeableCondition: 'cross-review' },
+    providerOrigin: () => '',
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     element: fakeElement,
     badge: (text, tone) => fakeElement('span', tone, text),

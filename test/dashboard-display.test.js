@@ -669,7 +669,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
 
   function renderWithOrder(sectionOrder) {
     const element = (tag, className = '', textContent = '') => ({
-      tag, className, textContent, children: [], childNodes: [],
+      tag, className, textContent, children: [], childNodes: [], dataset: {},
       append(...nodes) { this.childNodes.push(...nodes); this.children.push(...nodes); },
       querySelector() { return null; },
     });
