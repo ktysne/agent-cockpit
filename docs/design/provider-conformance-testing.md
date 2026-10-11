@@ -464,3 +464,37 @@ factory ticket接続、factory close順、子の物理停止、provider元作業
 PR #356のsource `f449304`は関連145件と全体2849件が成功し、失敗0、全体はWindows実symlink権限skip2である。
 ticket解放のfalsy例外理由を保ち、先行する失敗理由を後始末の例外で置き換えないことを確認した。
 実Claude/Codex runtimeとfactory ticket接続は未実施である。
+
+## native factoryの起動・観測と終了追跡 (#209)
+
+`ID-F209-L02`は、明示的回収factoryと実owned runner/compositionのfixtureで、native startとcollector処理をfactory寿命へ接続する。
+ClaudeとCodexの通常起動、Codexの観測read、共通のcollector接続と停止を能力条件とする。
+Claudeのreadはunsupportedを期待し、実runtimeの結果とは分けて記録する。
+
+closeは同期に新規ticketを拒否し、全collectorの受付停止後に全nativeの停止を開始する。
+service closeが保留されても停止開始を遅らせず、一件の停止保留や例外で他entryの停止開始を妨げない。
+受付済みstartとcollector処理は結果判定および後始末までticketを保持し、非協調処理が未完了ならcloseも未完了のままとする。
+起動失敗のstop coreはstart自身、collector drain、factory gate drainを待たず、自己待ちを作らない。
+
+start、stop、closeの同期再入は先行Promiseを共用し、二重spawn、二重停止、停止後のrunning復活を許容しない。
+生成済みcollectorとcleanupはcallback前にentryへ登録する。
+collector準備失敗は元の同期throwを保持し、生成済み資源の後始末が終わるまでticketを返さない。
+後始末の失敗は元のthrowを置き換えず、後続closeで確認する。
+control不在やbind拒否ではcollectorを公開せず、ticketがゼロでもdrain成功と扱わない。
+entry登録後のrouter attach失敗とdirect collector作成失敗も後始末の待機対象とする。
+
+初期化失敗でadmission集合を参照でき、composition未生成の空集合へnative停止を呼ばない。
+contextの同期保存禁止とready拒否はticket drainより先に始め、標準modeでは既存停止順と返却条件を維持する。
+物理停止はexit、closeと非activeを独立観測し、wrapper settlementだけで成功へ変換しない。
+保持点はfinallyで明示解放し、callback内で捕捉されるassertを成功の証拠にしない。
+
+外部認証元作業、raw provider I/O、保存ownership解放順、電源断耐久性、新schema接続は対象外である。
+provider固有RPCと既存error codeの差は許容するが、追加送信、新規受付、authority再発行とcleanup失敗の成功変換は許容しない。
+両providerのfixture結果と実runtimeを別記し、未実行の保持点を成功へ合算しない。
+補強前の関連4ファイル108件と、最初のtest-only監査修正後のlifetime51件が成功した。
+Claude R1後の標準mode例外保持のtest補強を含むlifetime52件はすべて成功した。
+通常起動と非協調startの保留は両provider、観測readと故障注入はCodex fixtureを中心に確認する。
+構築中にcollector返却前のclose再入を起こす試験はprivate injectionであり、通常製品のcallback到達性とは分ける。
+固定head `9379162`の全体テストは2885件成功、失敗0、Windows実symlink権限によるskip2である。
+52件へのtest補強後は全体未再実行で、検証source `d253639`以降に製品sourceの差分はない。
+実Claude/Codex runtimeは未実施である。
