@@ -96,13 +96,31 @@ function hookFileEntries(file, keyPrefix) {
   try { return hookEntries(JSON.parse(text).hooks, keyPrefix); } catch { return hookEntries(null, keyPrefix); }
 }
 
+// manifest は、root の plugin.json に extensions["com.openai"] があればそれを、無ければ .codex-plugin/plugin.json を使う。
+// manifest に hooks があれば既定の hooks/hooks.json は読まれない。
+function selectedManifestHooks(versionDir) {
+  const parse = (file) => {
+    const text = readText(file);
+    if (text === null) return { found: false };
+    try { return { found: true, value: JSON.parse(text) }; } catch { return { found: true, invalid: true }; }
+  };
+  const root = parse(path.join(versionDir, 'plugin.json'));
+  if (root.invalid) return { invalid: true };
+  const extension = root.value?.extensions?.['com.openai'];
+  if (extension !== undefined) {
+    if (!extension || typeof extension !== 'object') return { invalid: true };
+    return { hooks: extension.hooks };
+  }
+  const compat = parse(path.join(versionDir, '.codex-plugin', 'plugin.json'));
+  if (compat.invalid) return { invalid: true };
+  return { hooks: compat.value?.hooks };
+}
+
 // manifest の hooks は、ファイルのパス、インラインの定義、それらの配列のどれか。インラインの鍵は plugin.json#hooks[<番号>]。
-function manifestEntries(versionDir, plugin) {
-  const text = readText(path.join(versionDir, '.codex-plugin', 'plugin.json'));
-  if (text === null) return [];
-  let hooks;
-  try { hooks = JSON.parse(text).hooks; } catch { return hookEntries(null, `${plugin}:plugin.json`); }
-  if (hooks === undefined) return [];
+function pluginVersionEntries(versionDir, plugin) {
+  const { hooks, invalid } = selectedManifestHooks(versionDir);
+  if (invalid) return hookEntries(null, `${plugin}:plugin.json`);
+  if (hooks === undefined) return hookFileEntries(path.join(versionDir, 'hooks', 'hooks.json'), `${plugin}:hooks/hooks.json`);
   return (Array.isArray(hooks) ? hooks : [hooks]).flatMap((spec, index) => {
     if (typeof spec !== 'string') return hookEntries(spec, `${plugin}:plugin.json#hooks[${index}]`);
     const relative = spec.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -160,11 +178,8 @@ function untrustedExistingHooks(codexHome, cwd) {
     const pluginDir = path.join(codexHome, 'plugins', 'cache', marketplace || '', name || '');
     let versions = [];
     try { versions = fs.readdirSync(pluginDir); } catch {}
-    for (const version of versions) {
-      const versionDir = path.join(pluginDir, version);
-      entries.push(...hookFileEntries(path.join(versionDir, 'hooks', 'hooks.json'), `${plugin}:hooks/hooks.json`));
-      entries.push(...manifestEntries(versionDir, plugin));
-    }
+    // 実行時に選ばれる版を確かめる手段が無いので、キャッシュにあるすべての版を検査する。
+    for (const version of versions) entries.push(...pluginVersionEntries(path.join(pluginDir, version), plugin));
   }
   for (const entry of new Map(entries.map((item) => [item.key, item])).values()) {
     const state = states.get(entry.key);
