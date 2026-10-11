@@ -90,7 +90,7 @@ managed collectorはserverの通常起動では作成・接続しない。注入
 - Interrupt で中断したセッションは「中断」と表示し、待機中や終了済みとは区別する。
   ターンの中断だけではセッションの終了を示さないため、「終わったものを隠す」設定の対象にしない。
 - 常駐サーバーは、正規登録されていないClaude互換セッションについて、定期取得したライブセッションファイルの一覧から消えたイベント由来のセッションを、最後に一覧で確認してから 60 秒経過した時点で終了扱いにする。一度も一覧に載らなかったセッションは対象にせず、一覧を読めなかった取得では判定しない。時刻には `syncSessionFiles` の `now` を使う。標準Claude issuerは自身の期間表にある行を保護する。注入registry構成では、確実に終了した登録実行の保護だけを解除し、unknown・混在・照会不明は保護する。条件は[登録実行と不在保護](registration-absence-protection.md)に従い、session fileの消失を期間終了や権限解放の証拠にしない。
-- `POST /api/sessions/<session_id>/estimate` は、現在の一覧に存在する状態不明のセッションだけを推定する。存在しない ID は `404`、状態が不明でなければ `409` を返す。ID は `[A-Za-z0-9_-]` の 1〜100 文字に限る。
+- `POST /api/sessions/<session_id>/estimate` は、実stateに存在する状態不明のセッションだけを推定する。質問・指示だけから合成した行は対象外で、画面にも推定操作を出さない。実stateに存在しない ID は `404`、状態が不明でなければ `409` を返す。ID は `[A-Za-z0-9_-]` の 1〜100 文字に限る。
 - 会話記録の場所は、常駐サーバーが登録済みセッションの `cwd` と ID から `~/.claude/projects/<cwd の英数字以外を '-' に置換した値>/<session_id>.jsonl` として決める。画面からパスは受け取らない。解決したパスは `projects` の直下にある 1 階層のプロジェクトディレクトリ内に限る。
 - 推定ではファイルの末尾 256KB だけを位置指定で読み、途中から読んだ場合は先頭の行を捨てる。assistant と user のうちサイドチェーンでない行を使い、会話本文は返さない。記録を読めない場合や対象行の形式が合わない場合は、推定不可として保存する。user の行の `content` は文字列のこともある。知らない種類の要素は推定に使わずに飛ばす。`isMeta` の user の行(スラッシュコマンドの出力など)は対象にしない。中断の行(`[Request interrupted` で始まる user の行)で終わる場合は `input` とする。長い cwd では Claude Code が記録の置き場の名前を縮めるので、場所が合わずに推定できないことがある。
 - assistant の最後の行が `end_turn` で終わる場合、または `tool_use` を含まず stop reason も `tool_use` でない場合は `input` とする。user の行が最後なら `model`、それ以外の assistant の行なら `tool` とする。最後のツール名は末尾の読取範囲内で最後に現れる `tool_use` から求める。
@@ -145,6 +145,10 @@ PR 登録はグループの起点と、マージ後の base 付け替えと rest
 同期時の一覧に ID が無い状態は、ファイルの読み取り失敗でも起きるため掃除に使わない。
 
 共通質問・指示から合成する検証済み行の表示設定は、`projectionDisplaySettings` として `store.json` に保存する。各要素は `{provider, session_id, hiddenAt}` または `{provider, session_id, deletedAt}` のどちらかで、provider と session ID の組を識別に使う。項目の無い旧形式は空として読む。画面は provider を指定せず、サーバーが有効なsnapshotと登録情報から対象を照合する。
+
+`GET /api/state`が質問・指示だけから新しく合成した行には、公開応答の属性`projectionOnly: true`を付ける。行とこの属性は実stateへ保存しない。
+検証済み登録実行の観測が一致すればstatusは待機中または終了済みとなり、unknownや観測の不一致では不明となる。終了時刻は生成せず、未解決カードを終了statusだけで隠さない。
+集約、実rowへの合流、画面操作の条件は[合成行の状態表示](synthetic-session-status.md)に従う。
 
 合成行の非表示と削除は表示overlayだけを変更し、projection削除から実セッションの終了処理や `answerDelivery` の終了通知を呼ばない。実rowの起源が同providerだけのときは、削除印がある間だけそのrowを `GET /api/state` から隠す。混在・不明の実rowは隠さない。session file と実状態は保持して不在終了の判定を続ける。複数providerのprojection、実rowの複数・不明・異providerの起源が重なる操作は `409`、構成済みのprojection snapshotまたは登録情報を取得できない操作は状態を変更せず `503` を返す。snapshot取得に失敗したときも `GET /api/state` は応答し、取得できた表示を返す。
 
