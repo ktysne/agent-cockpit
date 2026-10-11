@@ -1374,7 +1374,10 @@ function createOwnedNativeRunner(options) {
             finish(resolve, result);
           }
         },
-        () => finish(reject, runnerError('rpc_rejected')),
+        (error) => finish(reject,
+          error instanceof OwnedNativeRunnerError && ['stdin_write_failed', 'operation_stopped'].includes(error.code)
+            ? error
+            : runnerError('rpc_rejected')),
       );
       unsubscribe = readScope.registerCancel(cancel);
       if (settled) { unsubscribe(); return; }
@@ -1454,7 +1457,10 @@ function createOwnedNativeRunner(options) {
       } catch (error) {
         if (pendingReadRpcs.get(id) === pending) retirePendingRead(id, pending, error);
         else retireReadWriteState(writeState);
-        if (writeAttempted && error.code === 'stdin_write_failed') fail('stdin_write_failed');
+        if (writeAttempted && error instanceof OwnedNativeRunnerError &&
+            error.code === 'stdin_write_failed' && isCurrent(expectedGeneration)) {
+          fail('stdin_write_failed');
+        }
         throw error instanceof OwnedNativeRunnerError ? error : runnerError('owned_read_failed');
       } finally {
         unsubscribeRetire();

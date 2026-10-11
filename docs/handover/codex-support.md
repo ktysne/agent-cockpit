@@ -667,6 +667,9 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 
 元PRブランチ作成時点では、表に記載したPRがReadyだった。
 #347〜#349、#351〜#354、#356と#357はReadyとして扱える。
+
+元PRブランチ作成時点では、表に記載したPRがReadyだった。
+#347〜#349、#351〜#354、#356〜#358はReadyとして扱える。
 #348と#349のbaseはfeatureへ統一し、headの内容は変更していない。
 
 | PRとhead | 内容 | 検証とレビュー |
@@ -680,6 +683,7 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 | [#354](https://github.com/ktysne/agent-cockpit/pull/354)、検証source `b70816d` | lease単位のnative read協調取消 | 関連120成功、全体2836成功、失敗0、Windows実symlink権限skip2。修正後関連120成功、source無変更、Claude R2で必須0 |
 | [#356](https://github.com/ktysne/agent-cockpit/pull/356)、検証source `f449304` | collectorの恒久受付停止とprivate drain | 関連145成功、全体2849成功、失敗0、Windows実symlink権限skip2。Claude R2で必須0。#354の後に取り込む |
 | [#357](https://github.com/ktysne/agent-cockpit/pull/357)、検証source `d253639` | native startとcollectorのfactory終了追跡 | `9379162`で全体2885成功、失敗0、Windows実symlink権限skip2。test補強後はlifetime52成功、全体未再実行、製品source無変更。Claude R3で必須0。#356の後に取り込む |
+| [#358](https://github.com/ktysne/agent-cockpit/pull/358)、検証source `bbd9d15` | native readの取消前write故障分類 | 関連123成功、固定head `d12453b`で全体2889成功、失敗0、Windows実symlink権限skip2。Claude R1で必須0。#357の後に取り込む |
 
 #347、#348、#349はこの順でマージする。
 #351はfeatureへマージ済みである。#352、#353、#354はこの順に通常mergeするスタックである。
@@ -720,7 +724,7 @@ loaded-list後のmicrotask取消は次RPC不送信を確認するが、内部con
 ラッパー終了とraw callbackの終了を分け、epochやdetachをI/O終了の証拠にしない。
 次はcollectorのprivate drainとfactory ticketへの接続を進める。
 collector単独の追跡とfactory接続は別PRに分ける。
-取消前のstdin write故障がrunner failureへ進まない既存の挙動は[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)に記録し、今回のread取消とは分けて対応する。
+取消前のstdin write故障分類は[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)に記録し、read取消とは分けてPR #358で対応した。
 協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
 ## native起動取消の段階別検証
 
@@ -884,9 +888,23 @@ R2の検証範囲記載の指摘を反映し、全体検証と補強後の関連
 Claude R3はblockerと要修正が0件で収束した。
 構築中のclose再入による後着collector回収はprivate injectionであり、通常製品のcallback到達性を示さない。
 実runtime、raw I/Oと保存ownership解放順は対象外である。
-次は[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)のread write故障分類を修正し、その後にcontextの二段階終了を設計する。
+read write故障分類はPR #358で修正した。
+次はcontextの二段階終了を設計し実装する。
 contextの保存禁止開始と保存所有権の最終解放を分け、factoryの未終了処理が残る間の所有権保持を検証する。
 process間の協調lockは方式と参加writerの決定後に別PRで扱い、process内の終了順確認を排他保証へ読み替えない。
+
+## native readのwrite故障分類の後続
+
+[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)は、取消前のreadonly RPC write故障が一般のRPC拒否へ変換され、runnerがrunningのままになる不具合を扱う。
+`codex/native-read-write-failure-355-20261011`を最新feature `c731abe`から作成し、PR #357のレビュー済みhead `a69bb80`を通常mergeした。
+開始headは`bc9a331`で、マージ順は#357の後である。
+PR [#358](https://github.com/ktysne/agent-cockpit/pull/358)はReadyで、検証sourceは`bbd9d15`である。
+実装前に[ID-F209-R02](../design/provider-conformance-testing.md)を定義した。
+制御済みのwrite故障と論理取消だけを保持し、provider拒否、timeoutと失効generationの契約を維持する。
+FakeChildと実owned sourceの関連123件は成功し、失敗0件である。
+固定head `d12453b`の全体テストは2889件成功、失敗0、Windows実symlink権限によるskip2である。
+Claude R1はblockerと要修正が0件で収束した。
+実runtimeと実stdio故障は未実施である。
 
 ## 起票していない候補
 

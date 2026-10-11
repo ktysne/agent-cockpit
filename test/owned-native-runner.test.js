@@ -2420,10 +2420,12 @@ test('ID-F209-R01 source invalidation by stop cancels a response-first pending w
   const stop = fixture.runner.stop();
   assert.equal((await pending).status, 'unknown');
   await stop;
+  const stopKillCount = fixture.harness.child.killCalls.length;
   held.completeWrite(new Error('old generation error'));
   await nextImmediate();
   assert.equal(fixture.runner.snapshot().state, 'stopped');
   assert.equal(fixture.runner.snapshot().failureCode, null);
+  assert.equal(fixture.harness.child.killCalls.length, stopKillCount);
 });
 
 test('ID-F209-R01 cancelling one runner read preserves another runner pending read', { timeout: 3000 }, async (t) => {
@@ -2649,6 +2651,44 @@ test('a refused readonly source RPC returns unknown without stopping the native 
     assert.equal(runner.snapshot().state, 'running');
     assert.equal(harness.child.killCalls.length, 0);
     await runner.stop();
+  }
+});
+
+for (const method of ['thread/loaded/list', 'thread/read']) {
+  test(`ID-F209-R02 ${method} write failure before lease cancellation fails the current runner`, { timeout: 3000 }, async (t) => {
+    const fixture = await createReadCancellationFixture(t);
+    const held = holdNextOwnedRead(t, fixture, method);
+    const read = fixture.source.readCurrent(fixture.lease);
+    const readResult = read.then((value) => value, (error) => { throw error; });
+    await held.reached;
+    held.completeWrite(new Error('physical pipe failure'));
+
+    assert.equal((await readResult).status, 'unknown');
+    await nextImmediate();
+    assert.equal(fixture.runner.snapshot().state, 'failed');
+    assert.equal(fixture.runner.snapshot().failureCode, 'stdin_write_failed');
+    assert.equal(fixture.harness.child.killCalls.length, 1);
+  });
+}
+
+test('ID-F209-R02 falsy synchronous stdin write errors fail the current runner as pipe failures', { timeout: 5000 }, async (t) => {
+  for (const thrown of [undefined, null, false, 0, '']) {
+    const fixture = await createReadCancellationFixture(t);
+    const stdin = fixture.harness.child.stdin;
+    const originalWrite = stdin.write.bind(stdin);
+    stdin.write = (line, callback) => {
+      const request = JSON.parse(line.toString());
+      if (request.method === 'thread/loaded/list') throw thrown;
+      return originalWrite(line, callback);
+    };
+    const read = fixture.source.readCurrent(fixture.lease);
+    const readResult = read.then((value) => value, (error) => { throw error; });
+
+    assert.equal((await readResult).status, 'unknown', `throw value: ${String(thrown)}`);
+    await nextImmediate();
+    assert.equal(fixture.runner.snapshot().state, 'failed', `throw value: ${String(thrown)}`);
+    assert.equal(fixture.runner.snapshot().failureCode, 'stdin_write_failed', `throw value: ${String(thrown)}`);
+    assert.equal(fixture.harness.child.killCalls.length, 1, `throw value: ${String(thrown)}`);
   }
 });
 

@@ -498,3 +498,26 @@ Claude R1後の標準mode例外保持のtest補強を含むlifetime52件はす�
 固定head `9379162`の全体テストは2885件成功、失敗0、Windows実symlink権限によるskip2である。
 52件へのtest補強後は全体未再実行で、検証source `d253639`以降に製品sourceの差分はない。
 実Claude/Codex runtimeは未実施である。
+
+## native readのwrite故障分類 (#355)
+
+`ID-F209-R02`はCodexのowned readonly RPCのwrite故障を、provider拒否と論理取消から区別する。
+対象RPCは`thread/loaded/list`と`thread/read`で、Claudeの同等readはunsupportedのままとする。
+
+取消前にwrite callbackがErrorを返す場合、readはunknownとなり、現行runnerは`failed`と`stdin_write_failed`を記録して子の停止を一度だけ開始する。
+writeの同期throwはundefined、null、false、0、空文字を含めて物理write故障に包む。
+callbackのnullまたはundefinedはNode Writableの成功として扱い、同期throwと混同しない。
+providerのJSON-RPC refusalとread timeoutはreadをunknownにするが、物理write故障を伴わなければrunnerをfailedへ変えない。
+
+lease取消後の後着write failureは同じrunner generationが現行の場合に失敗を記録する。
+stopでgenerationが失効した後は、旧callbackがfailureCodeを作ったりchild停止を追加したりしない。
+同じrunnerを再startするAPIは無いため、別runnerを旧generationの後継として検証したとは扱わない。
+read専用処理の分類だけを変更し、instruction ACKとbulk取消の契約を広げない。
+
+FakeChildのwrite保持点と実owned sourceを使うfixtureで確認する。
+実Codex runtime、実stdio故障、外部認証元作業は未実施であり、fixtureの合格へ混ぜない。
+
+runnerとsourceの関連123件は成功し、失敗0件である。
+固定head `d12453b`の全体テストは2889件成功、失敗0、Windows実symlink権限によるskip2である。
+Claude R1はblockerと要修正が0件で収束した。
+実Codex runtimeと実stdio故障は未実施である。
