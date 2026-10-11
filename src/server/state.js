@@ -723,8 +723,10 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
     const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
     if (decisionId !== event.tool_use_id) return [];
     const stored = storedAskDecisions.get(decisionId);
+    // 取り下げ済みの呼び出しの終了が遅れて届いても、保存済みの取り下げを解決へ変えない。
     const keepStored = isFinishedAskDecision(stored) && finishedOutsideEventsIds.has(decisionId) &&
-      !(latestAskFinishAt.get(decisionId) >= Date.parse(stored.resolvedAt || stored.updatedAt));
+      (Boolean(stored.state === 'withdrawn' && stored.finishedByToolUseId) ||
+        !(latestAskFinishAt.get(decisionId) >= Date.parse(stored.resolvedAt || stored.updatedAt)));
     return keepStored ? [] : [decisionId];
   }));
   return {
@@ -1325,7 +1327,7 @@ class DashboardState {
     this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
     this.askDecisionBindings = new Map();
-    // 読み込んだ時点で終わっていたか、イベントから作る前に MCP で終えた離席中の質問の判断事項。終わりのイベントはメモリーに無い。
+    // 保存済み、MCP、後続イベントで終えた質問は、開始と終了のフックだけで再現できないため状態を保つ。
     this.finishedOutsideEventsAskDecisionIds = new Map();
     this.decisionOverrides = new Map();
     this.decisionLifecycles = new Map();
@@ -2342,6 +2344,50 @@ class DashboardState {
     }
   }
 
+  withdrawFinishedDesktopAsks(event) {
+    if (event.agent_id) return false;
+    const isNextTool = event.hook_event_name === 'PreToolUse' && event.tool_use_id;
+    if (!isNextTool && !['UserPromptSubmit', 'Stop'].includes(event.hook_event_name)) return false;
+    const sessionId = event.session_id;
+    const bindings = this.askDecisionBindings.get(sessionId) || new Map();
+    const entries = this.entries.get(sessionId) || [];
+    let changed = false;
+    for (const decision of this.decisionsFor(sessionId)) {
+      if (decision.source !== 'ask' || decision.state !== 'waiting') continue;
+      // フックの回答待ちは再起動で期限を消しても配信を続けるため、記録の存在で保護する。
+      if (this.decisionLifecycles.get(sessionId)?.has(decision.id)) continue;
+      const stored = this.plans.get(sessionId)?.decisions.find((item) => item.id === decision.id);
+      if (!stored) continue;
+      const starts = entries.filter(({ event: start }) => start.hook_event_name === 'PreToolUse' &&
+        start.tool_name === 'AskUserQuestion' && !start.agent_id && bindings.get(start.tool_use_id) === decision.id);
+      starts.sort((left, right) => right.event.hookAt - left.event.hookAt || right.sequence - left.sequence);
+      const start = starts[0]?.event;
+      const storedStartAt = Date.parse(stored.updatedAt);
+      const toolUseId = start && start.hookAt >= storedStartAt
+        ? start.tool_use_id
+        : [...bindings].reverse().find(([, id]) => id === decision.id)?.[0];
+      if (!toolUseId || event.hookAt <= Math.max(start?.hookAt ?? -Infinity, storedStartAt)) continue;
+      if (isNextTool && event.tool_use_id === toolUseId) continue;
+      // 同じ質問の出し直しは既存の判断事項と回答を引き継ぐため、取り下げずに結び付ける。
+      if (isNextTool && event.tool_name === 'AskUserQuestion' && sameQuestionSet(decision.questions, event.questions || [])) continue;
+      Object.assign(stored, {
+        state: 'withdrawn',
+        updatedAt: isoTime(event.hookAt),
+        resolvedAt: isoTime(event.hookAt),
+        resolution: null,
+        finishedByToolUseId: toolUseId,
+      });
+      let finishedIds = this.finishedOutsideEventsAskDecisionIds.get(sessionId);
+      if (!finishedIds) {
+        finishedIds = new Set();
+        this.finishedOutsideEventsAskDecisionIds.set(sessionId, finishedIds);
+      }
+      finishedIds.add(decision.id);
+      changed = true;
+    }
+    return changed;
+  }
+
   addEvent(input, metadata = {}) {
     const event = sanitizeEvent(input, metadata);
     if (!event) return false;
@@ -2369,6 +2415,7 @@ class DashboardState {
       this.sessionFileLastSeenAt.set(event.session_id, event.hookAt);
     }
 
+    const withdrawnAsk = this.withdrawFinishedDesktopAsks(event);
     const entries = this.entries.get(event.session_id) || [];
     const eventSequence = this.sequence++;
     entries.push({ event, sequence: eventSequence });
@@ -2394,7 +2441,7 @@ class DashboardState {
     const clearedClosedAgent = this.reconcileClosedAgents(event.session_id) || reopenedClosedAgent;
     if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden || clearedClosedAgent) this.touch();
     if (wasHidden) this.requestStoreWrite();
-    if (askDecisionStateChanged) this.requestStoreWrite();
+    if (askDecisionStateChanged || withdrawnAsk) this.requestStoreWrite();
     return true;
   }
 
