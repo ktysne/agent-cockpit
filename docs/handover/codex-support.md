@@ -656,6 +656,22 @@ fixtureのpause通知はIPC親の有無に依存し、同process試験のpause�
 closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
 標準runtime、外process排他、OS耐久性は未達として扱う。
 
+## main配布物同期と次の作業
+
+2026-10-11の後続作業では、mainの配布物更新PR #350（`518b946`）を`codex/sync-main-350-20261011`へ通常mergeした。
+featureの`c731abe`とmainのmerge headを祖先として保持し、配布物4ファイルだけを取り込む。
+[PR #352](https://github.com/ktysne/agent-cockpit/pull/352)はfeature向けで、関連2件とCLI定義読み取りの5条件、構文・空白・上流同期checkが成功した。
+指定Claudeレビューは1往復でblocker・要修正なしである。
+アプリsourceは無変更のため全体テストの重複実行は省略し、#351のfeature baseに対する検証証跡を参照する。
+上流配布物の関数冒頭コメントにある一般説明の補足は任意候補であり、このリポジトリで配布物を手編集しない。
+
+当時未マージだったReady PR #347、#348、#349は、この順でfeatureへマージ済みである。
+いずれもbaseはfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)も当時Readyであり、この系列とは独立して取り込まれ、現在のfeatureに修正head `dc4de64`が統合済みである。
+#351のsource `4db527e`は全体2802件成功、失敗0、Windows実symlink権限skip2で、指定Claudeレビューは1往復で必須指摘なしである。
+最終`62e18b2`は結果と確認範囲の文書記録だけである。
+各PRのfixture合格を実runtime適合や新schemaの通常接続とは扱わない。
+同期後の次の作業はnative startの段階別取消検証であり、観測readの取消とdrainは別PRに残す。
 指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
 PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
 
@@ -723,7 +739,7 @@ headの内容は変更していない。
 | 2 | [#348](https://github.com/ktysne/agent-cockpit/pull/348)、`5457dce` | fixture専有の既存更新backend | source `8c335d5`で全体2829成功、失敗0、Windows権限skip3。補強後関連27成功、Claude R3で必須0 |
 | 3 | [#349](https://github.com/ktysne/agent-cockpit/pull/349)、`c05c564` | fixture限定操作とclose/reopen/dispose | `604dddd`で全体2850成功、失敗0、Windows権限skip3。test/helper補強後関連22成功、Claude R2で必須0 |
 
-featureの現在のheadは`aa84489`で、三つのレビュー済みheadとmerge commitを祖先に保持する。
+当時のfeature headは`aa84489`で、三つのレビュー済みheadとmerge commitを祖先に保持していた。現在のfeature head `10eec5c`は、これらとPR #351の修正headを保持する。
 fixtureの合格を通常native factoryへの新schema接続や実runtimeの成功には数えない。
 
 後続の`codex/native-factory-lifetime-gate-feature-209-20261011`は、最新featureの`c731abe`から作成した。
@@ -731,7 +747,7 @@ fixtureの合格を通常native factoryへの新schema接続や実runtimeの成�
 質問と指示の共通queue、回収coreとschedulerで操作の受付と終了を追跡し、closeで新受付を同期的に停止する。
 既存context.closeの開始順を保ち、受理済み処理の取消や失敗も終了として待つ。
 両providerの機能適合シナリオは[ID-F209-L01](../design/provider-conformance-testing.md)に定義した。
-[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)はfeature向けで、現在のfeature `aa84489`を通常mergeして引き継ぎ資料の競合を解消する。両系列の記録を保持し、製品sourceとtestは各系列のレビュー済み内容から変更しない。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)はfeature向けで、当時のfeature `aa84489`を通常mergeして引き継ぎ資料の競合を解消した。最終修正head `dc4de64`は現在のfeature `10eec5c`へ通常merge済みである。両系列の記録を保持し、製品sourceとtestは各系列のレビュー済み内容から変更しない。
 source `4db527e`の関連11ファイル248件と全体`npm test`2802件は成功し、失敗0、全体のWindows実symlink権限skip2である。
 標準挙動の追加subset26件も成功した。
 指定Claudeレビューは1往復でblocker・要修正なしとなり、追跡入口と同期scheduler起動の限定を文書へ補足した。
@@ -739,7 +755,7 @@ source `4db527e`の関連11ファイル248件と全体`npm test`2802件は成功
 Claude live appliedと両providerの実runtimeは未確認であり、skip0を適合済みとは読み替えない。
 feature `aa84489`との統合head 8dc8f4eで、lifetime gateとcapsule両系列の関連5ファイル97件中96件が成功し、失敗0件、Windows実symlink権限によるskip1件だった。
 競合解消で手修正したのはこの引き継ぎ資料だけで、各系列の製品sourceとtestはそれぞれレビュー済みheadから不変である。
-文書競合と現在地の記録だけのため、cross-reviewの軽微例外として追加レビューを省略する。PR #351の既存指定Claudeレビューは収束済みで、#347〜#349のマージ後に取り込める。
+文書競合と現在地の記録だけのため、cross-reviewの軽微例外として追加レビューを省略する。PR #351の既存指定Claudeレビューは収束済みで、#347〜#349とともに現在のfeatureへマージ済みである。
 
 nativeの長時間startと観測readの取消は別段階で確認する。
 epochやdetachによる論理失効を、I/O終了や保存先所有の解放へ読み替えない。
