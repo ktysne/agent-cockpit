@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 const { PassThrough, Writable } = require('node:stream');
 const {
   startMcpServer,
@@ -584,6 +585,154 @@ test('answer-pollは通信失敗時にPOSTを再送せず、同一質問のrespo
   assert.deepEqual(requests[0].body.writer, requests[1].body.writer);
 });
 
+test('MCPの書き込み結果不明は固定案内を返し、同じ要求やrefreshを再送しない', async () => {
+  const unknownMessage = '処理結果を確認できません。同じ書き込みを繰り返す前に、ダッシュボードで反映状態を確認してください。';
+  const calls = [
+    ['cockpit_set_tasks', { tasks: [] }],
+    ['cockpit_add_decision', {
+      title: '確認する', context: '結果が不明な場合', state: 'waiting',
+      options: [{ label: '状態を見る', description: '', recommended: true }],
+    }],
+    ['cockpit_update_decision', { id: 'decision-1', state: 'resolved', chosen: '状態を見る', note: '' }],
+    ['cockpit_add_pr', { url: 'https://github.com/example/project/pull/45' }],
+    ['cockpit_skip_review', {
+      owner: 'example', repo: 'project', number: 45, headRefOid: 'a'.repeat(40), reason: '理由を記録する',
+    }],
+    ['cockpit_register_question', commonQuestionInput()],
+    ['cockpit_question_status', { questionId: 'question-fixture' }],
+    ['cockpit_answer_poll', { questionId: 'question-fixture' }],
+  ];
+  const fakeFailure = Object.freeze(Object.assign(new Error('private URL and payload'), {
+    requestStarted: false,
+    code: 'DEADLINE_TIMEOUT',
+  }));
+  const paths = [];
+  let ensureCalls = 0;
+  let refreshCalls = 0;
+  const responses = await exchange(calls.map(([name, argumentsValue], index) => ({
+    jsonrpc: '2.0', id: index + 1, method: 'tools/call', params: { name, arguments: argumentsValue },
+  })), {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    writer: makeWriter(),
+    refreshWriter: async () => { refreshCalls += 1; },
+    ensureServerRunning: async () => {
+      ensureCalls += 1;
+      return { port: 49124, secret: 'test-secret' };
+    },
+    fetchImpl: async (url) => {
+      paths.push(new URL(url).pathname);
+      throw fakeFailure;
+    },
+  });
+  const byId = new Map(responses.map((response) => [response.id, response]));
+
+  assert.equal(responses.length, calls.length);
+  for (const [index] of calls.entries()) {
+    assert.equal(byId.get(index + 1).result.isError, true);
+    assert.equal(byId.get(index + 1).result.content[0].text, unknownMessage);
+  }
+  assert.equal(paths.length, calls.length + 1);
+  assert.equal(paths.filter((pathname) => pathname.endsWith('/response-lost')).length, 1);
+  assert.equal(ensureCalls, calls.length + 1);
+  assert.equal(refreshCalls, 0);
+  assert.ok(!JSON.stringify(responses).includes('private URL and payload'));
+  assert.ok(!JSON.stringify(responses).includes('test-secret'));
+  assert.ok(!JSON.stringify(responses).includes('registered-writer-token'));
+});
+
+test('MCP stdioは実HTTP切断とmalformed JSON後にClaude/Codex双方で一度だけ送信する', async (t) => {
+  const unknownMessage = '処理結果を確認できません。同じ書き込みを繰り返す前に、ダッシュボードで反映状態を確認してください。';
+  const modes = ['disconnect', 'malformed-json'];
+  const counters = () => Object.fromEntries(modes.map((mode) => [mode, { claude: 0, codex: 0 }]));
+  const posts = [];
+  const postCount = counters();
+  const effectCount = counters();
+  const rawPostCount = Object.fromEntries(modes.map((mode) => [mode, 0]));
+  let activeMode = null;
+  const server = http.createServer((request, response) => {
+    const mode = activeMode;
+    if (request.method === 'POST') rawPostCount[mode] += 1;
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      let body;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch {
+        response.writeHead(400, { connection: 'close' });
+        response.end();
+        return;
+      }
+      const entry = { mode, path: request.url, secret: request.headers['x-cockpit-secret'], body };
+      posts.push(entry);
+      const provider = body.writer?.identity?.provider;
+      if (request.method === 'POST' && ['claude', 'codex'].includes(provider)) postCount[mode][provider] += 1;
+      if (request.method === 'POST' && request.url === '/api/sessions/pending/plan' &&
+          request.headers['x-cockpit-secret'] === 'fixture-secret' && body.kind === 'tasks' &&
+          ['claude', 'codex'].includes(provider)) {
+        effectCount[mode][provider] += 1;
+      }
+      if (mode === 'disconnect') {
+        response.destroy();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json', connection: 'close' });
+      response.end('{');
+    });
+  });
+  await new Promise((resolve, reject) => {
+    const fail = (error) => reject(error);
+    server.once('error', fail);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', fail);
+      resolve();
+    });
+  });
+  t.after(() => new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  }));
+  const { port } = server.address();
+
+  for (const mode of modes) {
+    for (const provider of ['claude', 'codex']) {
+      activeMode = mode;
+      const writer = makeWriter(provider, provider === 'codex' ? 'mcp-thread' : 'mcp-session');
+      const request = {
+        jsonrpc: '2.0', id: `${mode}-${provider}`, method: 'tools/call',
+        params: {
+          name: 'cockpit_set_tasks', arguments: { tasks: [] },
+          ...(provider === 'codex' ? { _meta: { provider: 'codex', threadId: 'mcp-thread' } } : {}),
+        },
+      };
+      let ensureCalls = 0;
+      let refreshCalls = 0;
+      const responses = await exchange([request], {
+        homeDir: 'C:\\temporary-cockpit',
+        environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+        writer,
+        refreshWriter: async () => { refreshCalls += 1; },
+        ensureServerRunning: async () => {
+          ensureCalls += 1;
+          return { port, secret: 'fixture-secret' };
+        },
+      });
+
+      assert.equal(responses[0].result.isError, true, `${mode}/${provider}`);
+      assert.equal(responses[0].result.content[0].text, unknownMessage, `${mode}/${provider}`);
+      assert.ok(!JSON.stringify(responses).includes('fixture-secret'), `${mode}/${provider}`);
+      assert.ok(!JSON.stringify(responses).includes(writer.token), `${mode}/${provider}`);
+      assert.equal(ensureCalls, 1, `${mode}/${provider}`);
+      assert.equal(refreshCalls, 0, `${mode}/${provider}`);
+      assert.equal(postCount[mode][provider], 1, `${mode}/${provider} POST`);
+      assert.equal(effectCount[mode][provider], 1, `${mode}/${provider} effect`);
+    }
+  }
+
+  for (const mode of modes) assert.equal(rawPostCount[mode], 2, mode);
+  assert.equal(posts.length, 4);
+  assert.ok(posts.every((entry) => entry.path === '/api/sessions/pending/plan'));
+});
+
 test('getWriterは各tools/callで一度だけ同期取得し、その呼出しのwriterを固定する', async () => {
   const firstWriter = makeWriter();
   const secondWriter = structuredClone(firstWriter);
@@ -791,4 +940,40 @@ test('writerの明示的な403だけは一度更新してMCP書き込みを再�
   assert.equal(responses[0].result.isError, undefined);
   assert.equal(refreshCalls, 1);
   assert.deepEqual(requests.map((request) => request.contextId), ['context-old', 'context-new']);
+});
+
+test('403後にwriter更新して再送した要求が結果不明なら再更新も再送もしない', async () => {
+  let writer = makeWriter();
+  const refreshedWriter = { ...writer, contextId: 'context-new', executionId: 'execution-new' };
+  const requests = [];
+  let refreshCalls = 0;
+  const unknownMessage = '処理結果を確認できません。同じ書き込みを繰り返す前に、ダッシュボードで反映状態を確認してください。';
+  const responses = await exchange([{
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'cockpit_set_tasks', arguments: { tasks: [] } },
+  }], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    getWriter: () => writer,
+    refreshWriter: async (_deadline, { discard }) => {
+      assert.equal(discard, true);
+      refreshCalls += 1;
+      writer = refreshedWriter;
+    },
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(init.body).writer);
+      if (requests.length === 1) return new Response('{}', { status: 403 });
+      throw Object.freeze(Object.assign(new Error('private response loss'), {
+        requestStarted: false,
+        code: 'DEADLINE_TIMEOUT',
+      }));
+    },
+  });
+
+  assert.equal(responses[0].result.isError, true);
+  assert.equal(responses[0].result.content[0].text, unknownMessage);
+  assert.equal(refreshCalls, 1);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map((request) => request.contextId), ['context-fixture', 'context-new']);
 });
