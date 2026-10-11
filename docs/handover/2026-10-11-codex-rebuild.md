@@ -1,8 +1,9 @@
 # Codex 対応の作り直しの計画(2026-10-11)
 
 agent-cockpit を Codex デスクトップと Codex CLI にも対応させる作業を、main から Claude が作り直す計画である。
-起点は、PR #384 のマージ(00e9114)を含む main の最新で、既存の集約ブランチ `codex/feature-codex-support` は PR #385 のマージ後の head を固定参照として残し、以後は変更しない。
+起点は、PR #384 のマージ(00e9114)を含む main の最新で、既存の集約ブランチ `codex/feature-codex-support` は凍結の印を付ける PR(PR #385 の後に積む)のマージ後の head を固定参照として残し、以後は変更しない。
 PoC の一式と資料は、同じく固定参照 8c701b1 で読む。
+資料ごとの扱いは「資料の扱い」に定める。
 
 対象から外したもの:
 
@@ -122,6 +123,32 @@ main の変更は同期 PR で feature へ取り込む。
 | 既存実装の欠陥 Issue(上の 15 件)の扱い | 要件に当たる部分を要件 Issue に転記して閉じる | 作り直しで実装自体が無くなり、Issue の対象が消えるため |
 | #209 の容量回収を作らないこと | 上限付きの単純な保存にし、上限に達したら受付を止めて画面に出す | 既存の計画は範囲の縮小に開発者の承認を求めている。肥大化は実際に起きてから設計するほうが要件が確かになるため |
 | feature ブランチの名前と既存ブランチの扱い | `claude/feature-codex-support` を作り、`codex/feature-codex-support` はブランチを残して固定参照にする | 既存の AGENTS.md のブランチ運用の節は旧ブランチ名を指しており、順序 1 で書き直す |
+
+## 資料の扱い
+
+Codex 対応に関わる資料は次の表のとおりに扱う。
+資料を増やすときはこの表に足し、旧資料を直したくなったら直さずにこの計画か新しい設計資料に書く。
+
+| 資料 | 場所 | 扱い |
+|---|---|---|
+| この計画 | main の `docs/handover/2026-10-11-codex-rebuild.md` | 正本。進み、順序、判断待ちはここにだけ書き、PR のマージや開発者の決定のたびにその場で更新する |
+| テストの作成方針 | main の [docs/testing.md](../testing.md) | 正本 |
+| cockpit 本体の計画書 | main の [docs/handover/2026-10-02.md](2026-10-02.md) | 本体(main 側)の正本。Codex 対応の進みは書かない。Codex をサブエージェントとして扱う判断(bridge の経路、`--wait` の行の扱い)はこちらにある |
+| テスト整理の計画 | main の [docs/handover/2026-10-11-codex-test-cleanup.md](2026-10-11-codex-test-cleanup.md) | 中止。既存ブランチのテストの現状と原因の記録として残す |
+| 追跡 Issue [#310](https://github.com/ktysne/agent-cockpit/issues/310) | GitHub | 入口。本文の冒頭でこの計画を指す。段階のチェックリストは使わず、「対応順序、ブランチ、PR」の表を正本にする |
+| マイルストーン「Codex対応」 | GitHub | 要件の Issue の分類。既存実装の欠陥 Issue の扱いは「判断待ち」 |
+| 旧集約ブランチの資料一式(`docs/handover/codex-support.md`、`docs/design/` の 42 本、`AGENTS.md` と `CLAUDE.md` のブランチ運用の節) | `codex/feature-codex-support` の凍結 head | 固定参照。読むだけで更新しない。資料の中で「正本」と書かれていても、2026-10-11 以降は正本ではない |
+| PoC の一式(`poc/`、`docs/poc-codex-157.md`〜`164.md`) | コミット 8c701b1 | 固定参照 |
+| 新しい設計資料 | 新 feature の `docs/design/codex-*.md` | 機能ごとに 1 本、着手時に作る。決定と不変条件だけを書く |
+| メモリー(`~/.claude/projects/.../memory/`) | 開発機 | この計画への参照だけを置く。進みは書かない |
+
+## 片付けてよいもの
+
+消す前に、ブランチが feature か main にマージ済みかを `git branch --merged` と `gh pr list --head` で確かめる。
+
+- 旧 feature の作業で残った Claude 側の worktree とブランチ: `claude/207-claude-writer-issuer`(`E:/Temp/claude/impl207`)、`claude/lineage-failure-notice`(`E:/Temp/claude/lineage-ui`)、`claude/mock-221-213-draft`(`E:/Temp/claude/mock221`)、`claude/fix-211-unmatched-resolution`、`claude/codex-support-organization-c6e7ed`。
+- Codex 側の worktree(`~/.codex/worktrees/` 配下)と、ローカルの `codex/*` ブランチ(156 本)。feature にマージ済みのものは消してよい。
+- 既存ブランチの `.cross-review/` 配下の出力。
 
 ## 落とし穴
 
