@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { makeHookEvent } = require('../src/hooks/event');
 const { DashboardState } = require('../src/server/state');
 const { hookHeaders, uiHeaders, jsonBody, request, startTestServer } = require('./support/server');
+const { temporaryDirectory } = require('./support/temp');
 
 const asyncQuestions = [
   { title: '表示の単位は', options: ['thread', 'ターン'] },
@@ -125,4 +126,18 @@ test('HTTP で受けた質問カードは在席中に回答できず、次の入
   await postEvent(event('UserPromptSubmit', {}, 200));
   assert.deepEqual((await snapshot()).sessions[0].decisions[0].resolution,
     { chosen: [], note: '元の画面で回答済み(内容は不明)' });
+});
+
+test('常駐サーバーの再起動の前に出た質問も次の入力で回答内容不明として閉じる', async (t) => {
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-codex-question-').directory;
+  const now = Date.now();
+  const state = await DashboardState.load(homeDir, { now });
+  state.addEvent(event('PreToolUse', {}, now));
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now: now + 10 });
+  restored.addEvent(event('UserPromptSubmit', {}, now + 20));
+  const decision = restored.decisionFor('thread', 'question-1');
+  assert.equal(decision.state, 'resolved');
+  assert.deepEqual(decision.resolution, { chosen: [], note: '元の画面で回答済み(内容は不明)' });
 });

@@ -1196,9 +1196,10 @@ function applySessionLifecycle(session, event) {
   const agentId = event.agent_id || null;
   if (session.provider === 'codex' && eventName === 'UserPromptSubmit' && !agentId) {
     // すぐ戻る質問は次の入力を元の画面での回答とみなす。待つ質問は結果が来ないまま入力が届いたら、Claude の中断と同じく取り下げにする。
+    // ツールの種類は保存しないので、再起動の前の質問はすぐ戻る質問として扱う。
     for (const decision of session.decisions) {
-      const tool = session.codexQuestionTools[decision.id];
-      if (!tool || decision.state !== 'waiting' || event.hookAt <= Date.parse(decision.updatedAt)) continue;
+      if (decision.source !== 'ask' || decision.state !== 'waiting' || event.hookAt <= Date.parse(decision.updatedAt)) continue;
+      const tool = session.codexQuestionTools[decision.id] || 'request_user_input_async';
       const answered = tool === 'request_user_input_async';
       decision.state = answered ? 'resolved' : 'withdrawn';
       decision.updatedAt = isoTime(event.hookAt);
