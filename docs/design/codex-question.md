@@ -67,7 +67,7 @@ Claude の質問には必ず選択肢と推奨があるので、同じ場面が�
 Codex にはセッションを起こす手段が無い。
 ターンの途中なら次の `PostToolUse` の `additionalContext` で、ターンの後なら次の `UserPromptSubmit` の `additionalContext` で届ける(開発者の決定)。
 `Stop` の時点で届けていない回答があれば、その回答を理由にして一度だけ続行(`decision: block`)させる。
-`Stop` で回答を待つことは、順序 5 の通常指示の設計で決める。
+離席中に `Stop` で待って届けることは [codex-instructions.md](codex-instructions.md) にある。
 
 ### フックの上限
 
@@ -89,12 +89,12 @@ Codex のフックの既定の上限は 600 秒で、Claude の待ちの上限(3
 ## 範囲の外
 
 - 実行許可(`PermissionRequest`)には回答しない。許可は元の画面に残す。
-- `Stop` で回答を待つことは順序 5 で決める。
 
 ## 導入
 
 期限の後にダッシュボードで送った判断事項の回答を、次の `PostToolUse` または `UserPromptSubmit` の `additionalContext` で届ける。
-未配信の回答があるときは、`Stop` で回答を理由に 1 回だけ続行させる。
+在席中は、ターンの終わりに未配信の回答があるときだけ続行させる。
+離席中は `Stop` で回答や通知を待って届け、届いた内容を理由に続行させる(詳細は [codex-instructions.md](codex-instructions.md)「ターンの後」)。
 
 Codex の `hooks.json` に、`node "<リポジトリ>/src/hooks/away.js" codex` を同期のフックとして登録する。
 provider は `event.js` と同じく引数で決め、入力の形から推測しない。
@@ -127,7 +127,7 @@ provider は `event.js` と同じく引数で決め、入力の形から推測�
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 10 }]
+        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 3600 }]
       }
     ]
   }

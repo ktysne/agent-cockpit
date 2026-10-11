@@ -9,8 +9,9 @@ const QUESTIONS = [{ title: '保存の形式は', options: ['JSON', 'CSV'] }];
 async function fixture(t, { answerWaitMs = 1000 } = {}) {
   let now = Date.now();
   let fetchCount = 0;
+  let away = true;
   const c = await startTestServer(t, {
-    away: { snapshot: () => ({ enabled: true, since: now }) },
+    away: { snapshot: () => ({ enabled: away, since: away ? now : null }) },
     answerDeliveryOptions: { now: () => now, answerWaitMs },
   });
   c.runtime.state.addEvent({ session_id: 'thread', provider: 'codex', hook_event_name: 'SessionStart', hookAt: now });
@@ -64,6 +65,7 @@ async function fixture(t, { answerWaitMs = 1000 } = {}) {
     now: () => now,
     advance: (milliseconds) => { now += milliseconds; },
     fetchCount: () => fetchCount,
+    returnFromAway: () => { away = false; },
   };
 }
 
@@ -98,9 +100,10 @@ test('期限後の回答は次の UserPromptSubmit の additionalContext に入�
   assert.equal(c.decision().answer.promptDeliveries, 1);
 });
 
-test('未配信の回答がある Stop は一度だけ block する', async (t) => {
+test('在席中、未配信の回答がある Stop は一度だけ block する', async (t) => {
   const c = await fixture(t);
   await createLateAnswer(c);
+  c.returnFromAway();
 
   const first = await c.run({ hook_event_name: 'Stop' });
   const second = await c.run({ hook_event_name: 'Stop' });
@@ -112,8 +115,9 @@ test('未配信の回答がある Stop は一度だけ block する', async (t) 
   assert.equal(second.output, null);
 });
 
-test('未配信の回答がない Stop と PostToolUse は出力しない', async (t) => {
+test('在席中、未配信の回答がない Stop と PostToolUse は出力しない', async (t) => {
   const c = await fixture(t);
+  c.returnFromAway();
 
   for (const hook_event_name of ['Stop', 'PostToolUse']) {
     const result = await c.run({ hook_event_name });

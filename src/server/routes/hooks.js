@@ -90,17 +90,16 @@ function createHookRoutes(ctx) {
     },
     {
       matches: (body) => body.action === 'stop-check' && body.event_name === 'Stop' && body.provider === 'codex',
-      run: (body) => ({
-        hookOutput: answerDelivery.checkStop(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined),
-      }),
+      run: (body) => answerDelivery.checkStop(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined),
     },
     {
       matches: (body) => body.action === 'stop-start' && body.event_name === 'Stop',
       run: (body) => ({ generation: answerDelivery.startStop(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined) }),
     },
     {
-      matches: (body) => body.action === 'stop-poll' && body.event_name === 'Stop' && Number.isInteger(body.generation) && typeof body.parent_alive === 'boolean',
-      run: (body) => answerDelivery.waitForStopAnswer(body.session_id, body.generation, body.parent_alive),
+      matches: (body) => body.action === 'stop-poll' && body.event_name === 'Stop' && Number.isInteger(body.generation) &&
+        typeof body.parent_alive === 'boolean' && (body.provider === undefined || body.provider === 'codex'),
+      run: (body) => answerDelivery.waitForStopAnswer(body.session_id, body.generation, body.parent_alive, body.provider || 'claude'),
     },
   ];
 
