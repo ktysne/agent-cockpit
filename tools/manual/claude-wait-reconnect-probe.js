@@ -341,12 +341,16 @@ async function runOwnedCase({ phase, rootParent, executablePath, oauthToken, pro
             return child;
           },
           onNative(event) {
-            options.onNative(event);
-            if (!observationOpen) return;
+            const nativeResult = options.onNative(event);
+            if (!observationOpen) return nativeResult;
             if (event?.type === 'identity') {
-              Promise.resolve(collector.connect()).then((connection) => {
-                if (connection?.status === 'connected') identityConnected.resolve(true);
-              }, () => {});
+              try {
+                Promise.resolve(collector.connect()).then((connection) => {
+                  identityConnected.resolve(connection?.status === 'connected');
+                }, () => identityConnected.resolve(false));
+              } catch {
+                identityConnected.resolve(false);
+              }
             }
             const contextId = event?.type === 'context' ? event.context?.nativeContextId : null;
             if (waitRecord && typeof contextId === 'string' && contextId !== waitRecord.contextId && !bObserved) {
@@ -365,6 +369,7 @@ async function runOwnedCase({ phase, rootParent, executablePath, oauthToken, pro
                 proofCheckpoint.resolve(true);
               });
             }
+            return nativeResult;
           },
           timeouts: { startupMs: runnerTimeoutMs, rpcMs: runnerTimeoutMs, loginMs: runnerTimeoutMs, stopMs: Math.min(5000, runnerTimeoutMs) },
         });
@@ -384,10 +389,6 @@ async function runOwnedCase({ phase, rootParent, executablePath, oauthToken, pro
       waitRecord = { handle, contextId: typeof metadata?.nativeContextId === 'string' ? metadata.nativeContextId : null };
       verifiedWait.resolve(waitRecord);
     });
-    owner.subscribeVerifiedWait(() => {
-      if (!observationOpen) return;
-      result.verifiedWaitCallbackCount += 1;
-    });
     owner.subscribeWaitInvalidated((handle) => {
       if (!observationOpen) return;
       if (waitRecord?.handle === handle) invalidationNotified = true;
@@ -405,31 +406,38 @@ async function runOwnedCase({ phase, rootParent, executablePath, oauthToken, pro
     const captured = await settleWithin(verifiedWait.promise, timeoutMs);
     if (captured.timedOut || captured.rejected || !captured.value) throw fixedError('probe_wait_unavailable');
     result.waitObserved = true;
-    result.waitCurrentBefore = owner.checkWait(captured.value.handle) === true;
     baselineProof = composition.resolveProof(launchRef);
     if (baselineProof === null || baselineProof === undefined) throw fixedError('probe_wait_unavailable');
     if (typeof driveFixtureAfterWait === 'function') await driveFixtureAfterWait(phase);
+    result.waitCurrentBefore = owner.checkWait(captured.value.handle) === true;
 
     if (phase === 'control') {
       if (!result.waitCurrentBefore) throw fixedError('probe_wait_stale');
       result.settleAttempted = true;
       result.settleAttemptCount = 1;
       result.settleAccepted = owner.settleWait(captured.value.handle, 'released') === true;
-      await settleWithin(proofCheckpoint.promise, timeoutMs);
-      result.status = result.settleAccepted && result.distinctContextObserved &&
-        result.proofCheckpointCompleted && result.freshCurrentProofAtCheckpoint === true ? 'observed' : 'unknown';
+      if (result.settleAccepted) {
+        await settleWithin(proofCheckpoint.promise, timeoutMs);
+        result.status = result.distinctContextObserved && result.proofCheckpointCompleted &&
+          result.freshCurrentProofAtCheckpoint === true ? 'observed' : 'unknown';
+      }
       if (result.status !== 'observed') result.reason = 'probe_wait_unavailable';
     } else {
-      result.collectorDisconnected = (await collector.disconnect()).status === 'disconnected';
+      if (!result.waitCurrentBefore) throw fixedError('probe_wait_stale');
+      result.collectorDisconnected = (await collector.disconnect())?.status === 'disconnected';
+      if (!result.collectorDisconnected) throw fixedError('probe_wait_stale');
       result.collectorReconnectAttempted = true;
-      await collector.connect();
+      const reconnectStatus = await collector.connect();
+      const collectorReconnected = reconnectStatus?.status === 'connected';
+      if (!collectorReconnected) throw fixedError('probe_wait_stale');
       result.invalidationNotificationObserved = invalidationNotified;
       result.waitCurrentAfterReconnect = owner.checkWait(captured.value.handle) === true;
       result.settleAttempted = true;
       result.settleAttemptCount = 1;
       result.settleAccepted = owner.settleWait(captured.value.handle, 'released') === true;
       await settleWithin(proofCheckpoint.promise, timeoutMs);
-      result.status = result.waitCurrentAfterReconnect === false && result.settleAccepted === false ? 'observed' : 'unknown';
+      result.status = result.waitCurrentBefore && result.collectorDisconnected && collectorReconnected &&
+        result.waitCurrentAfterReconnect === false && result.settleAccepted === false ? 'observed' : 'unknown';
       if (result.status !== 'observed') result.reason = 'probe_wait_stale';
     }
   } catch (error) {
@@ -481,7 +489,11 @@ async function runLiveProbe() {
   let parent;
   try { parent = runtimeHomeParent(); }
   catch { return Object.freeze({ schemaVersion: 'claude-wait-reconnect-live-v1', mode: 'live', status: 'unknown', reason: 'probe_setup_failed', version: null, control: null, reconnect: null, responseWriteObserved: null }); }
-  const versionRoot = createOwnedRoot(parent);
+  let versionRoot;
+  try { versionRoot = createOwnedRoot(parent); }
+  catch {
+    return Object.freeze({ schemaVersion: 'claude-wait-reconnect-live-v1', mode: 'live', status: 'unknown', reason: 'probe_setup_failed', version: null, control: null, reconnect: null, responseWriteObserved: null });
+  }
   const version = await runVersionChild({ executablePath, root: versionRoot });
   if (version.rootSafeToDelete) {
     try { removeOwnedRoot(parent, versionRoot); }

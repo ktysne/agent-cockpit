@@ -143,7 +143,7 @@ async function fixtureReady(child) {
 }
 
 function makeSpawnHarness({ runnerTermination = 'both', terminalizeContextB = false, duplicateWaitAfterCapture = false,
-  contextCBeforeCheckpoint = false } = {}) {
+  duplicateWaitOnReconnect = false, contextCBeforeCheckpoint = false } = {}) {
   const versions = [], runners = [], calls = [], drivenStart = [], drivenWait = [];
   function spawnImpl(executablePath, args, options) {
     calls.push({ executablePath, args: [...args], options });
@@ -210,7 +210,7 @@ function makeSpawnHarness({ runnerTermination = 'both', terminalizeContextB = fa
     });
   }
   async function driveAfterWait(phase) {
-    if (!duplicateWaitAfterCapture) return;
+    if (!(duplicateWaitAfterCapture && phase === 'control') && !(duplicateWaitOnReconnect && phase === 'reconnect')) return;
     emitWaitTool(runners[phase === 'control' ? 0 : 1], phase);
   }
   return { spawnImpl, versions, runners, calls, drivenStart, drivenWait, driveStart, driveWait, driveAfterWait };
@@ -403,7 +403,7 @@ test('fake child and real owned wait fixture distinguish control proof from stal
   assert.equal(result.status, 'observed', JSON.stringify({ result, drivenStart: harness.drivenStart, drivenWait: harness.drivenWait, runnerCount: harness.runners.length }));
   assert.equal(result.version, '2.7.4');
   assert.equal(result.control.waitObserved, true);
-  assert.equal(result.control.verifiedWaitCallbackCount, 2);
+  assert.equal(result.control.verifiedWaitCallbackCount, 1);
   assert.equal(result.control.waitCurrentBefore, true);
   assert.equal(result.control.settleAccepted, true);
   assert.equal(result.control.settleAttemptCount, 1);
@@ -415,9 +415,10 @@ test('fake child and real owned wait fixture distinguish control proof from stal
   assert.equal(result.control.rootRemoved, true);
   assert.equal(result.reconnect.collectorDisconnected, true);
   assert.equal(result.reconnect.collectorReconnectAttempted, true);
+  assert.equal(result.reconnect.waitCurrentBefore, true);
   assert.equal(result.reconnect.invalidationNotificationObserved, false);
   assert.equal(result.reconnect.waitCurrentAfterReconnect, false);
-  assert.equal(result.reconnect.verifiedWaitCallbackCount, 2);
+  assert.equal(result.reconnect.verifiedWaitCallbackCount, 1);
   assert.equal(result.reconnect.settleAccepted, false);
   assert.equal(result.reconnect.settleAttemptCount, 1);
   assert.equal(result.reconnect.distinctContextObserved, false);
@@ -496,17 +497,45 @@ test('a repeated native wait message makes the verified handle unusable before i
   });
   assert.equal(result.status, 'unknown');
   assert.equal(result.control.waitObserved, true);
-  assert.equal(result.control.verifiedWaitCallbackCount, 2);
+  assert.equal(result.control.verifiedWaitCallbackCount, 1);
   assert.equal(result.control.invalidationNotificationObserved, false);
-  assert.equal(result.control.waitCurrentBefore, true);
-  assert.equal(result.control.settleAttempted, true);
-  assert.equal(result.control.settleAccepted, false);
-  assert.equal(result.control.settleAttemptCount, 1);
+  assert.equal(result.control.waitCurrentBefore, false);
+  assert.equal(result.control.settleAttempted, false);
+  assert.equal(result.control.settleAccepted, null);
+  assert.equal(result.control.settleAttemptCount, 0);
   assert.equal(result.control.responseWriteObserved, null);
   assert.equal(result.reconnect, null);
   assert.equal(harness.runners.length, 1);
   assert.equal(JSON.stringify(result).includes('fixture-oauth-secret'), false);
   assert.equal(JSON.stringify(result).includes(__testing.waitNonce), false);
+  assert.deepEqual(fs.readdirSync(parent), ['claude.exe']);
+});
+
+test('a wait handle invalidated before reconnect prevents disconnect and settlement', async t => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'wait-reconnect-pre-stale-'));
+  const executable = path.join(parent, 'claude.exe');
+  fs.writeFileSync(executable, 'fixture');
+  const harness = makeSpawnHarness({ duplicateWaitOnReconnect: true });
+  t.after(() => cleanupOwnedParent(parent));
+  const result = await __testing.runFixtureProbe({
+    rootParent: parent, executablePath: executable, oauthToken: 'fixture-oauth-secret',
+    spawnImpl: harness.spawnImpl, driveFixtureStart: harness.driveStart, driveFixtureWait: harness.driveWait,
+    driveFixtureAfterWait: harness.driveAfterWait,
+  });
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.control.status, 'observed');
+  assert.equal(result.reconnect.status, 'unknown');
+  assert.equal(result.reconnect.reason, 'probe_wait_stale');
+  assert.equal(result.reconnect.waitObserved, true);
+  assert.equal(result.reconnect.verifiedWaitCallbackCount, 1);
+  assert.equal(result.reconnect.waitCurrentBefore, false);
+  assert.equal(result.reconnect.collectorDisconnected, false);
+  assert.equal(result.reconnect.collectorReconnectAttempted, false);
+  assert.equal(result.reconnect.settleAttempted, false);
+  assert.equal(result.reconnect.settleAttemptCount, 0);
+  assert.equal(result.reconnect.stopConfirmed, true);
+  assert.equal(result.reconnect.rootRemoved, true);
+  assert.equal(harness.runners.length, 2);
   assert.deepEqual(fs.readdirSync(parent), ['claude.exe']);
 });
 

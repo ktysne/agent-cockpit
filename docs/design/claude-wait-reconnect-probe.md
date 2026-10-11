@@ -10,6 +10,7 @@
 
 実registration、launch、runtime kernel、composition、owned runnerとcollectorを使う。
 wait ownerの通知callbackはhandleをメモリーに保持するだけにし、callback完了後に通常のsettleWaitを一度だけ呼ぶ。
+通知回数は単一listenerへのcallback回数として記録する。
 失効したhandleの拒否も有効な観測結果であり、拒否後にraw HTTP、runner内部操作や別promptで救済しない。
 
 settleの受付、新contextのnative到着、通知後checkpointのcurrent fresh proof、物理停止は独立の観測である。
@@ -34,6 +35,7 @@ controlとreconnectは別processと別専用rootで行う。
 controlはAの有効baseline proofを確認して通常settleし、distinct context Bの到着と通知後checkpointのcurrent fresh proofを観測する。
 controlが成立しなければreconnectを起動せず比較不能とする。
 reconnectはAの保持後にcollectorをdisconnect/connectし、旧handleのcurrent判定と通常settle一回の結果、その後のBを期限付きで観測する。
+再接続前のhandle有効性、disconnectの成立とconnectの成立を確認できない場合はsettleせずunknownにする。
 current判定とinvalidation通知は別に記録し、通知が発火しなくても旧handleの判定とsettleを行う。
 Bなしやunsupportedは未確認として残し、自動再送しない。
 実runtimeが未実行ならfixtureの成功で#314を完了扱いにしない。
@@ -73,7 +75,7 @@ raw frameや秘密を含む値のhashを共有証拠へ残さない。
 
 [provider適合試験](provider-conformance-testing.md)のID-F314-WRP01〜WRP08を実装前に記録する。
 fixtureは観測器の計測と終了条件を確かめ、実CLI能力の証明とは分ける。
-専用fixtureの18件と関連試験277件が成功した。
+初回の専用fixture18件と関連試験277件が成功し、レビュー補強後の専用fixtureは19件で成功した。
 baseline proof欠落の分岐と、観測終了後のcallback guardへ直接到達するfixtureは未確認であり、source監査の結果と区別する。
 停止処理の開始前に観測を閉じ、製品callbackを維持したまま遅延通知による結果の変更を防ぐ。
 既存fakepipeで旧waitの拒否を確認しても、実Claudeがその後に進むという期待を捏造しない。

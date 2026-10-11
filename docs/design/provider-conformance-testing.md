@@ -781,7 +781,7 @@ R03/R04は既存rowへの質問統合の変化を確認し、操作認可の証�
 | ID | 操作 | 期待値 |
 | --- | --- | --- |
 | ID-F314-WRP01 | import、defaultとpreflight | spawn、secret取得、networkと通常HOMEの認証や設定の読書き0 |
-| ID-F314-WRP02 | verified callbackと二重通知 | callbackは同期保存だけ、完了後のsettleは一回 |
+| ID-F314-WRP02 | 単一verified listenerの通知回数と重複native wait frame | callbackは同期保存だけ、完了後のsettleは一回。frame重複と同listenerへの二重callbackを区別 |
 | ID-F314-WRP03 | controlのsettleと次context | 有効baselineを前提に受付、distinct B到着と通知後checkpointのcurrent fresh proofを別々に観測 |
 | ID-F314-WRP04 | reconnect後に旧handleへ通常settle | 既存owner経路の拒否を維持。Bなしを未確認と記録 |
 | ID-F314-WRP05 | B到着後のterminal、BからCへの進行または世代増加だけ | native到着とcheckpointを区別し、current proofのB対応や過去のproof不存在を主張しない。世代だけで成功にしない |
