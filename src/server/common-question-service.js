@@ -1011,6 +1011,7 @@ function createCommonQuestionService(options = {}, lifetimeGate = null) {
       if (existing) {
         assertNotQuarantined(existing);
         if (existing.contentDigest !== digest) throw serviceError('question_conflict');
+        if (existing.cancelledAt !== null) throw serviceError('question_cancelled');
         return { outcome: 'existing', question: await projectRecord(existing) };
       }
       let internalQuestionId = null;

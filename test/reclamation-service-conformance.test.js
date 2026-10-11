@@ -131,6 +131,40 @@ for (const provider of PROVIDERS) {
     assert.equal(saved.deliveryIntent, null);
     assert.equal(harness.persistenceCounts.questions.writes, 2);
     assert.equal((await harness.deliveryStore.snapshot()).deliveries.length, 0);
+
+    const beforeRetry = harness.questionBackend.getSnapshot();
+    const replacementActor = harness.product.openActor(harness.resumed, harness.resumed.child,
+      `replacement-${provider}`, true);
+    const proof = harness.product.reconcile(harness.resumed, { childActor: replacementActor });
+    assert.equal(harness.product.runtimeRegistry.checkCurrentProof(harness.resumed.launchRef, proof.proofHandle).ok, true);
+    const writesBeforeRetry = harness.persistenceCounts.questions.writes;
+    await assert.rejects(registerQuestion(harness, harness.resumed,
+      `question-disconnect-${provider}`), hasCode('question_cancelled'));
+    assert.equal(harness.persistenceCounts.questions.writes, writesBeforeRetry);
+    assert.deepEqual(harness.questionBackend.getSnapshot(), beforeRetry);
+    assert.equal((await harness.deliveryStore.snapshot()).deliveries.length, 0);
+  });
+
+  test(`actual ${provider} normal cancellation keeps its public ID unavailable`, async (t) => {
+    const harness = await createReclamationServiceHarness(provider);
+    t.after(() => harness.close());
+
+    const questionId = `question-public-cancel-${provider}`;
+    const created = await registerQuestion(harness, harness.resumed, questionId);
+    assert.equal((await registerQuestion(harness, harness.resumed, questionId)).outcome, 'existing');
+    const writesBeforeCancel = harness.persistenceCounts.questions.writes;
+    assert.equal((await harness.questionService.cancel(created.question.internalQuestionId)).outcome, 'cancelled');
+    assert.equal(harness.persistenceCounts.questions.writes, writesBeforeCancel + 1);
+
+    const beforeRetry = harness.questionBackend.getSnapshot();
+    const reservation = beforeRetry.reservations.find((item) => item.internalQuestionId === created.question.internalQuestionId);
+    assert.ok(reservation);
+    assert.equal(reservation.questionId, questionId);
+    const writesAfterCancel = harness.persistenceCounts.questions.writes;
+    await assert.rejects(registerQuestion(harness, harness.resumed, questionId), hasCode('question_cancelled'));
+    assert.equal(harness.persistenceCounts.questions.writes, writesAfterCancel);
+    assert.deepEqual(harness.questionBackend.getSnapshot(), beforeRetry);
+    assert.equal((await harness.deliveryStore.snapshot()).deliveries.length, 0);
   });
 
   test(`actual ${provider} composition preserves live periods and retires only the selected question period`, async (t) => {

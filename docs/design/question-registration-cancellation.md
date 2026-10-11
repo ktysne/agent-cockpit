@@ -12,6 +12,9 @@
 cancelledAtを保存し、recordと質問ID予約は保持する。
 同じIDを削除して新規質問として再利用しない。
 取消保存成功後も元の再検証errorを返し、受付成功を報告しない。
+同period・同IDの取消済み質問を同内容で再登録した場合はquestion_cancelledで拒否する。
+通常の取消にも適用し、未取消duplicateのexisting成功と、quarantine・内容不一致の先行判定を維持する。
+取消済みIDの再登録で保存や配送を増やさず、statusとcancelの契約は変更しない。
 
 ## 取消保存を確認できない場合
 

@@ -859,17 +859,18 @@ E01〜E09の関連fixture試験84件と構文確認は成功した。
 
 ## 質問登録の保存後失効 (#210)
 
-以下は実装前に記録した適合の期待値である。
+以下は保存後失効に対する適合の契約と検証範囲である。
 設計は[保存後失効と取消](question-registration-cancellation.md)に置く。
 
 | ID | 操作 | 期待値 |
 | --- | --- | --- |
 | ID-F210-QRF01 | 両providerの正規kernelで初回保存中に接続を切断 | registerは元の再検証codeでreject。record1件は取消済み、selectionとdeliveryIntentはnull |
 | ID-F210-QRF02 | 同period・actorの正規新connectionで復帰しaway期限後tick | 旧未受付質問は取消のまま。回答delivery作成・送信0。旧tokenを偽復活しない |
-| ID-F210-QRF03 | 保存中にactorまたはexecutionを終端化 | 登録失敗を取消保存し、終端を解除しない。正常登録と既存duplicateは不変 |
+| ID-F210-QRF03 | 保存中にactorまたはexecutionを終端化 | 登録失敗を取消保存し、終端を解除しない。actor検証済み、execution単独は未確認。未取消duplicateは不変 |
 | ID-F210-QRF04 | 補償取消保存の副作用前・後に失敗し再起動 | 固定codeとwriter blocked、auto/manual配送0、取消成功を偽装しない。再起動後は旧質問quarantine |
 | ID-F210-QRF05 | 初回保存の副作用前・後に失敗 | 補償取消writeを行わず既存未知保存停止を保持。取消成功では別の正常質問を巻き込まない |
 | ID-F210-QRF06 | reclamation current gateで接続失効、fake gateで保存後失効 | currentなら既存権限で取消保存。閉鎖後は無許可writeなし、固定blocked。fake gateを実kernel競合と混同しない |
+| ID-F210-QRF07 | 補償または通常取消後に同period・同ID・同内容を再登録 | question_cancelledで拒否、HTTP409とMCPisError。IDと予約を保持、追加保存・deliveryなし。未取消duplicateはexisting、内容差は従来question_conflict |
 
 実provider再接続と登録履歴全体の再照合は未確認であり、上記fixtureの成功へ含めない。
 

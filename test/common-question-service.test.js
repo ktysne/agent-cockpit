@@ -270,6 +270,25 @@ test('registration fixes its identity, content, and original deadline without ex
   assert.deepEqual(dashboard.questions[0].selectedOptionIds, []);
 });
 
+test('a cancelled public question ID rejects same-content registration without another journal write', async (t) => {
+  const fixture = await createFixture(t);
+  const created = await register(fixture);
+  assert.equal((await register(fixture)).outcome, 'existing');
+  await assert.rejects(register(fixture, question('question-1', { allowFreeText: true })),
+    errorCode('question_conflict'));
+
+  await fixture.service.cancel(created.question.internalQuestionId);
+  const beforeRetry = JSON.parse(await fs.readFile(fixture.journalPath, 'utf8'));
+  assert.notEqual(beforeRetry.questions[0].cancelledAt, null);
+  await assert.rejects(register(fixture), errorCode('question_cancelled'));
+  await assert.rejects(register(fixture, question('question-1', { allowFreeText: true })),
+    errorCode('question_conflict'));
+  assert.deepEqual(JSON.parse(await fs.readFile(fixture.journalPath, 'utf8')), beforeRetry);
+
+  assert.equal((await register(fixture, question('question-unrelated'))).outcome, 'created');
+  assert.equal((await fixture.delivery.store.snapshot()).deliveries.length, 0);
+});
+
 test('manual selection persists one delivery intent and answer poll exposes it once', async (t) => {
   const fixture = await createFixture(t);
   const created = await register(fixture);
@@ -1058,9 +1077,11 @@ for (const provider of ['claude', 'codex']) {
     const writeEntered = deferred();
     const releaseWrite = deferred();
     let heldInitialWrite = false;
+    let questionWrites = 0;
     let now = 1_000;
     const questionId = `registration-disconnect-${provider}`;
     const atomicWrite = async (filePath, value) => {
+      questionWrites += 1;
       const result = await atomicWriteJson(path.dirname(filePath), path.basename(filePath), value);
       const record = value.questions.find((item) => item.questionId === questionId);
       if (!heldInitialWrite && record?.cancelledAt === null) {
@@ -1103,6 +1124,11 @@ for (const provider of ['claude', 'codex']) {
       assert.equal(harness.runtimeRegistry.checkCurrentProof(harness.primary.launchRef, proof.proofHandle).ok, true);
       now = 400_000;
       assert.deepEqual(await harness.questionService.tick(), []);
+
+      const writesBeforeRetry = questionWrites;
+      await assert.rejects(harness.questionService.register(harness.writer,
+        question(questionId, { recommendation: 'continue' })), errorCode('question_cancelled'));
+      assert.equal(questionWrites, writesBeforeRetry);
 
       journal = JSON.parse(await fs.readFile(harness.journalPath, 'utf8'));
       assert.notEqual(journal.questions[0].cancelledAt, null);

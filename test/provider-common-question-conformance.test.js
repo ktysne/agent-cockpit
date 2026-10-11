@@ -199,6 +199,33 @@ async function answerOverMcp(context, questionId, output = new PassThrough()) {
 }
 
 for (const provider of PROVIDERS) {
+  test(`ID-F210-QRF07: ${provider} は取消済み質問の再登録をHTTPとMCPで失敗として返す`, { timeout: 5000 }, async (t) => {
+    const context = await createProductContext(t, provider);
+    const writer = context.harness.writer;
+    const questionId = `cancelled-register-${provider}`;
+    const body = questionRegistration(writer, questionId);
+    const initial = await postProduct(context, `${QUESTION_ROUTE}/register`, body);
+    assert.equal(initial.status, 200, initial.body);
+    const internalQuestionId = jsonBody(initial).question.internalQuestionId;
+    assert.equal((await context.harness.questionService.cancel(internalQuestionId)).outcome, 'cancelled');
+
+    const httpRetry = await postProduct(context, `${QUESTION_ROUTE}/register`, body);
+    assert.equal(httpRetry.status, 409, httpRetry.body);
+    assert.deepEqual(jsonBody(httpRetry), { error: 'Question request is unavailable' });
+
+    const mcpRetry = await mcpExchange([mcpCall(1, 'cockpit_register_question', {
+      questionId, questions: [question('choice')], timeoutMinutes: 1,
+    }, provider, writer.identity.nativeId)], mcpOptions(context));
+    assert.equal(mcpRetry[0].result.isError, true);
+    assert.equal(mcpRetry[0].result.content[0].text, '質問の内容が変わったため登録できません。');
+    assert.throws(() => JSON.parse(mcpRetry[0].result.content[0].text));
+
+    const record = await getDashboardQuestion(context, questionId);
+    assert.equal(record.internalQuestionId, internalQuestionId);
+    assert.equal(record.cancelled, true);
+    assert.equal((await context.harness.deliveryStore.snapshot()).deliveries.length, 0);
+  });
+
   test(`ID-F07-A01/A02: ${provider} は質問を期間とidentityへ固定し、認証・選択をHTTPで分離する`, { timeout: 5000 }, async (t) => {
     const context = await createProductContext(t, provider);
     const writer = context.harness.writer;
