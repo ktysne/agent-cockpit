@@ -975,3 +975,23 @@ CAファイルへのアクセスがないことと、返ったchildの停止追�
 固定head `639ff5b`の全体試験は3,260件中3,255件成功、失敗0件、Windows実symlink権限によるskip5件だった。
 指定Claude R1の文書対応をR2で確認し、blockerと要修正0件で収束した。R2の提案に従い、導入手順のNO_PROXY文字列を未確認の表記例と明記した。
 最終更新は文書と結果記録だけで、sourceとtestは全体試験headから不変である。
+
+## Owned Codexの認証URL (#215)
+
+期待条件は[認証URLの契約](native-authentication-url.md)に従う。
+ClaudeはOAuth token供給を維持し、このbrowser URL検査の対象ではない。provider間の認証方式の差として許容する。
+
+| ID | 入力 | 期待条件 |
+|---|---|---|
+| ID-F215-AU01 | 二つの許可origin、既定443と大文字host | 正規化originが一致すれば受理。callbackへ元URLとqueryを完全保持して一度渡す |
+| ID-F215-AU02 | 未知host、subdomain、suffix、末尾dot、IPとlocalhost | 固定code、callback0とthread/start0。値とcauseを公開しない |
+| ID-F215-AU03 | 非標準port、userinfo、HTTP、制御文字、長さ超過と前後空白 | 既存の拒否条件と空白拒否を維持し、元URLを診断へ含めない |
+| ID-F215-AU04 | 早着success completionと不正URL | URL検査を先に行い、早着successで拒否を回避しない |
+| ID-F215-AU05 | 停止後の不正URL応答とtrusted callbackの同期throw、非同期reject | 遅延応答は無視。同期throwのstartはauthentication_prompt_failed、非同期rejectのstartはoperation_stopped。両方のsnapshotはauthentication_prompt_failed、thread/start0、URLとcause非公開 |
+| ID-F215-AU06 | compositionの実runner正常系 | 許可originのfixtureで既存起動を維持。fake DI透過はorigin証明に含めない |
+
+実認証、installed provider版、SSOと後続redirectの互換性は未確認として分ける。
+Windowsの関連3ファイルは241件中240件成功、失敗0件、実symlink権限によるskip1件だった。
+固定head `c32fed6`の全体試験再確認は3,265件中3,260件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+同headの先行全体実行ではHTTP target試験がファイル単位で失敗した。単独10件と全体再確認では再現せず、原因は未特定である。
+指定Claude R2はblockerと要修正0件で収束した。最終更新は文書と結果記録のみで、sourceとtestは全体試験headから不変である。

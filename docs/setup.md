@@ -20,6 +20,8 @@ CAの二つの変数には完全な絶対パスを指定します。不正な型
 proxyを設定する場合は、起動元の`NO_PROXY`へloopbackの除外を設定してください。`127.0.0.1,localhost,::1`は例で、IPv6の表記と解釈はproviderごとに未確認です。認証付きのCockpit loopback通信をproxyへ送らないための条件です。値は自動補完しません。実providerでloopbackが直結することを確認してから使用してください。
 変数を渡す検査は、実providerでのproxyやCAを使った通信成功を保証しません。供給元と検証範囲は[通信環境の契約](design/native-transport-environment.md)にあります。
 
+owned Codexのbrowser認証URLは`https://auth.openai.com`と`https://chatgpt.com`のoriginに限定します。未知のoriginや非標準portは、URLを表示せず`authentication_response_invalid`で拒否します。前後空白も受け付けません。対象は初期URLで、後続redirectと実runtimeの互換性は未確認です。[認証URLの契約](design/native-authentication-url.md)に検査条件があります。
+
 ## 進め方の決まり
 
 - `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。

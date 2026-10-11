@@ -296,7 +296,7 @@ function codexResponder(options = {}) {
       child.send(codexResponse(request.id, {
         type: 'chatgpt',
         loginId: options.loginResponseId || LOGIN_ID,
-        authUrl: LOGIN_URL,
+        authUrl: options.authUrl === undefined ? LOGIN_URL : options.authUrl,
       }));
       return;
     }
@@ -474,6 +474,121 @@ test('Codex presents same-process managed login once and waits for its matching 
   assert.equal(runner.snapshot().contextState, 'ended');
   assert.equal(runner.snapshot().terminalContextCount, 1);
   await assert.rejects(runner.start({ inputText: 'a second task' }), (error) => error.code === 'already_started');
+  await runner.stop();
+});
+
+test('Codex accepts only approved authentication URL origins and preserves the original URL', async (t) => {
+  const authenticationUrls = [
+    'https://auth.openai.com/oauth/authorize?code=auth-origin-CREDENTIAL-SENTINEL',
+    'https://chatgpt.com/device?continue=%2Fsettings&code=chatgpt-origin-CREDENTIAL-SENTINEL',
+    'https://AUTH.OPENAI.COM:443/arbitrary/path?opaque=%2f+',
+    'https://chatgpt.com:443/another/path?state=original+value',
+  ];
+
+  for (const authUrl of authenticationUrls) {
+    const workspace = createWorkspace(t);
+    const events = [];
+    const harness = codexResponder({ workspace, authUrl });
+    let displayedUrl = null;
+    let promptCalls = 0;
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onAuthenticationRequired: ({ loginId, authUrl: challengeUrl }) => {
+        promptCalls += 1;
+        displayedUrl = challengeUrl;
+        harness.child.send(codexLoginCompleted(loginId));
+      },
+      spawnImpl: harness.spawnImpl,
+      onNative: (event) => events.push(event),
+    }));
+    t.after(async () => { await runner.stop(); });
+
+    const snapshot = await runner.start({ inputText: 'fixture task' });
+    assert.equal(displayedUrl, authUrl);
+    assert.equal(promptCalls, 1);
+    assert.deepEqual(harness.methods, ['initialize', 'account/login/start', 'thread/start', 'turn/start']);
+    assert.equal(JSON.stringify(snapshot).includes(authUrl), false);
+    assert.equal(JSON.stringify(events).includes(authUrl), false);
+    assert.equal(JSON.stringify(snapshot).includes('CREDENTIAL-SENTINEL'), false);
+    assert.equal(JSON.stringify(events).includes('CREDENTIAL-SENTINEL'), false);
+    await runner.stop();
+  }
+});
+
+test('Codex rejects authentication URLs outside the approved origins without exposing them', async (t) => {
+  const marker = 'private-auth-url-CREDENTIAL-SENTINEL';
+  const invalidUrls = [
+    `https://unknown.invalid/oauth?code=${marker}`,
+    `https://auth.openai.com:444/oauth?code=${marker}`,
+    `https://fixture-user:${marker}@auth.openai.com/oauth`,
+    `https://login.auth.openai.com/oauth?code=${marker}`,
+    `https://auth.openai.com.attacker.invalid/oauth?code=${marker}`,
+    `https://auth.openai.com./oauth?code=${marker}`,
+    `https://127.0.0.1/oauth?code=${marker}`,
+    `https://[::1]/oauth?code=${marker}`,
+    `https://localhost/oauth?code=${marker}`,
+    `http://auth.openai.com/oauth?code=${marker}`,
+    ` https://auth.openai.com/oauth?code=${marker}`,
+    `https://auth.openai.com/oauth?code=${marker} `,
+    `https://auth.openai.com/oauth?code=${marker}${String.fromCharCode(10)}continued`,
+    `https://auth.openai.com/oauth?code=${'x'.repeat(4100)}${marker}`,
+  ];
+
+  for (const authUrl of invalidUrls) {
+    const workspace = createWorkspace(t);
+    const events = [];
+    const harness = codexResponder({ workspace, authUrl });
+    let promptCalls = 0;
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onAuthenticationRequired() { promptCalls += 1; },
+      spawnImpl: harness.spawnImpl,
+      onNative: (event) => events.push(event),
+    }));
+    t.after(async () => { await runner.stop(); });
+
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+      assert.equal(error.code, 'authentication_response_invalid');
+      assert.equal(error.cause, undefined);
+      assert.equal(error.message.includes(authUrl), false);
+      assert.equal(error.stack.includes(authUrl), false);
+      assert.equal(error.message.includes(marker), false);
+      assert.equal(error.stack.includes(marker), false);
+      return true;
+    });
+    assert.equal(promptCalls, 0);
+    assert.deepEqual(harness.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(events, []);
+    assert.equal(runner.snapshot().failureCode, 'authentication_response_invalid');
+    assert.equal(JSON.stringify(runner.snapshot()).includes(authUrl), false);
+    assert.equal(JSON.stringify(runner.snapshot()).includes(marker), false);
+    await runner.stop();
+  }
+});
+
+test('Codex rejects an invalid authentication URL even when login completion arrived first', async (t) => {
+  const workspace = createWorkspace(t);
+  const marker = 'early-private-auth-url-CREDENTIAL-SENTINEL';
+  const authUrl = `https://unknown.invalid/oauth?code=${marker}`;
+  const events = [];
+  const harness = codexResponder({ workspace, authUrl, earlyLoginCompletion: true });
+  let promptCalls = 0;
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    onAuthenticationRequired() { promptCalls += 1; },
+    spawnImpl: harness.spawnImpl,
+    onNative: (event) => events.push(event),
+  }));
+  t.after(async () => { await runner.stop(); });
+
+  await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+    assert.equal(error.code, 'authentication_response_invalid');
+    assert.equal(error.cause, undefined);
+    assert.equal(error.message.includes(marker), false);
+    assert.equal(error.stack.includes(marker), false);
+    return true;
+  });
+  assert.equal(promptCalls, 0);
+  assert.deepEqual(harness.methods, ['initialize', 'account/login/start']);
+  assert.deepEqual(events, []);
+  assert.equal(JSON.stringify(runner.snapshot()).includes(marker), false);
   await runner.stop();
 });
 
@@ -3074,9 +3189,9 @@ test('a duplicate resolution during terminal callback does not consume the defer
   await runner.stop();
 });
 
-function createStartCancellationFixture(workspace, provider, stage) {
+function createStartCancellationFixture(workspace, provider, stage, options = {}) {
   const barriers = new Map();
-  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], releaseLate: () => {} };
+  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], authenticationPromptCalls: 0, releaseLate: () => {} };
   const barrier = (name) => {
     if (!barriers.has(name)) barriers.set(name, deferred());
     return barriers.get(name);
@@ -3095,7 +3210,7 @@ function createStartCancellationFixture(workspace, provider, stage) {
   function responseFor(request) {
     if (request.method === 'initialize') return codexResponse(request.id, { serverInfo: { name: 'codex', version: 'test' } });
     if (request.method === 'account/login/start') return codexResponse(request.id, {
-      type: 'chatgpt', loginId: LOGIN_ID, authUrl: LOGIN_URL,
+      type: 'chatgpt', loginId: LOGIN_ID, authUrl: options.authUrl ?? LOGIN_URL,
     });
     if (request.method === 'thread/start') return codexResponse(request.id, { thread: { id: 'thread_native_1' } });
     if (request.method === 'turn/start') return codexResponse(request.id, { turn: { id: 'turn_native_1' } });
@@ -3157,8 +3272,10 @@ function createStartCancellationFixture(workspace, provider, stage) {
       reached('authentication-requested');
       return stage === 'claude-authentication' ? barrier('authentication-result').promise : { oauthToken: 'fixture-oauth-token' };
     } } : {}),
-    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId }) => {
+    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId, authUrl }) => {
+      state.authenticationPromptCalls += 1;
       reached('authentication-prompt');
+      if (options.onAuthenticationRequired) return options.onAuthenticationRequired({ loginId, authUrl });
       if (stage === 'codex-login-completion') {
         state.releaseLate = () => state.child.send(codexLoginCompleted(loginId));
       } else {
@@ -3311,6 +3428,94 @@ for (const stage of [
     }
   });
 }
+
+test('Codex ignores an invalid login response delivered after stop', { timeout: 7000 }, async (t) => {
+  const workspace = createWorkspace(t);
+  const marker = 'late-login-url-CREDENTIAL-SENTINEL';
+  const authUrl = `https://unknown.invalid/device?fixture=${marker}`;
+  const fixture = createStartCancellationFixture(workspace, 'codex', 'codex-login-start-response', { authUrl });
+  t.after(async () => { await fixture.runner.stop(); });
+  const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
+  let lateResponseReleased = false;
+  const releaseLateOnce = () => {
+    if (lateResponseReleased) return;
+    lateResponseReleased = true;
+    fixture.releaseLate();
+  };
+
+  try {
+    await waitForCodexResponseBarrier(fixture, 'account/login/start');
+    const stopSnapshot = await fixture.runner.stop();
+    const writesBeforeLate = fixture.state.writes.slice();
+    const outcome = await startOutcome;
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, 'operation_stopped');
+    assert.equal(outcome.error.cause, undefined);
+    assert.equal(stopSnapshot.childExited, true);
+    assert.equal(stopSnapshot.childClosed, true);
+    assert.equal(stopSnapshot.ownedChildActive, false);
+    assert.equal(fixture.state.authenticationPromptCalls, 0);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+
+    const snapshotBeforeLate = fixture.runner.snapshot();
+    releaseLateOnce();
+    await nextImmediate();
+
+    assert.deepEqual(fixture.runner.snapshot(), snapshotBeforeLate);
+    assert.deepEqual(fixture.state.writes, writesBeforeLate);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(fixture.state.events, []);
+    const serialized = [outcome.error.code, outcome.error.message, outcome.error.stack,
+      JSON.stringify(fixture.runner.snapshot()), JSON.stringify(fixture.state.events)].join('\n');
+    assert.equal(serialized.includes(authUrl), false);
+    assert.equal(serialized.includes(marker), false);
+  } finally {
+    await fixture.runner.stop();
+    releaseLateOnce();
+    await nextImmediate();
+    await startOutcome;
+  }
+});
+
+test('Codex classifies trusted authentication prompt throws and rejections without exposing details', { timeout: 7000 }, async (t) => {
+  for (const failureMode of ['sync-throw', 'async-reject']) {
+    const workspace = createWorkspace(t);
+    const urlMarker = `prompt-url-${failureMode}-CREDENTIAL-SENTINEL`;
+    const callbackMarker = `prompt-error-${failureMode}-CREDENTIAL-SENTINEL`;
+    const authUrl = `https://auth.openai.com/device?fixture=${urlMarker}`;
+    const callbackError = new Error(callbackMarker);
+    let presentedUrl = null;
+    const fixture = createStartCancellationFixture(workspace, 'codex', 'codex-prompt-failure', {
+      authUrl,
+      onAuthenticationRequired({ authUrl: challengeUrl }) {
+        presentedUrl = challengeUrl;
+        if (failureMode === 'sync-throw') throw callbackError;
+        return Promise.reject(callbackError);
+      },
+    });
+    t.after(async () => { await fixture.runner.stop(); });
+
+    const outcome = await observeStart(fixture.runner.start({ inputText: 'private start input' }));
+    const expectedStartCode = failureMode === 'sync-throw' ? 'authentication_prompt_failed' : 'operation_stopped';
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, expectedStartCode);
+    assert.equal(outcome.error.cause, undefined);
+    assert.equal(presentedUrl, authUrl);
+    assert.equal(fixture.state.authenticationPromptCalls, 1);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(fixture.state.events, []);
+
+    const snapshot = fixture.runner.snapshot();
+    assert.equal(snapshot.failureCode, 'authentication_prompt_failed');
+    assert.equal(snapshot.contextState, 'none');
+    const serialized = [outcome.error.code, outcome.error.message, outcome.error.stack,
+      JSON.stringify(snapshot), JSON.stringify(fixture.state.events)].join('\n');
+    assert.equal(serialized.includes(authUrl), false);
+    assert.equal(serialized.includes(urlMarker), false);
+    assert.equal(serialized.includes(callbackMarker), false);
+    await fixture.runner.stop();
+  }
+});
 
 test('owned Claude and Codex pass only current transport values and delete each spawn environment', async (t) => {
   const claudeWorkspace = createWorkspace(t);
