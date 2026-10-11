@@ -3189,9 +3189,9 @@ test('a duplicate resolution during terminal callback does not consume the defer
   await runner.stop();
 });
 
-function createStartCancellationFixture(workspace, provider, stage) {
+function createStartCancellationFixture(workspace, provider, stage, options = {}) {
   const barriers = new Map();
-  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], releaseLate: () => {} };
+  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], authenticationPromptCalls: 0, releaseLate: () => {} };
   const barrier = (name) => {
     if (!barriers.has(name)) barriers.set(name, deferred());
     return barriers.get(name);
@@ -3210,7 +3210,7 @@ function createStartCancellationFixture(workspace, provider, stage) {
   function responseFor(request) {
     if (request.method === 'initialize') return codexResponse(request.id, { serverInfo: { name: 'codex', version: 'test' } });
     if (request.method === 'account/login/start') return codexResponse(request.id, {
-      type: 'chatgpt', loginId: LOGIN_ID, authUrl: LOGIN_URL,
+      type: 'chatgpt', loginId: LOGIN_ID, authUrl: options.authUrl ?? LOGIN_URL,
     });
     if (request.method === 'thread/start') return codexResponse(request.id, { thread: { id: 'thread_native_1' } });
     if (request.method === 'turn/start') return codexResponse(request.id, { turn: { id: 'turn_native_1' } });
@@ -3272,8 +3272,10 @@ function createStartCancellationFixture(workspace, provider, stage) {
       reached('authentication-requested');
       return stage === 'claude-authentication' ? barrier('authentication-result').promise : { oauthToken: 'fixture-oauth-token' };
     } } : {}),
-    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId }) => {
+    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId, authUrl }) => {
+      state.authenticationPromptCalls += 1;
       reached('authentication-prompt');
+      if (options.onAuthenticationRequired) return options.onAuthenticationRequired({ loginId, authUrl });
       if (stage === 'codex-login-completion') {
         state.releaseLate = () => state.child.send(codexLoginCompleted(loginId));
       } else {
@@ -3426,6 +3428,94 @@ for (const stage of [
     }
   });
 }
+
+test('Codex ignores an invalid login response delivered after stop', { timeout: 7000 }, async (t) => {
+  const workspace = createWorkspace(t);
+  const marker = 'late-login-url-CREDENTIAL-SENTINEL';
+  const authUrl = `https://unknown.invalid/device?fixture=${marker}`;
+  const fixture = createStartCancellationFixture(workspace, 'codex', 'codex-login-start-response', { authUrl });
+  t.after(async () => { await fixture.runner.stop(); });
+  const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
+  let lateResponseReleased = false;
+  const releaseLateOnce = () => {
+    if (lateResponseReleased) return;
+    lateResponseReleased = true;
+    fixture.releaseLate();
+  };
+
+  try {
+    await waitForCodexResponseBarrier(fixture, 'account/login/start');
+    const stopSnapshot = await fixture.runner.stop();
+    const writesBeforeLate = fixture.state.writes.slice();
+    const outcome = await startOutcome;
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, 'operation_stopped');
+    assert.equal(outcome.error.cause, undefined);
+    assert.equal(stopSnapshot.childExited, true);
+    assert.equal(stopSnapshot.childClosed, true);
+    assert.equal(stopSnapshot.ownedChildActive, false);
+    assert.equal(fixture.state.authenticationPromptCalls, 0);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+
+    const snapshotBeforeLate = fixture.runner.snapshot();
+    releaseLateOnce();
+    await nextImmediate();
+
+    assert.deepEqual(fixture.runner.snapshot(), snapshotBeforeLate);
+    assert.deepEqual(fixture.state.writes, writesBeforeLate);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(fixture.state.events, []);
+    const serialized = [outcome.error.code, outcome.error.message, outcome.error.stack,
+      JSON.stringify(fixture.runner.snapshot()), JSON.stringify(fixture.state.events)].join('\n');
+    assert.equal(serialized.includes(authUrl), false);
+    assert.equal(serialized.includes(marker), false);
+  } finally {
+    await fixture.runner.stop();
+    releaseLateOnce();
+    await nextImmediate();
+    await startOutcome;
+  }
+});
+
+test('Codex classifies trusted authentication prompt throws and rejections without exposing details', { timeout: 7000 }, async (t) => {
+  for (const failureMode of ['sync-throw', 'async-reject']) {
+    const workspace = createWorkspace(t);
+    const urlMarker = `prompt-url-${failureMode}-CREDENTIAL-SENTINEL`;
+    const callbackMarker = `prompt-error-${failureMode}-CREDENTIAL-SENTINEL`;
+    const authUrl = `https://auth.openai.com/device?fixture=${urlMarker}`;
+    const callbackError = new Error(callbackMarker);
+    let presentedUrl = null;
+    const fixture = createStartCancellationFixture(workspace, 'codex', 'codex-prompt-failure', {
+      authUrl,
+      onAuthenticationRequired({ authUrl: challengeUrl }) {
+        presentedUrl = challengeUrl;
+        if (failureMode === 'sync-throw') throw callbackError;
+        return Promise.reject(callbackError);
+      },
+    });
+    t.after(async () => { await fixture.runner.stop(); });
+
+    const outcome = await observeStart(fixture.runner.start({ inputText: 'private start input' }));
+    const expectedStartCode = failureMode === 'sync-throw' ? 'authentication_prompt_failed' : 'operation_stopped';
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, expectedStartCode);
+    assert.equal(outcome.error.cause, undefined);
+    assert.equal(presentedUrl, authUrl);
+    assert.equal(fixture.state.authenticationPromptCalls, 1);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(fixture.state.events, []);
+
+    const snapshot = fixture.runner.snapshot();
+    assert.equal(snapshot.failureCode, 'authentication_prompt_failed');
+    assert.equal(snapshot.contextState, 'none');
+    const serialized = [outcome.error.code, outcome.error.message, outcome.error.stack,
+      JSON.stringify(snapshot), JSON.stringify(fixture.state.events)].join('\n');
+    assert.equal(serialized.includes(authUrl), false);
+    assert.equal(serialized.includes(urlMarker), false);
+    assert.equal(serialized.includes(callbackMarker), false);
+    await fixture.runner.stop();
+  }
+});
 
 test('owned Claude and Codex pass only current transport values and delete each spawn environment', async (t) => {
   const claudeWorkspace = createWorkspace(t);

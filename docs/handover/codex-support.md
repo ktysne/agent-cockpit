@@ -1282,5 +1282,9 @@ PR #378はfeature向けにレビュー収束した。次は認証URLを二つの
 Astraの助言と公式公開実装、公式protocolの例を確認し、[認証URLの契約](../design/native-authentication-url.md)とAU01〜AU06を実装前に記録した。
 二つのHTTPS originに限定し、URLの元文字列を保持する。既存のtypeとloginId検査、URL検査、早着completion照合の順序を維持する。
 未知hostの汎用許可設定は追加せず、固定codeで拒否する。前後空白も拒否する。
-Windowsの関連2ファイルは223件中222件成功、失敗0件、実symlink権限によるskip1件だった。全体試験と指定Claudeレビューはこれから行う。
+初回のWindows関連2ファイルは223件中222件成功、失敗0件、実symlink権限によるskip1件だった。
+PR #379をfeature向けDraftとして作成した。固定head `2890629`の初回全体試験は3,263件中3,193件成功、65件失敗、Windows実symlink権限によるskip5件だった。
+指定Claude R1も、実runnerを通るsource collectorとinstruction dispatchの旧正常系URLを要修正として挙げた。全65件の失敗はこの2ファイルに限られた。
+二つのfixtureを許可originへ修正し、停止後の不正URL応答とcallbackの同期throw・非同期rejectを検証に追加した。sourceとruntimeは変更していない。
+修正後の関連3ファイルは241件中240件成功、失敗0件、Windows実symlink権限によるskip1件だった。次に固定headの全体試験とClaude R2を行う。
 今回の変更は認証再利用とlogin直列化から独立した部分対応で、実認証と後続redirectの互換性を確認したとは扱わない。

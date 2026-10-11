@@ -987,8 +987,10 @@ ClaudeはOAuth token供給を維持し、このbrowser URL検査の対象では�
 | ID-F215-AU02 | 未知host、subdomain、suffix、末尾dot、IPとlocalhost | 固定code、callback0とthread/start0。値とcauseを公開しない |
 | ID-F215-AU03 | 非標準port、userinfo、HTTP、制御文字、長さ超過と前後空白 | 既存の拒否条件と空白拒否を維持し、元URLを診断へ含めない |
 | ID-F215-AU04 | 早着success completionと不正URL | URL検査を先に行い、早着successで拒否を回避しない |
-| ID-F215-AU05 | 停止後の遅延応答とtrusted callback throw | 既存停止と固定診断の境界を維持。後着thread/start0 |
+| ID-F215-AU05 | 停止後の不正URL応答とtrusted callbackの同期throw、非同期reject | 遅延応答は無視。同期throwのstartはauthentication_prompt_failed、非同期rejectのstartはoperation_stopped。両方のsnapshotはauthentication_prompt_failed、thread/start0、URLとcause非公開 |
 | ID-F215-AU06 | compositionの実runner正常系 | 許可originのfixtureで既存起動を維持。fake DI透過はorigin証明に含めない |
 
 実認証、installed provider版、SSOと後続redirectの互換性は未確認として分ける。
 Windowsの関連2ファイルは223件中222件成功、失敗0件、実symlink権限によるskip1件だった。
+Claude R1で見つかった実runnerの旧正常系URLを修正し、AU05のケースを追加した。
+修正後の関連3ファイルは241件中240件成功、失敗0件、実symlink権限によるskip1件だった。全体試験と再レビューは未完了である。
