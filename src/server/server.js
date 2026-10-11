@@ -441,7 +441,7 @@ async function startServer(options = {}) {
   const notificationReader = options.readTaskNotifications || readTaskNotifications;
   function needsTaskNotifications(sessionId) {
     const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
-    return session?.status === '待機中(サブエージェント稼働中)'
+    return session?.provider !== 'codex' && session?.status === '待機中(サブエージェント稼働中)'
       && session.agents.some((agent) => !agent.isCodex && agent.active);
   }
   function reconcileTaskNotifications(sessionId) {

@@ -33,7 +33,9 @@ cockpit 本体と同じ流儀で、入口から 1 機能ずつ実 runtime で確
 集約ブランチを base にした PR をダッシュボードでマージできるようにする変更は、main 向けの [PR #390](https://github.com/ktysne/agent-cockpit/pull/390) で入れ、同期 PR #393 で集約先へ取り込んだ。
 
 2026-10-11 に順序 2(登録と識別)に着手した。
-通常の `~/.codex` に記録用のフックと MCP を一時的に入れて実機の入力を記録し、設計資料 [codex-registration.md](../design/codex-registration.md) を書いた。
+通常の `~/.codex` に記録用のフックと MCP を一時的に入れて実機の入力を記録し、設計資料 [codex-registration.md](../design/codex-registration.md) を書いた(PR #394)。
+実装は `impl-hard` で Codex に任せ、Codex CLI とデスクトップで、セッション行、ネイティブの子、MCP の書き込み、再開、`SessionEnd` を確かめた。
+実機の `PermissionRequest` は、許可を求める操作を作れず未確認である。
 
 ## 決定済みの判断
 
@@ -83,7 +85,7 @@ cockpit 本体と同じ流儀で、入口から 1 機能ずつ実 runtime で確
 | 順 | 対象 | 入口と実 runtime の確認 | 持ち込む PoC | 委譲の区分 | 状態(2026-10-11) |
 |---|---|---|---|---|---|
 | 1 | feature ブランチの作成、この計画の更新、モックの採用範囲の合意、欠陥 Issue の転記、`AGENTS.md` と `CLAUDE.md` のブランチ運用の節 | 採用範囲を開発者が確認する | | メインセッション | 完了(PR #389 ほか) |
-| 2 | 登録と識別(#166、#167)。Codex のフックを共通イベントへ変換し、MCP の書込先を provider と native の ID で照合する | Codex デスクトップと CLI のフックが常駐サーバーに届き、セッション行が出る | #157、#159 | Codex、実測は Claude | 設計中 |
+| 2 | 登録と識別(#166、#167)。Codex のフックを共通イベントへ変換し、MCP の書込先を provider と native の ID で照合する | Codex デスクトップと CLI のフックが常駐サーバーに届き、セッション行が出る | #157、#159 | Codex、実測は Claude | 実装と実機確認済み、PR のレビュー中 |
 | 3 | 実接続(#170、#171)。managed app-server への接続と観測、bridge の起動登録との結合 | app-server の接続世代の更新と再接続を実 runtime で確かめる | #158、#159、#163 | 実測しながらの接続は Claude、残りは Codex | 未着手 |
 | 4 | 共通質問(#174)。質問の MCP、回答の配信、離席時の推奨適用。#216 の問題を設計に含める | Codex の質問に画面から答え、実 runtime で反映される | #160 | Codex、実測は Claude | 未着手 |
 | 5 | 通常指示(#175)。指示の配信と、受付と適用の分離。#217 の待ち時間を設計に含める | 作業中の Codex に指示が届き、適用の証拠が出る | #161 | Codex、実測は Claude | 未着手 |

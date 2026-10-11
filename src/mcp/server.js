@@ -12,6 +12,8 @@ const MCP_GITHUB_TIMEOUT_MS = 60000;
 const UNREACHABLE_MESSAGE = 'ダッシュボードに書けなかった。作業は続けてよい';
 const TIMEOUT_MESSAGE = '常駐サーバーの応答が時間内に返らず、記録できたかを確かめられなかった。処理が続いている可能性があるため、ダッシュボードで確かめてほしい';
 const MAX_RESULT_ITEMS = 10;
+let codexClient = false;
+const CODEX_UNREGISTERED_MESSAGE = 'Codex のフックが届いていないため記録できなかった。未登録または終了済みのセッションです。';
 const PLAN_ERROR_MESSAGES = new Map([
   [400, '入力が正しくないか、上限を超えています'],
   [404, '判断事項が見つからないか、解決済みです'],
@@ -171,8 +173,9 @@ function shortSavedList(toolName, saved) {
   return `${action}: ${summary}${remainder}`;
 }
 
-function postMcpRequest(requestPath, body, options, deadline, attemptTimeoutMs = 2000) {
-  return postToServer(requestPath, body, {
+// 常駐サーバーは、フックで登録されていないか終了した Codex のセッションへの書き込みを 403 で拒否する。
+async function postMcpRequest(requestPath, body, options, deadline, attemptTimeoutMs = 2000) {
+  const result = await postToServer(requestPath, body, {
     homeDir: options.homeDir || cockpitHomeFromOptions(options),
     environment: options.environment || process.env,
     fetchImpl: options.fetchImpl || fetch,
@@ -186,6 +189,7 @@ function postMcpRequest(requestPath, body, options, deadline, attemptTimeoutMs =
     retryAfterTimeout: false,
     ensure: true,
   });
+  return { ...result, codexUnregistered: Boolean(options.codexSessionId) && result.status === 403 };
 }
 
 function requestDeadline(options, timeoutMs) {
@@ -193,21 +197,28 @@ function requestDeadline(options, timeoutMs) {
   return options.deadline ?? now() + timeoutMs;
 }
 
-async function postPlan(toolName, args, options = {}) {
+function writerIdentity(options) {
+  if (options.codexSessionId) return { routeSessionId: options.codexSessionId, body: { codexSessionId: options.codexSessionId } };
   const environment = options.environment || process.env;
+  const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string' ? environment.CLAUDE_CODE_SESSION_ID : '';
+  return {
+    routeSessionId: isHookSessionId(sessionId) ? sessionId : 'pending',
+    body: { ppid: options.ppid === undefined ? process.ppid : options.ppid, claudeCodeSessionId: sessionId || null },
+  };
+}
+
+async function postPlan(toolName, args, options = {}) {
   const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
-  const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string'
-    ? environment.CLAUDE_CODE_SESSION_ID
-    : '';
-  const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
+  const identity = writerIdentity(options);
+  const routeSessionId = identity.routeSessionId;
   const body = {
     ...planArguments(toolName, args),
-    ppid: options.ppid === undefined ? process.ppid : options.ppid,
-    claudeCodeSessionId: sessionId || null,
+    ...identity.body,
   };
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/plan`, body, options, deadline);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
+  if (result.codexUnregistered) return { errorMessage: CODEX_UNREGISTERED_MESSAGE };
   const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -215,22 +226,19 @@ async function postPlan(toolName, args, options = {}) {
 async function postPullRequest(args, options = {}) {
   const pullRequest = parsePullRequestUrl(args.url);
   if (!pullRequest) return { errorMessage: PR_ERROR_MESSAGES.get(400) };
-  const environment = options.environment || process.env;
   const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
-  const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string'
-    ? environment.CLAUDE_CODE_SESSION_ID
-    : '';
-  const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
+  const identity = writerIdentity(options);
+  const routeSessionId = identity.routeSessionId;
   const body = {
     kind: 'add_pr',
     url: pullRequest.url,
-    ppid: options.ppid === undefined ? process.ppid : options.ppid,
-    claudeCodeSessionId: sessionId || null,
+    ...identity.body,
     cwd: options.cwd === undefined ? process.cwd() : options.cwd,
   };
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
+  if (result.codexUnregistered) return { errorMessage: CODEX_UNREGISTERED_MESSAGE };
   const errorMessage = PR_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -240,10 +248,9 @@ async function postCrossReviewSkip(args, options = {}) {
     !isCompleteCommitSha(args.headRefOid) || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000) {
     return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(400) };
   }
-  const environment = options.environment || process.env;
   const deadline = requestDeadline(options, MCP_GITHUB_TIMEOUT_MS);
-  const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string' ? environment.CLAUDE_CODE_SESSION_ID : '';
-  const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
+  const identity = writerIdentity(options);
+  const routeSessionId = identity.routeSessionId;
   const body = {
     kind: 'skip_review',
     owner: args.owner,
@@ -251,8 +258,7 @@ async function postCrossReviewSkip(args, options = {}) {
     number: args.number,
     headRefOid: args.headRefOid,
     reason: args.reason,
-    ppid: options.ppid === undefined ? process.ppid : options.ppid,
-    claudeCodeSessionId: sessionId || null,
+    ...identity.body,
   };
   const result = await postMcpRequest(
     `/api/sessions/${encodeURIComponent(routeSessionId)}/prs`,
@@ -263,6 +269,7 @@ async function postCrossReviewSkip(args, options = {}) {
   );
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
+  if (result.codexUnregistered) return { errorMessage: CODEX_UNREGISTERED_MESSAGE };
   const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -298,6 +305,7 @@ async function handleRequest(request, options = {}) {
   }
   if (request.method.startsWith('notifications/')) return null;
   if (request.method === 'initialize') {
+    codexClient = request.params?.clientInfo?.name === 'codex-mcp-client';
     return {
       jsonrpc: '2.0',
       id: request.id,
@@ -314,7 +322,13 @@ async function handleRequest(request, options = {}) {
   }
   if (request.method === 'tools/call') {
     const name = request.params?.name;
-    const result = await callTool(name, request.params?.arguments || {}, options);
+    const meta = request.params?._meta;
+    if ((codexClient && !isHookSessionId(meta?.sessionId)) ||
+      (!codexClient && meta && Object.hasOwn(meta, 'threadId'))) {
+      return { jsonrpc: '2.0', id: request.id, result: toolResult('Codex の接続情報または sessionId が無いため記録できなかった。', true) };
+    }
+    const callOptions = codexClient ? { ...options, codexSessionId: meta.sessionId } : options;
+    const result = await callTool(name, request.params?.arguments || {}, callOptions);
     return { jsonrpc: '2.0', id: request.id, result };
   }
   return { jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } };

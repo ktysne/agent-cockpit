@@ -13,6 +13,8 @@ const EVENT_NAMES = new Set([
   'SessionEnd',
   'UserPromptSubmit',
   'PostToolBatch',
+  'PermissionRequest',
+  'Interrupt',
 ]);
 
 const MAX_ASK_QUESTIONS = 4;
@@ -114,6 +116,7 @@ function sanitizeEvent(input, metadata = {}) {
   const hookAt = Number.isFinite(Number(input.hookAt)) ? Number(input.hookAt) : Date.now();
   const event = {
     session_id: sessionId,
+    provider: input.provider === 'codex' ? 'codex' : 'claude',
     hook_event_name: eventName,
     hookAt,
     product: metadata.product || null,
@@ -126,6 +129,19 @@ function sanitizeEvent(input, metadata = {}) {
   const agentType = shortString(input.agent_type, 200);
   if (agentId) event.agent_id = agentId;
   if (agentType) event.agent_type = agentType;
+  if (event.provider === 'codex') {
+    event.model = shortString(input.model, 160) || '';
+    if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest'].includes(eventName)) {
+      event.tool_name = shortString(input.tool_name, 100) || '';
+      if (eventName !== 'PermissionRequest') event.tool_use_id = shortString(input.tool_use_id, 256) || '';
+      if (['PreToolUse', 'PermissionRequest'].includes(eventName)) event.summary = shortString(input.summary, 80) || event.tool_name;
+    }
+    return event;
+  }
+  if (eventName === 'PermissionRequest') {
+    event.tool_name = shortString(input.tool_name, 100) || '';
+    event.summary = shortString(input.summary, 80) || event.tool_name;
+  }
   if (eventName === 'SubagentStart' && ['default', 'codex', 'claude'].includes(input.route)) event.route = input.route;
   if (metadata.agentDefinition) event.agentDefinition = metadata.agentDefinition;
 

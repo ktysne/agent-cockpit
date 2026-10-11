@@ -36,8 +36,8 @@ Codex から呼ばれた MCP の書き込み先を、フックで登録したセ
 
 ツール名は、MCP が `mcp__<サーバー>__<ツール>`、組み込みが `collaborationspawn_agent` のような区切りの無い名前だった。
 フックと MCP の環境変数に、thread ID を指すものは無かった。
-`/exit` の後に `SessionEnd` は届かなかった。
-PoC #157 では CLI の `SessionEnd` を取得しているので、届く条件は版や終わらせ方で変わる見込みである。
+記録用のフックでは `/exit` の後に `SessionEnd` が届かなかったが、実装後の確認では CLI の `/exit` で 2 回とも届いた。
+届く条件は確かめられていないので、届かない場合に備える。
 
 ## 決定
 
@@ -122,8 +122,9 @@ PoC #157 では CLI の `SessionEnd` を取得しているので、届く条件�
 ## 未確認
 
 - デスクトップと CLI で `SessionEnd` が届く条件
-- `Stop` のフックが何も出力しなくてよいか(記録では `{}` を返した)
+- 実機の `PermissionRequest`。確認した操作では、CLI もデスクトップも許可を求めずに権限昇格か失敗で終わった
 - `PermissionRequest` と `PreToolUse` の順序
+- 確認の最初のやり取りで、Codex がフックの失敗(終了コード 1)を表示した原因。終了コードを記録した後のやり取りでは、cockpit のフックはすべて 0 で終わった
 - compaction の前後のフック
 - Claude の MCP の `tools/call` に `_meta.threadId` が付かないこと(実機で 1 回確かめる)
 - 常駐サーバーの再起動後、`~/.claude/sessions` に無い ID の計画が保存から消されないか(順序 7 で確かめる)

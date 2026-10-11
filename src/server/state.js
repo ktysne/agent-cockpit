@@ -561,7 +561,7 @@ function agentModelFromDefinition(agentType, definition) {
  * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
  * }} SessionAgent */
 
-/** @typedef {{session_id: string, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
+/** @typedef {{session_id: string, provider: 'claude'|'codex', codex?: {model: string, resumes: number}, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
 
 /** @typedef {{tools: SessionTool[], completedToolIds: Set<string>, agentToolBindings: Object<string, string|symbol|null>}} SessionTools */
 
@@ -581,6 +581,8 @@ function agentModelFromDefinition(agentType, definition) {
 function newSession(event, askDecisionState = {}) {
   return {
     session_id: event.session_id,
+    provider: event.provider,
+    ...(event.provider === 'codex' ? { codex: { model: '', resumes: 0 } } : {}),
     product: event.product,
     title: event.sessionName,
     status: '不明',
@@ -755,7 +757,7 @@ function sessionSnapshot(session) {
       return {
         ...agent,
         ...(childUnconfirmed ? { unconfirmed: true } : {}),
-        modelName: agent.isCodex ? '' : claudeModelName(agent.model),
+        modelName: session.provider === 'codex' ? agent.model : agent.isCodex ? '' : claudeModelName(agent.model),
         ...(gptAgent ? {
           gpt: {
             model: gptAgent.model,
@@ -781,6 +783,8 @@ function sessionSnapshot(session) {
 
   return {
     session_id: session.session_id,
+    provider: session.provider,
+    ...(session.codex ? { codex: { ...session.codex } } : {}),
     product: session.product,
     title: session.title,
     lastActivityAt: session.lastActivityAt,
@@ -1024,7 +1028,7 @@ function applyToolStart(session, event) {
         agent_id: agentId,
         startedAt: isoTime(event.hookAt),
       });
-      if (event.tool_name === 'Agent' && !agentId) {
+      if (session.provider !== 'codex' && event.tool_name === 'Agent' && !agentId) {
         // 未対応の呼び出しが重なった時点で、どの SubagentStart がどれに当たるかは決まらない。
         const overlapping = unboundAgentCallsOf(session).filter((tool) => tool.tool_use_id !== toolUseId);
         for (const tool of overlapping) session.agentToolBindings[tool.tool_use_id] = AMBIGUOUS_AGENT_CALL;
@@ -1039,8 +1043,10 @@ function applyToolStart(session, event) {
       }
     }
 
-    applyCodexStart(session, event);
-    applyAskQuestionStart(session, event);
+    if (session.provider !== 'codex') {
+      applyCodexStart(session, event);
+      applyAskQuestionStart(session, event);
+    }
 
     if (!agentId) {
       session.stopped = false;
@@ -1104,19 +1110,24 @@ function applyToolCompletion(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
-    applyAgentToolCompletion(session, event);
+    if (session.provider !== 'codex') applyAgentToolCompletion(session, event);
     if (toolUseId) {
       session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
       session.completedToolIds.add(toolUseId);
     }
 
-    applyCodexLaunchCompletion(session, event);
-    applyCodexResult(session, event);
+    if (session.provider !== 'codex') {
+      applyCodexLaunchCompletion(session, event);
+      applyCodexResult(session, event);
+    }
 
     session.permissionWaits = session.permissionWaits.filter((wait) => !(
-      sameAgent(wait.agent_id, agentId) && wait.target_tool_use_id === toolUseId && toolUseId
+      sameAgent(wait.agent_id, agentId) && (
+        (wait.target_tool_use_id === toolUseId && toolUseId) ||
+        (session.provider === 'codex' && eventName === 'PostToolUse' && !wait.target_tool_use_id)
+      )
     ));
-    applyAskQuestionCompletion(session, event);
+    if (session.provider !== 'codex') applyAskQuestionCompletion(session, event);
 
     if (!agentId) {
       session.stopped = false;
@@ -1147,18 +1158,18 @@ function applyToolBatch(session, event) {
 function applyPermissionPrompt(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
-  if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
+  if (eventName === 'PermissionRequest' || (eventName === 'Notification' && event.notification_type === 'permission_prompt')) {
     // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
     const oldestTool = session.tools
       .filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent')
       .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0];
     const wait = {
       agent_id: agentId,
-      target_tool_use_id: oldestTool?.tool_use_id || null,
-      tool_name: oldestTool?.tool_name || '',
-      summary: oldestTool?.summary || '',
-      notification_type: event.notification_type,
-      message: event.message,
+      target_tool_use_id: eventName === 'PermissionRequest' ? null : oldestTool?.tool_use_id || null,
+      tool_name: eventName === 'PermissionRequest' ? event.tool_name : oldestTool?.tool_name || '',
+      summary: eventName === 'PermissionRequest' ? event.summary : oldestTool?.summary || '',
+      notification_type: event.notification_type || 'permission_prompt',
+      message: event.message || '',
       startedAt: isoTime(event.hookAt),
     };
     session.permissionWaits = session.permissionWaits.filter((item) => !sameAgent(item.agent_id, agentId));
@@ -1170,7 +1181,7 @@ function applyPermissionPrompt(session, event) {
  * @param {Pick<SessionTools, 'tools'> & SessionPermissions & Pick<SessionIdentity, 'stopped'|'turnKnown'|'ended'>} session
  */
 function applySessionLifecycle(session, event) {
-  const eventName = event.hook_event_name;
+  const eventName = event.hook_event_name === 'Interrupt' ? 'Stop' : event.hook_event_name;
   const agentId = event.agent_id || null;
   if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
     session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
@@ -1300,6 +1311,15 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
 
     applyToolStart(session, event);
     applySubagentStart(session, event);
+    if (session.provider === 'codex') {
+      if (event.agent_id) {
+        const agent = agentFor(session, event.agent_id);
+        if (agent && event.model) agent.model = event.model;
+      } else {
+        if (event.model) session.codex.model = event.model;
+        if (event.hook_event_name === 'SessionStart' && event.source === 'resume') session.codex.resumes += 1;
+      }
+    }
     applySubagentStop(session, event);
     applyToolCompletion(session, event);
     applyToolBatch(session, event);
@@ -2420,6 +2440,9 @@ class DashboardState {
   addEvent(input, metadata = {}) {
     const event = sanitizeEvent(input, metadata);
     if (!event) return false;
+    const existingProvider = this.entries.get(event.session_id)?.[0]?.event.provider
+      || this.sessions.get(event.session_id)?.provider;
+    if (existingProvider && existingProvider !== event.provider) return false;
     if (!this.acceptSessionWrite(event.session_id, event.hookAt)) return true;
 
     const endedAt = this.endedAt.get(event.session_id);
@@ -2865,6 +2888,7 @@ class DashboardState {
       ), null) || base.lastActivityAt || null;
       const current = {
         ...visible,
+        provider: base.provider || 'claude',
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,
         sessionFileUpdatedAt: file?.updatedAt || null,

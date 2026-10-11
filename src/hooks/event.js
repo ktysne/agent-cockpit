@@ -247,7 +247,7 @@ function codexOutputLines(value) {
   return Object.keys(lines).length ? lines : null;
 }
 
-function makeHookEvent(input, now = Date.now()) {
+function makeHookEvent(input, now = Date.now(), options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const eventName = pickString(input.hook_event_name);
   if (!eventName) return null;
@@ -259,12 +259,24 @@ function makeHookEvent(input, now = Date.now()) {
     hookAt: now,
     input_fields: Object.keys(input).slice(0, 64),
   };
+  const isCodex = options.provider === 'codex';
+  if (isCodex) {
+    event.provider = 'codex';
+    event.model = pickString(input.model).slice(0, 160);
+  }
   if (eventName === 'SessionStart') event.source = pickString(input.source).slice(0, 100);
   for (const key of ['agent_id', 'agent_type']) {
     if (typeof input[key] === 'string') event[key] = input[key];
   }
 
-  if (eventName === 'PreToolUse') {
+  if (eventName === 'PermissionRequest') {
+    event.tool_name = pickString(input.tool_name);
+    event.summary = inputSummary(event.tool_name, input.tool_input);
+  } else if (isCodex && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName)) {
+    event.tool_name = pickString(input.tool_name);
+    event.tool_use_id = pickString(input.tool_use_id);
+    if (eventName === 'PreToolUse') event.summary = inputSummary(event.tool_name, input.tool_input);
+  } else if (eventName === 'PreToolUse') {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
     event.summary = inputSummary(event.tool_name, input.tool_input);
@@ -347,10 +359,10 @@ async function postEvent(event, options = {}) {
 }
 
 async function runHook(input, options = {}) {
-  const event = makeHookEvent(input, options.now === undefined ? Date.now() : options.now);
+  const event = makeHookEvent(input, options.now === undefined ? Date.now() : options.now, options);
   if (!event) return { exitCode: 0, additionalContext: null };
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
-  if (event.hook_event_name === 'SubagentStart') event.route = (await readRouting(homeDir)).agents;
+  if (event.provider !== 'codex' && event.hook_event_name === 'SubagentStart') event.route = (await readRouting(homeDir)).agents;
   let dashboardUrl = null;
 
   if (event.hook_event_name === 'SessionStart') {
@@ -388,7 +400,7 @@ async function readStdin(stream = process.stdin) {
 async function main() {
   try {
     const input = JSON.parse(await readStdin());
-    const result = await runHook(input);
+    const result = await runHook(input, { provider: process.argv[2] === 'codex' ? 'codex' : 'claude' });
     if (result.additionalContext) {
       process.stdout.write(`${JSON.stringify({
         hookSpecificOutput: {

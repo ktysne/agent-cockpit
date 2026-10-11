@@ -10,6 +10,17 @@ function createHookRoutes(ctx) {
   const { state, answerDelivery, claudeHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications } = ctx;
 
   async function resolveWriterSessionId(routeId, body) {
+    if (Object.hasOwn(body, 'codexSessionId')) {
+      if (Object.hasOwn(body, 'ppid') || Object.hasOwn(body, 'claudeCodeSessionId') ||
+        !validSessionId(body.codexSessionId) || routeId !== body.codexSessionId) {
+        return { status: 400, error: 'Invalid session id' };
+      }
+      const session = state.sessions.get(body.codexSessionId);
+      if (session?.provider !== 'codex' || state.sessionHasEnded(body.codexSessionId)) {
+        return { status: 403, error: 'Codex session unavailable' };
+      }
+      return { sessionId: body.codexSessionId, routeMismatch: false };
+    }
     // 呼び出し元が ID 不一致を個別の応答へ変換できるよう、解決した ID と不一致状態を返す。
     const mappedSessionId = Number.isInteger(body.ppid) ? await findSessionIdByPid(body.ppid) : null;
     const fallbackSessionId = Object.hasOwn(body, 'claudeCodeSessionId') ? body.claudeCodeSessionId : routeId;
@@ -107,12 +118,12 @@ function createHookRoutes(ctx) {
     let codexDefinitionMetadata = null;
 
     if (
-      body.agent_id && body.agent_type && eventName !== 'SubagentStop' &&
+      body.provider !== 'codex' && body.agent_id && body.agent_type && eventName !== 'SubagentStop' &&
       (eventName === 'SubagentStart' || !state.hasAgentRow(sessionId, body.agent_id))
     ) {
       agentDefinition = await claudeAgentDefinition(body.agent_type, claudeHome);
     }
-    if (eventName === 'PreToolUse') {
+    if (body.provider !== 'codex' && eventName === 'PreToolUse') {
       const preliminary = sanitizeEvent(body, { product });
       const codexAgentName = preliminary?.codexDefinition || preliminary?.codexWaitDefinition;
       if (codexAgentName) {
@@ -121,7 +132,10 @@ function createHookRoutes(ctx) {
     }
 
     const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
-    state.addEvent(body, eventMetadata);
+    if (!state.addEvent(body, eventMetadata)) {
+      jsonResponse(response, 202, { accepted: true });
+      return;
+    }
     const event = sanitizeEvent(body, eventMetadata);
     // 終了通知はメインの記録に書かれるので、サブエージェントのイベントのたびには読まない。
     if (event && !event.agent_id) scheduleTaskNotifications(event.session_id);
@@ -161,6 +175,10 @@ function createHookRoutes(ctx) {
     }
 
     const resolvedSession = await resolveWriterSessionId(routeSessionId, body);
+    if (resolvedSession.status) {
+      jsonResponse(response, resolvedSession.status, { error: resolvedSession.error });
+      return;
+    }
     const sessionId = resolvedSession.sessionId;
     if (!sessionId) {
       jsonResponse(response, 400, { error: 'Session id unavailable' });
@@ -208,17 +226,24 @@ function createHookRoutes(ctx) {
     const isAddPullRequest = body?.kind === 'add_pr';
     const isSkipReview = body?.kind === 'skip_review';
     const pullRequest = isAddPullRequest ? parsePullRequestUrl(body.url) : null;
-    const skipReviewKeys = ['claudeCodeSessionId', 'headRefOid', 'kind', 'number', 'owner', 'ppid', 'reason', 'repo'];
+    const isCodex = Object.hasOwn(body || {}, 'codexSessionId');
+    const skipReviewKeys = isCodex
+      ? ['codexSessionId', 'headRefOid', 'kind', 'number', 'owner', 'reason', 'repo']
+      : ['claudeCodeSessionId', 'headRefOid', 'kind', 'number', 'owner', 'ppid', 'reason', 'repo'];
     const validSkipReview = isSkipReview && Object.keys(body).sort().join(',') === skipReviewKeys.join(',') &&
       validRepositoryPart(body.owner) && validRepositoryPart(body.repo) && Number.isSafeInteger(body.number) && body.number > 0 &&
       isCompleteCommitSha(body.headRefOid) && validText(body.reason, 2000);
-    if ((!pullRequest && !validSkipReview) || !Number.isInteger(body.ppid) || body.ppid < 1 ||
+    if ((!pullRequest && !validSkipReview) || (!isCodex && (!Number.isInteger(body.ppid) || body.ppid < 1)) ||
       (body.cwd !== undefined && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) ||
       (body.claudeCodeSessionId !== undefined && body.claudeCodeSessionId !== null && typeof body.claudeCodeSessionId !== 'string')) {
       jsonResponse(response, 400, { error: 'Invalid request' });
       return;
     }
     const resolvedSession = await resolveWriterSessionId(routeSessionId, body);
+    if (resolvedSession.status) {
+      jsonResponse(response, resolvedSession.status, { error: resolvedSession.error });
+      return;
+    }
     const sessionId = resolvedSession.sessionId;
     if (!sessionId || resolvedSession.routeMismatch) {
       jsonResponse(response, 400, { error: 'Session id unavailable' });
