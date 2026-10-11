@@ -951,3 +951,47 @@ membershipのfalse返却中の実kernel revision変更、再入、method置換�
 関連3ファイルは221件成功、失敗0件、実symlink権限によるskip2件だった。
 指定Claude R1はblockerと要修正0件で収束し、提案に従ってcompositionの検査時点を文書へ補足した。
 結果記録と文書補足だけの最終更新ではsourceとtestを変更しない。
+
+## Native起動の通信環境 (#215)
+
+期待条件は[通信環境の供給契約](native-transport-environment.md)に従う。
+owned Claude/Codexとmanaged app-server/remote CLIの4経路をfixtureで区別する。
+
+| ID | 入力または保持点 | 期待条件 |
+|---|---|---|
+| ID-F215-TE01 | 固定5変数と禁止変数を持つ供給元 | 値を変更せず5変数だけを渡し、shell:false、args、HOMEと認証の固定供給を維持 |
+| ID-F215-TE02 | undefined、空、非文字列、NUL、CR/LF、throwing getter | 未設定は省略。不正値は固定code、値とcause非公開、spawn0 |
+| ID-F215-TE03 | CAの完全絶対パスと相対、Windowsドライブ相対、単一rootとdevice namespace | 完全絶対表記だけ受理し、空白を保持。外部CAファイルの読取や変更0 |
+| ID-F215-TE04 | spawn成功と同期throw後のenv参照 | 全key削除または空文字化。供給元不変、元のspawn失敗code維持 |
+| ID-F215-TE05 | plain objectのlowercase-onlyとuppercase併存 | 固定uppercase名だけ継承。OSの大小文字規則の検証と区別 |
+| ID-F215-TE06 | 供給元を変更した後の次起動 | 新しい起動は新値、捕捉済みの以前のenvコピーは旧値 |
+| ID-F215-TE07 | owned MCP endpoint待機中の失敗と失効、不正環境 | 待機中に環境構築しない。endpoint開始後の不正は通常停止で閉じ、後着spawn0 |
+| ID-F215-TE08 | 環境構築後のowner失効とspawn内の停止再入 | guard失敗codeと環境消去を維持。返ったchildの停止追跡を省略しない |
+
+実providerのproxy/CA利用と通信成功、NO_PROXYによるloopbackへの直結、未実行OSは未確認として分ける。
+Windowsの関連2ファイルは135件中133件成功、失敗0件、実symlink権限によるskip2件だった。
+TE08の構築後失効はspawn0と停止完了をfixtureで確認し、spawn前の一時環境の消去は外側finallyの差分監査で確認した。
+CAファイルへのアクセスがないことと、返ったchildの停止追跡を維持することは差分監査で確認した。未実行OSと実通信は成功に含めない。
+固定head `639ff5b`の全体試験は3,260件中3,255件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+指定Claude R1の文書対応をR2で確認し、blockerと要修正0件で収束した。R2の提案に従い、導入手順のNO_PROXY文字列を未確認の表記例と明記した。
+最終更新は文書と結果記録だけで、sourceとtestは全体試験headから不変である。
+
+## Owned Codexの認証URL (#215)
+
+期待条件は[認証URLの契約](native-authentication-url.md)に従う。
+ClaudeはOAuth token供給を維持し、このbrowser URL検査の対象ではない。provider間の認証方式の差として許容する。
+
+| ID | 入力 | 期待条件 |
+|---|---|---|
+| ID-F215-AU01 | 二つの許可origin、既定443と大文字host | 正規化originが一致すれば受理。callbackへ元URLとqueryを完全保持して一度渡す |
+| ID-F215-AU02 | 未知host、subdomain、suffix、末尾dot、IPとlocalhost | 固定code、callback0とthread/start0。値とcauseを公開しない |
+| ID-F215-AU03 | 非標準port、userinfo、HTTP、制御文字、長さ超過と前後空白 | 既存の拒否条件と空白拒否を維持し、元URLを診断へ含めない |
+| ID-F215-AU04 | 早着success completionと不正URL | URL検査を先に行い、早着successで拒否を回避しない |
+| ID-F215-AU05 | 停止後の不正URL応答とtrusted callbackの同期throw、非同期reject | 遅延応答は無視。同期throwのstartはauthentication_prompt_failed、非同期rejectのstartはoperation_stopped。両方のsnapshotはauthentication_prompt_failed、thread/start0、URLとcause非公開 |
+| ID-F215-AU06 | compositionの実runner正常系 | 許可originのfixtureで既存起動を維持。fake DI透過はorigin証明に含めない |
+
+実認証、installed provider版、SSOと後続redirectの互換性は未確認として分ける。
+Windowsの関連3ファイルは241件中240件成功、失敗0件、実symlink権限によるskip1件だった。
+固定head `c32fed6`の全体試験再確認は3,265件中3,260件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+同headの先行全体実行ではHTTP target試験がファイル単位で失敗した。単独10件と全体再確認では再現せず、原因は未特定である。
+指定Claude R2はblockerと要修正0件で収束した。最終更新は文書と結果記録のみで、sourceとtestは全体試験headから不変である。

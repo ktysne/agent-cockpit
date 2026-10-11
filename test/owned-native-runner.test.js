@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -12,6 +13,13 @@ const { sha256 } = require('../src/server/owned-native-instruction-dispatch');
 
 const LOGIN_ID = 'login_test_1';
 const LOGIN_URL = 'https://auth.openai.com/oauth/authorize?code=test';
+const TRANSPORT_ENVIRONMENT_KEYS = Object.freeze([
+  'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS',
+]);
+const FORBIDDEN_INHERITED_ENVIRONMENT_KEYS = Object.freeze([
+  'ALL_PROXY', 'SSL_CERT_DIR', 'NODE_OPTIONS', 'NODE_TLS_REJECT_UNAUTHORIZED',
+  'GH_TOKEN', 'GITHUB_TOKEN', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CUSTOM_ENDPOINT',
+]);
 
 class FakePipe extends EventEmitter {
   constructor(onWrite, onWriteCallback) {
@@ -94,7 +102,7 @@ function createWorkspace(t) {
 }
 
 function createSpawnHarness(workspace, onWrite) {
-  const harness = { calls: 0, child: null, executable: null, args: null, options: null, environment: null };
+  const harness = { calls: 0, child: null, executable: null, args: null, options: null, environment: null, spawnEnvironment: null };
   harness.spawnImpl = (executable, args, options) => {
     harness.calls += 1;
     harness.executable = executable;
@@ -105,6 +113,7 @@ function createSpawnHarness(workspace, onWrite) {
     harness.windowsHome = { HOMEDRIVE: options.env.HOMEDRIVE, HOMEPATH: options.env.HOMEPATH };
     harness.claudeTokenPresent = typeof options.env.CLAUDE_CODE_OAUTH_TOKEN === 'string';
     harness.environment = options.env;
+    harness.spawnEnvironment = { ...options.env };
     harness.child = new FakeChild(onWrite);
     setImmediate(() => harness.child.emit('spawn'));
     return harness.child;
@@ -287,7 +296,7 @@ function codexResponder(options = {}) {
       child.send(codexResponse(request.id, {
         type: 'chatgpt',
         loginId: options.loginResponseId || LOGIN_ID,
-        authUrl: LOGIN_URL,
+        authUrl: options.authUrl === undefined ? LOGIN_URL : options.authUrl,
       }));
       return;
     }
@@ -465,6 +474,121 @@ test('Codex presents same-process managed login once and waits for its matching 
   assert.equal(runner.snapshot().contextState, 'ended');
   assert.equal(runner.snapshot().terminalContextCount, 1);
   await assert.rejects(runner.start({ inputText: 'a second task' }), (error) => error.code === 'already_started');
+  await runner.stop();
+});
+
+test('Codex accepts only approved authentication URL origins and preserves the original URL', async (t) => {
+  const authenticationUrls = [
+    'https://auth.openai.com/oauth/authorize?code=auth-origin-CREDENTIAL-SENTINEL',
+    'https://chatgpt.com/device?continue=%2Fsettings&code=chatgpt-origin-CREDENTIAL-SENTINEL',
+    'https://AUTH.OPENAI.COM:443/arbitrary/path?opaque=%2f+',
+    'https://chatgpt.com:443/another/path?state=original+value',
+  ];
+
+  for (const authUrl of authenticationUrls) {
+    const workspace = createWorkspace(t);
+    const events = [];
+    const harness = codexResponder({ workspace, authUrl });
+    let displayedUrl = null;
+    let promptCalls = 0;
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onAuthenticationRequired: ({ loginId, authUrl: challengeUrl }) => {
+        promptCalls += 1;
+        displayedUrl = challengeUrl;
+        harness.child.send(codexLoginCompleted(loginId));
+      },
+      spawnImpl: harness.spawnImpl,
+      onNative: (event) => events.push(event),
+    }));
+    t.after(async () => { await runner.stop(); });
+
+    const snapshot = await runner.start({ inputText: 'fixture task' });
+    assert.equal(displayedUrl, authUrl);
+    assert.equal(promptCalls, 1);
+    assert.deepEqual(harness.methods, ['initialize', 'account/login/start', 'thread/start', 'turn/start']);
+    assert.equal(JSON.stringify(snapshot).includes(authUrl), false);
+    assert.equal(JSON.stringify(events).includes(authUrl), false);
+    assert.equal(JSON.stringify(snapshot).includes('CREDENTIAL-SENTINEL'), false);
+    assert.equal(JSON.stringify(events).includes('CREDENTIAL-SENTINEL'), false);
+    await runner.stop();
+  }
+});
+
+test('Codex rejects authentication URLs outside the approved origins without exposing them', async (t) => {
+  const marker = 'private-auth-url-CREDENTIAL-SENTINEL';
+  const invalidUrls = [
+    `https://unknown.invalid/oauth?code=${marker}`,
+    `https://auth.openai.com:444/oauth?code=${marker}`,
+    `https://fixture-user:${marker}@auth.openai.com/oauth`,
+    `https://login.auth.openai.com/oauth?code=${marker}`,
+    `https://auth.openai.com.attacker.invalid/oauth?code=${marker}`,
+    `https://auth.openai.com./oauth?code=${marker}`,
+    `https://127.0.0.1/oauth?code=${marker}`,
+    `https://[::1]/oauth?code=${marker}`,
+    `https://localhost/oauth?code=${marker}`,
+    `http://auth.openai.com/oauth?code=${marker}`,
+    ` https://auth.openai.com/oauth?code=${marker}`,
+    `https://auth.openai.com/oauth?code=${marker} `,
+    `https://auth.openai.com/oauth?code=${marker}${String.fromCharCode(10)}continued`,
+    `https://auth.openai.com/oauth?code=${'x'.repeat(4100)}${marker}`,
+  ];
+
+  for (const authUrl of invalidUrls) {
+    const workspace = createWorkspace(t);
+    const events = [];
+    const harness = codexResponder({ workspace, authUrl });
+    let promptCalls = 0;
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onAuthenticationRequired() { promptCalls += 1; },
+      spawnImpl: harness.spawnImpl,
+      onNative: (event) => events.push(event),
+    }));
+    t.after(async () => { await runner.stop(); });
+
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+      assert.equal(error.code, 'authentication_response_invalid');
+      assert.equal(error.cause, undefined);
+      assert.equal(error.message.includes(authUrl), false);
+      assert.equal(error.stack.includes(authUrl), false);
+      assert.equal(error.message.includes(marker), false);
+      assert.equal(error.stack.includes(marker), false);
+      return true;
+    });
+    assert.equal(promptCalls, 0);
+    assert.deepEqual(harness.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(events, []);
+    assert.equal(runner.snapshot().failureCode, 'authentication_response_invalid');
+    assert.equal(JSON.stringify(runner.snapshot()).includes(authUrl), false);
+    assert.equal(JSON.stringify(runner.snapshot()).includes(marker), false);
+    await runner.stop();
+  }
+});
+
+test('Codex rejects an invalid authentication URL even when login completion arrived first', async (t) => {
+  const workspace = createWorkspace(t);
+  const marker = 'early-private-auth-url-CREDENTIAL-SENTINEL';
+  const authUrl = `https://unknown.invalid/oauth?code=${marker}`;
+  const events = [];
+  const harness = codexResponder({ workspace, authUrl, earlyLoginCompletion: true });
+  let promptCalls = 0;
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    onAuthenticationRequired() { promptCalls += 1; },
+    spawnImpl: harness.spawnImpl,
+    onNative: (event) => events.push(event),
+  }));
+  t.after(async () => { await runner.stop(); });
+
+  await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+    assert.equal(error.code, 'authentication_response_invalid');
+    assert.equal(error.cause, undefined);
+    assert.equal(error.message.includes(marker), false);
+    assert.equal(error.stack.includes(marker), false);
+    return true;
+  });
+  assert.equal(promptCalls, 0);
+  assert.deepEqual(harness.methods, ['initialize', 'account/login/start']);
+  assert.deepEqual(events, []);
+  assert.equal(JSON.stringify(runner.snapshot()).includes(marker), false);
   await runner.stop();
 });
 
@@ -3065,9 +3189,9 @@ test('a duplicate resolution during terminal callback does not consume the defer
   await runner.stop();
 });
 
-function createStartCancellationFixture(workspace, provider, stage) {
+function createStartCancellationFixture(workspace, provider, stage, options = {}) {
   const barriers = new Map();
-  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], releaseLate: () => {} };
+  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], authenticationPromptCalls: 0, releaseLate: () => {} };
   const barrier = (name) => {
     if (!barriers.has(name)) barriers.set(name, deferred());
     return barriers.get(name);
@@ -3086,7 +3210,7 @@ function createStartCancellationFixture(workspace, provider, stage) {
   function responseFor(request) {
     if (request.method === 'initialize') return codexResponse(request.id, { serverInfo: { name: 'codex', version: 'test' } });
     if (request.method === 'account/login/start') return codexResponse(request.id, {
-      type: 'chatgpt', loginId: LOGIN_ID, authUrl: LOGIN_URL,
+      type: 'chatgpt', loginId: LOGIN_ID, authUrl: options.authUrl ?? LOGIN_URL,
     });
     if (request.method === 'thread/start') return codexResponse(request.id, { thread: { id: 'thread_native_1' } });
     if (request.method === 'turn/start') return codexResponse(request.id, { turn: { id: 'turn_native_1' } });
@@ -3148,8 +3272,10 @@ function createStartCancellationFixture(workspace, provider, stage) {
       reached('authentication-requested');
       return stage === 'claude-authentication' ? barrier('authentication-result').promise : { oauthToken: 'fixture-oauth-token' };
     } } : {}),
-    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId }) => {
+    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId, authUrl }) => {
+      state.authenticationPromptCalls += 1;
       reached('authentication-prompt');
+      if (options.onAuthenticationRequired) return options.onAuthenticationRequired({ loginId, authUrl });
       if (stage === 'codex-login-completion') {
         state.releaseLate = () => state.child.send(codexLoginCompleted(loginId));
       } else {
@@ -3301,4 +3427,493 @@ for (const stage of [
       await startOutcome;
     }
   });
+}
+
+test('Codex ignores an invalid login response delivered after stop', { timeout: 7000 }, async (t) => {
+  const workspace = createWorkspace(t);
+  const marker = 'late-login-url-CREDENTIAL-SENTINEL';
+  const authUrl = `https://unknown.invalid/device?fixture=${marker}`;
+  const fixture = createStartCancellationFixture(workspace, 'codex', 'codex-login-start-response', { authUrl });
+  t.after(async () => { await fixture.runner.stop(); });
+  const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
+  let lateResponseReleased = false;
+  const releaseLateOnce = () => {
+    if (lateResponseReleased) return;
+    lateResponseReleased = true;
+    fixture.releaseLate();
+  };
+
+  try {
+    await waitForCodexResponseBarrier(fixture, 'account/login/start');
+    const stopSnapshot = await fixture.runner.stop();
+    const writesBeforeLate = fixture.state.writes.slice();
+    const outcome = await startOutcome;
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, 'operation_stopped');
+    assert.equal(outcome.error.cause, undefined);
+    assert.equal(stopSnapshot.childExited, true);
+    assert.equal(stopSnapshot.childClosed, true);
+    assert.equal(stopSnapshot.ownedChildActive, false);
+    assert.equal(fixture.state.authenticationPromptCalls, 0);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+
+    const snapshotBeforeLate = fixture.runner.snapshot();
+    releaseLateOnce();
+    await nextImmediate();
+
+    assert.deepEqual(fixture.runner.snapshot(), snapshotBeforeLate);
+    assert.deepEqual(fixture.state.writes, writesBeforeLate);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(fixture.state.events, []);
+    const serialized = [outcome.error.code, outcome.error.message, outcome.error.stack,
+      JSON.stringify(fixture.runner.snapshot()), JSON.stringify(fixture.state.events)].join('\n');
+    assert.equal(serialized.includes(authUrl), false);
+    assert.equal(serialized.includes(marker), false);
+  } finally {
+    await fixture.runner.stop();
+    releaseLateOnce();
+    await nextImmediate();
+    await startOutcome;
+  }
+});
+
+test('Codex classifies trusted authentication prompt throws and rejections without exposing details', { timeout: 7000 }, async (t) => {
+  for (const failureMode of ['sync-throw', 'async-reject']) {
+    const workspace = createWorkspace(t);
+    const urlMarker = `prompt-url-${failureMode}-CREDENTIAL-SENTINEL`;
+    const callbackMarker = `prompt-error-${failureMode}-CREDENTIAL-SENTINEL`;
+    const authUrl = `https://auth.openai.com/device?fixture=${urlMarker}`;
+    const callbackError = new Error(callbackMarker);
+    let presentedUrl = null;
+    const fixture = createStartCancellationFixture(workspace, 'codex', 'codex-prompt-failure', {
+      authUrl,
+      onAuthenticationRequired({ authUrl: challengeUrl }) {
+        presentedUrl = challengeUrl;
+        if (failureMode === 'sync-throw') throw callbackError;
+        return Promise.reject(callbackError);
+      },
+    });
+    t.after(async () => { await fixture.runner.stop(); });
+
+    const outcome = await observeStart(fixture.runner.start({ inputText: 'private start input' }));
+    const expectedStartCode = failureMode === 'sync-throw' ? 'authentication_prompt_failed' : 'operation_stopped';
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, expectedStartCode);
+    assert.equal(outcome.error.cause, undefined);
+    assert.equal(presentedUrl, authUrl);
+    assert.equal(fixture.state.authenticationPromptCalls, 1);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(fixture.state.events, []);
+
+    const snapshot = fixture.runner.snapshot();
+    assert.equal(snapshot.failureCode, 'authentication_prompt_failed');
+    assert.equal(snapshot.contextState, 'none');
+    const serialized = [outcome.error.code, outcome.error.message, outcome.error.stack,
+      JSON.stringify(snapshot), JSON.stringify(fixture.state.events)].join('\n');
+    assert.equal(serialized.includes(authUrl), false);
+    assert.equal(serialized.includes(urlMarker), false);
+    assert.equal(serialized.includes(callbackMarker), false);
+    await fixture.runner.stop();
+  }
+});
+
+test('owned Claude and Codex pass only current transport values and delete each spawn environment', async (t) => {
+  const claudeWorkspace = createWorkspace(t);
+  const codexWorkspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues());
+  const sourceDescriptors = Object.getOwnPropertyDescriptors(source.environment);
+  const firstValues = { ...source.values };
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    const claudeHarness = createSpawnHarness(claudeWorkspace, (line, child) => {
+      const message = JSON.parse(line);
+      if (message.type !== 'user') return;
+      child.send(
+        { type: 'system', subtype: 'init', session_id: 'session_transport_1' },
+        {
+          type: 'stream_event', session_id: 'session_transport_1', parent_tool_use_id: null,
+          event: { type: 'message_start', message: { id: 'message_transport_1', role: 'assistant' } },
+        },
+      );
+    });
+    const claudeRunner = createOwnedNativeRunner(baseOptions(claudeWorkspace, 'claude', {
+      onNative() {},
+      getAuthentication: () => ({ oauthToken: 'fixture-oauth-CREDENTIAL-SENTINEL' }),
+      spawnImpl: claudeHarness.spawnImpl,
+    }));
+
+    const claudeSnapshot = await claudeRunner.start({ inputText: 'fixture prompt' });
+    assert.deepEqual(readTransportValues(claudeHarness.spawnEnvironment), firstValues);
+    assert.deepEqual(claudeHarness.args, [
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      '--include-partial-messages', '--no-session-persistence', '--setting-sources', '',
+      '--strict-mcp-config', '--tools', '', '--settings', '{"disableAllHooks":true}',
+    ]);
+    assert.equal(claudeHarness.spawnEnvironment.HOME, claudeWorkspace.homePath);
+    assert.equal(claudeHarness.spawnEnvironment.USERPROFILE, claudeWorkspace.homePath);
+    assert.equal(claudeHarness.spawnEnvironment.CLAUDE_CONFIG_DIR, claudeWorkspace.homePath);
+    assert.equal(claudeHarness.spawnEnvironment.CLAUDE_CODE_OAUTH_TOKEN, 'fixture-oauth-CREDENTIAL-SENTINEL');
+    assert.equal(claudeHarness.options.shell, false);
+    assert.deepEqual(claudeHarness.options.stdio, ['pipe', 'pipe', 'pipe']);
+    assertForbiddenEnvironmentAbsent(claudeHarness.spawnEnvironment);
+    assert.equal(Object.keys(claudeHarness.environment).length, 0);
+    assert.equal(JSON.stringify(claudeHarness.args).includes('CREDENTIAL-SENTINEL'), false);
+    assert.equal(JSON.stringify(claudeSnapshot).includes('CREDENTIAL-SENTINEL'), false);
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 1])));
+    assert.deepEqual(Object.getOwnPropertyDescriptors(source.environment), sourceDescriptors);
+    assert.deepEqual(source.values, firstValues);
+    await claudeRunner.stop();
+
+    source.values.HTTPS_PROXY = 'http://fixture:next-CREDENTIAL-SENTINEL@proxy.invalid:9443';
+    const codexHarness = createOwnedCodexHarness(codexWorkspace);
+    const codexRunner = createOwnedNativeRunner(baseOptions(codexWorkspace, 'codex', {
+      onNative() {},
+      onAuthenticationRequired: ({ loginId }) => codexHarness.child.send(codexLoginCompleted(loginId)),
+      spawnImpl: codexHarness.spawnImpl,
+    }));
+    const codexSnapshot = await codexRunner.start({ inputText: 'fixture task' });
+
+    assert.equal(claudeHarness.spawnEnvironment.HTTPS_PROXY, firstValues.HTTPS_PROXY);
+    assert.equal(codexHarness.spawnEnvironment.HTTPS_PROXY, source.values.HTTPS_PROXY);
+    assert.deepEqual(codexHarness.args, [
+      'app-server', '--listen', 'stdio://',
+      '-c', 'cli_auth_credentials_store="ephemeral"',
+      '-c', 'features.shell_tool=false',
+      '-c', 'features.unified_exec=false',
+      '-c', 'features.multi_agent=false',
+      '-c', 'features.apps=false',
+      '-c', 'features.hooks=false',
+      '-c', 'features.skill_mcp_dependency_install=false',
+      '-c', 'features.daemon_auto_start=false',
+      '-c', 'features.browser_use=false',
+      '-c', 'features.browser_use_external=false',
+      '-c', 'features.browser_use_full_cdp_access=false',
+      '-c', 'features.computer_use=false',
+      '-c', 'features.image_generation=false',
+      '-c', 'features.plugins=false',
+      '-c', 'features.remote_plugin=false',
+      '-c', 'features.workspace_dependencies=false',
+      '-c', 'web_search="disabled"',
+    ]);
+    assert.deepEqual(readTransportValues(codexHarness.spawnEnvironment), source.values);
+    assert.equal(codexHarness.spawnEnvironment.HOME, codexWorkspace.homePath);
+    assert.equal(codexHarness.spawnEnvironment.CODEX_HOME, path.join(codexWorkspace.homePath, '.codex'));
+    assert.equal(Object.hasOwn(codexHarness.spawnEnvironment, 'CLAUDE_CODE_OAUTH_TOKEN'), false);
+    assert.equal(codexHarness.options.shell, false);
+    assert.deepEqual(codexHarness.options.stdio, ['pipe', 'pipe', 'pipe']);
+    assertForbiddenEnvironmentAbsent(codexHarness.spawnEnvironment);
+    assert.equal(Object.keys(codexHarness.environment).length, 0);
+    assert.equal(JSON.stringify(codexHarness.args).includes('CREDENTIAL-SENTINEL'), false);
+    assert.equal(JSON.stringify(codexSnapshot).includes('CREDENTIAL-SENTINEL'), false);
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 2])));
+    assert.deepEqual(Object.getOwnPropertyDescriptors(source.environment), sourceDescriptors);
+    await codexRunner.stop();
+  });
+});
+
+test('owned runner rejects invalid transport values before spawning', async (t) => {
+  const invalidValues = [
+    { key: 'HTTP_PROXY', value: 17 },
+    { key: 'HTTPS_PROXY', value: 'http://fixture.invalid\u0000/path' },
+    { key: 'NO_PROXY', value: 'fixture.invalid\rmore' },
+    { key: 'NODE_EXTRA_CA_CERTS', value: `${makeTransportValues().NODE_EXTRA_CA_CERTS}\n` },
+    { key: 'SSL_CERT_FILE', value: process.platform === 'win32' ? 'C:relative-ca.pem' : 'relative-ca.pem' },
+    ...(process.platform === 'win32' ? [
+      { key: 'SSL_CERT_FILE', value: '\\rooted-without-drive.pem' },
+      { key: 'SSL_CERT_FILE', value: '\\\\?\\C:\\device-ca.pem' },
+      { key: 'NODE_EXTRA_CA_CERTS', value: '\\\\.\\pipe\\device-ca.pem' },
+    ] : []),
+  ];
+
+  for (const invalid of invalidValues) {
+    const workspace = createWorkspace(t);
+    const source = makeOwnedProcessEnvironment({ ...makeTransportValues(), [invalid.key]: invalid.value });
+    const descriptors = Object.getOwnPropertyDescriptors(source.environment);
+    let spawnCalls = 0;
+
+    await withIsolatedProcessEnvironment(source.environment, async () => {
+      const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+        onNative() {},
+        onAuthenticationRequired() {},
+        spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+      }));
+      await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+        assert.equal(error.code, 'invalid_transport_environment');
+        assert.equal(error.cause, undefined);
+        assert.equal(error.message.includes('CREDENTIAL-SENTINEL'), false);
+        assert.equal(error.message.includes(String(invalid.value)), false);
+        return true;
+      });
+      assert.equal(spawnCalls, 0);
+      assert.equal(runner.snapshot().failureCode, 'invalid_transport_environment');
+      assert.deepEqual(Object.getOwnPropertyDescriptors(source.environment), descriptors);
+      await runner.stop();
+    });
+  }
+});
+
+test('owned transport lookup errors use a fixed diagnostic without preserving their cause', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues(), 'HTTPS_PROXY');
+  const descriptors = Object.getOwnPropertyDescriptors(source.environment);
+  let spawnCalls = 0;
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onNative() {},
+      onAuthenticationRequired() {},
+      spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+    }));
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+      assert.equal(error.code, 'invalid_transport_environment');
+      assert.equal(error.cause, undefined);
+      assert.equal(error.message.includes('fixture-private-proxy-CREDENTIAL-SENTINEL'), false);
+      assert.equal(error.stack.includes('fixture-private-proxy-CREDENTIAL-SENTINEL'), false);
+      return true;
+    });
+    assert.equal(source.lookupCounts.HTTPS_PROXY, 1);
+    assert.equal(spawnCalls, 0);
+    assert.deepEqual(Object.getOwnPropertyDescriptors(source.environment), descriptors);
+    await runner.stop();
+  });
+});
+
+test('owned runner omits unset and empty transport values and ignores lowercase names', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment({
+    HTTPS_PROXY: '', HTTP_PROXY: undefined, NO_PROXY: undefined, SSL_CERT_FILE: '', NODE_EXTRA_CA_CERTS: undefined,
+  });
+  source.environment.https_proxy = 'http://lowercase.invalid:8080';
+  source.environment.ssl_cert_file = '/lowercase/ca.pem';
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    const harness = createOwnedCodexHarness(workspace);
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onNative() {},
+      onAuthenticationRequired: ({ loginId }) => harness.child.send(codexLoginCompleted(loginId)),
+      spawnImpl: harness.spawnImpl,
+    }));
+    await runner.start({ inputText: 'fixture task' });
+    for (const key of TRANSPORT_ENVIRONMENT_KEYS) assert.equal(Object.hasOwn(harness.spawnEnvironment, key), false);
+    assert.equal(Object.hasOwn(harness.spawnEnvironment, 'https_proxy'), false);
+    assert.equal(Object.hasOwn(harness.spawnEnvironment, 'ssl_cert_file'), false);
+    assertForbiddenEnvironmentAbsent(harness.spawnEnvironment);
+    assert.equal(Object.keys(harness.environment).length, 0);
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 1])));
+    await runner.stop();
+  });
+});
+
+test('invalid owned transport values are physically stopped by the owned stop path', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment({ ...makeTransportValues(), HTTP_PROXY: 19 });
+  const originalCreateServer = http.createServer;
+  const servers = [];
+  let spawnCalls = 0;
+  let runner;
+  http.createServer = function captureServer(...args) {
+    const server = originalCreateServer.apply(this, args);
+    servers.push(server);
+    return server;
+  };
+
+  try {
+    await withIsolatedProcessEnvironment(source.environment, async () => {
+      runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+        profile: 'cockpit-native-wait-v1',
+        onNative() {},
+        ownedSourceClaim: Object.freeze({}),
+        getAuthentication: () => ({ oauthToken: 'fixture-oauth-CREDENTIAL-SENTINEL' }),
+        onSourceReady() {},
+        captureWaitAuthorization: () => null,
+        onContextContinuation() {},
+        spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+      }));
+      await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) =>
+        error.code === 'invalid_transport_environment' && error.cause === undefined);
+      assert.equal(spawnCalls, 0);
+      assert.equal(servers.length, 1);
+      const stopped = await runner.stop();
+      assert.equal(stopped.state, 'stopped');
+      assert.equal(servers[0].listening, false);
+    });
+  } finally {
+    if (runner) await runner.stop();
+    http.createServer = originalCreateServer;
+  }
+});
+
+test('owned wait endpoint startup does not read transport values while its listen callback is pending', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues());
+  const originalCreateServer = http.createServer;
+  const originalListen = http.Server.prototype.listen;
+  const servers = [];
+  let resolveListening;
+  const listening = new Promise((resolve) => { resolveListening = resolve; });
+  let spawnCalls = 0;
+  let runner;
+  http.createServer = function captureServer(...args) {
+    const server = originalCreateServer.apply(this, args);
+    servers.push(server);
+    server.once('listening', resolveListening);
+    return server;
+  };
+  http.Server.prototype.listen = function holdListenCallback(...args) {
+    const callbackIndex = args.length - 1;
+    if (typeof args[callbackIndex] === 'function') args[callbackIndex] = () => {};
+    return originalListen.apply(this, args);
+  };
+
+  try {
+    await withIsolatedProcessEnvironment(source.environment, async () => {
+      runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+        profile: 'cockpit-native-wait-v1',
+        onNative() {},
+        ownedSourceClaim: Object.freeze({}),
+        getAuthentication: () => ({ oauthToken: 'fixture-oauth-CREDENTIAL-SENTINEL' }),
+        onSourceReady() {},
+        captureWaitAuthorization: () => null,
+        onContextContinuation() {},
+        spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+      }));
+      const startPromise = runner.start({ inputText: 'fixture task' });
+      await listening;
+      assert.equal(servers.length, 1);
+      assert.equal(servers[0].listening, true);
+      assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 0])));
+      assert.equal(spawnCalls, 0);
+
+      const stopped = await runner.stop();
+      await assert.rejects(startPromise, (error) => error.code === 'operation_stopped');
+      assert.equal(stopped.state, 'stopped');
+      assert.equal(servers[0].listening, false);
+      assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 0])));
+      assert.equal(spawnCalls, 0);
+    });
+  } finally {
+    if (runner) await runner.stop();
+    http.Server.prototype.listen = originalListen;
+    http.createServer = originalCreateServer;
+  }
+});
+
+test('owned runner stops after transport capture when the owner expires before spawn', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues());
+  let runner;
+  let stopPromise;
+  let spawnCalls = 0;
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+      onNative() {},
+      getAuthentication: () => ({ oauthToken: 'fixture-oauth-CREDENTIAL-SENTINEL' }),
+      isSourceCurrent() {
+        if (source.lookupCounts.NODE_EXTRA_CA_CERTS === 1 && !stopPromise) stopPromise = runner.stop();
+        return true;
+      },
+      spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+    }));
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => error.code === 'operation_stopped');
+    const stopped = await stopPromise;
+    assert.equal(stopped.state, 'stopped');
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 1])));
+    assert.deepEqual(source.values, makeTransportValues());
+    assert.equal(spawnCalls, 0);
+    assert.equal(JSON.stringify(runner.snapshot()).includes('CREDENTIAL-SENTINEL'), false);
+  });
+});
+
+test('owned runner clears its environment after a synchronous spawn error', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues());
+  let environmentReference;
+  let spawnEnvironment;
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onNative() {},
+      onAuthenticationRequired() {},
+      spawnImpl(_executable, _args, options) {
+        environmentReference = options.env;
+        spawnEnvironment = { ...options.env };
+        throw new Error('fixture-CREDENTIAL-SENTINEL');
+      },
+    }));
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) =>
+      error.code === 'spawn_failed' && error.cause === undefined && !error.message.includes('CREDENTIAL-SENTINEL'));
+    assert.deepEqual(readTransportValues(spawnEnvironment), source.values);
+    assertForbiddenEnvironmentAbsent(spawnEnvironment);
+    assert.equal(Object.keys(environmentReference).length, 0);
+    assert.equal(JSON.stringify(runner.snapshot()).includes('CREDENTIAL-SENTINEL'), false);
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 1])));
+    await runner.stop();
+  });
+});
+
+function makeTransportValues() {
+  return {
+    HTTPS_PROXY: 'http://fixture:proxy-CREDENTIAL-SENTINEL@proxy.invalid:8443',
+    HTTP_PROXY: 'http://http-proxy.invalid:8080',
+    NO_PROXY: 'localhost, internal.invalid ',
+    SSL_CERT_FILE: process.platform === 'win32'
+      ? 'C:\\transport certs\\root.pem'
+      : '/tmp/transport certs/root.pem',
+    NODE_EXTRA_CA_CERTS: process.platform === 'win32'
+      ? '\\\\certificate-server\\shared certs\\extra.pem'
+      : '/tmp/transport certs/extra.pem',
+  };
+}
+
+function makeOwnedProcessEnvironment(transportValues, throwingKey = null) {
+  const values = { ...transportValues };
+  const lookupCounts = Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 0]));
+  const environment = {
+    PATH: 'owned-fixture-path',
+    PATHEXT: '.EXE',
+    SYSTEMROOT: 'owned-fixture-system-root',
+    WINDIR: 'owned-fixture-windows-root',
+    COMSPEC: 'owned-fixture-command-shell',
+    ALL_PROXY: 'fixture-forbidden-all-proxy',
+    SSL_CERT_DIR: 'fixture-forbidden-ca-dir',
+    NODE_OPTIONS: '--require fixture-forbidden-module',
+    NODE_TLS_REJECT_UNAUTHORIZED: '0',
+    GH_TOKEN: 'fixture-forbidden-github-token',
+    GITHUB_TOKEN: 'fixture-forbidden-github-token',
+    CLAUDE_CODE_MESSAGING_TOKEN: 'fixture-forbidden-messaging-token',
+    CUSTOM_ENDPOINT: 'fixture-forbidden-endpoint',
+    https_proxy: 'http://lowercase.invalid:8080',
+    ssl_cert_file: '/lowercase/ca.pem',
+  };
+  for (const key of TRANSPORT_ENVIRONMENT_KEYS) {
+    Object.defineProperty(environment, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        lookupCounts[key] += 1;
+        if (key === throwingKey) throw new Error('fixture-private-proxy-CREDENTIAL-SENTINEL');
+        return values[key];
+      },
+    });
+  }
+  return { environment, lookupCounts, values };
+}
+
+async function withIsolatedProcessEnvironment(environment, callback) {
+  const originalEnvironment = process.env;
+  process.env = environment;
+  try {
+    return await callback();
+  } finally {
+    process.env = originalEnvironment;
+  }
+}
+
+function readTransportValues(environment) {
+  return Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, environment[key]]));
+}
+
+function assertForbiddenEnvironmentAbsent(environment) {
+  for (const key of FORBIDDEN_INHERITED_ENVIRONMENT_KEYS) assert.equal(Object.hasOwn(environment, key), false);
 }

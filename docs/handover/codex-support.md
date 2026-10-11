@@ -1257,3 +1257,38 @@ PR #377の取り込みでこの部分対応をfeatureへ集約する。#364は�
 force push、squash、rebase、mainへの取り込みは行っていない。
 最終更新はマージ済みの現在地の文書だけで、非文書ファイルは全体検証済みheadと同一である。
 今回のマージ許可はこの対象22件だけに適用し、後続PRには持ち越さない。
+
+## 通信環境の限定伝播の現在地 (#215)
+
+最新feature `6c5854b`から`codex/transport-environment-215-20261011`を作り、proxyとCAの5変数の伝播へ着手した。
+Astraの設計助言に基づき、[通信環境の供給契約](../design/native-transport-environment.md)とTE01〜TE08を実装前に記録した。
+既存の信頼済み供給元、固定uppercase名、非空文字列の保持とCAの完全絶対表記を採用する。
+不正値を黙って省略せず固定codeで拒否し、公開診断やsnapshotへ値を残さない。
+owned MCP endpointの待機後へ環境構築を移し、構築後の失効も検査する。
+managed app-serverの環境消去を全keyへ広げ、remote CLIの既存消去とそろえる。
+Windowsの関連2ファイルは135件中133件成功、失敗0件、実symlink権限によるskip2件だった。
+構築後失効時の環境消去は差分監査、spawn0とendpointの物理停止はfixtureで確認した。
+PR #378はfeature向けのDraftとして作成し、固定head `639ff5b`の全体試験は3,260件中3,255件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+指定Claude R1はblocker0、要修正1件だった。推奨の文書対応を採用し、NO_PROXYのloopback除外を導入条件へ追加する。自動追記は行わず、実runtimeでの直結確認を残す。
+指定Claude R2はblockerと要修正0件で収束した。提案に従い、導入手順のNO_PROXYを未確認の表記例と明記した。
+proxy設定時のloopback除外の欠落診断は、providerの解釈を確かめてから設計する#215の残件とする。今の文書条件だけで誤設定を防ぐとは扱わない。
+最終更新は文書と結果記録だけで、sourceとtestは全体試験headから不変である。
+PR #378はfeature向けにレビュー収束した。次は認証URLを二つの既知originへ限定する部分対応へスタックし、未収束の#364は含めない。
+認証の再利用、loginの直列化、機能設定の実効性と実runtimeの通信成功は今回の完了条件に含めず、#215の残件を維持する。
+
+## 認証URLのorigin限定の現在地 (#215)
+
+最新feature `6c5854b`から`codex/auth-url-origin-215-20261011`を作り、ReadyのPR #378最終head `958bb99`を通常mergeで取り込んだ。
+Astraの助言と公式公開実装、公式protocolの例を確認し、[認証URLの契約](../design/native-authentication-url.md)とAU01〜AU06を実装前に記録した。
+二つのHTTPS originに限定し、URLの元文字列を保持する。既存のtypeとloginId検査、URL検査、早着completion照合の順序を維持する。
+未知hostの汎用許可設定は追加せず、固定codeで拒否する。前後空白も拒否する。
+初回のWindows関連2ファイルは223件中222件成功、失敗0件、実symlink権限によるskip1件だった。
+PR #379をfeature向けDraftとして作成した。固定head `2890629`の初回全体試験は3,263件中3,193件成功、65件失敗、Windows実symlink権限によるskip5件だった。
+指定Claude R1も、実runnerを通るsource collectorとinstruction dispatchの旧正常系URLを要修正として挙げた。全65件の失敗はこの2ファイルに限られた。
+二つのfixtureを許可originへ修正し、停止後の不正URL応答とcallbackの同期throw・非同期rejectを検証に追加した。sourceとruntimeは変更していない。
+修正後の関連3ファイルは241件中240件成功、失敗0件、Windows実symlink権限によるskip1件だった。
+固定head `c32fed6`の全体再確認は3,265件中3,260件成功、失敗0件、Windows実symlink権限によるskip5件だった。先行実行のHTTP target試験のファイル単位失敗は単独10件と全体再確認で再現せず、原因未特定として残す。
+指定Claude R2はblockerと要修正0件で収束した。提案に従ってcallback失敗分類を設計正本に補足し、最終更新は文書と結果記録に限る。
+PR #379はReadyとする。取り込み順は#378→#379で、feature向けPRのマージ承認は別途必要である。
+次は#215のowned Codexログイン直列化へ進む。同module内の論理loginをFIFOで直列化し、異常時はchildのexitとcloseの双方まで保持する。OS port解放、別processと実認証を証明したとは扱わない。
+今回の変更は認証再利用とlogin直列化から独立した部分対応で、実認証と後続redirectの互換性を確認したとは扱わない。

@@ -353,7 +353,7 @@ function createOwnedRunnerFactory(workspace, provider, options = {}) {
         child.send({ id: request.id, result: { serverInfo: { name: 'fixture', version: '1' }, codexHome: path.join(workspace.homePath, '.codex') } });
       } else if (request.method === 'account/login/start') {
         child.send({ id: request.id, result: {
-          type: 'chatgpt', loginId: 'login-integration', authUrl: 'https://auth.example.test/device',
+          type: 'chatgpt', loginId: 'login-integration', authUrl: 'https://auth.openai.com/device?fixture=composition-CREDENTIAL-SENTINEL',
         } });
       } else if (request.method === 'thread/start') {
         child.send({ id: request.id, result: { thread: { id: options.nativeId || 'thread-integration' } } });
