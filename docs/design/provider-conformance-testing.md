@@ -744,11 +744,14 @@ M01〜M08の関連試験48件は成功し、失敗とskipは0件である。
 実loopbackの効果後切断とJSON解析失敗は、Claude/Codexの各writer fixtureでPOST1回、効果1回、追加ensureとrefresh0回を確認した。
 固定head `f045d13` の全体試験は3,060件成功、失敗0件、Windows実symlink権限によるskip2件である。
 両provider実runtimeは未確認である。
+製品caller、HTTP、管理protocol、ACL、全writerと両provider実runtimeは後続gateである。
 
 ## 表示記録と出自履歴の保持反例 (#312)
 
 以下は[保持契約](projection-display-retention.md)のfixture実装前期待値である。
 情報を忘れた候補状態はtest内の反例であり、製品GCの実装や未実装世代拒否の成功としない。
+
+### 実装前に記録した期待値
 
 | ID | 操作 | 期待値 |
 | --- | --- | --- |
@@ -761,11 +764,14 @@ M01〜M08の関連試験48件は成功し、失敗とskipは0件である。
 | ID-F312-R07 | 最新と古い保存状態に同じ中間時刻writeを与える | 最新側は保持、古い候補は解除。保存順序の反例に限定 |
 | ID-F312-R08 | 非active中にhiddenを落とした候補へ同identity再登場 | 保持側はhidden選好を維持、候補は表示が変わる |
 
+### 現時点の結果
+
 R01〜R08のfixture試験8件は成功した。
 R05の一時不在と再登場、R08の表示選好を両providerで補強し、関連2件も成功した。
 R03/R04は既存rowへの質問統合の変化を確認し、操作認可の証拠としない。
-全体試験と指定Claudeレビューは未完了である。
-製品caller、HTTP、管理protocol、ACL、全writerと両provider実runtimeは後続gateである。
+固定head `d57d84e` の全体試験は3,077件成功、失敗0件、Windows実symlink権限によるskip2件である。
+指定Claude R1の文書要修正1件を補正し、R2で妥当性を確認する。
+両provider実runtime、全入口の永続拒否と製品GCは未確認である。
 
 ## provider別表示墓標の計測 (#312)
 

@@ -1066,4 +1066,6 @@ Astraへ回収条件を相談し、現在の証拠だけでは一般GCの安全�
 #209の世代と表示identityの対応、永続拒否境界と#313の保存所有が後続の依存であり、未収束#364を採用した前提にはしない。
 Luna Maxが反例fixtureを実装し、編集停止後にrootが監査した。
 関連8件と、両providerへ補強した不在後再登場とhidden選好の関連2件が成功した。
-全体試験と指定Claudeレビューを固定headで行い、確定後に結果を記録する。
+PR [#371](https://github.com/ktysne/agent-cockpit/pull/371)の固定head `d57d84e` で全体試験は3,077件成功、失敗0件、Windows実symlink権限によるskip2件である。
+指定Claude R1の文書要修正1件と任意の範囲補足を修正し、文書だけのR2妥当性確認を行う。
+src/test/toolsは全体試験headから不変で、製品GCと件数上限の解決は後続に残す。
