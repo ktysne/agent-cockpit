@@ -1270,5 +1270,8 @@ Windowsの関連2ファイルは135件中133件成功、失敗0件、実symlink�
 構築後失効時の環境消去は差分監査、spawn0とendpointの物理停止はfixtureで確認した。
 PR #378はfeature向けのDraftとして作成し、固定head `639ff5b`の全体試験は3,260件中3,255件成功、失敗0件、Windows実symlink権限によるskip5件だった。
 指定Claude R1はblocker0、要修正1件だった。推奨の文書対応を採用し、NO_PROXYのloopback除外を導入条件へ追加する。自動追記は行わず、実runtimeでの直結確認を残す。
-文書対応の妥当性をClaude R2で確認する。最終文書更新ではsourceとtestを変更しない。
+指定Claude R2はblockerと要修正0件で収束した。提案に従い、導入手順のNO_PROXYを未確認の表記例と明記した。
+proxy設定時のloopback除外の欠落診断は、providerの解釈を確かめてから設計する#215の残件とする。今の文書条件だけで誤設定を防ぐとは扱わない。
+最終更新は文書と結果記録だけで、sourceとtestは全体試験headから不変である。
+PR #378はfeature向けにレビュー収束した。次は認証URLを二つの既知originへ限定する部分対応へスタックし、未収束の#364は含めない。
 認証の再利用、loginの直列化、機能設定の実効性と実runtimeの通信成功は今回の完了条件に含めず、#215の残件を維持する。
