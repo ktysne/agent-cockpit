@@ -55,7 +55,7 @@ async function postHookRequest(body, options = {}) {
   return result.ok ? result.json : null;
 }
 
-async function runAskQuestion(input, options) {
+async function runAskQuestion(input, options = {}) {
   const sessionId = input.session_id;
   const toolUseId = input.tool_use_id;
   if (!validSessionId(sessionId) || typeof toolUseId !== 'string' || !toolUseId) return null;
@@ -66,11 +66,13 @@ async function runAskQuestion(input, options) {
     session_id: sessionId,
     id: toolUseId,
     questions: input.tool_input?.questions || [],
+    provider: options.provider || 'claude',
+    tool_name: options.toolName || 'AskUserQuestion',
     ...(typeof input.agent_id === 'string' ? { agent_id: input.agent_id } : {}),
   }, { ...options, timeoutMs: 1_000 });
   if (!register) return null;
   if (!register.awaiting) return register.hookOutput || null;
-  const fallbackOutput = register.fallbackOutput || denyAnswerOutput(register.decisionId);
+  const fallbackOutput = register.fallbackOutput || denyAnswerOutput(register.decisionId, options.provider, options.toolName);
   const serverDeadline = Number.isFinite(register.deadline)
     ? register.deadline
     : Date.parse(register.awaitingAnswerUntil || '');
@@ -80,11 +82,13 @@ async function runAskQuestion(input, options) {
   while ((options.now || Date.now)() < hookDeadline) {
     const result = await postHookRequest({
       action: 'ask-poll', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId,
+      provider: options.provider || 'claude', tool_name: options.toolName || 'AskUserQuestion',
     }, { ...options, timeoutMs: MAX_LONG_POLL_MS + 1_500 });
     if (!result) {
       const lost = await postHookRequest({
         action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, outcome: 'server-lost',
         decision_id: register.decisionId,
+        provider: options.provider || 'claude', tool_name: options.toolName || 'AskUserQuestion',
       }, { ...options, timeoutMs: 1_000 });
       const hookOutput = lost ? lost.hookOutput ?? null : fallbackOutput;
       return useOriginalToolInput(hookOutput, input.tool_input);
@@ -93,6 +97,7 @@ async function runAskQuestion(input, options) {
     const outcome = ASK_OUTCOMES.has(result.outcome) ? result.outcome : 'server-lost';
     const finished = await postHookRequest({
       action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId, outcome,
+      provider: options.provider || 'claude', tool_name: options.toolName || 'AskUserQuestion',
     }, { ...options, timeoutMs: 1_000 });
     const hookOutput = finished
       ? finished.hookOutput ?? null
@@ -101,6 +106,7 @@ async function runAskQuestion(input, options) {
   }
   const timeout = await postHookRequest({
     action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId, outcome: 'timeout',
+    provider: options.provider || 'claude', tool_name: options.toolName || 'AskUserQuestion',
   }, { ...options, timeoutMs: 1_000 });
   return timeout?.hookOutput || fallbackOutput;
 }
