@@ -131,12 +131,31 @@ function createReadRoutes(ctx) {
       if (stateSessionIds.has(sessionId)) return rowProviders.length === 1 && rowProviders[0] === provider;
       return rowProviders.length === 0 || (rowProviders.length === 1 && rowProviders[0] === provider);
     }
+    const syntheticSessionStates = new Map();
+    function observeSyntheticExecution(sessionId, session, execution) {
+      const observedState = ['active', 'ended', 'unknown'].includes(execution.state)
+        ? execution.state : 'unknown';
+      const current = syntheticSessionStates.get(sessionId);
+      if (!current) {
+        syntheticSessionStates.set(sessionId, {
+          session,
+          executionId: execution.executionId,
+          observedState,
+        });
+        return;
+      }
+      if (current.observedState === 'unknown') return;
+      if (current.executionId !== execution.executionId || current.observedState !== observedState) {
+        current.observedState = 'unknown';
+      }
+    }
     const orphanedCommonQuestions = projectionRecords.orphanedCommonQuestions;
     for (const { question, link, provider, sessionId } of projectionRecords.questions) {
       if (!projectionCanMerge(sessionId, provider)) continue;
       const display = state.projectionDisplayFor(provider, sessionId);
       if (display?.deletedAt) continue;
       let session = sessionsById.get(sessionId);
+      let isSynthetic = false;
       if (!session) {
         session = {
           session_id: sessionId,
@@ -144,6 +163,7 @@ function createReadRoutes(ctx) {
           title: question.identity.nativeId,
           product: null,
           status: '待機中',
+          projectionOnly: true,
           tools: [],
           agents: [],
           permissionWaits: [],
@@ -153,6 +173,10 @@ function createReadRoutes(ctx) {
         };
         sessionsById.set(sessionId, session);
         sessions.push(session);
+        isSynthetic = true;
+      }
+      if (isSynthetic || syntheticSessionStates.has(sessionId)) {
+        observeSyntheticExecution(sessionId, session, link.execution);
       }
       if (display?.hiddenAt) {
         session.hidden = true;
@@ -174,11 +198,16 @@ function createReadRoutes(ctx) {
       const display = state.projectionDisplayFor(provider, sessionId);
       if (display?.deletedAt) continue;
       let session = sessionsById.get(sessionId);
+      let isSynthetic = false;
       if (!session) {
         session = { session_id: sessionId, provider, title: instruction.identity.nativeId, product: null,
-          status: "待機中", tools: [], agents: [], permissionWaits: [], decisions: [], tasks: [], tasksUpdatedAt: null };
+          status: "待機中", projectionOnly: true, tools: [], agents: [], permissionWaits: [], decisions: [], tasks: [], tasksUpdatedAt: null };
         sessionsById.set(sessionId, session);
         sessions.push(session);
+        isSynthetic = true;
+      }
+      if (isSynthetic || syntheticSessionStates.has(sessionId)) {
+        observeSyntheticExecution(sessionId, session, link.execution);
       }
       if (display?.hiddenAt) {
         session.hidden = true;
@@ -187,6 +216,9 @@ function createReadRoutes(ctx) {
       if (!Array.isArray(session.instructions)) session.instructions = [];
       session.instructions.push({ ...instruction, registrationExecutionId: link.execution.executionId,
         executionState: link.execution.state });
+    }
+    for (const { session, observedState } of syntheticSessionStates.values()) {
+      session.status = observedState === 'active' ? '待機中' : observedState === 'ended' ? '終了済み' : '不明';
     }
     const instructionRecovery = safeInstructionRecovery(instructionDashboard?.recovery);
     const instructionConfigured = Boolean(instructionService || launchRegistry || instructionTargetState);

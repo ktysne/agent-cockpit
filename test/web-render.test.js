@@ -424,7 +424,7 @@ test('ブラウザーに残った旧形式の表示設定を読んでも、サ�
   assert.deepEqual(Object.keys(context.readDisplayPreferences()).sort(), expectedKeys);
 });
 
-test('終わったセッションは待機中で未完了のものが無い場合だけと判定する', () => {
+test('待機中と終了済みのセッションは未完了の項目が無い場合だけ終端と判定する', () => {
   const endedAgent = functionSource(pageHtml, 'isEndedAgent');
   const endedDecision = functionSource(pageHtml, 'isEndedDecision');
   const finishedQuestion = functionSource(pageHtml, 'isFinishedCommonQuestion');
@@ -443,6 +443,10 @@ test('終わったセッションは待機中で未完了のものが無い場�
     agents: [{ active: false, unconfirmed: false }],
   };
   assert.equal(context.isFinishedSession(finished), true);
+  const ended = { ...finished, status: '終了済み', projectionOnly: true };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.activityStatus(ended))), { label: '終了済み', tone: 'ended' });
+  assert.equal(context.isFinishedSession(ended), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.activityStatus(finished))), { label: '待機中', tone: 'wait' });
   for (const update of [
     { tasks: [{ state: 'todo' }] },
     { tasks: [{ state: 'doing' }] },
@@ -455,8 +459,11 @@ test('終わったセッションは待機中で未完了のものが無い場�
     { status: '作業中' },
     { status: '不明' },
   ]) {
-    assert.equal(context.isFinishedSession({ ...finished, ...update }), false, JSON.stringify(update));
+    assert.equal(context.isFinishedSession({ ...finished, ...update }), false, `待機中: ${JSON.stringify(update)}`);
+    assert.equal(context.isFinishedSession({ ...ended, ...update }), false, `終了済み: ${JSON.stringify(update)}`);
   }
+  assert.equal(context.isFinishedSession({ ...ended, commonQuestions: [{ cancelled: false, deliveryState: null }] }), false);
+  assert.equal(context.isFinishedSession({ ...ended, instructions: [{ state: 'available' }] }), false);
 });
 
 test('種類別の判断事項は有効な回答を送ったものを後ろに並べ、無視された回答は経過時間で並べる', () => {
@@ -2305,14 +2312,24 @@ test('終わったセッションはタスクの有無にかかわらず両方�
     permissionWaits: [], agents: [{ active: false, unconfirmed: false }],
   };
   const finishedWithoutTasks = { ...finished, session_id: 'no-tasks', tasks: [], product: { key: 'no-tasks', name: 'タスク無し' } };
+  const finishedProjection = {
+    ...finished, session_id: 'finished-projection', status: '終了済み', projectionOnly: true,
+    title: '終了済み', product: { key: 'finished-projection', name: '終了済み' }, tasks: [], decisions: [],
+    commonQuestions: [], instructions: [],
+  };
+  const pendingProjection = {
+    ...finishedProjection, session_id: 'pending-projection', title: '質問が残る終了済み行',
+    product: { key: 'pending-projection', name: '質問が残る終了済み行' },
+    commonQuestions: [{ cancelled: false, deliveryState: null, selectionSource: null }],
+  };
   const partial = {
     ...finished, session_id: 'partial', title: '一部完了', product: { key: 'partial', name: '一部完了' },
     tasks: [{ id: 'done', state: 'done' }, { id: 'todo', state: 'todo' }],
   };
-  const visible = context.orderedProducts([finished, finishedWithoutTasks, partial]);
-  assert.deepEqual(JSON.parse(JSON.stringify(visible.map((product) => product.key))), ['partial']);
+  const visible = context.orderedProducts([finished, finishedWithoutTasks, finishedProjection, pendingProjection, partial]);
+  assert.deepEqual(JSON.parse(JSON.stringify(visible.map((product) => product.key))), ['pending-projection', 'partial']);
   const references = context.sessionReferences(visible);
-  assert.deepEqual(JSON.parse(JSON.stringify(references.map(({ session }) => session.session_id))), ['partial']);
+  assert.deepEqual(JSON.parse(JSON.stringify(references.map(({ session }) => session.session_id))), ['pending-projection', 'partial']);
   assert.equal(context.kindDoneTaskCount(references), 1);
   const taskList = new FakeElement('ul');
   context.appendTaskItem(taskList, { ...partial.tasks[0], title: '完了済み', criteria: [] }, {}, partial);
@@ -2329,10 +2346,12 @@ test('終わったセッションはタスクの有無にかかわらず両方�
   assert.deepEqual(closedItem.children.map((node) => node.className), ['task-body', 'criteria-list'], '完了条件の一覧は題の行の下に行の幅いっぱいで並べる');
 
   context.displayPreferences.hideFinished = false;
-  const shownWhenDisabled = context.orderedProducts([finished, finishedWithoutTasks, partial]);
-  assert.deepEqual(JSON.parse(JSON.stringify(shownWhenDisabled.map((product) => product.key).sort())), ['finished', 'no-tasks', 'partial']);
+  const shownWhenDisabled = context.orderedProducts([finished, finishedWithoutTasks, finishedProjection, pendingProjection, partial]);
+  assert.deepEqual(JSON.parse(JSON.stringify(shownWhenDisabled.map((product) => product.key).sort())), [
+    'finished', 'finished-projection', 'no-tasks', 'partial', 'pending-projection',
+  ]);
   assert.deepEqual(JSON.parse(JSON.stringify(context.sessionReferences(shownWhenDisabled).map(({ session }) => session.session_id).sort())), [
-    'finished', 'no-tasks', 'partial',
+    'finished', 'finished-projection', 'no-tasks', 'partial', 'pending-projection',
   ]);
 });
 
@@ -4711,6 +4730,128 @@ test('モックの非対話の行は稼働中の札で出し、状態推定と�
   const unknown = context.mainRow({}, { id: 'unknown', status: 'unknown', tasks: [], main: {} }, false);
   assert.match(unknown, /<strong>状態不明 \(時刻不明\)<\/strong>/);
   assert.match(unknown, /状態を推定/);
+});
+
+test('終了済み合成行を専用表示し、不明合成行だけ状態推定を抑止する', () => {
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.className = '';
+      this.children = [];
+      this.childNodes = this.children;
+      this.dataset = {};
+      this._textContent = '';
+    }
+    get textContent() { return this._textContent + this.children.map((child) => child.textContent || '').join(''); }
+    set textContent(value) { this._textContent = String(value); this.children = []; this.childNodes = this.children; }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+  class FakeText { constructor(text) { this.textContent = text; } }
+  const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
+
+  const webFunctions = ['element', 'activityStatus', 'unknownSessionControls', 'appendUnknownSessionControls', 'mainRow']
+    .map((name) => functionSource(pageHtml, name));
+  assert.ok(webFunctions.every(Boolean));
+  const webContext = pageContext(pageHtml, {
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    newestFirst: (items) => items,
+    appendContextTags() {},
+    appendToolLine() {},
+    appendSessionModelLine() {},
+    durationAgoLabel: () => '時刻不明',
+    relativeTimeElement: (_value, className, text) => {
+      const node = new FakeElement('time');
+      node.className = className;
+      node.textContent = text;
+      return node;
+    },
+    absoluteTimeLabel: () => '記録時刻',
+  });
+  vm.runInContext(webFunctions.join('\n'), webContext);
+  const rowBase = {
+    session_id: 'projection-ended', title: '終了した会話', tasks: [], tools: [], decisions: [], permissionWaits: [], agents: [],
+  };
+  const endedSession = { ...rowBase, projectionOnly: true, status: '終了済み' };
+  const endedRow = webContext.mainRow(endedSession, { name: 'Project' });
+  const endedNodes = descendants(endedRow);
+  assert.ok(endedNodes.some((node) => node.className === 'dot ended'));
+  assert.ok(endedNodes.some((node) => node.tagName === 'strong' && node.textContent === '終了済み'));
+  assert.equal(Object.hasOwn(endedSession, 'endedAt'), false);
+  const waitingNodes = descendants(webContext.mainRow({ ...rowBase, status: '待機中' }, { name: 'Project' }));
+  assert.ok(waitingNodes.some((node) => node.className === 'dot wait'));
+  assert.ok(waitingNodes.some((node) => node.tagName === 'strong' && node.textContent === '待機中'));
+  for (const html of [pageHtml, mockHtml]) {
+    assert.equal(Object.fromEntries(cssDeclarations(html, '.dot')).background, 'var(--text-2)');
+    assert.deepEqual(cssDeclarations(html, '.dot.ended'), []);
+  }
+
+  const projectedUnknownControls = webContext.unknownSessionControls({
+    session_id: 'projection-unknown', projectionOnly: true, status: '不明',
+    estimate: { canEstimate: true, recordedAt: '2026-10-10T12:00:00.000Z', lastTool: 'Read' },
+  });
+  const projectedUnknownNodes = descendants(projectedUnknownControls);
+  assert.ok(projectedUnknownNodes.some((node) => node.dataset.hideSession === 'projection-unknown'));
+  assert.equal(projectedUnknownNodes.some((node) => node.dataset.estimateSession), false);
+  assert.equal(projectedUnknownNodes.some((node) => node.className === 'estimate'), false);
+  const realUnknownNodes = descendants(webContext.unknownSessionControls({
+    session_id: 'real-unknown', status: '不明', estimate: { canEstimate: false },
+  }));
+  assert.ok(realUnknownNodes.some((node) => node.dataset.estimateSession === 'real-unknown'));
+  assert.ok(realUnknownNodes.some((node) => node.dataset.hideSession === 'real-unknown'));
+  assert.equal(webContext.unknownSessionControls({ status: '不明', nonInteractive: true }), null);
+
+  assert.match(mockHtml, /id: 'agent-cockpit-projection-ended'[\s\S]*?status: 'ended', projectionOnly: true/);
+  assert.match(mockHtml, /id: 'agent-cockpit-projection-unknown'[\s\S]*?status: 'unknown', projectionOnly: true/);
+  const mockFunctions = ['mainRow', 'unknownSessionControls', 'isFinishedSession'].map((name) => functionSource(mockHtml, name));
+  const visibleSessions = sourceBetween(mockHtml, 'const visibleSessions = p =>', '\nconst effectiveDecisionState');
+  assert.ok(mockFunctions.every(Boolean) && visibleSessions);
+  const mockContext = pageContext(mockHtml, {
+    ui: { estimatedSessions: ['projection-unknown'], hideFinished: true, deletedSessionIds: [], hiddenSessions: [] },
+    showIdleSessions: true,
+    taskState: (_session, task) => task.state,
+    isEndedDecision: (decision) => ['resolved', 'withdrawn'].includes(decision.state),
+    isEndedAgent: (agent) => agent.state === 'done' && !agent.unconfirmed,
+    isFinishedCommonQuestion: (question) => question.cancelled === true
+      || (question.deliveryState === 'applied' && question.selectionSource !== 'away-default'),
+    commonQuestionsOf: (session) => session.commonQuestions || [],
+    instructionRecordsForSession: (session) => session.instructionRecords || [],
+    isFinishedInstructionRecord: (record) => ['applied', 'cancelled_before_send', 'superseded_before_send'].includes(record.state),
+    isIdleHiddenSession: () => false,
+    esc: (value) => String(value),
+    sessionTag: () => '',
+    nativeStopState: () => '',
+    lineageNotice: () => '',
+    renderToolLine: () => '',
+    absoluteTimeLabel: () => '記録時刻',
+    ESTIMATE_WAITING: { input: 'はい' },
+  });
+  vm.runInContext(`${mockFunctions.join('\n')}\n${visibleSessions}\nthis.visibleProjectionSessions = visibleSessions;`, mockContext);
+  const mockEnded = {
+    id: 'projection-ended', status: 'ended', projectionOnly: true, main: { tool: '', since: '' },
+    tasks: [], decisions: [], perms: [], subagents: [], commonQuestions: [], instructionRecords: [],
+  };
+  const mockPendingEnded = { ...mockEnded, id: 'projection-pending', commonQuestions: [{ cancelled: false, deliveryState: null }] };
+  const mockEndedRow = mockContext.mainRow({}, mockPendingEnded, false);
+  assert.match(mockEndedRow, /class="dot ended"/);
+  assert.match(mockEndedRow, /<strong>終了済み<\/strong>/);
+  assert.equal(mockContext.isFinishedSession(mockEnded), true);
+  assert.equal(mockContext.isFinishedSession(mockPendingEnded), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(mockContext.visibleProjectionSessions({ sessions: [mockEnded, mockPendingEnded] }).map((session) => session.id))), ['projection-pending']);
+  mockContext.ui.hideFinished = false;
+  assert.deepEqual(JSON.parse(JSON.stringify(mockContext.visibleProjectionSessions({ sessions: [mockEnded, mockPendingEnded] }).map((session) => session.id))), ['projection-ended', 'projection-pending']);
+
+  const mockUnknown = {
+    id: 'projection-unknown', status: 'unknown', projectionOnly: true, estimate: { canEstimate: true, recordedAt: '14:00', tool: 'Read', state: 'input' },
+  };
+  const mockUnknownControls = mockContext.unknownSessionControls(mockUnknown);
+  assert.doesNotMatch(mockUnknownControls, /状態を推定|data-estimate/);
+  assert.match(mockUnknownControls, /data-hide-session="projection-unknown"/);
+  const mockRealUnknown = mockContext.unknownSessionControls({ ...mockUnknown, id: 'real-unknown', projectionOnly: false });
+  assert.match(mockRealUnknown, /状態を推定|data-estimate="real-unknown"/);
+  assert.match(mockRealUnknown, /data-hide-session="real-unknown"/);
 });
 
 test('非対話で状態が不明の行は更新時刻が古くても更新の無い帯へ隠さず、対話の不明な行は従来どおり隠す', () => {

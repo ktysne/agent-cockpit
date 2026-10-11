@@ -353,7 +353,7 @@ function createOwnedRunnerFactory(workspace, provider, options = {}) {
         child.send({ id: request.id, result: { serverInfo: { name: 'fixture', version: '1' }, codexHome: path.join(workspace.homePath, '.codex') } });
       } else if (request.method === 'account/login/start') {
         child.send({ id: request.id, result: {
-          type: 'chatgpt', loginId: 'login-integration', authUrl: 'https://auth.example.test/device',
+          type: 'chatgpt', loginId: 'login-integration', authUrl: 'https://auth.openai.com/device?fixture=composition-CREDENTIAL-SENTINEL',
         } });
       } else if (request.method === 'thread/start') {
         child.send({ id: request.id, result: { thread: { id: options.nativeId || 'thread-integration' } } });
@@ -1271,6 +1271,11 @@ test('a parent period that ends during Codex login prevents thread and turn crea
   const bindCalls = fixture.launchCalls.bindExecution;
   const adoptCalls = fixture.runtimeCalls.adoptExecution;
   const pendingStart = fixture.composition.start(childAdmission, { inputText: 'private child prompt' });
+  const pendingStartObserved = observeStart(pendingStart);
+  t.after(async () => {
+    await fixture.composition.stop(childAdmission);
+    await pendingStartObserved;
+  });
   const loginChallenge = await challenge;
   assert.equal(loginChallenge.loginId, 'login-integration');
   assert.equal(fixture.registrationKernel.registry.snapshot().executions.length, 1);

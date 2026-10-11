@@ -6,7 +6,7 @@ const { DashboardState } = require('../src/server/state');
 const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
 const { createRegistrationFixture } = require('./support/registration');
 
-function questionFor(fixture) {
+function questionFor(fixture, overrides = {}) {
   return {
     internalQuestionId: `projection-question-${fixture.identity.provider}`,
     questionId: 'projection-question',
@@ -15,6 +15,7 @@ function questionFor(fixture) {
     conversationId: fixture.registration.conversationId,
     createdAt: 1_800_000_000_000,
     questions: [],
+    ...overrides,
   };
 }
 
@@ -24,6 +25,83 @@ function questionService(fixture) {
     ready: async () => {},
     dashboardSnapshot: async () => ({ version: 1, questions: [question] }),
     close() {},
+  };
+}
+
+function questionServiceFor(questions) {
+  return {
+    ready: async () => {},
+    dashboardSnapshot: async () => ({ version: 1, questions }),
+    close() {},
+  };
+}
+
+function registrationRegistryWithStates(fixture, initialStates = ['active'], additionalExecutions = []) {
+  let states = [...initialStates];
+  let snapshotIndex = 0;
+  return {
+    registry: {
+      snapshot() {
+        const base = fixture.registry.snapshot();
+        const state = states[Math.min(snapshotIndex++, states.length - 1)] || 'active';
+        return {
+          conversations: base.conversations,
+          executions: [
+            ...base.executions.map((execution) => ({ ...execution, state })),
+            ...additionalExecutions,
+          ],
+        };
+      },
+      authorizeEvent: (...args) => fixture.registry.authorizeEvent(...args),
+      authorizeWriter: (...args) => fixture.registry.authorizeWriter(...args),
+      isRegisteredSessionId: (...args) => fixture.registry.isRegisteredSessionId(...args),
+    },
+    setStates(nextStates) {
+      states = [...nextStates];
+      snapshotIndex = 0;
+    },
+    snapshotCount: () => snapshotIndex,
+  };
+}
+
+function launchFor(fixture, launchRef) {
+  return {
+    launchRef,
+    state: 'bound',
+    identity: fixture.identity,
+    conversationId: fixture.registration.conversationId,
+    sessionId: fixture.registration.sessionId,
+    origin: 'standalone',
+    purpose: 'agent',
+    executionBinding: {
+      periodId: fixture.registration.executionId,
+      actor: { kind: 'agent', id: `${fixture.identity.provider}-status-actor` },
+    },
+  };
+}
+
+function instructionFor(fixture, launchRef) {
+  return {
+    deliveryAttemptId: `${fixture.identity.provider}-status-attempt`,
+    logicalMessageId: `${fixture.identity.provider}-status-message`,
+    revision: 1,
+    launchRef,
+    sessionId: fixture.registration.sessionId,
+    executionId: fixture.registration.executionId,
+    identity: fixture.identity,
+    origin: 'standalone',
+    state: 'available',
+    mode: 'start',
+    nativeTurnId: null,
+    heldReason: null,
+    createdAt: 1_800_000_000_000,
+  };
+}
+
+function instructionServiceFor(instructions) {
+  return {
+    ready: async () => {},
+    dashboardSnapshot: async () => ({ instructions }),
   };
 }
 
@@ -618,3 +696,281 @@ test('real rowのprovider根拠は複数のevent sourceとunknown sourceを保�
   state.addEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: 1_800_000_000_002 });
   assert.deepEqual(state.sessionProviderSourcesFor(sessionId), ['claude', 'codex', 'unknown']);
 });
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider} の質問projectionだけで作るrowは登録状態を表示する`, async (t) => {
+    const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-synthetic-question-status` });
+    const registration = registrationRegistryWithStates(fixture);
+    const runtime = (await startTestServer(t, {
+      registrationRegistry: registration.registry,
+      questionService: questionServiceFor([questionFor(fixture)]),
+    })).runtime;
+
+    for (const [executionState, expectedStatus] of [
+      ['active', '待機中'],
+      ['ended', '終了済み'],
+      ['unknown', '不明'],
+      ['future-state', '不明'],
+    ]) {
+      registration.setStates([executionState]);
+      const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+      const row = snapshot.sessions.find((session) => session.session_id === fixture.registration.sessionId);
+      assert.equal(row.status, expectedStatus);
+      assert.equal(row.projectionOnly, true);
+      assert.equal(Object.hasOwn(row, 'endedAt'), false);
+    }
+  });
+
+  test(`${provider} のinstruction projectionはactiveとendedだけを合成行へ反映する`, async (t) => {
+    const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-synthetic-instruction-status` });
+    const registration = registrationRegistryWithStates(fixture);
+    const launchRef = `${provider}-synthetic-status-launch`;
+    const launch = launchFor(fixture, launchRef);
+    const runtime = (await startTestServer(t, {
+      registrationRegistry: registration.registry,
+      launchRegistry: {
+        get: (ref) => ref === launchRef ? launch : null,
+        snapshot: () => ({ launches: [launch] }),
+      },
+      instructionService: instructionServiceFor([instructionFor(fixture, launchRef)]),
+    })).runtime;
+
+    for (const [executionState, expectedStatus] of [
+      ['active', '待機中'],
+      ['ended', '終了済み'],
+    ]) {
+      registration.setStates([executionState]);
+      const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+      const row = snapshot.sessions.find((session) => session.session_id === fixture.registration.sessionId);
+      assert.equal(row.status, expectedStatus);
+      assert.equal(row.projectionOnly, true);
+      assert.equal(row.instructions.length, 1);
+    }
+
+    registration.setStates(['unknown']);
+    const unknown = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+    assert.equal(unknown.sessions.some((session) => session.session_id === fixture.registration.sessionId), false);
+    assert.equal(unknown.instructionDiagnostics.unmatchedCount, 1);
+  });
+}
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider} の質問と指示の状態不一致は不明になり、unknownから復帰しない`, async (t) => {
+    const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-synthetic-status-conflict` });
+    const registration = registrationRegistryWithStates(fixture);
+    const launchRef = `${provider}-synthetic-conflict-launch`;
+    const launch = launchFor(fixture, launchRef);
+    const runtime = (await startTestServer(t, {
+      registrationRegistry: registration.registry,
+      launchRegistry: {
+        get: (ref) => ref === launchRef ? launch : null,
+        snapshot: () => ({ launches: [launch] }),
+      },
+      questionService: questionServiceFor([questionFor(fixture)]),
+      instructionService: instructionServiceFor([instructionFor(fixture, launchRef)]),
+    })).runtime;
+
+    for (const [questionState, instructionState, expectedStatus] of [
+      ['active', 'active', '待機中'],
+      ['ended', 'ended', '終了済み'],
+      ['active', 'ended', '不明'],
+      ['ended', 'active', '不明'],
+      ['unknown', 'active', '不明'],
+      ['future-state', 'active', '不明'],
+    ]) {
+      registration.setStates([questionState, instructionState]);
+      const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+      const row = snapshot.sessions.find((session) => session.session_id === fixture.registration.sessionId);
+      assert.equal(row.status, expectedStatus);
+      assert.equal(row.projectionOnly, true);
+    }
+  });
+
+  test(`${provider} の別executionIdを含む三投影は最後の一致状態でも不明のまま`, async (t) => {
+    const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-synthetic-status-multiple-executions` });
+    const baseExecution = fixture.registry.snapshot().executions[0];
+    const secondExecution = {
+      ...baseExecution,
+      executionId: `${baseExecution.executionId}-other`,
+      state: 'ended',
+    };
+    const registration = registrationRegistryWithStates(fixture, ['active'], [secondExecution]);
+    const questions = [
+      questionFor(fixture, { internalQuestionId: `${provider}-status-first` }),
+      questionFor(fixture, {
+        internalQuestionId: `${provider}-status-second`, executionId: secondExecution.executionId,
+      }),
+      questionFor(fixture, { internalQuestionId: `${provider}-status-third` }),
+    ];
+    const runtime = (await startTestServer(t, {
+      registrationRegistry: registration.registry,
+      questionService: questionServiceFor(questions),
+    })).runtime;
+
+    const row = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
+      .find((session) => session.session_id === fixture.registration.sessionId);
+    assert.equal(row.status, '不明');
+    assert.equal(row.projectionOnly, true);
+    assert.equal(row.commonQuestions.length, 3);
+    assert.equal(Object.hasOwn(row, 'endedAt'), false);
+  });
+}
+
+test('実rowのstatusと識別情報はprojectionで上書きされず、合成flagも付かない', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'real-row-synthetic-status' });
+  const state = new DashboardState();
+  state.addEvent({
+    session_id: fixture.registration.sessionId,
+    hook_event_name: 'UserPromptSubmit',
+    hookAt: 1_800_000_000_000,
+  }, { provider: 'claude' });
+  const before = state.snapshot().sessions.find((session) => session.session_id === fixture.registration.sessionId);
+  const runtime = (await startTestServer(t, {
+    state,
+    registrationRegistry: fixture.registry,
+    questionService: questionService(fixture),
+  })).runtime;
+
+  const row = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
+    .find((session) => session.session_id === fixture.registration.sessionId);
+  for (const field of ['session_id', 'status', 'title', 'product']) assert.deepEqual(row[field], before[field]);
+  assert.equal(Object.hasOwn(row, 'projectionOnly'), false);
+});
+
+test('実rowが後続GETで現れたらprojectionOnlyを除き実statusへ戻す', async (t) => {
+  const fixture = createRegistrationFixture('codex', { nativeId: 'synthetic-row-reappears' });
+  const state = new DashboardState();
+  const runtime = (await startTestServer(t, {
+    state,
+    registrationRegistry: fixture.registry,
+    questionService: questionService(fixture),
+  })).runtime;
+  const sessionId = fixture.registration.sessionId;
+
+  const synthetic = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
+    .find((session) => session.session_id === sessionId);
+  assert.equal(synthetic.projectionOnly, true);
+  state.addEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: Date.now() }, { provider: 'codex' });
+  const realBefore = state.snapshot().sessions.find((session) => session.session_id === sessionId);
+  const real = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
+    .find((session) => session.session_id === sessionId);
+  assert.equal(Object.hasOwn(real, 'projectionOnly'), false);
+  assert.equal(real.status, realBefore.status);
+});
+
+test('hidden projectionは状態を保ち、deleted projectionは状態集約前に除外する', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'synthetic-status-display-guards' });
+  const state = new DashboardState();
+  const runtime = (await startTestServer(t, {
+    state,
+    registrationRegistry: fixture.registry,
+    questionService: questionService(fixture),
+  })).runtime;
+  const sessionId = fixture.registration.sessionId;
+
+  state.setProjectionHidden('claude', sessionId, true);
+  const hidden = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
+    .find((session) => session.session_id === sessionId);
+  assert.equal(hidden.hidden, true);
+  assert.equal(hidden.projectionOnly, true);
+  assert.equal(hidden.status, '待機中');
+
+  state.deleteProjectionDisplay('claude', sessionId, Date.now());
+  const deleted = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.equal(deleted.sessions.some((session) => session.session_id === sessionId), false);
+});
+
+test('同じsynthetic session IDに複数providerのprojectionがある場合は合成しない', async (t) => {
+  const claude = createRegistrationFixture('claude', { nativeId: 'synthetic-shared-projection' });
+  const codex = createRegistrationFixture('codex', { nativeId: 'synthetic-codex-shared-projection' });
+  const sessionId = claude.registration.sessionId;
+  const claudeSnapshot = claude.registry.snapshot();
+  const codexSnapshot = codex.registry.snapshot();
+  const registrationRegistry = {
+    snapshot() {
+      return {
+        conversations: [...claudeSnapshot.conversations, ...codexSnapshot.conversations],
+        executions: [
+          ...claudeSnapshot.executions,
+          ...codexSnapshot.executions.map((execution) => ({ ...execution, sessionId })),
+        ],
+      };
+    },
+    authorizeEvent: (writer) => writer?.identity?.provider === 'codex'
+      ? codex.registry.authorizeEvent(writer) : claude.registry.authorizeEvent(writer),
+    authorizeWriter: (writer) => writer?.identity?.provider === 'codex'
+      ? codex.registry.authorizeWriter(writer) : claude.registry.authorizeWriter(writer),
+    isRegisteredSessionId: (id) => id === sessionId,
+  };
+  const runtime = (await startTestServer(t, {
+    registrationRegistry,
+    questionService: questionServiceFor([questionFor(claude), questionFor(codex)]),
+  })).runtime;
+
+  const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.equal(snapshot.sessions.some((session) => session.session_id === sessionId), false);
+});
+
+test('質問snapshot失敗時も有効なinstruction projectionの状態を表示し診断を維持する', async (t) => {
+  const fixture = createRegistrationFixture('codex', { nativeId: 'question-failure-with-instruction' });
+  const registration = registrationRegistryWithStates(fixture, ['ended']);
+  const launchRef = 'codex-question-failure-launch';
+  const launch = launchFor(fixture, launchRef);
+  const runtime = (await startTestServer(t, {
+    registrationRegistry: registration.registry,
+    launchRegistry: {
+      get: (ref) => ref === launchRef ? launch : null,
+      snapshot: () => ({ launches: [launch] }),
+    },
+    questionService: {
+      ready: async () => {},
+      dashboardSnapshot: async () => { throw new Error('private question snapshot failure'); },
+    },
+    instructionService: instructionServiceFor([instructionFor(fixture, launchRef)]),
+  })).runtime;
+
+  registration.setStates(['ended']);
+  const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const row = snapshot.sessions.find((session) => session.session_id === fixture.registration.sessionId);
+  assert.equal(row.status, '終了済み');
+  assert.equal(row.projectionOnly, true);
+  assert.equal(row.instructions.length, 1);
+  assert.equal(registration.snapshotCount(), 2);
+  assert.deepEqual(snapshot.commonQuestionDiagnostics, {
+    recovery: { status: 'unavailable', errorCode: 'common_question_state_unavailable' },
+  });
+});
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider} の実authority終了は応答上の質問rowだけをendedにする`, async (t) => {
+    const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-real-authority-end` });
+    const state = new DashboardState();
+    const runtime = (await startTestServer(t, {
+      state,
+      registrationRegistry: fixture.registry,
+      questionService: questionService(fixture),
+    })).runtime;
+    const sessionId = fixture.registration.sessionId;
+
+    assert.equal(state.snapshot().sessions.some((session) => session.session_id === sessionId), false);
+    const active = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
+      .find((session) => session.session_id === sessionId);
+    assert.equal(active.status, '待機中');
+    assert.equal(active.projectionOnly, true);
+    assert.equal(active.endedAt, undefined);
+    const stableFields = ['session_id', 'title', 'product'];
+    const stableValues = Object.fromEntries(stableFields.map((field) => [field, active[field]]));
+    assert.equal(state.snapshot().sessions.some((session) => session.session_id === sessionId), false);
+
+    assert.equal(fixture.authority.end(fixture.registration.executionId), true);
+    assert.equal(fixture.registry.snapshot().executions.find((execution) =>
+      execution.executionId === fixture.registration.executionId).state, 'ended');
+    const ended = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
+      .find((session) => session.session_id === sessionId);
+    assert.equal(ended.status, '終了済み');
+    assert.equal(ended.projectionOnly, true);
+    assert.equal(ended.endedAt, undefined);
+    assert.deepEqual(Object.fromEntries(stableFields.map((field) => [field, ended[field]])), stableValues);
+    assert.equal(state.snapshot().sessions.some((session) => session.session_id === sessionId), false);
+  });
+}

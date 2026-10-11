@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -12,6 +13,13 @@ const { sha256 } = require('../src/server/owned-native-instruction-dispatch');
 
 const LOGIN_ID = 'login_test_1';
 const LOGIN_URL = 'https://auth.openai.com/oauth/authorize?code=test';
+const TRANSPORT_ENVIRONMENT_KEYS = Object.freeze([
+  'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS',
+]);
+const FORBIDDEN_INHERITED_ENVIRONMENT_KEYS = Object.freeze([
+  'ALL_PROXY', 'SSL_CERT_DIR', 'NODE_OPTIONS', 'NODE_TLS_REJECT_UNAUTHORIZED',
+  'GH_TOKEN', 'GITHUB_TOKEN', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CUSTOM_ENDPOINT',
+]);
 
 class FakePipe extends EventEmitter {
   constructor(onWrite, onWriteCallback) {
@@ -94,7 +102,7 @@ function createWorkspace(t) {
 }
 
 function createSpawnHarness(workspace, onWrite) {
-  const harness = { calls: 0, child: null, executable: null, args: null, options: null, environment: null };
+  const harness = { calls: 0, child: null, executable: null, args: null, options: null, environment: null, spawnEnvironment: null };
   harness.spawnImpl = (executable, args, options) => {
     harness.calls += 1;
     harness.executable = executable;
@@ -102,8 +110,10 @@ function createSpawnHarness(workspace, onWrite) {
     harness.options = { ...options, env: undefined };
     harness.home = options.env.HOME;
     harness.codexHome = options.env.CODEX_HOME;
+    harness.windowsHome = { HOMEDRIVE: options.env.HOMEDRIVE, HOMEPATH: options.env.HOMEPATH };
     harness.claudeTokenPresent = typeof options.env.CLAUDE_CODE_OAUTH_TOKEN === 'string';
     harness.environment = options.env;
+    harness.spawnEnvironment = { ...options.env };
     harness.child = new FakeChild(onWrite);
     setImmediate(() => harness.child.emit('spawn'));
     return harness.child;
@@ -124,6 +134,15 @@ function baseOptions(workspace, provider, values = {}) {
   };
 }
 
+function assertWindowsHomePair(environment, homePath, cwd) {
+  if (process.platform !== 'win32') return;
+  const drivePath = `${environment.HOMEDRIVE}${environment.HOMEPATH}`;
+  assert.equal(path.win32.isAbsolute(environment.HOMEPATH), true);
+  assert.equal(path.win32.isAbsolute(drivePath), true);
+  assert.equal(path.win32.resolve(drivePath).toLowerCase(), path.win32.resolve(homePath).toLowerCase());
+  assert.equal(path.win32.resolve(cwd, drivePath).toLowerCase(), path.win32.resolve(homePath).toLowerCase());
+}
+
 function requiredHomeDirectories(homePath) {
   return [
     path.join(homePath, 'AppData', 'Roaming'),
@@ -135,6 +154,92 @@ function requiredHomeDirectories(homePath) {
     path.join(homePath, '.codex'),
   ];
 }
+
+test('Windows rejects non-EXE native paths before authentication, spawn, or isolated HOME setup', (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows executable suffix contract');
+
+  for (const provider of ['claude', 'codex']) {
+    for (const fileName of ['native.cmd', 'native.bat', 'native']) {
+      const workspace = createWorkspace(t);
+      const executablePath = path.join(workspace.root, fileName);
+      fs.writeFileSync(executablePath, 'fixture executable');
+      let callbackCount = 0;
+      let spawnCount = 0;
+      const providerCallbacks = provider === 'claude'
+        ? { getAuthentication() { callbackCount += 1; return { oauthToken: 'unused' }; } }
+        : { onAuthenticationRequired() { callbackCount += 1; } };
+      assert.throws(
+        () => createOwnedNativeRunner(baseOptions(workspace, provider, {
+          executablePath,
+          ...providerCallbacks,
+          onNative() { callbackCount += 1; },
+          spawnImpl() { spawnCount += 1; },
+        })),
+        (error) => error.code === 'executable_format_unsupported' && !error.message.includes(executablePath),
+      );
+      assert.equal(callbackCount, 0);
+      assert.equal(spawnCount, 0);
+      assert.equal(requiredHomeDirectories(workspace.homePath).some((directory) => fs.existsSync(directory)), false);
+    }
+  }
+});
+
+test('Windows executable validation preserves earlier diagnostics and accepts uppercase EXE suffixes', (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows executable suffix contract');
+
+  const workspace = createWorkspace(t);
+  const validExecutablePath = path.join(workspace.root, 'alternate.EXE');
+  fs.writeFileSync(validExecutablePath, 'fixture executable');
+  for (const provider of ['claude', 'codex']) {
+    const providerCallbacks = provider === 'claude'
+      ? { getAuthentication() { return { oauthToken: 'unused' }; } }
+      : { onAuthenticationRequired() {} };
+    const options = {
+      ...providerCallbacks,
+      onNative() {},
+      executablePath: validExecutablePath,
+    };
+    assert.doesNotThrow(() => createOwnedNativeRunner(baseOptions(workspace, provider, options)));
+    assert.throws(
+      () => createOwnedNativeRunner(baseOptions(workspace, provider, { ...options, executablePath: 'native.cmd' })),
+      (error) => error.code === 'absolute_executable_required',
+    );
+    const missingExecutablePath = path.join(workspace.root, 'missing.cmd');
+    assert.throws(
+      () => createOwnedNativeRunner(baseOptions(workspace, provider, { ...options, executablePath: missingExecutablePath })),
+      (error) => error.code === 'executable_unavailable' && !error.message.includes(missingExecutablePath),
+    );
+  }
+});
+
+test('Windows executable symlinks keep the unavailable diagnostic ahead of suffix validation', (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows executable suffix contract');
+
+  const workspace = createWorkspace(t);
+  const targetPath = path.join(workspace.root, 'target.EXE');
+  const symlinkPath = path.join(workspace.root, 'linked.cmd');
+  fs.writeFileSync(targetPath, 'fixture executable');
+  try {
+    fs.symlinkSync(targetPath, symlinkPath, 'file');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'UNKNOWN'].includes(error?.code)) return t.skip('Windows symlink privilege unavailable');
+    throw error;
+  }
+
+  for (const provider of ['claude', 'codex']) {
+    const providerCallbacks = provider === 'claude'
+      ? { getAuthentication() { return { oauthToken: 'unused' }; } }
+      : { onAuthenticationRequired() {} };
+    assert.throws(
+      () => createOwnedNativeRunner(baseOptions(workspace, provider, {
+        ...providerCallbacks,
+        executablePath: symlinkPath,
+        onNative() {},
+      })),
+      (error) => error.code === 'executable_unavailable',
+    );
+  }
+});
 
 function codexResponse(id, result) {
   return { id, result };
@@ -191,7 +296,7 @@ function codexResponder(options = {}) {
       child.send(codexResponse(request.id, {
         type: 'chatgpt',
         loginId: options.loginResponseId || LOGIN_ID,
-        authUrl: LOGIN_URL,
+        authUrl: options.authUrl === undefined ? LOGIN_URL : options.authUrl,
       }));
       return;
     }
@@ -232,6 +337,7 @@ test('construction does not spawn and Claude reports only native main-message co
         assert.deepEqual(spawnOptions.stdio, ['pipe', 'pipe', 'pipe']);
         assert.equal(spawnOptions.env.HOME, workspace.homePath);
         assert.equal(spawnOptions.env.USERPROFILE, workspace.homePath);
+        assertWindowsHomePair(spawnOptions.env, workspace.homePath, workspace.cwd);
         assert.equal(spawnOptions.env.CLAUDE_CONFIG_DIR, workspace.homePath);
         assert.equal(spawnOptions.env.CLAUDE_CODE_OAUTH_TOKEN, token);
         assert.equal(spawnOptions.env.OWNED_NATIVE_RUNNER_TEST_SECRET, undefined);
@@ -335,11 +441,13 @@ test('Codex presents same-process managed login once and waits for its matching 
     },
     onNative: (event) => events.push(event),
   }));
+  t.after(() => runner.stop());
   const snapshot = await runner.start({ inputText: 'private task prompt' });
   assert.equal(harness.calls, 1);
   assert.equal(harness.options.shell, false);
   assert.equal(harness.options.windowsHide, true);
   assert.equal(harness.home, workspace.homePath);
+  assertWindowsHomePair(harness.windowsHome, workspace.homePath, workspace.cwd);
   assert.equal(harness.codexHome, path.join(workspace.homePath, '.codex'));
   assert.equal(harness.claudeTokenPresent, false);
   assert.deepEqual(harness.args.slice(0, 3), ['app-server', '--listen', 'stdio://']);
@@ -367,6 +475,121 @@ test('Codex presents same-process managed login once and waits for its matching 
   assert.equal(runner.snapshot().contextState, 'ended');
   assert.equal(runner.snapshot().terminalContextCount, 1);
   await assert.rejects(runner.start({ inputText: 'a second task' }), (error) => error.code === 'already_started');
+  await runner.stop();
+});
+
+test('Codex accepts only approved authentication URL origins and preserves the original URL', async (t) => {
+  const authenticationUrls = [
+    'https://auth.openai.com/oauth/authorize?code=auth-origin-CREDENTIAL-SENTINEL',
+    'https://chatgpt.com/device?continue=%2Fsettings&code=chatgpt-origin-CREDENTIAL-SENTINEL',
+    'https://AUTH.OPENAI.COM:443/arbitrary/path?opaque=%2f+',
+    'https://chatgpt.com:443/another/path?state=original+value',
+  ];
+
+  for (const authUrl of authenticationUrls) {
+    const workspace = createWorkspace(t);
+    const events = [];
+    const harness = codexResponder({ workspace, authUrl });
+    let displayedUrl = null;
+    let promptCalls = 0;
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onAuthenticationRequired: ({ loginId, authUrl: challengeUrl }) => {
+        promptCalls += 1;
+        displayedUrl = challengeUrl;
+        harness.child.send(codexLoginCompleted(loginId));
+      },
+      spawnImpl: harness.spawnImpl,
+      onNative: (event) => events.push(event),
+    }));
+    t.after(async () => { await runner.stop(); });
+
+    const snapshot = await runner.start({ inputText: 'fixture task' });
+    assert.equal(displayedUrl, authUrl);
+    assert.equal(promptCalls, 1);
+    assert.deepEqual(harness.methods, ['initialize', 'account/login/start', 'thread/start', 'turn/start']);
+    assert.equal(JSON.stringify(snapshot).includes(authUrl), false);
+    assert.equal(JSON.stringify(events).includes(authUrl), false);
+    assert.equal(JSON.stringify(snapshot).includes('CREDENTIAL-SENTINEL'), false);
+    assert.equal(JSON.stringify(events).includes('CREDENTIAL-SENTINEL'), false);
+    await runner.stop();
+  }
+});
+
+test('Codex rejects authentication URLs outside the approved origins without exposing them', async (t) => {
+  const marker = 'private-auth-url-CREDENTIAL-SENTINEL';
+  const invalidUrls = [
+    `https://unknown.invalid/oauth?code=${marker}`,
+    `https://auth.openai.com:444/oauth?code=${marker}`,
+    `https://fixture-user:${marker}@auth.openai.com/oauth`,
+    `https://login.auth.openai.com/oauth?code=${marker}`,
+    `https://auth.openai.com.attacker.invalid/oauth?code=${marker}`,
+    `https://auth.openai.com./oauth?code=${marker}`,
+    `https://127.0.0.1/oauth?code=${marker}`,
+    `https://[::1]/oauth?code=${marker}`,
+    `https://localhost/oauth?code=${marker}`,
+    `http://auth.openai.com/oauth?code=${marker}`,
+    ` https://auth.openai.com/oauth?code=${marker}`,
+    `https://auth.openai.com/oauth?code=${marker} `,
+    `https://auth.openai.com/oauth?code=${marker}${String.fromCharCode(10)}continued`,
+    `https://auth.openai.com/oauth?code=${'x'.repeat(4100)}${marker}`,
+  ];
+
+  for (const authUrl of invalidUrls) {
+    const workspace = createWorkspace(t);
+    const events = [];
+    const harness = codexResponder({ workspace, authUrl });
+    let promptCalls = 0;
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onAuthenticationRequired() { promptCalls += 1; },
+      spawnImpl: harness.spawnImpl,
+      onNative: (event) => events.push(event),
+    }));
+    t.after(async () => { await runner.stop(); });
+
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+      assert.equal(error.code, 'authentication_response_invalid');
+      assert.equal(error.cause, undefined);
+      assert.equal(error.message.includes(authUrl), false);
+      assert.equal(error.stack.includes(authUrl), false);
+      assert.equal(error.message.includes(marker), false);
+      assert.equal(error.stack.includes(marker), false);
+      return true;
+    });
+    assert.equal(promptCalls, 0);
+    assert.deepEqual(harness.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(events, []);
+    assert.equal(runner.snapshot().failureCode, 'authentication_response_invalid');
+    assert.equal(JSON.stringify(runner.snapshot()).includes(authUrl), false);
+    assert.equal(JSON.stringify(runner.snapshot()).includes(marker), false);
+    await runner.stop();
+  }
+});
+
+test('Codex rejects an invalid authentication URL even when login completion arrived first', async (t) => {
+  const workspace = createWorkspace(t);
+  const marker = 'early-private-auth-url-CREDENTIAL-SENTINEL';
+  const authUrl = `https://unknown.invalid/oauth?code=${marker}`;
+  const events = [];
+  const harness = codexResponder({ workspace, authUrl, earlyLoginCompletion: true });
+  let promptCalls = 0;
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    onAuthenticationRequired() { promptCalls += 1; },
+    spawnImpl: harness.spawnImpl,
+    onNative: (event) => events.push(event),
+  }));
+  t.after(async () => { await runner.stop(); });
+
+  await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+    assert.equal(error.code, 'authentication_response_invalid');
+    assert.equal(error.cause, undefined);
+    assert.equal(error.message.includes(marker), false);
+    assert.equal(error.stack.includes(marker), false);
+    return true;
+  });
+  assert.equal(promptCalls, 0);
+  assert.deepEqual(harness.methods, ['initialize', 'account/login/start']);
+  assert.deepEqual(events, []);
+  assert.equal(JSON.stringify(runner.snapshot()).includes(marker), false);
   await runner.stop();
 });
 
@@ -444,6 +667,7 @@ test('a successful login notification that precedes its RPC response is correlat
     spawnImpl: harness.spawnImpl,
     onNative() {},
   }));
+  t.after(() => runner.stop());
   const snapshot = await runner.start({ inputText: 'task' });
   assert.equal(prompts, 0);
   assert.deepEqual(methods, ['initialize', 'account/login/start', 'thread/start', 'turn/start']);
@@ -475,6 +699,7 @@ test('owner expiry at the authentication callback prevents thread start despite 
     spawnImpl: harness.spawnImpl,
     onNative() {},
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'task' }), (error) => error.code === 'authority_expired');
   assert.equal(prompts, 1);
   assert.deepEqual(methods, ['initialize', 'account/login/start']);
@@ -784,6 +1009,7 @@ test('a mismatched login completion fails closed without starting a thread or ex
     onNative() {},
     onDisconnect: (event) => { disconnect = event; },
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'private' }), (error) => {
     assert.equal(error.message.includes(LOGIN_URL), false);
     assert.equal(error.message.includes(LOGIN_ID), false);
@@ -815,6 +1041,7 @@ test('a login completion that arrives before the start response must match its l
     spawnImpl: harness.spawnImpl,
     onNative() {},
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'task' }));
   assert.equal(runner.snapshot().failureCode, 'authentication_login_mismatch');
   assert.equal(prompts, 0);
@@ -843,6 +1070,7 @@ test('the authentication prompt promise does not substitute for the native login
     onDisconnect: (event) => { disconnect = event; },
     timeouts: { loginMs: 50 },
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'task' }), (error) => error.code === 'authentication_timeout');
   assert.equal(prompts, 1);
   assert.deepEqual(methods, ['initialize', 'account/login/start']);
@@ -891,6 +1119,7 @@ test('stopping from the authentication callback invalidates the pending attempt 
     spawnImpl: harness.spawnImpl,
     onNative() {},
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'task' }), (error) => error.code === 'operation_stopped');
   const snapshot = await runner.stop();
   assert.equal(snapshot.state, 'stopped');
@@ -2967,9 +3196,9 @@ test('a duplicate resolution during terminal callback does not consume the defer
   await runner.stop();
 });
 
-function createStartCancellationFixture(workspace, provider, stage) {
+function createStartCancellationFixture(workspace, provider, stage, options = {}) {
   const barriers = new Map();
-  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], releaseLate: () => {} };
+  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], authenticationPromptCalls: 0, releaseLate: () => {} };
   const barrier = (name) => {
     if (!barriers.has(name)) barriers.set(name, deferred());
     return barriers.get(name);
@@ -2988,7 +3217,7 @@ function createStartCancellationFixture(workspace, provider, stage) {
   function responseFor(request) {
     if (request.method === 'initialize') return codexResponse(request.id, { serverInfo: { name: 'codex', version: 'test' } });
     if (request.method === 'account/login/start') return codexResponse(request.id, {
-      type: 'chatgpt', loginId: LOGIN_ID, authUrl: LOGIN_URL,
+      type: 'chatgpt', loginId: LOGIN_ID, authUrl: options.authUrl ?? LOGIN_URL,
     });
     if (request.method === 'thread/start') return codexResponse(request.id, { thread: { id: 'thread_native_1' } });
     if (request.method === 'turn/start') return codexResponse(request.id, { turn: { id: 'turn_native_1' } });
@@ -3050,8 +3279,10 @@ function createStartCancellationFixture(workspace, provider, stage) {
       reached('authentication-requested');
       return stage === 'claude-authentication' ? barrier('authentication-result').promise : { oauthToken: 'fixture-oauth-token' };
     } } : {}),
-    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId }) => {
+    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId, authUrl }) => {
+      state.authenticationPromptCalls += 1;
       reached('authentication-prompt');
+      if (options.onAuthenticationRequired) return options.onAuthenticationRequired({ loginId, authUrl });
       if (stage === 'codex-login-completion') {
         state.releaseLate = () => state.child.send(codexLoginCompleted(loginId));
       } else {
@@ -3204,3 +3435,1047 @@ for (const stage of [
     }
   });
 }
+
+test('Codex ignores an invalid login response delivered after stop', { timeout: 7000 }, async (t) => {
+  const workspace = createWorkspace(t);
+  const marker = 'late-login-url-CREDENTIAL-SENTINEL';
+  const authUrl = `https://unknown.invalid/device?fixture=${marker}`;
+  const fixture = createStartCancellationFixture(workspace, 'codex', 'codex-login-start-response', { authUrl });
+  t.after(async () => { await fixture.runner.stop(); });
+  const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
+  let lateResponseReleased = false;
+  const releaseLateOnce = () => {
+    if (lateResponseReleased) return;
+    lateResponseReleased = true;
+    fixture.releaseLate();
+  };
+
+  try {
+    await waitForCodexResponseBarrier(fixture, 'account/login/start');
+    const stopSnapshot = await fixture.runner.stop();
+    const writesBeforeLate = fixture.state.writes.slice();
+    const outcome = await startOutcome;
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, 'operation_stopped');
+    assert.equal(outcome.error.cause, undefined);
+    assert.equal(stopSnapshot.childExited, true);
+    assert.equal(stopSnapshot.childClosed, true);
+    assert.equal(stopSnapshot.ownedChildActive, false);
+    assert.equal(fixture.state.authenticationPromptCalls, 0);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+
+    const snapshotBeforeLate = fixture.runner.snapshot();
+    releaseLateOnce();
+    await nextImmediate();
+
+    assert.deepEqual(fixture.runner.snapshot(), snapshotBeforeLate);
+    assert.deepEqual(fixture.state.writes, writesBeforeLate);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(fixture.state.events, []);
+    const serialized = [outcome.error.code, outcome.error.message, outcome.error.stack,
+      JSON.stringify(fixture.runner.snapshot()), JSON.stringify(fixture.state.events)].join('\n');
+    assert.equal(serialized.includes(authUrl), false);
+    assert.equal(serialized.includes(marker), false);
+  } finally {
+    await fixture.runner.stop();
+    releaseLateOnce();
+    await nextImmediate();
+    await startOutcome;
+  }
+});
+
+test('Codex classifies trusted authentication prompt throws and rejections without exposing details', { timeout: 7000 }, async (t) => {
+  for (const failureMode of ['sync-throw', 'async-reject']) {
+    const workspace = createWorkspace(t);
+    const urlMarker = `prompt-url-${failureMode}-CREDENTIAL-SENTINEL`;
+    const callbackMarker = `prompt-error-${failureMode}-CREDENTIAL-SENTINEL`;
+    const authUrl = `https://auth.openai.com/device?fixture=${urlMarker}`;
+    const callbackError = new Error(callbackMarker);
+    let presentedUrl = null;
+    const fixture = createStartCancellationFixture(workspace, 'codex', 'codex-prompt-failure', {
+      authUrl,
+      onAuthenticationRequired({ authUrl: challengeUrl }) {
+        presentedUrl = challengeUrl;
+        if (failureMode === 'sync-throw') throw callbackError;
+        return Promise.reject(callbackError);
+      },
+    });
+    t.after(async () => { await fixture.runner.stop(); });
+
+    const outcome = await observeStart(fixture.runner.start({ inputText: 'private start input' }));
+    const expectedStartCode = failureMode === 'sync-throw' ? 'authentication_prompt_failed' : 'operation_stopped';
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, expectedStartCode);
+    assert.equal(outcome.error.cause, undefined);
+    assert.equal(presentedUrl, authUrl);
+    assert.equal(fixture.state.authenticationPromptCalls, 1);
+    assert.deepEqual(fixture.state.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(fixture.state.events, []);
+
+    const snapshot = fixture.runner.snapshot();
+    assert.equal(snapshot.failureCode, 'authentication_prompt_failed');
+    assert.equal(snapshot.contextState, 'none');
+    const serialized = [outcome.error.code, outcome.error.message, outcome.error.stack,
+      JSON.stringify(snapshot), JSON.stringify(fixture.state.events)].join('\n');
+    assert.equal(serialized.includes(authUrl), false);
+    assert.equal(serialized.includes(urlMarker), false);
+    assert.equal(serialized.includes(callbackMarker), false);
+    await fixture.runner.stop();
+  }
+});
+
+test('owned Claude and Codex pass only current transport values and delete each spawn environment', async (t) => {
+  const claudeWorkspace = createWorkspace(t);
+  const codexWorkspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues());
+  const sourceDescriptors = Object.getOwnPropertyDescriptors(source.environment);
+  const firstValues = { ...source.values };
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    const claudeHarness = createSpawnHarness(claudeWorkspace, (line, child) => {
+      const message = JSON.parse(line);
+      if (message.type !== 'user') return;
+      child.send(
+        { type: 'system', subtype: 'init', session_id: 'session_transport_1' },
+        {
+          type: 'stream_event', session_id: 'session_transport_1', parent_tool_use_id: null,
+          event: { type: 'message_start', message: { id: 'message_transport_1', role: 'assistant' } },
+        },
+      );
+    });
+    const claudeRunner = createOwnedNativeRunner(baseOptions(claudeWorkspace, 'claude', {
+      onNative() {},
+      getAuthentication: () => ({ oauthToken: 'fixture-oauth-CREDENTIAL-SENTINEL' }),
+      spawnImpl: claudeHarness.spawnImpl,
+    }));
+
+    const claudeSnapshot = await claudeRunner.start({ inputText: 'fixture prompt' });
+    assert.deepEqual(readTransportValues(claudeHarness.spawnEnvironment), firstValues);
+    assert.deepEqual(claudeHarness.args, [
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      '--include-partial-messages', '--no-session-persistence', '--setting-sources', '',
+      '--strict-mcp-config', '--tools', '', '--settings', '{"disableAllHooks":true}',
+    ]);
+    assert.equal(claudeHarness.spawnEnvironment.HOME, claudeWorkspace.homePath);
+    assert.equal(claudeHarness.spawnEnvironment.USERPROFILE, claudeWorkspace.homePath);
+    assert.equal(claudeHarness.spawnEnvironment.CLAUDE_CONFIG_DIR, claudeWorkspace.homePath);
+    assert.equal(claudeHarness.spawnEnvironment.CLAUDE_CODE_OAUTH_TOKEN, 'fixture-oauth-CREDENTIAL-SENTINEL');
+    assert.equal(claudeHarness.options.shell, false);
+    assert.deepEqual(claudeHarness.options.stdio, ['pipe', 'pipe', 'pipe']);
+    assertForbiddenEnvironmentAbsent(claudeHarness.spawnEnvironment);
+    assert.equal(Object.keys(claudeHarness.environment).length, 0);
+    assert.equal(JSON.stringify(claudeHarness.args).includes('CREDENTIAL-SENTINEL'), false);
+    assert.equal(JSON.stringify(claudeSnapshot).includes('CREDENTIAL-SENTINEL'), false);
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 1])));
+    assert.deepEqual(Object.getOwnPropertyDescriptors(source.environment), sourceDescriptors);
+    assert.deepEqual(source.values, firstValues);
+    await claudeRunner.stop();
+
+    source.values.HTTPS_PROXY = 'http://fixture:next-CREDENTIAL-SENTINEL@proxy.invalid:9443';
+    const codexHarness = createOwnedCodexHarness(codexWorkspace);
+    const codexRunner = createOwnedNativeRunner(baseOptions(codexWorkspace, 'codex', {
+      onNative() {},
+      onAuthenticationRequired: ({ loginId }) => codexHarness.child.send(codexLoginCompleted(loginId)),
+      spawnImpl: codexHarness.spawnImpl,
+    }));
+    const codexSnapshot = await codexRunner.start({ inputText: 'fixture task' });
+
+    assert.equal(claudeHarness.spawnEnvironment.HTTPS_PROXY, firstValues.HTTPS_PROXY);
+    assert.equal(codexHarness.spawnEnvironment.HTTPS_PROXY, source.values.HTTPS_PROXY);
+    assert.deepEqual(codexHarness.args, [
+      'app-server', '--listen', 'stdio://',
+      '-c', 'cli_auth_credentials_store="ephemeral"',
+      '-c', 'features.shell_tool=false',
+      '-c', 'features.unified_exec=false',
+      '-c', 'features.multi_agent=false',
+      '-c', 'features.apps=false',
+      '-c', 'features.hooks=false',
+      '-c', 'features.skill_mcp_dependency_install=false',
+      '-c', 'features.daemon_auto_start=false',
+      '-c', 'features.browser_use=false',
+      '-c', 'features.browser_use_external=false',
+      '-c', 'features.browser_use_full_cdp_access=false',
+      '-c', 'features.computer_use=false',
+      '-c', 'features.image_generation=false',
+      '-c', 'features.plugins=false',
+      '-c', 'features.remote_plugin=false',
+      '-c', 'features.workspace_dependencies=false',
+      '-c', 'web_search="disabled"',
+    ]);
+    assert.deepEqual(readTransportValues(codexHarness.spawnEnvironment), source.values);
+    assert.equal(codexHarness.spawnEnvironment.HOME, codexWorkspace.homePath);
+    assert.equal(codexHarness.spawnEnvironment.CODEX_HOME, path.join(codexWorkspace.homePath, '.codex'));
+    assert.equal(Object.hasOwn(codexHarness.spawnEnvironment, 'CLAUDE_CODE_OAUTH_TOKEN'), false);
+    assert.equal(codexHarness.options.shell, false);
+    assert.deepEqual(codexHarness.options.stdio, ['pipe', 'pipe', 'pipe']);
+    assertForbiddenEnvironmentAbsent(codexHarness.spawnEnvironment);
+    assert.equal(Object.keys(codexHarness.environment).length, 0);
+    assert.equal(JSON.stringify(codexHarness.args).includes('CREDENTIAL-SENTINEL'), false);
+    assert.equal(JSON.stringify(codexSnapshot).includes('CREDENTIAL-SENTINEL'), false);
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 2])));
+    assert.deepEqual(Object.getOwnPropertyDescriptors(source.environment), sourceDescriptors);
+    await codexRunner.stop();
+  });
+});
+
+test('owned runner rejects invalid transport values before spawning', async (t) => {
+  const invalidValues = [
+    { key: 'HTTP_PROXY', value: 17 },
+    { key: 'HTTPS_PROXY', value: 'http://fixture.invalid\u0000/path' },
+    { key: 'NO_PROXY', value: 'fixture.invalid\rmore' },
+    { key: 'NODE_EXTRA_CA_CERTS', value: `${makeTransportValues().NODE_EXTRA_CA_CERTS}\n` },
+    { key: 'SSL_CERT_FILE', value: process.platform === 'win32' ? 'C:relative-ca.pem' : 'relative-ca.pem' },
+    ...(process.platform === 'win32' ? [
+      { key: 'SSL_CERT_FILE', value: '\\rooted-without-drive.pem' },
+      { key: 'SSL_CERT_FILE', value: '\\\\?\\C:\\device-ca.pem' },
+      { key: 'NODE_EXTRA_CA_CERTS', value: '\\\\.\\pipe\\device-ca.pem' },
+    ] : []),
+  ];
+
+  for (const invalid of invalidValues) {
+    const workspace = createWorkspace(t);
+    const source = makeOwnedProcessEnvironment({ ...makeTransportValues(), [invalid.key]: invalid.value });
+    const descriptors = Object.getOwnPropertyDescriptors(source.environment);
+    let spawnCalls = 0;
+
+    await withIsolatedProcessEnvironment(source.environment, async () => {
+      const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+        onNative() {},
+        onAuthenticationRequired() {},
+        spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+      }));
+      await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+        assert.equal(error.code, 'invalid_transport_environment');
+        assert.equal(error.cause, undefined);
+        assert.equal(error.message.includes('CREDENTIAL-SENTINEL'), false);
+        assert.equal(error.message.includes(String(invalid.value)), false);
+        return true;
+      });
+      assert.equal(spawnCalls, 0);
+      assert.equal(runner.snapshot().failureCode, 'invalid_transport_environment');
+      assert.deepEqual(Object.getOwnPropertyDescriptors(source.environment), descriptors);
+      await runner.stop();
+    });
+  }
+});
+
+test('owned transport lookup errors use a fixed diagnostic without preserving their cause', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues(), 'HTTPS_PROXY');
+  const descriptors = Object.getOwnPropertyDescriptors(source.environment);
+  let spawnCalls = 0;
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onNative() {},
+      onAuthenticationRequired() {},
+      spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+    }));
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+      assert.equal(error.code, 'invalid_transport_environment');
+      assert.equal(error.cause, undefined);
+      assert.equal(error.message.includes('fixture-private-proxy-CREDENTIAL-SENTINEL'), false);
+      assert.equal(error.stack.includes('fixture-private-proxy-CREDENTIAL-SENTINEL'), false);
+      return true;
+    });
+    assert.equal(source.lookupCounts.HTTPS_PROXY, 1);
+    assert.equal(spawnCalls, 0);
+    assert.deepEqual(Object.getOwnPropertyDescriptors(source.environment), descriptors);
+    await runner.stop();
+  });
+});
+
+test('owned runner omits unset and empty transport values and ignores lowercase names', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment({
+    HTTPS_PROXY: '', HTTP_PROXY: undefined, NO_PROXY: undefined, SSL_CERT_FILE: '', NODE_EXTRA_CA_CERTS: undefined,
+  });
+  source.environment.https_proxy = 'http://lowercase.invalid:8080';
+  source.environment.ssl_cert_file = '/lowercase/ca.pem';
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    const harness = createOwnedCodexHarness(workspace);
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onNative() {},
+      onAuthenticationRequired: ({ loginId }) => harness.child.send(codexLoginCompleted(loginId)),
+      spawnImpl: harness.spawnImpl,
+    }));
+    await runner.start({ inputText: 'fixture task' });
+    for (const key of TRANSPORT_ENVIRONMENT_KEYS) assert.equal(Object.hasOwn(harness.spawnEnvironment, key), false);
+    assert.equal(Object.hasOwn(harness.spawnEnvironment, 'https_proxy'), false);
+    assert.equal(Object.hasOwn(harness.spawnEnvironment, 'ssl_cert_file'), false);
+    assertForbiddenEnvironmentAbsent(harness.spawnEnvironment);
+    assert.equal(Object.keys(harness.environment).length, 0);
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 1])));
+    await runner.stop();
+  });
+});
+
+test('invalid owned transport values are physically stopped by the owned stop path', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment({ ...makeTransportValues(), HTTP_PROXY: 19 });
+  const originalCreateServer = http.createServer;
+  const servers = [];
+  let spawnCalls = 0;
+  let runner;
+  http.createServer = function captureServer(...args) {
+    const server = originalCreateServer.apply(this, args);
+    servers.push(server);
+    return server;
+  };
+
+  try {
+    await withIsolatedProcessEnvironment(source.environment, async () => {
+      runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+        profile: 'cockpit-native-wait-v1',
+        onNative() {},
+        ownedSourceClaim: Object.freeze({}),
+        getAuthentication: () => ({ oauthToken: 'fixture-oauth-CREDENTIAL-SENTINEL' }),
+        onSourceReady() {},
+        captureWaitAuthorization: () => null,
+        onContextContinuation() {},
+        spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+      }));
+      await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) =>
+        error.code === 'invalid_transport_environment' && error.cause === undefined);
+      assert.equal(spawnCalls, 0);
+      assert.equal(servers.length, 1);
+      const stopped = await runner.stop();
+      assert.equal(stopped.state, 'stopped');
+      assert.equal(servers[0].listening, false);
+    });
+  } finally {
+    if (runner) await runner.stop();
+    http.createServer = originalCreateServer;
+  }
+});
+
+test('owned wait endpoint startup does not read transport values while its listen callback is pending', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues());
+  const originalCreateServer = http.createServer;
+  const originalListen = http.Server.prototype.listen;
+  const servers = [];
+  let resolveListening;
+  const listening = new Promise((resolve) => { resolveListening = resolve; });
+  let spawnCalls = 0;
+  let runner;
+  http.createServer = function captureServer(...args) {
+    const server = originalCreateServer.apply(this, args);
+    servers.push(server);
+    server.once('listening', resolveListening);
+    return server;
+  };
+  http.Server.prototype.listen = function holdListenCallback(...args) {
+    const callbackIndex = args.length - 1;
+    if (typeof args[callbackIndex] === 'function') args[callbackIndex] = () => {};
+    return originalListen.apply(this, args);
+  };
+
+  try {
+    await withIsolatedProcessEnvironment(source.environment, async () => {
+      runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+        profile: 'cockpit-native-wait-v1',
+        onNative() {},
+        ownedSourceClaim: Object.freeze({}),
+        getAuthentication: () => ({ oauthToken: 'fixture-oauth-CREDENTIAL-SENTINEL' }),
+        onSourceReady() {},
+        captureWaitAuthorization: () => null,
+        onContextContinuation() {},
+        spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+      }));
+      const startPromise = runner.start({ inputText: 'fixture task' });
+      await listening;
+      assert.equal(servers.length, 1);
+      assert.equal(servers[0].listening, true);
+      assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 0])));
+      assert.equal(spawnCalls, 0);
+
+      const stopped = await runner.stop();
+      await assert.rejects(startPromise, (error) => error.code === 'operation_stopped');
+      assert.equal(stopped.state, 'stopped');
+      assert.equal(servers[0].listening, false);
+      assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 0])));
+      assert.equal(spawnCalls, 0);
+    });
+  } finally {
+    if (runner) await runner.stop();
+    http.Server.prototype.listen = originalListen;
+    http.createServer = originalCreateServer;
+  }
+});
+
+test('owned runner stops after transport capture when the owner expires before spawn', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues());
+  let runner;
+  let stopPromise;
+  let spawnCalls = 0;
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+      onNative() {},
+      getAuthentication: () => ({ oauthToken: 'fixture-oauth-CREDENTIAL-SENTINEL' }),
+      isSourceCurrent() {
+        if (source.lookupCounts.NODE_EXTRA_CA_CERTS === 1 && !stopPromise) stopPromise = runner.stop();
+        return true;
+      },
+      spawnImpl() { spawnCalls += 1; throw new Error('unexpected fixture spawn'); },
+    }));
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => error.code === 'operation_stopped');
+    const stopped = await stopPromise;
+    assert.equal(stopped.state, 'stopped');
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 1])));
+    assert.deepEqual(source.values, makeTransportValues());
+    assert.equal(spawnCalls, 0);
+    assert.equal(JSON.stringify(runner.snapshot()).includes('CREDENTIAL-SENTINEL'), false);
+  });
+});
+
+test('owned runner clears its environment after a synchronous spawn error', async (t) => {
+  const workspace = createWorkspace(t);
+  const source = makeOwnedProcessEnvironment(makeTransportValues());
+  let environmentReference;
+  let spawnEnvironment;
+
+  await withIsolatedProcessEnvironment(source.environment, async () => {
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onNative() {},
+      onAuthenticationRequired() {},
+      spawnImpl(_executable, _args, options) {
+        environmentReference = options.env;
+        spawnEnvironment = { ...options.env };
+        throw new Error('fixture-CREDENTIAL-SENTINEL');
+      },
+    }));
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) =>
+      error.code === 'spawn_failed' && error.cause === undefined && !error.message.includes('CREDENTIAL-SENTINEL'));
+    assert.deepEqual(readTransportValues(spawnEnvironment), source.values);
+    assertForbiddenEnvironmentAbsent(spawnEnvironment);
+    assert.equal(Object.keys(environmentReference).length, 0);
+    assert.equal(JSON.stringify(runner.snapshot()).includes('CREDENTIAL-SENTINEL'), false);
+    assert.deepEqual(source.lookupCounts, Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 1])));
+    await runner.stop();
+  });
+});
+
+function makeTransportValues() {
+  return {
+    HTTPS_PROXY: 'http://fixture:proxy-CREDENTIAL-SENTINEL@proxy.invalid:8443',
+    HTTP_PROXY: 'http://http-proxy.invalid:8080',
+    NO_PROXY: 'localhost, internal.invalid ',
+    SSL_CERT_FILE: process.platform === 'win32'
+      ? 'C:\\transport certs\\root.pem'
+      : '/tmp/transport certs/root.pem',
+    NODE_EXTRA_CA_CERTS: process.platform === 'win32'
+      ? '\\\\certificate-server\\shared certs\\extra.pem'
+      : '/tmp/transport certs/extra.pem',
+  };
+}
+
+function makeOwnedProcessEnvironment(transportValues, throwingKey = null) {
+  const values = { ...transportValues };
+  const lookupCounts = Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, 0]));
+  const environment = {
+    PATH: 'owned-fixture-path',
+    PATHEXT: '.EXE',
+    SYSTEMROOT: 'owned-fixture-system-root',
+    WINDIR: 'owned-fixture-windows-root',
+    COMSPEC: 'owned-fixture-command-shell',
+    ALL_PROXY: 'fixture-forbidden-all-proxy',
+    SSL_CERT_DIR: 'fixture-forbidden-ca-dir',
+    NODE_OPTIONS: '--require fixture-forbidden-module',
+    NODE_TLS_REJECT_UNAUTHORIZED: '0',
+    GH_TOKEN: 'fixture-forbidden-github-token',
+    GITHUB_TOKEN: 'fixture-forbidden-github-token',
+    CLAUDE_CODE_MESSAGING_TOKEN: 'fixture-forbidden-messaging-token',
+    CUSTOM_ENDPOINT: 'fixture-forbidden-endpoint',
+    https_proxy: 'http://lowercase.invalid:8080',
+    ssl_cert_file: '/lowercase/ca.pem',
+  };
+  for (const key of TRANSPORT_ENVIRONMENT_KEYS) {
+    Object.defineProperty(environment, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        lookupCounts[key] += 1;
+        if (key === throwingKey) throw new Error('fixture-private-proxy-CREDENTIAL-SENTINEL');
+        return values[key];
+      },
+    });
+  }
+  return { environment, lookupCounts, values };
+}
+
+async function withIsolatedProcessEnvironment(environment, callback) {
+  const originalEnvironment = process.env;
+  process.env = environment;
+  try {
+    return await callback();
+  } finally {
+    process.env = originalEnvironment;
+  }
+}
+
+function readTransportValues(environment) {
+  return Object.fromEntries(TRANSPORT_ENVIRONMENT_KEYS.map((key) => [key, environment[key]]));
+}
+
+function assertForbiddenEnvironmentAbsent(environment) {
+  for (const key of FORBIDDEN_INHERITED_ENVIRONMENT_KEYS) assert.equal(Object.hasOwn(environment, key), false);
+}
+
+function createControlledCodexLoginFixture(t, values = {}) {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const barriers = new Map();
+  const state = {
+    child: null,
+    methods: [],
+    writes: [],
+    loginRequest: null,
+    threadStartRequest: null,
+    promptCalls: 0,
+    exitSeen: false,
+    closeSeen: false,
+    startPromise: null,
+    startObserved: null,
+  };
+  const barrier = (name) => {
+    if (!barriers.has(name)) barriers.set(name, deferred());
+    return barriers.get(name);
+  };
+  const signal = (name) => barrier(name).resolve();
+  const spawnImpl = () => {
+    const child = new FakeChild((line, currentChild) => {
+      state.writes.push(line);
+      const request = JSON.parse(line);
+      if (request.method === 'initialized') {
+        signal('initialized-write');
+        return;
+      }
+      if (!request.method || !Object.hasOwn(request, 'id')) return;
+      state.methods.push(request.method);
+      signal(`request:${request.method}`);
+      if (request.method === 'initialize') {
+        currentChild.send(codexResponse(request.id, {
+          serverInfo: { name: 'codex', version: 'test' },
+          codexHome: path.join(workspace.homePath, '.codex'),
+        }));
+      } else if (request.method === 'account/login/start') {
+        state.loginRequest = { id: request.id };
+      } else if (request.method === 'thread/start') {
+        if (values.holdThreadStartResponse) {
+          state.threadStartRequest = { id: request.id };
+          signal('thread-start-held');
+        } else currentChild.send(codexResponse(request.id, { thread: { id: 'thread_native_1' } }));
+      } else if (request.method === 'turn/start') {
+        currentChild.send(codexResponse(request.id, { turn: { id: 'turn_native_1' } }));
+      }
+    }, {
+      ...(values.childOptions || {}),
+      onWriteCallback(text, callback) {
+        const request = JSON.parse(text);
+        if (request.method === 'account/login/start' && values.loginWriteFailure) {
+          signal('login-write-failure-injected');
+          const error = new Error(values.loginWriteError);
+          if (values.loginWriteFailure === 'sync-throw') throw error;
+          queueMicrotask(() => callback(error));
+          return;
+        }
+        queueMicrotask(() => {
+          callback();
+          if (request.method === 'initialized') signal('initialized-complete');
+        });
+      },
+    });
+    state.child = child;
+    child.on('exit', () => { state.exitSeen = true; });
+    child.on('close', () => { state.closeSeen = true; });
+    setImmediate(() => child.emit('spawn'));
+    return child;
+  };
+  let runner;
+  runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    ownedSourceClaim: claim,
+    onSourceReady: () => {},
+    isCurrent: () => values.isCurrent ? values.isCurrent() : true,
+    isSourceCurrent: () => values.isSourceCurrent ? values.isSourceCurrent() : true,
+    onAuthenticationRequired: (input) => {
+      state.promptCalls += 1;
+      signal('authentication-prompt');
+      if (values.onAuthenticationRequired) return values.onAuthenticationRequired(input, state);
+      state.child.send(codexLoginCompleted(input.loginId));
+    },
+    spawnImpl,
+    onNative: () => {},
+    timeouts: { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: 100, ...values.timeouts },
+  }));
+  const fixture = {
+    runner,
+    state,
+    start(inputText = 'fixed task') {
+      state.startPromise = runner.start({ inputText });
+      state.startObserved = observeStart(state.startPromise);
+      return state.startPromise;
+    },
+    wait(name) { return barrier(name).promise; },
+    respondLogin(result = { type: 'chatgpt', loginId: LOGIN_ID, authUrl: values.authUrl || LOGIN_URL }) {
+      if (!state.loginRequest) throw new Error('login request has not been written');
+      state.child.send(codexResponse(state.loginRequest.id, result));
+    },
+    completeLogin(loginId = LOGIN_ID, success = true) {
+      state.child.send(codexLoginCompleted(loginId, success));
+    },
+    respondThreadStart() {
+      if (!state.threadStartRequest) throw new Error('thread start response is not held');
+      state.child.send(codexResponse(state.threadStartRequest.id, { thread: { id: 'thread_native_1' } }));
+    },
+    emitTermination(event) {
+      if (event === 'exit') state.child.exited = true;
+      state.child.emit(event, 0, null);
+    },
+  };
+  t.after(async () => {
+    try { await runner.stop(); } catch {}
+    if (state.child) {
+      if (!state.exitSeen) fixture.emitTermination('exit');
+      if (!state.closeSeen) fixture.emitTermination('close');
+      await nextImmediate();
+    }
+    if (state.startObserved) await state.startObserved;
+  });
+  return fixture;
+}
+
+function hasMethod(fixture, method) {
+  return fixture.state.methods.includes(method);
+}
+
+test('owned Codex login attempts are granted FIFO and release before thread startup only after success', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, { holdThreadStartResponse: true });
+  const second = createControlledCodexLoginFixture(t);
+  const third = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  third.start();
+  await third.wait('initialized-complete');
+  await nextImmediate();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  assert.equal(hasMethod(third, 'account/login/start'), false);
+
+  first.respondLogin();
+  await first.wait('thread-start-held');
+  await second.wait('request:account/login/start');
+  assert.equal(first.state.threadStartRequest !== null, true);
+  assert.equal(hasMethod(third, 'account/login/start'), false);
+  first.respondThreadStart();
+  assert.equal((await first.state.startObserved).status, 'resolved');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+  await third.wait('request:account/login/start');
+  third.respondLogin();
+  assert.equal((await third.state.startObserved).status, 'resolved');
+});
+
+test('queued stop and owner expiry remove login waiters without starting login RPCs', { timeout: 8000 }, async (t) => {
+  const holder = createControlledCodexLoginFixture(t);
+  const stopped = createControlledCodexLoginFixture(t);
+  let ownerCurrent = true;
+  const expired = createControlledCodexLoginFixture(t, { isCurrent: () => ownerCurrent });
+  const next = createControlledCodexLoginFixture(t);
+  holder.start();
+  await holder.wait('request:account/login/start');
+  stopped.start();
+  await stopped.wait('initialized-complete');
+  await nextImmediate();
+  const stoppedResult = stopped.state.startObserved;
+  await stopped.runner.stop();
+  assert.equal((await stoppedResult).status, 'rejected');
+  assert.equal(hasMethod(stopped, 'account/login/start'), false);
+
+  expired.start();
+  await expired.wait('initialized-complete');
+  next.start();
+  await next.wait('initialized-complete');
+  await nextImmediate();
+  ownerCurrent = false;
+  holder.respondLogin();
+  const expiredResult = await expired.state.startObserved;
+  assert.equal(expiredResult.status, 'rejected');
+  assert.equal(expiredResult.error.code, 'authority_expired');
+  assert.equal(hasMethod(expired, 'account/login/start'), false);
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});
+
+test('queue timeout removes its waiter and leaves the active Codex login intact', { timeout: 8000 }, async (t) => {
+  const holder = createControlledCodexLoginFixture(t);
+  const timedOut = createControlledCodexLoginFixture(t, { timeouts: { loginMs: 80 } });
+  const next = createControlledCodexLoginFixture(t);
+  holder.start();
+  await holder.wait('request:account/login/start');
+  timedOut.start();
+  await timedOut.wait('initialized-complete');
+  next.start();
+  await next.wait('initialized-complete');
+  const result = await timedOut.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'authentication_queue_timeout');
+  assert.equal(hasMethod(timedOut, 'account/login/start'), false);
+  assert.equal(hasMethod(next, 'account/login/start'), false);
+
+  holder.respondLogin();
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});
+
+test('a synchronous stop during post-grant owner checking returns the unused ticket before login RPC', { timeout: 8000 }, async (t) => {
+  let stopAtNextOwnerCheck = false;
+  let reentrant;
+  const holder = createControlledCodexLoginFixture(t);
+  reentrant = createControlledCodexLoginFixture(t, {
+    isCurrent: () => {
+      if (stopAtNextOwnerCheck) {
+        stopAtNextOwnerCheck = false;
+        reentrant.state.stopPromise = reentrant.runner.stop();
+      }
+      return true;
+    },
+  });
+  const next = createControlledCodexLoginFixture(t);
+  holder.start();
+  await holder.wait('request:account/login/start');
+  reentrant.start();
+  await reentrant.wait('initialized-complete');
+  next.start();
+  await next.wait('initialized-complete');
+  await nextImmediate();
+  stopAtNextOwnerCheck = true;
+  holder.respondLogin();
+
+  const result = await reentrant.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'operation_stopped');
+  await reentrant.state.stopPromise;
+  assert.equal(hasMethod(reentrant, 'account/login/start'), false);
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});
+
+test('early login success cannot release a bad authentication response before child termination', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, {
+    childOptions: { killEvents: ['exit'] },
+  });
+  const second = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  first.completeLogin();
+  first.respondLogin({
+    type: 'chatgpt', loginId: LOGIN_ID, authUrl: 'https://auth.example.test/oauth/authorize?fixture=bad-url',
+  });
+  const result = await first.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'authentication_response_invalid');
+  await nextImmediate();
+  assert.equal(first.state.exitSeen, true);
+  assert.equal(first.state.closeSeen, false);
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  await first.runner.stop();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+
+  first.emitTermination('close');
+  await second.wait('request:account/login/start');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+});
+
+test('close without exit does not release a started login until the late exit arrives', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, { childOptions: { killEvents: ['close'] } });
+  const second = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  first.respondLogin({ type: 'invalid-provider', loginId: LOGIN_ID, authUrl: LOGIN_URL });
+  assert.equal((await first.state.startObserved).status, 'rejected');
+  await nextImmediate();
+  assert.equal(first.state.closeSeen, true);
+  assert.equal(first.state.exitSeen, false);
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  await first.runner.stop();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  first.emitTermination('exit');
+  await second.wait('request:account/login/start');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+});
+
+test('explicit stop keeps a started login slot through stop_unconfirmed until late termination completes', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, {
+    childOptions: { autoKillEvents: false },
+    onAuthenticationRequired: () => {},
+  });
+  const second = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  first.respondLogin();
+  await first.wait('authentication-prompt');
+  const stopped = await first.runner.stop();
+  assert.equal(stopped.state, 'stop_unconfirmed');
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  first.emitTermination('exit');
+  await nextImmediate();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  first.emitTermination('close');
+  await second.wait('request:account/login/start');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+});
+
+test('authentication callback can synchronously start and stop another runner while the gate is held', { timeout: 8000 }, async (t) => {
+  let reentrant;
+  const first = createControlledCodexLoginFixture(t, {
+    onAuthenticationRequired: ({ loginId }, state) => {
+      reentrant.start();
+      state.reentrantStop = reentrant.runner.stop();
+      state.child.send(codexLoginCompleted(loginId));
+    },
+  });
+  reentrant = createControlledCodexLoginFixture(t);
+  const next = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  next.start();
+  await next.wait('initialized-complete');
+  first.respondLogin();
+  assert.equal((await first.state.startObserved).status, 'resolved');
+  await first.state.reentrantStop;
+  assert.equal((await reentrant.state.startObserved).status, 'rejected');
+  assert.equal(hasMethod(reentrant, 'account/login/start'), false);
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});
+
+for (const scenario of ['invalid-type', 'early-mismatch', 'duplicate-completion', 'failed-completion']) {
+  test(`started login ${scenario} holds the gate until both child termination events`, { timeout: 8000 }, async (t) => {
+    const first = createControlledCodexLoginFixture(t, {
+      childOptions: { autoKillEvents: false },
+      onAuthenticationRequired: scenario === 'duplicate-completion'
+        ? ({ loginId }, state) => {
+          state.child.send(codexLoginCompleted(loginId));
+          state.child.send(codexLoginCompleted(loginId));
+        }
+        : () => {},
+    });
+    const second = createControlledCodexLoginFixture(t);
+    first.start();
+    await first.wait('request:account/login/start');
+    second.start();
+    await second.wait('initialized-complete');
+    if (scenario === 'early-mismatch') first.completeLogin('login_mismatch_fixture');
+    if (scenario === 'invalid-type') {
+      first.respondLogin({ type: 'wrong-provider', loginId: LOGIN_ID, authUrl: LOGIN_URL });
+    } else {
+      first.respondLogin();
+      if (scenario === 'failed-completion') {
+        await first.wait('authentication-prompt');
+        first.completeLogin(LOGIN_ID, false);
+      }
+    }
+    const result = await first.state.startObserved;
+    assert.equal(result.status, 'rejected');
+    await nextImmediate();
+    assert.equal(first.state.exitSeen, false);
+    assert.equal(first.state.closeSeen, false);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    await first.runner.stop();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('exit');
+    await nextImmediate();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('close');
+    await second.wait('request:account/login/start');
+    second.respondLogin();
+    assert.equal((await second.state.startObserved).status, 'resolved');
+  });
+}
+
+for (const mode of ['sync-throw', 'async-reject']) {
+  test(`${mode} authentication callback failure is sanitized and retains the login gate until termination`, { timeout: 8000 }, async (t) => {
+    const privateSentinel = `fixture-callback-${mode}-private-sentinel`;
+    const authUrl = `https://auth.openai.com/oauth/authorize?fixture=${privateSentinel}`;
+    const first = createControlledCodexLoginFixture(t, {
+      authUrl,
+      childOptions: { autoKillEvents: false },
+      onAuthenticationRequired: () => {
+        if (mode === 'sync-throw') throw new Error(privateSentinel);
+        return Promise.reject(new Error(privateSentinel));
+      },
+    });
+    const second = createControlledCodexLoginFixture(t);
+    first.start();
+    await first.wait('request:account/login/start');
+    second.start();
+    await second.wait('initialized-complete');
+    first.respondLogin({ type: 'chatgpt', loginId: LOGIN_ID, authUrl });
+    const result = await first.state.startObserved;
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.error.code, mode === 'sync-throw' ? 'authentication_prompt_failed' : 'operation_stopped');
+    await nextImmediate();
+    assert.equal(first.runner.snapshot().failureCode, 'authentication_prompt_failed');
+    assert.equal(result.error.cause, undefined);
+    assert.equal(result.error.message.includes(privateSentinel), false);
+    assert.equal(result.error.stack.includes(privateSentinel), false);
+    assert.equal(JSON.stringify(first.runner.snapshot()).includes(privateSentinel), false);
+    assert.equal(JSON.stringify(first.runner.snapshot()).includes(authUrl), false);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    await first.runner.stop();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('exit');
+    await nextImmediate();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('close');
+    await second.wait('request:account/login/start');
+    second.respondLogin();
+    assert.equal((await second.state.startObserved).status, 'resolved');
+  });
+}
+
+test('authentication timeout keeps the login gate until exit and close both arrive', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, {
+    childOptions: { autoKillEvents: false },
+    onAuthenticationRequired: () => {},
+    timeouts: { loginMs: 60 },
+  });
+  const second = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  first.respondLogin();
+  await first.wait('authentication-prompt');
+  const result = await first.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'authentication_timeout');
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  await first.runner.stop();
+  first.emitTermination('exit');
+  await nextImmediate();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  first.emitTermination('close');
+  await second.wait('request:account/login/start');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+});
+
+test('termination and completion from an older login cannot release the current Codex holder', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t);
+  const second = createControlledCodexLoginFixture(t);
+  const third = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  first.respondLogin();
+  assert.equal((await first.state.startObserved).status, 'resolved');
+
+  second.start();
+  await second.wait('request:account/login/start');
+  third.start();
+  await third.wait('initialized-complete');
+  first.emitTermination('exit');
+  first.emitTermination('close');
+  first.completeLogin();
+  await nextImmediate();
+  assert.equal(hasMethod(third, 'account/login/start'), false);
+
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+  await third.wait('request:account/login/start');
+  third.respondLogin();
+  assert.equal((await third.state.startObserved).status, 'resolved');
+});
+
+for (const mode of ['callback-error', 'sync-throw']) {
+  test(`an account login write ${mode} keeps the gate until both child termination events`, { timeout: 8000 }, async (t) => {
+    const privateSentinel = `fixture-login-write-${mode}-private-sentinel`;
+    const authUrl = `https://auth.openai.com/device?fixture=${privateSentinel}`;
+    const writeFailure = `${authUrl} ${privateSentinel}`;
+    const first = createControlledCodexLoginFixture(t, {
+      loginWriteFailure: mode,
+      loginWriteError: writeFailure,
+      childOptions: { autoKillEvents: false },
+    });
+    const second = createControlledCodexLoginFixture(t);
+    first.start();
+    await first.wait('login-write-failure-injected');
+    const result = await first.state.startObserved;
+    const failureSnapshot = first.runner.snapshot();
+    second.start();
+    await second.wait('initialized-complete');
+    assert.equal(hasMethod(first, 'account/login/start'), true);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.error.code, 'operation_failed');
+    assert.equal(result.error.cause, undefined);
+    assert.equal(result.error.message.includes(privateSentinel), false);
+    assert.equal(result.error.stack.includes(privateSentinel), false);
+    assert.equal(result.error.message.includes(authUrl), false);
+    assert.equal(result.error.stack.includes(authUrl), false);
+    assert.equal(failureSnapshot.failureCode, 'operation_failed');
+    assert.equal(JSON.stringify(failureSnapshot).includes(privateSentinel), false);
+    assert.equal(JSON.stringify(failureSnapshot).includes(authUrl), false);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    await first.runner.stop();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('exit');
+    await nextImmediate();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('close');
+    await second.wait('request:account/login/start');
+    second.respondLogin();
+    assert.equal((await second.state.startObserved).status, 'resolved');
+  });
+}
+
+test('source expiry before login gate grant returns its ticket without sending login', { timeout: 8000 }, async (t) => {
+  const holder = createControlledCodexLoginFixture(t);
+  let sourceCurrent = true;
+  const sourceExpired = createControlledCodexLoginFixture(t, {
+    isCurrent: () => true,
+    isSourceCurrent: () => sourceCurrent,
+  });
+  const next = createControlledCodexLoginFixture(t);
+  holder.start();
+  await holder.wait('request:account/login/start');
+  sourceExpired.start();
+  await sourceExpired.wait('initialized-complete');
+  next.start();
+  await next.wait('initialized-complete');
+  await nextImmediate();
+  assert.equal(hasMethod(sourceExpired, 'account/login/start'), false);
+  assert.equal(hasMethod(next, 'account/login/start'), false);
+
+  sourceCurrent = false;
+  holder.respondLogin();
+  const result = await sourceExpired.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'authority_expired');
+  assert.equal(hasMethod(sourceExpired, 'account/login/start'), false);
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});

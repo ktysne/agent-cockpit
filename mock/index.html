@@ -643,6 +643,22 @@ const DATA = {
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 45,
           estimate: { canEstimate: true, recordedAt: '14:21', tool: 'Read', state: 'input' },
         },
+        {
+          id: 'agent-cockpit-projection-ended', title: '終了した実行の質問', status: 'ended', projectionOnly: true, branch: 'plan/pr-stack-view',
+          main: { tool: '', since: '' }, perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 1,
+          commonQuestions: [{
+            internalQuestionId: 'cq-mock-projection-ended', questionId: '終了した実行の質問', createdAt: Date.now() - 60_000,
+            deadlineAt: Date.now() + 5 * 60_000, revision: 0, held: false, selectionSource: null, selectedAt: null,
+            selectedOptionIds: [], deliveryState: null, externalResolution: false, lateAnswerCount: 0,
+            cancelled: false, cancelRequested: false,
+            questions: [{ id: 'choice', text: '回答を保存しますか', mode: 'single', allowFreeText: false,
+              recommendedOptionId: 'yes', options: [{ id: 'yes', label: '保存する' }, { id: 'no', label: '取り下げる' }] }],
+          }],
+        },
+        {
+          id: 'agent-cockpit-projection-unknown', title: '状態不明の合成行', status: 'unknown', projectionOnly: true, branch: 'plan/pr-stack-view',
+          main: { tool: '', since: '' }, perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 1,
+        },
         // resume しても同じ conversationId の会話は 1 行にまとめる。再開の回数は行の札で示す。
         {
           id: 'agent-cockpit-codex', title: 'Codex: 表示の単位の調査', status: 'wait', branch: 'plan/pr-stack-view',
@@ -2098,6 +2114,7 @@ function mainRow(p, session, withTag) {
   const nonInteractive = session.nonInteractive === true;
   const nonInteractiveUnknown = session.status === 'unknown' && nonInteractive;
   const unknown = session.status === 'unknown' && !nonInteractiveUnknown;
+  const endedProjection = session.projectionOnly === true && session.status === 'ended';
   const nativeState = nativeStopState(session);
   const nativeStatus = {
     'native-wait': '質問・許可待ち',
@@ -2109,10 +2126,10 @@ function mainRow(p, session, withTag) {
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
   // 状態不明の行の main.since は、ターンを確定しないイベントが最後に届いた時刻。無いときは時刻不明にする。
-  const status = nativeStatus || (nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)');
+  const status = nativeStatus || (endedProjection ? '終了済み' : nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)');
   const statusTitle = session.status === 'interrupted' ? ' title="利用者が中断した。セッションは生きていて、次の入力を待っている"' : '';
   const conversation = session.codex?.resumes ? `<span class="route-tag" title="同じ会話を再開しても 1 行にまとめて表示する">再開 ${session.codex.resumes} 回</span>` : '';
-  const stateClass = nativeState === 'native-stop-unconfirmed' ? 'unknown'
+  const stateClass = endedProjection ? 'ended' : nativeState === 'native-stop-unconfirmed' ? 'unknown'
     : ['native-wait', 'native-capacity', 'native-stopped'].includes(nativeState) ? 'wait'
       : nonInteractiveUnknown ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
@@ -2144,7 +2161,7 @@ const isUnconfirmed = (session, agent) => !!agent.unconfirmed && !isClosedByUser
 const isEndedAgent = (session, agent) => (agent.state === 'done' || isClosedByUser(session, agent)) && !isClosable(session, agent);
 
 function isFinishedSession(session) {
-  return session.status === 'wait'
+  return (session.status === 'wait' || (session.projectionOnly === true && session.status === 'ended'))
     && session.tasks.every(task => taskState(session, task) === 'done')
     && session.decisions.every(isEndedDecision)
     && session.perms.length === 0
@@ -2919,12 +2936,13 @@ const ESTIMATE_WAITING = { input: 'はい', tool: 'いいえ (許可待ちかツ
 
 function unknownSessionControls(session) {
   if (session.status !== 'unknown' || session.nonInteractive) return '';
-  const estimate = ui.estimatedSessions.includes(session.id)
+  const canEstimate = session.projectionOnly !== true;
+  const estimate = canEstimate && ui.estimatedSessions.includes(session.id)
     ? session.estimate?.canEstimate
       ? `<div class="estimate"><p>最後の記録: ${esc(absoluteTimeLabel(session.estimate.recordedAt))}、最後のツール: ${esc(session.estimate.lastTool ?? session.estimate.tool ?? 'なし')}</p><p>入力待ちらしい: ${ESTIMATE_WAITING[session.estimate.state]}</p></div>`
       : '<div class="estimate">推定できませんでした</div>'
     : '';
-  return `<div class="session-extra"><div class="session-actions"><button type="button" class="ended-toggle" data-estimate="${esc(session.id)}">状態を推定</button><button type="button" class="ended-toggle" data-hide-session="${esc(session.id)}">一覧から外す</button></div>${estimate}</div>`;
+  return `<div class="session-extra"><div class="session-actions">${canEstimate ? `<button type="button" class="ended-toggle" data-estimate="${esc(session.id)}">状態を推定</button>` : ''}<button type="button" class="ended-toggle" data-hide-session="${esc(session.id)}">一覧から外す</button></div>${estimate}</div>`;
 }
 
 function sessionBlock(p, session) {

@@ -59,7 +59,7 @@ function fixture(t, provider, options = {}) {
         methods.push(request.method);
         const send = (result) => child.send({ id: request.id, result });
         if (request.method === 'initialize') send({ serverInfo: { name: 'fixture', version: '1' }, codexHome: path.join(homePath, '.codex') });
-        else if (request.method === 'account/login/start') send({ type: 'chatgpt', loginId: 'login-id', authUrl: 'https://auth.example.test/device' });
+        else if (request.method === 'account/login/start') send({ type: 'chatgpt', loginId: 'login-id', authUrl: 'https://auth.openai.com/device?fixture=source-collector-CREDENTIAL-SENTINEL' });
         else if (request.method === 'thread/start') send({ thread: { id: 'native-id' } });
         else if (request.method === 'turn/start') {
           const sendContext = () => send({ turn: { id: 'native-context' } });

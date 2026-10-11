@@ -1011,6 +1011,7 @@ function createCommonQuestionService(options = {}, lifetimeGate = null) {
       if (existing) {
         assertNotQuarantined(existing);
         if (existing.contentDigest !== digest) throw serviceError('question_conflict');
+        if (existing.cancelledAt !== null) throw serviceError('question_cancelled');
         return { outcome: 'existing', question: await projectRecord(existing) };
       }
       let internalQuestionId = null;
@@ -1048,11 +1049,33 @@ function createCommonQuestionService(options = {}, lifetimeGate = null) {
         throw error;
       }
       capacityRejected = false;
-      rescheduleTimer();
-      const confirmed = findLiveWriter(writer);
-      if (confirmed.launchRef !== live.launchRef || !sameBinding(confirmed.executionBinding, live.executionBinding)) {
-        throw serviceError('question_writer_unverified');
+      let revalidationFailed = false;
+      let revalidationReason;
+      try {
+        const confirmed = findLiveWriter(writer);
+        if (confirmed.launchRef !== live.launchRef || !sameBinding(confirmed.executionBinding, live.executionBinding)) {
+          throw serviceError('question_writer_unverified');
+        }
+      } catch (error) {
+        revalidationFailed = true;
+        revalidationReason = error;
       }
+      if (revalidationFailed) {
+        try {
+          await commitRecord({ ...saved, cancelledAt: nowValue() });
+        } catch (error) {
+          blocked = true;
+          startupError = serviceError('question_cancelled_journal_save_failed');
+          Object.defineProperty(startupError, 'cause', {
+            value: new AggregateError([revalidationReason, error], 'question registration cancellation failed'),
+          });
+          rescheduleTimer();
+          throw serviceError('question_cancelled_journal_save_failed');
+        }
+        rescheduleTimer();
+        throw revalidationReason;
+      }
+      rescheduleTimer();
       return { outcome: 'created', question: await projectRecord(saved) };
     }, false, token);
   }

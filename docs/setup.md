@@ -11,6 +11,21 @@ remote実行環境では、loopback外へtransportを公開せず、認証済み
 native actorと登録済みexecutionを結ぶ証拠が確認されるまでは、観測はunknownとして扱い、production bindingとして採用しません。
 通常HOMEへの導入案を検討するときは、対象、差分、復旧手順を先に示し、個別の承認後にだけ進めます。
 
+実験用のowned native runnerとCodex managed processに実行ファイルを指定する場合、Windowsではproviderのnative `.exe`の絶対パスを使います。
+npmの`codex.cmd`などのshell wrapperは使えず、`executable_format_unsupported`になります。設定を確認し、providerが提供するnative実行ファイルの場所を明示してください。
+この診断は認証や隔離HOME配下の作成より前に行います。`.exe`という拡張子だけでインストールや実行の成功を保証するものではありません。
+
+実験用runnerは、起動元の信頼済み環境から`HTTPS_PROXY`、`HTTP_PROXY`、`NO_PROXY`、`SSL_CERT_FILE`、`NODE_EXTRA_CA_CERTS`だけを通信設定として継承します。
+CAの二つの変数には完全な絶対パスを指定します。不正な型や制御文字、相対CAパスは、値を表示せず`invalid_transport_environment`で起動を拒否します。
+proxyを設定する場合は、起動元の`NO_PROXY`へloopbackの除外を設定してください。`127.0.0.1,localhost,::1`は例で、IPv6の表記と解釈はproviderごとに未確認です。認証付きのCockpit loopback通信をproxyへ送らないための条件です。値は自動補完しません。実providerでloopbackが直結することを確認してから使用してください。
+変数を渡す検査は、実providerでのproxyやCAを使った通信成功を保証しません。供給元と検証範囲は[通信環境の契約](design/native-transport-environment.md)にあります。
+
+owned Codexのbrowser認証URLは`https://auth.openai.com`と`https://chatgpt.com`のoriginに限定します。未知のoriginや非標準portは、URLを表示せず`authentication_response_invalid`で拒否します。前後空白も受け付けません。対象は初期URLで、後続redirectと実runtimeの互換性は未確認です。[認証URLの契約](design/native-authentication-url.md)に検査条件があります。
+
+同module内のowned Codexのログインは順番に開始します。queueの期限切れは`authentication_queue_timeout`になります。開始済みloginの停止が未確認の場合、childのexitとcloseを両方確認するまで後続を開始しません。別processや外部CLIとの競合とOS portの解放は、この制御から保証しません。[ログイン直列化の契約](design/native-login-serialization.md)に待機と解放の条件があります。
+
+`stop_unconfirmed`のloginが残ると、後続も`authentication_queue_timeout`になり得ます。対象実行と関連processの停止を確認してください。保持しているchildのexitとcloseがCockpitへ届けば、ゲートは自動解放されます。Cockpitの再起動は旧childの停止確認の代わりにならず、終了不明のまま再起動して認証競合が解消することは保証できません。
+
 ## 進め方の決まり
 
 - `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。

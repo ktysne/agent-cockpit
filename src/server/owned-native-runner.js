@@ -27,6 +27,11 @@ const WAIT_TOOL_SPEC = Object.freeze({
   }),
 });
 const ENVIRONMENT_ALLOWLIST = Object.freeze(['PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC']);
+const ALLOWED_AUTHENTICATION_ORIGINS = new Set(['https://auth.openai.com', 'https://chatgpt.com']);
+const TRANSPORT_ENVIRONMENT_ALLOWLIST = Object.freeze([
+  'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS',
+]);
+const CA_FILE_ENVIRONMENT_VARIABLES = new Set(['SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS']);
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_INPUT_BYTES = 256 * 1024;
 const MAX_LINES = 100_000;
@@ -60,6 +65,116 @@ function runnerError(code) {
   return new OwnedNativeRunnerError(code);
 }
 
+function createOwnedCodexLoginGate() {
+  let holder = null;
+  const queue = [];
+
+  function removeQueued(record) {
+    const index = queue.indexOf(record);
+    if (index !== -1) queue.splice(index, 1);
+  }
+
+  function grantNext() {
+    if (holder) return;
+    while (queue.length > 0) {
+      const record = queue.shift();
+      if (record.status !== 'queued') continue;
+      if (record.timer) clearTimeout(record.timer);
+      record.timer = null;
+      record.status = 'granted';
+      holder = record;
+      record.resolve();
+      return;
+    }
+  }
+
+  return function acquire(timeoutMs) {
+    let resolve;
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    promise.catch(() => {});
+    const record = { status: 'queued', loginStarted: false, timer: null, resolve, reject };
+    const ticket = Object.freeze({
+      promise,
+      markLoginStarted() {
+        if (holder !== record || record.status !== 'granted') return false;
+        record.loginStarted = true;
+        return true;
+      },
+      release() {
+        if (holder !== record || record.status !== 'granted') return false;
+        record.status = 'released';
+        holder = null;
+        grantNext();
+        return true;
+      },
+      cancel() {
+        if (record.status === 'queued') {
+          record.status = 'cancelled';
+          if (record.timer) clearTimeout(record.timer);
+          record.timer = null;
+          removeQueued(record);
+          record.reject(runnerError('operation_stopped'));
+          grantNext();
+          return true;
+        }
+        if (holder === record && record.status === 'granted' && !record.loginStarted) {
+          record.status = 'cancelled';
+          holder = null;
+          grantNext();
+          return true;
+        }
+        return false;
+      },
+    });
+    queue.push(record);
+    record.timer = setTimeout(() => {
+      if (record.status !== 'queued') return;
+      record.status = 'cancelled';
+      record.timer = null;
+      removeQueued(record);
+      record.reject(runnerError('authentication_queue_timeout'));
+      grantNext();
+    }, timeoutMs);
+    grantNext();
+    return ticket;
+  };
+}
+
+const acquireOwnedCodexLoginGate = createOwnedCodexLoginGate();
+
+function isFullyQualifiedCaFile(value) {
+  if (process.platform !== 'win32') return path.posix.isAbsolute(value);
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+  const unc = /^(?:\\\\|\/\/)([^\\/]+)[\\/]([^\\/]+)(?:[\\/]|$)/.exec(value);
+  return Boolean(unc && unc[1] !== '.' && unc[1] !== '?');
+}
+
+function readTransportEnvironment(sourceEnvironment) {
+  const values = [];
+  try {
+    for (const key of TRANSPORT_ENVIRONMENT_ALLOWLIST) {
+      const value = sourceEnvironment[key];
+      if (value === undefined || value === '') continue;
+      if (typeof value !== 'string' || /[\u0000\r\n]/.test(value) ||
+          (CA_FILE_ENVIRONMENT_VARIABLES.has(key) && !isFullyQualifiedCaFile(value))) {
+        throw runnerError('invalid_transport_environment');
+      }
+      values.push([key, value]);
+    }
+  } catch {
+    throw runnerError('invalid_transport_environment');
+  }
+  return values;
+}
+
+function deleteEnvironment(environment) {
+  for (const key of Object.keys(environment)) delete environment[key];
+}
+
 function isRecord(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
@@ -81,12 +196,14 @@ function isSecretValue(value) {
 }
 
 function validateAuthenticationUrl(value) {
-  if (typeof value !== 'string' || value.length > 4096 || /[\u0000-\u001f\u007f]/.test(value)) {
+  if (typeof value !== 'string' || value.length > 4096 || value !== value.trim() ||
+      /[\u0000-\u001f\u007f]/.test(value)) {
     throw runnerError('authentication_response_invalid');
   }
   let parsed;
   try { parsed = new URL(value); } catch { throw runnerError('authentication_response_invalid'); }
-  if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) {
+  if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password ||
+      !ALLOWED_AUTHENTICATION_ORIGINS.has(parsed.origin)) {
     throw runnerError('authentication_response_invalid');
   }
   return value;
@@ -161,6 +278,9 @@ function validateExecutable(value) {
     if (error instanceof OwnedNativeRunnerError) throw error;
     throw runnerError('executable_unavailable');
   }
+  if (process.platform === 'win32' && path.extname(resolved).toLowerCase() !== '.exe') {
+    throw runnerError('executable_format_unsupported');
+  }
   return resolved;
 }
 
@@ -198,12 +318,18 @@ function makeEnvironment(provider, homePath, oauthToken) {
   });
   if (process.platform === 'win32') {
     environment.HOMEDRIVE = path.parse(homePath).root.replace(/[\\/]$/, '');
-    environment.HOMEPATH = path.relative(path.parse(homePath).root, homePath);
+    environment.HOMEPATH = path.sep + path.relative(path.parse(homePath).root, homePath);
   }
   if (provider === 'codex') environment.CODEX_HOME = path.join(homePath, '.codex');
   if (provider === 'claude') {
     environment.CLAUDE_CONFIG_DIR = homePath;
     environment.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+  }
+  try {
+    for (const [key, value] of readTransportEnvironment(process.env)) environment[key] = value;
+  } catch {
+    deleteEnvironment(environment);
+    throw runnerError('invalid_transport_environment');
   }
   return environment;
 }
@@ -490,6 +616,50 @@ function createOwnedNativeRunner(options) {
         },
         () => finish(reject, runnerError('operation_failed')),
       );
+    });
+  }
+
+  function waitForCodexLoginGate(expectedGeneration) {
+    const ticket = acquireOwnedCodexLoginGate(timeouts.loginMs);
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const cancel = () => {
+        ticket.cancel();
+        cancellations.delete(cancel);
+        if (settled) return;
+        settled = true;
+        reject(runnerError('operation_stopped'));
+      };
+      const rejectAcquisition = (error) => {
+        if (settled) return;
+        settled = true;
+        cancellations.delete(cancel);
+        reject(error);
+      };
+      cancellations.add(cancel);
+      if (!isCurrent(expectedGeneration)) {
+        cancel();
+        return;
+      }
+      ticket.promise.then(() => {
+        if (settled) return;
+        if (!isCurrent(expectedGeneration)) {
+          cancel();
+          return;
+        }
+        try {
+          requireOwnerCurrent(expectedGeneration);
+        } catch (error) {
+          ticket.cancel();
+          rejectAcquisition(error instanceof OwnedNativeRunnerError ? error : runnerError('authority_expired'));
+          return;
+        }
+        if (settled) return;
+        settled = true;
+        resolve({ ticket, disarmCancellation: () => cancellations.delete(cancel) });
+      }, (error) => {
+        rejectAcquisition(error instanceof OwnedNativeRunnerError ? error : runnerError('operation_failed'));
+      });
     });
   }
 
@@ -1874,34 +2044,41 @@ function createOwnedNativeRunner(options) {
 
   async function spawnOwnedProcess(authentication, expectedGeneration) {
     requireOwnerCurrent(expectedGeneration);
-    const environment = makeEnvironment(provider, homePath, provider === 'claude' ? authentication.oauthToken : null);
     let argumentsList = buildArguments(provider);
+    let endpoint = null;
     if (claudeMcpWait) {
-      const endpoint = await awaitCurrent(claudeMcpWait.controller.start(), expectedGeneration, timeouts.startupMs, 'claude_wait_start_timeout');
+      endpoint = await awaitCurrent(claudeMcpWait.controller.start(), expectedGeneration, timeouts.startupMs, 'claude_wait_start_timeout');
       requireOwnerCurrent(expectedGeneration);
-      environment.COCKPIT_NATIVE_MCP_SECRET = endpoint.secret;
-      environment.MCP_TOOL_TIMEOUT = '420000';
-      environment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT = '420000';
-      environment.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS = '0';
-      environment.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
       argumentsList = [...argumentsList, '--allowedTools', CLAUDE_WAIT_TOOL, '--permission-mode', 'dontAsk', '--mcp-config', endpoint.mcpConfig];
     }
+    requireOwnerCurrent(expectedGeneration);
+    const environment = makeEnvironment(provider, homePath, provider === 'claude' ? authentication.oauthToken : null);
     let childProcess;
     try {
-      childSpawnAttempted = true;
-      childProcess = spawnImpl(executablePath, argumentsList, {
-        cwd,
-        env: environment,
-        shell: false,
-        windowsHide: true,
-        detached: false,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch {
-      for (const key of Object.keys(environment)) delete environment[key];
-      throw runnerError('spawn_failed');
+      if (endpoint) {
+        environment.COCKPIT_NATIVE_MCP_SECRET = endpoint.secret;
+        environment.MCP_TOOL_TIMEOUT = '420000';
+        environment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT = '420000';
+        environment.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS = '0';
+        environment.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
+      }
+      requireOwnerCurrent(expectedGeneration);
+      try {
+        childSpawnAttempted = true;
+        childProcess = spawnImpl(executablePath, argumentsList, {
+          cwd,
+          env: environment,
+          shell: false,
+          windowsHide: true,
+          detached: false,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch {
+        throw runnerError('spawn_failed');
+      }
+    } finally {
+      deleteEnvironment(environment);
     }
-    for (const key of Object.keys(environment)) delete environment[key];
     attachChild(childProcess, expectedGeneration);
     requireCurrent(expectedGeneration);
     await waitForSpawn(expectedGeneration);
@@ -1928,19 +2105,34 @@ function createOwnedNativeRunner(options) {
     requireCurrent(expectedGeneration);
     await writeLine(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }), expectedGeneration);
     requireOwnerCurrent(expectedGeneration);
-    const loginAttempt = createLoginAttempt();
-    activeLogin = loginAttempt;
-    const login = await sendRpc('account/login/start', { type: 'chatgpt' }, expectedGeneration);
-    requireOwnerCurrent(expectedGeneration);
-    if (!isRecord(login) || login.type !== 'chatgpt' || !isIdentifier(login.loginId)) {
-      throw runnerError('authentication_response_invalid');
+    let loginGateAcquisition = null;
+    let loginLease = null;
+    try {
+      loginGateAcquisition = await waitForCodexLoginGate(expectedGeneration);
+      loginLease = loginGateAcquisition.ticket;
+      requireOwnerCurrent(expectedGeneration);
+      requireCurrent(expectedGeneration);
+      const loginAttempt = createLoginAttempt();
+      activeLogin = loginAttempt;
+      if (!loginLease.markLoginStarted()) throw runnerError('operation_stopped');
+      loginGateAcquisition.disarmCancellation();
+      childTerminationPromise.then(() => loginLease.release(), () => {});
+      const login = await sendRpc('account/login/start', { type: 'chatgpt' }, expectedGeneration);
+      requireOwnerCurrent(expectedGeneration);
+      if (!isRecord(login) || login.type !== 'chatgpt' || !isIdentifier(login.loginId)) {
+        throw runnerError('authentication_response_invalid');
+      }
+      const authUrl = validateAuthenticationUrl(login.authUrl);
+      reconcileEarlyLogin(loginAttempt, login.loginId);
+      if (!loginAttempt.completionSeen) requestAuthenticationPrompt(login.loginId, authUrl, expectedGeneration);
+      await awaitCurrent(loginAttempt.completion, expectedGeneration, timeouts.loginMs, 'authentication_timeout');
+      requireOwnerCurrent(expectedGeneration);
+      loginLease.release();
+      if (activeLogin === loginAttempt) activeLogin = null;
+    } finally {
+      loginGateAcquisition?.disarmCancellation();
+      loginLease?.cancel();
     }
-    const authUrl = validateAuthenticationUrl(login.authUrl);
-    reconcileEarlyLogin(loginAttempt, login.loginId);
-    if (!loginAttempt.completionSeen) requestAuthenticationPrompt(login.loginId, authUrl, expectedGeneration);
-    await awaitCurrent(loginAttempt.completion, expectedGeneration, timeouts.loginMs, 'authentication_timeout');
-    requireOwnerCurrent(expectedGeneration);
-    if (activeLogin === loginAttempt) activeLogin = null;
     requireCurrent(expectedGeneration);
     const threadStartParams = {
       cwd,

@@ -18,6 +18,7 @@ const CLAUDE_REASON_MESSAGES = new Map([
   ['claude_registration_failed', 'このセッションを登録核へ登録できませんでした。'],
 ]);
 const TIMEOUT_MESSAGE = '常駐サーバーの応答が時間内に返らず、記録できたかを確かめられなかった。処理が続いている可能性があるため、ダッシュボードで確かめてほしい';
+const UNKNOWN_RESULT_MESSAGE = '処理結果を確認できません。同じ書き込みを繰り返す前に、ダッシュボードで反映状態を確認してください。';
 const MAX_RESULT_ITEMS = 10;
 const PLAN_ERROR_MESSAGES = new Map([
   [400, '入力が正しくないか、上限を超えています'],
@@ -344,8 +345,9 @@ function postMcpRequest(requestPath, body, options, deadline, { maxAttempts = 2,
     now: options.now || Date.now,
     attemptTimeoutMs,
     maxAttempts,
-    // タイムアウト後も常駐サーバーで処理が続くため、同じ書き込みを再送しない。
+    // 結果不明の失敗後も処理が続く可能性があるため、同じ書き込みを再送しない。
     retryAfterTimeout: false,
+    retryAfterUnknownResult: false,
     ensure: true,
   });
 }
@@ -384,6 +386,7 @@ async function postPlan(toolName, args, options = {}) {
   if (writerRejected) return writerError(options);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
+  if (result.outcomeUnknown) return { outcomeUnknown: true };
   const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -403,6 +406,7 @@ async function postPullRequest(args, options = {}) {
   if (writerRejected) return writerError(options);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
+  if (result.outcomeUnknown) return { outcomeUnknown: true };
   const errorMessage = PR_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -431,6 +435,7 @@ async function postCrossReviewSkip(args, options = {}) {
   if (writerRejected) return writerError(options);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
+  if (result.outcomeUnknown) return { outcomeUnknown: true };
   const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -500,6 +505,7 @@ async function postCommonQuestion(name, args, options = {}) {
       if (writer) await notifyQuestionResponseLost(args.questionId, writer, options);
     }
     const message = response?.timedOut ? TIMEOUT_MESSAGE
+      : response?.outcomeUnknown ? UNKNOWN_RESULT_MESSAGE
       : response?.status === 400 ? '質問の入力を確認してください。'
         : response?.status === 403 ? WRITER_REQUIRED_MESSAGE
           : response?.status === 404 ? 'この実行期間の質問が見つかりません。'
@@ -551,6 +557,7 @@ async function callTool(name, args, options = {}) {
   if (name === 'cockpit_add_pr') {
     const saved = await postPullRequest(args, options);
     if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
+    if (saved?.outcomeUnknown) return toolResult(UNKNOWN_RESULT_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, true);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) を登録しました。`);
@@ -558,12 +565,14 @@ async function callTool(name, args, options = {}) {
   if (name === 'cockpit_skip_review') {
     const saved = await postCrossReviewSkip(args, options);
     if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
+    if (saved?.outcomeUnknown) return toolResult(UNKNOWN_RESULT_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, true);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) の head ${saved.headRefOid.slice(0, 7)} をクロスレビュー不要として記録しました。`);
   }
   const saved = await postPlan(name, args, options);
   if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
+  if (saved?.outcomeUnknown) return toolResult(UNKNOWN_RESULT_MESSAGE, true);
   if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
   if (saved.errorMessage) return toolResult(saved.errorMessage, true);
   return toolResult(shortSavedList(name, saved));

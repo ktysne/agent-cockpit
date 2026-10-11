@@ -667,3 +667,380 @@ writer排他の製品接続、graceful再起動と両provider実runtimeはこの
 | ID-F313-ST15 | 内部分類fixture | 確認済みの同scopeのrunning instanceと遅延敗者attemptの拒否を与え、scope全体のblockedへ昇格しない。無関係なport占有をhealthyやwriter_occupiedへ変換しない。残留markerでhealthy不在とHTTP終了後のstoppingを区別する。実processの観測と管理排他はST12側で確認 |
 
 実providerの停止と再起動は、上記fixtureの成功から推定せず別に記録する。
+
+### 停止結果record codecの独立条件
+
+以下は純粋codecの実装前期待値であり、製品callerを追加しない。
+codecは固定schemaのrecordをUTF-8 Bufferへencodeし、decodeはBufferとkind別の期待IDを必須とする。
+decode後は入力から独立した、固定primitive fieldだけのfreeze済みrecordを返す。
+診断はinvalid_stop_ensure_recordに限定し、入力や任意例外の内容を残さない。
+ファイルのbounded read、basename導出と保存は別moduleで検証し、codecの成功をACL、管理権限、healthやwriter解放の証拠としない。
+
+| ID | 操作 | 期待条件 |
+| --- | --- | --- |
+| ID-F313-C01 | shutdownのcompleted/failedとstartupのstarted/blocked全理由を往復 | version 1の固定fieldとstatus/reason/instance組合せを保持し、余分fieldと許可外理由を拒否 |
+| ID-F313-C02 | 大文字、過長、末尾改行、path区切り、version/variant違いのUUIDと不正scopeを与える | 36文字小文字UUID v4と64桁小文字hexだけを許可し、coercionせず拒否 |
+| ID-F313-C03 | accessor、未知field、symbol、非列挙field、不正prototypeとthrowing proxyを与える | getterとtoJSONを実行せず固定診断で拒否。plain objectまたはnull prototypeのdataだけをコピー |
+| ID-F313-C04 | 正しいJSONを空白で4096 byteへ拡張し4097 byteも与える。BufferのbyteLengthを偽装する | 実4096 byteは許容し実4097 byteはUTF-8変換とJSONparse前に拒否。入力のgetterを実行せず実byte長を検査し、文字数と混同しない |
+| ID-F313-C05 | malformed UTF-8、JSON、BOM、空入力と非Bufferを与える | replacementによる救済なしで固定診断。合法JSONの外側空白は許容 |
+| ID-F313-C06 | 期待IDを省略、不正schema、旧instance/request/scope/attemptとkind不一致にする | shutdownはkind/instanceId/requestId、startupはkind/scopeId/attemptIdの厳格照合が必要。startupの新instanceのhealth照合は後続の責任 |
+| ID-F313-C07 | encode/decode後に入力を変更し、Object.prototype.toJSONを故障fixtureで追加する | 返却recordはfreeze済み独立コピーで、入力と継承toJSONにより出力を変更しない。fixtureはprototypeを必ず復元 |
+
+C01〜C07を含む関連試験は17件成功、失敗0件で、両moduleの構文確認も成功した。
+IDの固定長を明示し、末尾改行と各期待IDの不一致を検証した。Bufferの見かけのbyteLengthを信用せず実長を確認する。
+実装head `6884318`の全体試験は2,986件成功、失敗0件、Windows実symlink試験2件skipだった。
+指定Claude R1はcodec本体に要修正なし、C04の上限超過入力の判別力不足が1件あった。
+合法JSONを4097 byteへ拡張した入力と偽装Bufferへ補強後も、関連17件と構文確認が成功した。
+全体試験headから製品srcは不変で、testの入力だけを補強したため全体試験は反復しない。
+Claude R2はblockerと要修正が0件で、C04の上限検査の退行を検出できる反例を確認して収束した。
+停止結果の保存と停止手続き、両provider実runtimeと製品排他は未確認のままである。
+停止全体の設計[PR #364](https://github.com/ktysne/agent-cockpit/pull/364)はレビュー未収束で、この独立codecの前提にしない。
+
+### 停止結果storeの独立条件
+
+以下は[限定内部store](stop-ensure-result-store.md)の実装前期待値である。
+同インスタンスのwrite latchとbounded I/Oだけを確認し、異process排他、ACL、writer所有を成功へ読み替えない。
+
+| ID | 操作 | 期待条件 |
+| --- | --- | --- |
+| ID-F313-R01 | expected-ID helperを直接呼び、encode/decodeも使う | 第4の内部exportだけを追加。厳格schemaと固定長、getter/Proxy非実行、入力独立freezeを保持 |
+| ID-F313-R02 | shutdown/startupを実temporary rootへ保存して照合する | 導出固定basename、writtenとvalid、期待ID一致。APIはread/writeのみ、製品callerゼロ |
+| ID-F313-R03 | 不正factory/record/expectedIDを与える | 未知field、accessor、path/ID形式を副作用前に拒否。I/O 0回、任意診断を返さない |
+| ID-F313-R04 | target不在と親消失、nonregular/symlinkを与える | targetENOENTだけmissing、親消失/不明とnonregularはunknown。ENOENT時親再確認 |
+| ID-F313-R05 | 4096/4097 byte、stat後伸長、short readと不正返値を与える | read最大4097固定buffer、short正進捗は続行、0EOF。過大statでbody read0、契約外返値はunknown |
+| ID-F313-R06 | read/stat/open/close失敗とcodec不一致を与える | 最初の固定診断と後続closeFailedを保持。close不明でvalid/missingなし、handle close一度 |
+| ID-F313-R07 | 同keyの即時再送、完了後再送と同期再入を行う | I/O前latch登録、同bytesは同Promise、異bytesはconflict、unknown後も再送でI/O増加0 |
+| ID-F313-R08 | short write、0/過大返値、write故障を与える | Buffer viewだけを正進捗で書く。最初の診断保持、known handle close一度 |
+| ID-F313-R09 | open副作用後rejectとclose不明を与える | 未確認handleを再close/unlinkしない。temp残留可能性を解消済みとしない |
+| ID-F313-R10 | rename前失敗/副作用後rejectとcleanup失敗を与える | targetを消さずreadback成功化なし。known-created/closed自己tempだけ一度cleanupし、first diagnosticとcleanupFailed保持 |
+| ID-F313-R11 | 既存targetと他file/temp/markerを置く | 既存は拒否、無関係なfileは不変。事前確認をcross-store/processのno-replace証拠としない |
+| ID-F313-R12 | 結果objectを変更し、実fixtureをcleanupする | 結果freeze、任意原因/path/本文なし。全実handle終了と字句的に解決済みの自作os.tmpdir root確認後だけfixture cleanup |
+
+R01〜R12を含むcodec/storeの関連試験44件は成功し、失敗とskipは0件だった。
+4ファイルの構文確認も成功した。
+実temporary rootでshutdownとstartup双方を保存して読み、全handle close確認後に自作rootをcleanupした。
+不明handle、closeとrenameの副作用後失敗はfake filesystemで確認し、実descriptorを故意に漏らしていない。
+固定head `df4fdbd`のnpm test（process隔離、concurrency 2）は3,013件成功、失敗0件、Windows実symlink2件skipだった。
+同headのinprocess全体実行はrootが中断したため未完了である。停滞位置の既存PR試験単独1件と同file153件は成功したが、その結果で全体の成功を代替していない。
+指定Claude R1はblockerと要修正が0件で収束した。
+cleanupFailed:falseの意味、字句的path比較と設計資料の時点依存記述を文書だけで明確化した。
+追加の故障分岐試験は任意提案として後続候補へ残し、故障値の全組合せを網羅したとは扱わない。
+最終の結果記録ではsrc/testを変えず、全体試験と追加レビューを反復しない。
+製品停止と両provider実runtimeの合格には数えない。
+record単位の上限はstore全体のメモリー容量を保証せず、製品enable前の設計条件に残す。
+
+### 停止手続きの内部coordinatorの独立条件
+
+以下は[限定内部coordinator](stop-ensure-shutdown-coordinator.md)の実装前期待値である。
+注入fixture手続きの完了と通知成否を別軸で検証し、製品停止、writer解放と再起動許可へ読み替えない。
+
+| ID | 操作 | 期待条件 |
+| --- | --- | --- |
+| ID-F313-Q01 | factoryとrequestへ未知field/accessor/Proxy/不正IDを与える | fixed error、getter/trapとprocedure/store I/O 0。factoryのinstance形式は初回requestで検査 |
+| ID-F313-Q02 | 同requestを保留中とsettled後に再送し、別request/旧instanceを与える | 同Promise、operation 1回、別request/旧instanceは副作用前拒否 |
+| ID-F313-Q03 | procedureを成功/同期throw/非同期rejectにする | completed/nullかfailed/shutdown_incomplete recordを一度通知し、falsy全5理由をprivate completionへ保持 |
+| ID-F313-Q04 | procedureの成功/失敗と通知written/unknownを組み合わせる | 二軸4組を保持。通知成功は手続き失敗を消さず通知不明は手続き成功を再起動許可にしない |
+| ID-F313-Q05 | 通知throw/reject/契約外返値/任意診断、直接then accessorとProxyを与える | notification_unconfirmedとcleanupFailed:null、原手続きreason不変。直接返値を同化せずgetter/trapを呼ばない。任意原因をrecord/snapshotへ出さない |
+| ID-F313-Q06 | procedure/store callbackから同期再入する | callback前latch、operation/通知1回、同Promiseを返す |
+| ID-F313-Q07 | procedureがcompletion自身を直接返し、間接自己待ちも与える | 直接はfailed通知、間接はpendingで成功化しない。依存が自分のcompletionをawaitしない前提 |
+| ID-F313-Q08 | procedureと通知を保留しsnapshotを読む | idle/running/notifying/settledだけ、pending結果を確定させず所有解放を示さない |
+| ID-F313-Q09 | unknown/failure後に同requestを再送し依存methodを差替える | callback/store再実行0、factory時captureを使う |
+| ID-F313-Q10 | codec/実storeを結合する | terminal recordを照合、own temporary rootを全handle終了後だけcleanup。製品callerゼロ |
+
+Q01〜Q10のレビュー補強後の関連fixture試験は37件成功し、失敗とskipは0件である。
+固定head `1766a90` の全体試験は3,049件成功、失敗0件、Windows実symlink権限によるskip2件である。
+receiverとrecordの凍結はcallback外で検証する。
+製品停止、管理protocol、writer接続と両provider実runtimeは未実行である。
+
+## MCP書き込みの結果不明と再送 (#311)
+
+以下は[MCP書き込みの契約](mcp-write-outcome.md)の実装前期待値である。
+
+| ID | 操作 | 合格条件 |
+|---|---|---|
+| ID-F311-M01 | MCP実入口から書き込み、効果を記録してからfetchをrejectする | 対象POST1回、効果1回、同POST再送と追加ensure/readInfo/refresh 0回、MCPは結果不明と反映確認を案内 |
+| ID-F311-M02 | 成功HTTPのJSON解析を失敗させる | POST1回、再送0回、非timeoutの結果不明、任意エラーとsecretを返さない |
+| ID-F311-M03 | fetch同期throw、非同期切断、開始後timeoutとJSON待ちtimeoutを与える | いずれも開始済みと分類して再送0回。実timeoutだけtimedOutを保持 |
+| ID-F311-M04 | fetch前の準備失敗と期限切れを与える | 送信0回、結果不明とは分類せず既存の開始前失敗と期限の扱いを保持 |
+| ID-F311-M05 | 明示401でsecretを更新し、明示403でwriterを更新する | 従来上限で再送できる。更新後の要求が結果不明なら追加再送0回 |
+| ID-F311-M06 | plan/判断/PR/レビュー不要/質問登録とstatus/pollを呼ぶ | 各MCP経路で同じ結果不明の案内。answer-poll元POST1回と独立response-lost1回を別に数える |
+| ID-F311-M07 | postToServerの既定policyと旧retryAfterTimeout:falseを対照にする | 既定の接続失敗とJSON失敗後のretry、旧timeout抑止、hookとGETの契約を維持 |
+| ID-F311-M08 | timeout後に元応答が遅れて到着する | 返した結果を差替えず再送0回。abortを未適用の証拠にしない |
+
+M01〜M08の関連試験48件は成功し、失敗とskipは0件である。
+実loopbackの効果後切断とJSON解析失敗は、Claude/Codexの各writer fixtureでPOST1回、効果1回、追加ensureとrefresh0回を確認した。
+固定head `f045d13` の全体試験は3,060件成功、失敗0件、Windows実symlink権限によるskip2件である。
+両provider実runtimeは未確認である。
+製品caller、HTTP、管理protocol、ACL、全writerと両provider実runtimeは後続gateである。
+
+## 表示記録と出自履歴の保持反例 (#312)
+
+以下は[保持契約](projection-display-retention.md)のfixture実装前期待値である。
+情報を忘れた候補状態はtest内の反例であり、製品GCの実装や未実装世代拒否の成功としない。
+
+### 実装前に記録した期待値
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-F312-R01 | 同providerの削除より新しいverified write | 対象だけ解除し別providerの削除を保持 |
+| ID-F312-R02 | 古い、同時刻、別provider write | 削除を保持 |
+| ID-F312-R03 | unknown履歴を落とした候補と保持状態を比較 | 同じprojection入力で表示統合が変わる反例 |
+| ID-F312-R04 | 両provider履歴から一方を落とした候補を比較 | 曖昧性と表示統合が変わる反例 |
+| ID-F312-R05 | 削除後snapshot不在から古いsnapshot再登場 | 保持側は削除非表示、墓標を落とした候補は再表示 |
+| ID-F312-R06 | cold restoreの保持JSONと墓標を落としたJSONを比較 | 保持側の削除を復元。未知の世代拒否を成功としない |
+| ID-F312-R07 | 最新と古い保存状態に同じ中間時刻writeを与える | 最新側は保持、古い候補は解除。保存順序の反例に限定 |
+| ID-F312-R08 | 非active中にhiddenを落とした候補へ同identity再登場 | 保持側はhidden選好を維持、候補は表示が変わる |
+
+### 現時点の結果
+
+R01〜R08のfixture試験8件は成功した。
+R05の一時不在と再登場、R08の表示選好を両providerで補強し、関連2件も成功した。
+R03/R04は既存rowへの質問統合の変化を確認し、操作認可の証拠としない。
+固定head `d57d84e` の全体試験は3,077件成功、失敗0件、Windows実symlink権限によるskip2件である。
+指定Claude R1の文書指摘を補正し、R2はblockerと要修正0件で収束した。
+両provider実runtime、全入口の永続拒否と製品GCは未確認である。
+
+## Claude wait再接続の観測器 (#314)
+
+以下は[限定観測設計](claude-wait-reconnect-probe.md)の実装前期待値である。
+観測器のfixtureと実CLIを分け、未実行runtimeを成功としない。
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-F314-WRP01 | import、defaultとpreflight | spawn、secret取得、networkと通常HOMEの認証や設定の読書き0 |
+| ID-F314-WRP02 | 単一verified listenerの通知回数と重複native wait frame | callbackは同期保存だけ、完了後のsettleは一回。frame重複と同listenerへの二重callbackを区別 |
+| ID-F314-WRP03 | controlのsettleと次context | 有効baselineを前提に受付、distinct B到着と通知後checkpointのcurrent fresh proofを別々に観測 |
+| ID-F314-WRP04 | reconnect後に旧handleへ通常settle | 既存owner経路の拒否を維持。Bなしを未確認と記録 |
+| ID-F314-WRP05 | B到着後のterminal、BからCへの進行または世代増加だけ | native到着とcheckpointを区別し、current proofのB対応や過去のproof不存在を主張しない。世代だけで成功にしない |
+| ID-F314-WRP06 | spawn、初期化、wait期限とstop失敗 | 終了処理を試み、exit、close、childとendpointを確認できないrootは削除しない |
+| ID-F314-WRP07 | secret、nonce、IDと例外messageのsentinel | 結果とログへ含めず、raw result hashなし |
+| ID-F314-WRP08 | control未達または停止未確認 | reconnect runを開始せず比較不能または残存状態を報告 |
+
+実装と検証は未完了である。
+両providerの共通runtime適合と#314の実Claude実測は、専用fixtureとは別に記録する。
+専用ファイルのnode --test報告件数19件と、固定head `b4c5e69` の全体3,096件が成功し、失敗0件、Windows実symlink権限によるskip2件だった。
+指定Claude R3はblockerと要修正0件で収束した。
+Claude 2.1.296の明示liveでcontrolのsettle受付、distinct contextとfresh current proofを確認した。
+reconnectは旧handleの失効とsettle拒否を確認したが、90秒以内にdistinct contextは到着せず、#314の進行は未解決である。
+両caseの物理停止と自己root削除を確認し、response writeは未観測nullのままである。
+実測manifestと範囲は[限定観測設計](claude-wait-reconnect-probe.md#実claudeの観測結果)に記録した。
+
+## Windowsの専有home環境 (#372)
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-ENV-W01 | ClaudeとCodexのowned runner、および観測器version childの環境取得 | WindowsのHOMEDRIVEとHOMEPATHの結合が絶対pathで、HOMEとUSERPROFILEへ一致する |
+
+fake-spawnの環境を検証し、実CLIによる全書込みの監査とは扱わない。
+
+## provider別表示墓標の計測 (#312)
+
+以下は[先行計測](projection-display-baseline.md)の実装前期待値である。
+全件走査のD01〜D08とその結果はPR #369最終commit `a890ee2b3469aa0474a11aa849aea461802de4fd` を参照し、索引版は後述のE01〜E09で検証する。
+state fixtureとrouteの合成依存を対象にし、両provider実runtimeの合格へ読み替えない。
+
+| ID | 操作 | 合格条件 |
+| --- | --- | --- |
+| ID-F312-D01 | 固定seedの合成storeと少量の実state操作を照合する | ID、時刻、schemaと復元した表示墓標が一致 |
+| ID-F312-D02 | 削除後に別provider、古い時刻、新しい同providerでwrite操作し復元する | 別providerと古いwriteは削除を保持、新しい同providerだけ対象解除。state fixtureの証拠に限定 |
+| ID-F312-D03 | 固定S/PでNを増やし件数専用instanceのiteratorを数える | lookup回数と実yield数を観測しMap.size×回数と照合。prototypeと製品APIは不変 |
+| ID-F312-D04 | 出自Map、unknown Setと永続store byte数を測る | メモリー出自と永続表示墓標を分け、JSON byteをheapとしない |
+| ID-F312-D05 | wrapperなしの別instanceを単調時計で測る | 構築、lookup、snapshot、route/JSON、serialize、restoreを分離しsampleと環境を記録 |
+| ID-F312-D06 | 専用contextでrouteを呼びfixtureを終了する | HOME、実session、networkへアクセスせず、自己rootをhandle終了と解決path確認後にcleanup |
+| ID-F312-D07 | churnとhide/unhide/delete/繰返しdeleteを行う | providerの曖昧性と墓標保持は現仕様どおり。TTL/GC/索引/拒否/telemetryを追加しない |
+| ID-F312-D08 | 小規模testと手動CLIで不正入力と出力を確認する | 不正入力を構築前拒否。件数/schemaは再現可能、通常testに重いloopや固定ms閾値なし |
+
+D01〜D08のレビュー補強後の小規模fixture試験6件と2ファイルの構文確認は成功した。
+rootは全15条件とCodexのN sweep4条件を25 sample、warmup 1で計測した。
+N=10000、S=8、P=8では両providerともlookup 16回、実yield 160000で期待値と一致した。
+結果と実行条件は先行計測の設計資料へ記録した。
+単providerの辞書順とbothの複数provider対でも保存pendingなし、書き戻し0回を確認し、その条件で再計測した。
+両provider実runtime、実データの長期保持と並行負荷は未確認である。
+固定head `58e8615` の全体試験は3,066件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+指定Claude R2はblockerと要修正0件で収束した。
+
+## provider別表示記録のsession索引 (#312)
+
+以下は索引実装前に記録したfixture適合の期待値であり、実runtime成功とは扱わない。
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-F312-E01 | 空、単provider、両provider、未知IDを照合 | 旧全件走査oracleと配列順とcopyが一致 |
+| ID-F312-E02 | 既存key置換、削除後の再追加 | 置換は順序不変、再追加は末尾 |
+| ID-F312-E03 | hide/unhide/delete/clearHiddenSessions | 全経路の索引が一致し、最後のkey削除で空bucketを残さない |
+| ID-F312-E04 | 古い、同時刻、別provider、新しい同provider write | 新しい同providerだけ削除解除 |
+| ID-F312-E05 | 同instanceへrestoreを繰り返す | 旧recordとbucketが残らず保存結果がoracleと一致 |
+| ID-F312-E06 | 診断getterとlookupの返却値を変更 | 内部stateを変更しない。内部propertyのmutation互換境界を明記 |
+| ID-F312-E07 | routeの両provider、unknown、削除表示を照合 | 曖昧性と統合抑止の既存結果を維持 |
+| ID-F312-E08 | 無関係recordを増やす | 対象lookupでcanonical全件iteratorを使わず、対象bucketだけを参照 |
+| ID-F312-E09 | 旧条件のmanifestと新計測modelを比較 | 件数と保存byte不変、旧baselineを保持して別artifactへ記録。固定ms閾値なし |
+
+設計は[session索引](projection-display-index.md)に置く。
+E01〜E09の関連fixture試験84件と構文確認は成功した。
+最後の空bucket削除assert補強後の隔離realm試験1件も成功した。
+全19条件の同一manifest比較で表示と出自の件数、routeと保存JSON byte数、lookup回数が一致した。
+手動計測のbucket訪問数は未観測とし、隔離realmのcanonical getとSet訪問の観測とは区別する。
+固定head `3bfd407` の全体試験は3,069件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+開発者指定のClaude R1はblockerと要修正0件で収束した。
+両provider実runtimeは未確認である。
+
+## 質問登録の保存後失効 (#210)
+
+以下は保存後失効に対する適合の契約と検証範囲である。
+設計は[保存後失効と取消](question-registration-cancellation.md)に置く。
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-F210-QRF01 | 両providerの正規kernelで初回保存中に接続を切断 | registerは元の再検証codeでreject。record1件は取消済み、selectionとdeliveryIntentはnull |
+| ID-F210-QRF02 | 同period・actorの正規新connectionで復帰しaway期限後tick | 旧未受付質問は取消のまま。回答delivery作成・送信0。旧tokenを偽復活しない |
+| ID-F210-QRF03 | 保存中にactorまたはexecutionを終端化 | 登録失敗を取消保存し、終端を解除しない。actor検証済み、execution単独は未確認。未取消duplicateは不変 |
+| ID-F210-QRF04 | 補償取消保存の副作用前・後に失敗し再起動 | 固定codeとwriter blocked、auto/manual配送0、取消成功を偽装しない。再起動後は旧質問quarantine |
+| ID-F210-QRF05 | 初回保存の副作用前・後に失敗 | 補償取消writeを行わず既存未知保存停止を保持。取消成功では別の正常質問を巻き込まない |
+| ID-F210-QRF06 | reclamation current gateで接続失効、fake gateで保存後失効 | currentなら既存権限で取消保存。閉鎖後は無許可writeなし、固定blocked。fake gateを実kernel競合と混同しない |
+| ID-F210-QRF07 | 補償または通常取消後に同period・同ID・同内容を再登録 | question_cancelledで拒否、HTTP409とMCPisError。IDと予約を保持、追加保存・deliveryなし。未取消duplicateはexisting、内容差は従来question_conflict |
+
+実provider再接続と登録履歴全体の再照合は未確認であり、上記fixtureの成功へ含めない。
+
+実装後の関連3ファイルの試験は86件成功、失敗・skipなしだった。
+両providerの正規kernelで接続失効・復帰とactor終端、初回保存と補償保存の副作用前後の失敗、再起動後のquarantineを確認した。
+execution終端を独立に注入した新規fixture、falsyの直接再検証例外、実provider runtimeと電源断は未確認である。
+reclamationの閉鎖gateは既存fake gateの分岐試験であり、current gateの実composition試験と区別する。
+
+QRF07を含む関連4ファイルは123件成功、失敗0件だった。
+固定source head `572e628` の全体試験は3,116件成功、失敗0件、Windows実symlink権限のskip2件だった。
+Claude R1の取消済み再登録拒否を実装し、通常取消にも適用する互換変更として記録した。
+R2では製品修正を確認し、旧schema文書の未取消条件を補正した。
+実provider runtime、execution終端単独の新規fixture、falsy直接再検証例外、電源断は未確認である。
+MCPの共通409文言は取消の理由を正確に説明しないため、操作ごとの案内改善を後続に残す。
+指定Claude R3はblockerと要修正0件で収束した。最終結果の文書更新後もsrc/test/toolsは固定source572e628から不変である。
+
+## 注入registry構成の不在保護 (#212)
+
+[登録実行と不在保護](registration-absence-protection.md)に従い、標準issuerと注入registryを区別する。
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-F212-AP01 | 実kernel注入serverで既観測Claude行のfileが不在 | activeは保護。endedは59,999msまで残り、60,000msで表示の不在終了。登録履歴は維持 |
+| ID-F212-AP02 | 同conversationの旧ended実行からresume | 旧projectionは不在終了、新active projectionは保護。最新executionで旧行を誤判定しない |
+| ID-F212-AP03 | restore unknownとmixed/unknown provider行 | 不明な登録行を不在から終了させない。process終了やauthority解放を推定しない |
+| ID-F212-AP04 | 多数候補のrefreshと権限revision変化 | 候補なしcapture/snapshot0、複数候補snapshot最大一回。全履歴の候補別再走査なし。構築再入とrevision変更では保護、scopeを残さない |
+| ID-F212-AP05 | snapshot不正・revision API欠落・照会失敗 | 当該refreshは未登録行も保護。健全batchへ戻れば再評価。古いDIの継続保護を制約として記録 |
+| ID-F212-AP06 | 健全batchでsnapshotに該当なし、membership厳密false | provider出自unknownでも従来の60秒整理を保持。照会中のrevision変化では保護 |
+| ID-F212-AP07 | 標準issuer・file未観測・同期区間外照会 | 標準issuerの期間表、未観測行の非対象、区間外の従来membership保守判定を維持 |
+
+遅延構築の修正head `5913430`でserver関連120件が成功した。
+同headの全体試験は3,151件中3,149件成功、失敗0件、Windowsの実symlink作成権限による2件skipである。
+Claudeのレビューは2往復でblockerと要修正0件に収束した。
+実provider runtimeとsession-file discoveryは未実施である。
+
+一覧・時刻と出自fixtureによるserver/state検証を実provider runtime、実file discovery、process終了と履歴GCの証拠にしない。
+
+実装後の関連結果はserver110件、registry20件、標準issuer統合10件が成功した。
+issuer統合はsandboxのspawn EPERM後に子プロセス起動が可能な環境で確認した。
+複数ended登録3件と未登録候補2件のrefreshでsnapshot取得一回を確認した。
+membershipのfalse返却中の実kernel revision変更、再入、method置換不可のfallback、同期DI値のPromise拒否を確認した。
+各登録rowの走査回数は独立計測しておらず、O(N+M)は一回集計のsource契約とsnapshot回数のfixtureを分けて扱う。
+実provider runtime、実file discovery、長時間polling、process終了とauthority解放は未確認である。
+
+## 合成セッション行の状態表示 (#213)
+
+期待条件は[合成行の状態表示](synthetic-session-status.md)に従う。
+
+| ID | 入力 | 期待条件 |
+|---|---|---|
+| ID-F213-SS01 | 両providerの質問だけの合成行 | active/ended/unknownを待機中/終了済み/不明へ反映。projectionOnly=true、ID維持、endedAtなし |
+| ID-F213-SS02 | 両providerの指示だけの合成行 | active/endedを反映。unknownは既存unmatched、検証条件を緩めない |
+| ID-F213-SS03 | 同sessionの複数投影 | 状態またはexecutionIdの不一致は不明を維持。質問と指示の処理順による先勝ちなし |
+| ID-F213-SS04 | 実rowへの合流、hidden/deleted、出自混在 | 実rowのstatusとmetadataを上書きせずflagなし。既存の出自と表示guardを維持 |
+| ID-F213-SS05 | 質問snapshot失敗、有効な指示 | unavailable診断維持、受理できた指示だけで状態表示。registry照会を追加しない |
+| ID-F213-SS06 | 終了と不明の画面fixture | 終了を待機中へ戻さず、未解決カードを表示。不明合成行は推定操作なし、実不明行は維持 |
+
+固定source head `7cf6633`の全体試験は3,167件中3,165件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+両providerの実authority終了はHTTP fixtureで確認し、合成行がstateへ保存されないことも検査した。
+画面関連100件とdashboard表示関連34件が成功し、モックをブラウザでも確認した。
+指定Claudeの2往復でblockerと要修正0件に収束した。文書と生成マニュアルの補足後もsrc/test/tools/mockは同headから不変である。
+実provider runtimeと実画面での状態遷移は未確認である。
+
+## Windowsのnative実行ファイルの診断 (#215)
+
+期待条件は[Windowsのnative実行ファイル](windows-native-executable.md)に従う。
+
+| ID | 入力 | 期待条件 |
+|---|---|---|
+| ID-F215-WE01 | Windowsで両providerの通常.cmd/.bat/拡張子なし | constructorで専用code。認証とspawn未呼出し、HOME配下未作成、私有path非公開 |
+| ID-F215-WE02 | Windowsで通常.EXE | 大文字の拡張子を受理し、固定profileとshell:falseを維持 |
+| ID-F215-WE03 | 相対path、不存在、非通常file、symlink | 既存の診断が拡張子の拒否より優先 |
+| ID-F215-WE04 | managed processの共通実行ファイル | 非対応fileをHOME準備と起動前に拒否。app-serverとremote CLIの固定pathを維持 |
+| ID-F215-WE05 | 非Windowsの既存fixture | 拡張子なしの既存動作を維持。Windowsからは未確認として分離 |
+
+実provider runtimeと未実行OSの成功はfixtureから推定しない。
+固定head `e9c8576`の全体試験は3,247件中3,242件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+関連3ファイルは221件成功、失敗0件、実symlink権限によるskip2件だった。
+指定Claude R1はblockerと要修正0件で収束し、提案に従ってcompositionの検査時点を文書へ補足した。
+結果記録と文書補足だけの最終更新ではsourceとtestを変更しない。
+
+## Native起動の通信環境 (#215)
+
+期待条件は[通信環境の供給契約](native-transport-environment.md)に従う。
+owned Claude/Codexとmanaged app-server/remote CLIの4経路をfixtureで区別する。
+
+| ID | 入力または保持点 | 期待条件 |
+|---|---|---|
+| ID-F215-TE01 | 固定5変数と禁止変数を持つ供給元 | 値を変更せず5変数だけを渡し、shell:false、args、HOMEと認証の固定供給を維持 |
+| ID-F215-TE02 | undefined、空、非文字列、NUL、CR/LF、throwing getter | 未設定は省略。不正値は固定code、値とcause非公開、spawn0 |
+| ID-F215-TE03 | CAの完全絶対パスと相対、Windowsドライブ相対、単一rootとdevice namespace | 完全絶対表記だけ受理し、空白を保持。外部CAファイルの読取や変更0 |
+| ID-F215-TE04 | spawn成功と同期throw後のenv参照 | 全key削除または空文字化。供給元不変、元のspawn失敗code維持 |
+| ID-F215-TE05 | plain objectのlowercase-onlyとuppercase併存 | 固定uppercase名だけ継承。OSの大小文字規則の検証と区別 |
+| ID-F215-TE06 | 供給元を変更した後の次起動 | 新しい起動は新値、捕捉済みの以前のenvコピーは旧値 |
+| ID-F215-TE07 | owned MCP endpoint待機中の失敗と失効、不正環境 | 待機中に環境構築しない。endpoint開始後の不正は通常停止で閉じ、後着spawn0 |
+| ID-F215-TE08 | 環境構築後のowner失効とspawn内の停止再入 | guard失敗codeと環境消去を維持。返ったchildの停止追跡を省略しない |
+
+実providerのproxy/CA利用と通信成功、NO_PROXYによるloopbackへの直結、未実行OSは未確認として分ける。
+Windowsの関連2ファイルは135件中133件成功、失敗0件、実symlink権限によるskip2件だった。
+TE08の構築後失効はspawn0と停止完了をfixtureで確認し、spawn前の一時環境の消去は外側finallyの差分監査で確認した。
+CAファイルへのアクセスがないことと、返ったchildの停止追跡を維持することは差分監査で確認した。未実行OSと実通信は成功に含めない。
+固定head `639ff5b`の全体試験は3,260件中3,255件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+指定Claude R1の文書対応をR2で確認し、blockerと要修正0件で収束した。R2の提案に従い、導入手順のNO_PROXY文字列を未確認の表記例と明記した。
+最終更新は文書と結果記録だけで、sourceとtestは全体試験headから不変である。
+
+## Owned Codexの認証URL (#215)
+
+期待条件は[認証URLの契約](native-authentication-url.md)に従う。
+ClaudeはOAuth token供給を維持し、このbrowser URL検査の対象ではない。provider間の認証方式の差として許容する。
+
+| ID | 入力 | 期待条件 |
+|---|---|---|
+| ID-F215-AU01 | 二つの許可origin、既定443と大文字host | 正規化originが一致すれば受理。callbackへ元URLとqueryを完全保持して一度渡す |
+| ID-F215-AU02 | 未知host、subdomain、suffix、末尾dot、IPとlocalhost | 固定code、callback0とthread/start0。値とcauseを公開しない |
+| ID-F215-AU03 | 非標準port、userinfo、HTTP、制御文字、長さ超過と前後空白 | 既存の拒否条件と空白拒否を維持し、元URLを診断へ含めない |
+| ID-F215-AU04 | 早着success completionと不正URL | URL検査を先に行い、早着successで拒否を回避しない |
+| ID-F215-AU05 | 停止後の不正URL応答とtrusted callbackの同期throw、非同期reject | 遅延応答は無視。同期throwのstartはauthentication_prompt_failed、非同期rejectのstartはoperation_stopped。両方のsnapshotはauthentication_prompt_failed、thread/start0、URLとcause非公開 |
+| ID-F215-AU06 | compositionの実runner正常系 | 許可originのfixtureで既存起動を維持。fake DI透過はorigin証明に含めない |
+
+実認証、installed provider版、SSOと後続redirectの互換性は未確認として分ける。
+Windowsの関連3ファイルは241件中240件成功、失敗0件、実symlink権限によるskip1件だった。
+固定head `c32fed6`の全体試験再確認は3,265件中3,260件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+同headの先行全体実行ではHTTP target試験がファイル単位で失敗した。単独10件と全体再確認では再現せず、原因は未特定である。
+指定Claude R2はblockerと要修正0件で収束した。最終更新は文書と結果記録のみで、sourceとtestは全体試験headから不変である。
+
+## Owned Codexのログイン直列化 (#215)
+
+期待条件は[ログイン直列化の契約](native-login-serialization.md)に従う。
+Claudeはこのゲートに参加せず、既存のtoken供給と開始・停止を維持する。provider間の認証方式の差として許容する。
+
+| ID | 入力または保持点 | 期待条件 |
+|---|---|---|
+| ID-F215-LG01 | 同moduleの複数owned Codexを同時開始 | initializeは並行、login RPCはFIFOで高々一つ。正常matching completionと検査後に次へ進む |
+| ID-F215-LG02 | 正常login後のrunning childと後続runner | thread/startはゲート外。成功後のchildの生存で後続loginを止めない |
+| ID-F215-LG03 | queue待機中のstopとloginMs期限切れ | recordとtimerを回収、login RPC0。期限切れはauthentication_queue_timeout、停止は既存分類 |
+| ID-F215-LG04 | grantと取消の同turn競合、取得後ownerまたはsourceだけの失効 | 未開始の自己tokenを回収、login RPC0。第三runnerの進行を妨げない |
+| ID-F215-LG05 | 早着success、不正URL/type/loginId、重複・不一致・失敗completion | responseとcompletionを全て検査。正常検査前の解放0、異常後はexitとcloseの両方まで後続login0 |
+| ID-F215-LG06 | login timeout、callback同期throw・非同期reject、RPC write同期throw・callback error、開始後stop | 固定診断と秘匿を維持。送信成否不明を未開始へ戻さず、exitだけまたはcloseだけでは解放0、両方で一度だけ解放 |
+| ID-F215-LG07 | stop_unconfirmed後の遅延両eventと旧token/completion | 未確認中は保持、後着両eventで次へ進む。旧tokenが新holderを解放しない |
+| ID-F215-LG08 | trusted callbackへの同期再入で別runnerをstart/stop | loginのholderは高々一つ。stopとstartの相互待ちを作らない |
+| ID-F215-LG09 | fixture assertion失敗と同module共有の関連試験 | 自己fake childの両eventを後片付けで確認。global resetでholder漏れを隠さない |
+
+関連2ファイルは241件中240件成功、失敗0件、Windows実symlink権限によるskip1件だった。同moduleを共有するtest-isolation=noneでも同じ件数と合否を確認した。
+固定head `c8d2f0c`の全体試験は3,281件中3,276件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+指定Claude R1はblockerと要修正0件だった。追加fixture後の関連2ファイルとtest-isolation=noneはそれぞれ244件中243件成功、失敗0件、Windows実symlink権限によるskip1件だった。sourceは全体試験headから不変で、追加testと文書は指定Claude R3でblockerと要修正0件に収束した。
+fixtureの成功を実runtime、OS port解放、別process間の排他や認証再利用の証明に含めない。
