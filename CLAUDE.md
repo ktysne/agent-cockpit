@@ -21,6 +21,16 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 - 各機能を実装するときは、モックの該当箇所と照らし合わせて食い違いが無いかを確かめる
 - 検証の結果、実現できないことや表現を変える必要が出たら、計画書の決定済みの判断に記録したうえで、その場でモックにも反映する。モックと計画書と実装を食い違わせたままにしない
 
+## Codex 対応のブランチ運用
+
+- Codex 対応の集約先は `claude/feature-codex-support` とする。作業ブランチは最新の集約先から `claude/codex-<主題>` の名前で作り、PR の base は集約先にする
+- 進み、順序、判断待ちの正本は [docs/handover/2026-10-11-codex-rebuild.md](docs/handover/2026-10-11-codex-rebuild.md) である。PR のマージと開発者の決定のたびに、その場で更新する
+- main の変更は同期 PR で集約先へ取り込む。元の head を祖先に残す通常の merge commit を使い、squash と rebase は使わない
+- 集約先へ入れる PR は、入口のテストと実 runtime の確認が両方終わったものに限る。入口から到達しないモジュールを入れない
+- ダッシュボードがマージするのは base が既定ブランチの PR だけである。集約先向けの PR は開発者が GitHub でマージし、モデルの判断ではマージしない
+- main への最終 PR は、全機能の実 runtime の確認を終えてから作る
+- `codex/feature-codex-support` は凍結した固定参照で、作業ブランチを作らず更新もしない
+
 ## AIクロスレビュー
 
 手順は [docs/cross-review.md](docs/cross-review.md) と cross-review スキルに従う。観点は [.cross-review.md](.cross-review.md)。
