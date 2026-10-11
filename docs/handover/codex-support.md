@@ -1,5 +1,10 @@
 # Codex対応の計画(2026-10-11)
 
+この資料と集約ブランチ `codex/feature-codex-support` は 2026-10-11 に凍結した。
+開発者が Codex 対応を main から Claude 側で作り直すと決めたためで、このブランチには以後コミットを足さず、この資料も更新しない。
+進み、順序、判断待ちの正本は main の [docs/handover/2026-10-11-codex-rebuild.md](https://github.com/ktysne/agent-cockpit/blob/main/docs/handover/2026-10-11-codex-rebuild.md) である。
+このブランチの資料は固定参照として読むだけにし、以下に「正本」と書かれていてもそのとおりには扱わない。
+
 agent-cockpit を Codex デスクトップと Codex CLI にも対応させる作業の、全体の流れ、現在地、次の作業、判断待ち、資料の一覧を 1 か所に集めた資料である。
 作業は集約ブランチ `codex/feature-codex-support` で進め、一通り完成するまで main には入れない。
 main の変更は同期 PR で随時 feature へ取り込む。

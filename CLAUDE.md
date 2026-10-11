@@ -17,6 +17,7 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 
 ## Codex連携の開発
 
+- この節の運用は 2026-10-11 に終了した。`codex/feature-codex-support` は凍結した固定参照であり、新しい作業ブランチと PR を作らない。Codex 対応の正本は main の `docs/handover/2026-10-11-codex-rebuild.md` である。以下は記録として残す。
 - 集約先の `codex/feature-codex-support` は `main` から作成し、本実装と関連するPoCや修正は集約先の最新headから `codex/` で始まる作業ブランチを作る。
 - PRの作成前とレビュー開始時に、実際のhead、base、headの起点をGitとGitHubで確認する。
 - 通常の作業PRは `codex/feature-codex-support` をbaseにする。mainの変更は同期PRで集約先へ随時取り込む。
