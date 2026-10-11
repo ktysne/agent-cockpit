@@ -14,7 +14,7 @@ record本体をcanonical Mapへ一度だけ置き、session索引は挿入順の
 
 DashboardStateのprojectionDisplaySettingsは診断用getterとしてMapとrecordのcopyを返す。
 確認したcallerのsize/values読取りを維持し、返却Mapの変更からstateを変更する挙動は維持しない。
-これは内部propertyのmutation互換境界の変更であり、自走中の推奨案として採用する。
+これは内部propertyのmutation互換境界の変更である。
 対象sessionのlookupはこの診断getterを経由しない。
 
 constructor、restore、hide/unhide、delete、verified-write解除とclearHiddenSessionsを同じcollectionの更新へ集約する。
@@ -68,4 +68,5 @@ N=10000、S=8、P=8では両providerともlookup 16回、返却record数16を観
 lookupの仕事量を対象sessionへ限定した一方、復元には索引構築が加わる。
 serializeとrestoreは全recordを扱い、測定した時間は上表のとおり増えた。
 heap容量、製品の分布、実runtime、並行負荷と長期保持は未確認である。
-全体試験と指定Claudeレビューは次に行う。
+固定head `3bfd407` の全体試験は3,069件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+開発者指定のClaude R1はblockerと要修正0件で収束した。

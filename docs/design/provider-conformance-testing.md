@@ -793,4 +793,6 @@ E01〜E09の関連fixture試験84件と構文確認は成功した。
 最後の空bucket削除assert補強後の隔離realm試験1件も成功した。
 全19条件の同一manifest比較で表示と出自の件数、routeと保存JSON byte数、lookup回数が一致した。
 手動計測のbucket訪問数は未観測とし、隔離realmのcanonical getとSet訪問の観測とは区別する。
-全体試験と指定Claudeレビューは未完了で、両provider実runtimeも未確認である。
+固定head `3bfd407` の全体試験は3,069件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+開発者指定のClaude R1はblockerと要修正0件で収束した。
+両provider実runtimeは未確認である。

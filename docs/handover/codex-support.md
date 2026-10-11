@@ -193,7 +193,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
 | #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | #368 | MCP専用policyとfetch開始境界による結果不明時の再送抑止はレビュー収束。実runtimeは未確認 |
-| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | #369 | 専有fixtureの先行計測はClaude R2で収束しReady。保持条件を維持するsession別索引を後続ブランチで実装中。回収条件は別に検討する |
+| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | #369、#370 | 先行計測とsession別索引はClaudeレビュー収束、Ready。診断getterのcopy化は開発者の確認待ち。次は保持契約と反例fixture |
 | #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはレビュー収束。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
 | #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
@@ -1047,4 +1047,11 @@ Luna Maxがstate、内部collectionと独立索引試験を実装し、Luna XHig
 両担当の編集停止後にrootが監査し、関連84件と最後の空bucket補強試験1件が成功した。
 旧基準と同じ19条件の再計測でmanifest、件数と保存byte数が一致した。
 時間と索引構築の費用は索引設計へ記録した。
-次は作業PRをDraftで作り、固定headで全体試験と指定Claudeレビューを行う。
+PR [#370](https://github.com/ktysne/agent-cockpit/pull/370)の固定head `3bfd407` で全体試験と指定Claudeレビューを行った。
+全体試験は3,069件成功、失敗0件、Windows実symlink権限によるskip2件である。
+Claude R1はblockerと要修正0件で収束した。
+PR #370はReadyで、#369の後にマージ可能である。
+最終変更は検証結果と文書の範囲補足だけで、src/test/toolsは固定headから不変である。
+診断getterのcopy化は推奨を仮採用した内部互換境界であり、開発者にPRで確認してもらう事項として残す。
+次はAstraの助言に基づき保持契約と反例fixtureを進める。
+現在の認証や停止だけで古いsnapshotの再登場を永久拒否したとは扱わず、製品GCは追加しない。
