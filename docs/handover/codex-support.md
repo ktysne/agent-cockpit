@@ -681,6 +681,24 @@ R2の任意提案に従い、旧形式のraw空白B+1と作成・切詰め・追
 後続はcapsule保持型の限定writer、実migrationのadmissionと排他・保存・復旧、件数枠の解放の順で進める。
 標準起動、実native session、外process排他、OS耐久性と件数解放は未達である。
 
+fixture専有の既存更新backendは`codex/question-capsule-existing-update-backend-209-20261011`で、PR #347のレビュー収束headからスタックする。
+Q3/CP4の外側値を保存正本とし、旧projectionは読み取り専用に限定する。
+期待head、既存更新guard、四正本の保存前再照合、追加lease、wx直前close/blocked gate、exact readback後のhead installを接続した。
+結果不明では全slotを停止し、操作leaseをcloseまで保持する。baseline leaseとB/Gから追加予約を控除しない。
+固定版backend source blob `cfbc4466f8ad55c7c442fb32aa3fad2c528faaa6`の関連24件は成功、失敗とskipは0件だった。
+両providerとmixedの保存/cold reload、並行QCP、stale/whitelist/容量拒否、close、rename前後の故障、未知orphan、同path二重owner、新形式のchunk/order破損拒否を確認した。
+構文、空白、変更後CodeGraph同期と調査も成功した。PR #348はPR #347を親にしたスタックである。
+追跡済み全体検証は`8c335d5`で2829件成功、失敗0件、Windows symlink権限による3件skip、372244.7484msだった。
+指定Claude R1の要修正2件をtest/helperで補強し、関連27件が成功、失敗とskipは0件だった。製品sourceは変更していない。
+公開測定primitiveと実byteから独立に求めた全slot前後最大量と対象tempを、pause中の実予約量およびbaseline込み総予算の1byte境界で照合した。
+正のI grant加算、CP/Iなしの合法Q保存、close時のqueued save拒否とqueue0・raw不変・予約復帰も確認した。
+指定Claude R2は試験補強を妥当と確認し、I上流拒否の文書参照を要修正1件として指摘した。既存whole試験のB+G境界と全体検証の成功を照合し、設計資料へ試験名を追記した。
+総予算の1byte境界はQ保存を対象とし、CP保存のtarget tempの独立した予算境界は未固定である。
+文書修正37d873fは指定Claude R3でblockerと要修正0件となり、3往復で収束した。PR #348はReadyで、PR #347、#348の順にマージできる。
+最終の結果記録と任意の文言調整だけの文書差分は、cross-reviewの軽微例外により追加レビューを省略する。
+後続はfixture専有の限定操作facadeで、操作受付から最新candidate生成、保存とclose/reopenを接続する。
+通常native factory、既存user directory、外process排他、runtime authority、OS耐久性、新受付と件数枠解放は別gateに残る。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
@@ -690,6 +708,7 @@ R2の任意提案に従い、旧形式のraw空白B+1と作成・切詰め・追
 |---|---|
 | capsule移行plannerの候補encode反復と全選択delivery走査を計測し、runtimeへ接続する前に最適化の要否を決める | PR #337のClaude R1任意提案。現状はpure処理で、計測と最適化は未実施 |
 | inspectionの全容量表がfitした後、実Bの最終whole/joint検査だけが失敗する入力の構成可否を特性化する | PR #347のClaude R2任意提案。現状は最終検査の失敗をinvalidとして停止し、容量不足とは推測しない |
+| fixture専有backendの短縮名・symlink tmpの扱い、closing中loadの表示state、prewrite読取失敗と指紋差異の診断を整理する | PR #348のClaude R1任意提案。初回関連試験は24件成功、R1補強後は27件成功。closing受付gateと不明時停止は維持し、他OS・tmp構成の成功は未実証 |
 | 外側codecの結合検査で正規化とencodeを繰り返す費用を計測し、検証済み結果を内部で再利用する | PR #336のClaude R1任意提案。未検査値を信頼する公開入口は増やさない |
 | 復元実験、拒否包含分析と質問保存のplain-data preflightを共通化する。例外分類と入力の上限の差を先に照合する | PR #333のClaudeレビュー提案。現在の検査経路は保つ |
 | 隔離診断が呼ばれるたびに容量の予約量を計算し直す(標準起動へ接続する前に #209 で考慮する) | PR #293 の[コメント](https://github.com/ktysne/agent-cockpit/pull/293#issuecomment-6060612725) |
