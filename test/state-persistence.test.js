@@ -141,7 +141,6 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
     collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
     sectionOrder: ['now', 'judgment', 'tasks', 'prs', 'sinceSeen'],
     longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, hideFinished: true, mergeableCondition: 'ci',
-    mergeResultHideMinutes: 5,
   };
   state.patchDisplayPreferences(display);
   state.registerPullRequest('restored-session', { url: 'https://github.com/example/project/pull/47' }, {
@@ -180,7 +179,7 @@ test('古い表示設定は既定順を補い、保存済みの不明な種類�
 
   for (const [name, sectionOrder, expected] of cases) {
     const homeDir = await temporaryHome(t);
-    const display = { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], mergeAfterReviewDefault: true };
+    const display = { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], mergeAfterReviewDefault: true, staleOption: 5 };
     if (sectionOrder !== undefined) display.sectionOrder = sectionOrder;
     await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify({
       version: 1,
@@ -195,6 +194,7 @@ test('古い表示設定は既定順を補い、保存済みの不明な種類�
     assert.deepEqual(restored.display.sectionOrder, expected, name);
     assert.equal(restored.getDisplayPreferences().mergeableCondition, 'cross-review', name);
     assert.equal(Object.hasOwn(restored.getDisplayPreferences(), 'mergeAfterReviewDefault'), false, name);
+    assert.equal(Object.hasOwn(restored.getDisplayPreferences(), 'staleOption'), false, name);
     assert.deepEqual(restored.crossReviewSkips.size, 0, name);
     assert.equal((await fs.readdir(homeDir)).some((file) => file.startsWith('store.json.broken-')), false, name);
     await restored.flushPersistence();
@@ -202,6 +202,7 @@ test('古い表示設定は既定順を補い、保存済みの不明な種類�
     assert.deepEqual(saved.display.sectionOrder, expected, name);
     assert.equal(saved.display.mergeableCondition, 'cross-review', name);
     assert.equal(Object.hasOwn(saved.display, 'mergeAfterReviewDefault'), false, name);
+    assert.equal(Object.hasOwn(saved.display, 'staleOption'), false, name);
     assert.deepEqual(saved.crossReviewSkips, [], name);
   }
 });
@@ -219,29 +220,6 @@ test('レビュー不要の記録は PR 登録と同じ保持期限で片付け�
 
   assert.equal(state.pullRequestRegistrations().some((record) => record.number === 48), false);
   assert.equal(state.crossReviewSkip('example', 'project', 48), null);
-});
-
-test('マージ結果を隠す時間は旧設定と不正値で既定を使う', async (t) => {
-  for (const [name, value, expected] of [
-    ['設定がない', undefined, 5],
-    ['整数の下限', 1, 1],
-    ['整数の上限', 60, 60],
-    ['下限未満', 0, 5],
-    ['上限超過', 61, 5],
-    ['整数でない', 5.5, 5],
-    ['数値でない', '5', 5],
-  ]) {
-    const homeDir = await temporaryHome(t);
-    const display = { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] };
-    if (value !== undefined) display.mergeResultHideMinutes = value;
-    await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify({
-      version: 1, display, plans: {}, decisionLifecycles: {}, closedTasks: [], hiddenSessions: [],
-    }));
-
-    const restored = await DashboardState.load(homeDir);
-    assert.equal(restored.getDisplayPreferences().mergeResultHideMinutes, expected, name);
-    assert.equal((await fs.readdir(homeDir)).some((file) => file.startsWith('store.json.broken-')), false, name);
-  }
 });
 
 test('予約マージ結果の閉じた時刻を保存し、旧形式は未閉鎖として読む', async (t) => {

@@ -522,10 +522,10 @@
   PR を登録したセッションが無いときと、登録したセッションがすべて終了しているときです。</p>
 
   <h2 id="pr-result">マージの結果</h2>
-  <p>マージが済むと、PR の枠に結果の行が出ます。
+  <p>マージ後、結果に警告がある場合だけ PR の枠に結果の行が出ます。
   ブランチを削除した場合、スタックの直上の PR は、base がマージ先に付け替わり、一番下の PR になります。
   ブランチを残した場合は、base を付け替えません。</p>
-  <figure class="guide-map" id="pr-result-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/1166"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="583" alt="スカッシュでマージした後の PR の枠。一番下になった PR に、base を main に付け替え済みと積み直しが必要の札があり、マージできない理由が積み直し待ちになっている。枠の下部に、マージ済みの一覧と、マージの結果の行がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#pr-result-map-1" style="left:27.57%;top:21.098%" aria-label="1. 付け替え済みの札">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-result-map-2" style="left:42.989%;top:21.098%" aria-label="2. 積み直しが必要">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-result-map-3" style="left:1.65%;top:31.647%" aria-label="3. マージできない理由">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-result-map-4" style="left:1.65%;top:88.465%" aria-label="4. マージ済みの一覧">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-result-map-5" style="left:1.65%;top:94.254%" aria-label="5. 結果の行">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#pr-result-map-6" style="left:65.038%;top:91.509%" aria-label="6. 閉じる">6</a></div></div></div><ol class="gm-list"><li id="pr-result-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>付け替え済みの札</b>：ダッシュボードが、この PR の base をマージ先に付け替えました。</div></li><li id="pr-result-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">積み直しが必要</span></b>：スカッシュでマージしたので、この PR の差分に、下の PR のコミットが残っています(<a href="#pr-restack">積み直し</a>)。</div></li><li id="pr-result-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>マージできない理由</b>：積み直しが済むまで、マージできません。</div></li><li id="pr-result-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>マージ済みの一覧</b>：マージした PR が、時刻と方式つきで加わります。</div></li><li id="pr-result-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>結果の行</b>：マージした PR の番号に、方式、ブランチの扱い、付け替えた PR が続きます。</div></li><li id="pr-result-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b><span class="ui">閉じる</span></b>：結果の行を消します。</div></li></ol></figure>
+  <figure class="guide-map" id="pr-result-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/1260"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="630" alt="スカッシュでマージした後の PR の枠。一番下になった PR に、base を main に付け替え済みと積み直しが必要の札があり、マージできない理由が積み直し待ちになっている。枠の下部に、マージ済みの一覧と、ブランチ削除に失敗した警告つきの結果の行がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#pr-result-map-1" style="left:27.57%;top:19.603%" aria-label="1. 付け替え済みの札">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-result-map-2" style="left:42.989%;top:19.603%" aria-label="2. 積み直しが必要">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-result-map-3" style="left:1.65%;top:29.365%" aria-label="3. マージできない理由">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-result-map-4" style="left:1.65%;top:81.944%" aria-label="4. マージ済みの一覧">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-result-map-5" style="left:1.65%;top:90.992%" aria-label="5. 結果の行">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#pr-result-map-6" style="left:3.934%;top:92.143%" aria-label="6. 閉じる">6</a></div></div></div><ol class="gm-list"><li id="pr-result-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>付け替え済みの札</b>：ダッシュボードが、この PR の base をマージ先に付け替えました。</div></li><li id="pr-result-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">積み直しが必要</span></b>：スカッシュでマージしたので、この PR の差分に、下の PR のコミットが残っています(<a href="#pr-restack">積み直し</a>)。</div></li><li id="pr-result-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>マージできない理由</b>：積み直しが済むまで、マージできません。</div></li><li id="pr-result-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>マージ済みの一覧</b>：マージした PR が、時刻と方式つきで加わります。</div></li><li id="pr-result-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>結果の行</b>：警告があるマージ結果だけを表示します。PR の番号に、方式、ブランチの扱い、付け替えた PR、警告が続きます。</div></li><li id="pr-result-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b><span class="ui">閉じる</span></b>：結果の行を消します。</div></li></ol></figure>
   <p>結果の行には、次の内容が出ます。</p>
   <ul>
     <li>マージの方式</li>
@@ -533,11 +533,11 @@
     <li>直上の PR の base を付け替えたときは、付け替えた PR の番号</li>
     <li>ブランチを削除できなかったときなどの警告</li>
   </ul>
-  <p>結果の行は、ページを開いている間だけ出ます。
-  ページを開き直すと消えます。
-  設定の <span class="ui">マージの結果を隠すまで (分)</span> に指定した時間がたつと、警告のない行は自動で隠れます。初期値は 5 分で、1〜60 分の整数を指定できます。
-  ブランチ削除などの警告がある行と、予約時に確認した head と異なる head がマージされた行は自動で隠れず、<span class="ui">閉じる</span> を押すまで残ります。
-  レビュー収束後マージの結果は常駐サーバーに保存され、<span class="ui">閉じる</span> を押すと閉じた状態も保存されます。マージ履歴が 24 時間で整理されると結果も消えます(<a href="settings.html#settings-merge-result-hide">マージの結果を隠すまで</a>)。</p>
+  <p><code>warning</code> に文字列があるか、予約時に確認した head と異なる head がマージされた場合に結果の行を表示します。
+  警告がないマージ結果の行は表示しません。
+  表示した行は <span class="ui">閉じる</span> を押すまで残ります。
+  即時マージの結果はページを開いている間だけ保持し、レビュー収束後の予約マージ結果は常駐サーバーに保存します。
+  予約マージの結果は、閉じた状態も保存され、マージ履歴と同じく 24 時間後に整理されます。</p>
 
   <h3 id="pr-notify">セッションへの知らせ</h3>
   <p>マージを検出すると、常駐サーバーは、PR を登録したセッションと、直上の PR を登録したセッションに知らせます。

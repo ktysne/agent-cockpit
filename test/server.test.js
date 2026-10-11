@@ -1586,7 +1586,6 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(mode).display.longWaitMinutes, 15);
   assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 5);
   assert.equal(jsonBody(mode).display.idleHideMinutes, 30);
-  assert.equal(jsonBody(mode).display.mergeResultHideMinutes, 5);
   assert.equal(jsonBody(mode).display.hideFinished, true);
   assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
   assert.equal(Object.hasOwn(jsonBody(mode).display, 'mergeAfterReviewDefault'), false);
@@ -1612,7 +1611,6 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     ['longWaitMinutes', 0], ['longWaitMinutes', 121], ['longWaitMinutes', 1.5], ['longWaitMinutes', '15'],
     ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
     ['idleHideMinutes', 4], ['idleHideMinutes', 1441], ['idleHideMinutes', 30.5], ['idleHideMinutes', '30'], ['idleHideMinutes', null],
-    ['mergeResultHideMinutes', 0], ['mergeResultHideMinutes', 61], ['mergeResultHideMinutes', 5.5], ['mergeResultHideMinutes', '5'], ['mergeResultHideMinutes', null],
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
     ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
     ['mergeAfterReviewDefault', true],
@@ -1645,13 +1643,6 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(waitSettings).display.longWaitMinutes, 120);
   assert.equal(jsonBody(waitSettings).display.awayAnswerWaitMinutes, 30);
   assert.equal(runtime.answerDelivery.answerWaitMs(), 30 * 60_000);
-  for (const mergeResultHideMinutes of [1, 60]) {
-    const resultHideRange = await request(runtime.info.port, {
-      method: 'POST', path: endpoint, body: JSON.stringify({ mergeResultHideMinutes }), headers: validHeaders,
-    });
-    assert.equal(resultHideRange.status, 200);
-    assert.equal(jsonBody(resultHideRange).display.mergeResultHideMinutes, mergeResultHideMinutes);
-  }
   const hideFinished = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ hideFinished: true }), headers: validHeaders,
   });
@@ -1672,7 +1663,6 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
     longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, mergeableCondition: 'cross-review',
-    mergeResultHideMinutes: 60,
   });
 });
 

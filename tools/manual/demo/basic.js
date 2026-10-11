@@ -103,6 +103,7 @@ module.exports = function basic({ baseTime }) {
         },
         [PARCEL_REPOSITORY]: {
           defaultBranch: 'main',
+          branchDeleteFailures: ['feature/slots-api'],
           pullRequests: [
             open(41, {
               title: '配送枠の取得 API を追加する', head: 'feature/slots-api', createdMinutesAgo: 188, checks: 'pass', reviewDecision: 'APPROVED',
