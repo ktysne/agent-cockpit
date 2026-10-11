@@ -4420,13 +4420,13 @@ for (const mode of ['callback-error', 'sync-throw']) {
     const second = createControlledCodexLoginFixture(t);
     first.start();
     await first.wait('login-write-failure-injected');
+    const result = await first.state.startObserved;
+    const failureSnapshot = first.runner.snapshot();
     second.start();
     await second.wait('initialized-complete');
     assert.equal(hasMethod(first, 'account/login/start'), true);
-    assert.equal(first.state.writes.some((line) => JSON.parse(line).method === 'account/login/start'), true);
     assert.equal(hasMethod(second, 'account/login/start'), false);
 
-    const result = await first.state.startObserved;
     assert.equal(result.status, 'rejected');
     assert.equal(result.error.code, 'operation_failed');
     assert.equal(result.error.cause, undefined);
@@ -4434,9 +4434,9 @@ for (const mode of ['callback-error', 'sync-throw']) {
     assert.equal(result.error.stack.includes(privateSentinel), false);
     assert.equal(result.error.message.includes(authUrl), false);
     assert.equal(result.error.stack.includes(authUrl), false);
-    assert.equal(first.runner.snapshot().failureCode, 'operation_failed');
-    assert.equal(JSON.stringify(first.runner.snapshot()).includes(privateSentinel), false);
-    assert.equal(JSON.stringify(first.runner.snapshot()).includes(authUrl), false);
+    assert.equal(failureSnapshot.failureCode, 'operation_failed');
+    assert.equal(JSON.stringify(failureSnapshot).includes(privateSentinel), false);
+    assert.equal(JSON.stringify(failureSnapshot).includes(authUrl), false);
     assert.equal(hasMethod(second, 'account/login/start'), false);
 
     await first.runner.stop();
@@ -4451,12 +4451,11 @@ for (const mode of ['callback-error', 'sync-throw']) {
   });
 }
 
-test('source expiry before login gate grant returns its ticket without affecting owner authority', { timeout: 8000 }, async (t) => {
+test('source expiry before login gate grant returns its ticket without sending login', { timeout: 8000 }, async (t) => {
   const holder = createControlledCodexLoginFixture(t);
-  const ownerCurrent = true;
   let sourceCurrent = true;
   const sourceExpired = createControlledCodexLoginFixture(t, {
-    isCurrent: () => ownerCurrent,
+    isCurrent: () => true,
     isSourceCurrent: () => sourceCurrent,
   });
   const next = createControlledCodexLoginFixture(t);
@@ -4471,7 +4470,6 @@ test('source expiry before login gate grant returns its ticket without affecting
   assert.equal(hasMethod(next, 'account/login/start'), false);
 
   sourceCurrent = false;
-  assert.equal(ownerCurrent, true);
   holder.respondLogin();
   const result = await sourceExpired.state.startObserved;
   assert.equal(result.status, 'rejected');
