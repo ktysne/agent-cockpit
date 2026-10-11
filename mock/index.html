@@ -624,6 +624,18 @@ const DATA = {
           main: { tool: '', since: '3 分前' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 3,
         },
+        // 通常の ~/.codex で動く Codex のセッション。resume しても同じ thread の会話は 1 行にまとめ、再開の回数を札で示す。
+        {
+          id: 'agent-cockpit-codex', title: 'Codex のセッション', status: 'wait', branch: 'plan/pr-stack-view',
+          main: { tool: '—', since: '2 分前' },
+          codex: { model: 'gpt-6.1-sol', resumes: 2 },
+          perms: [],
+          subagents: [
+            { type: 'Codex の子', text: 'collaborationwait_agent', since: '2 分前', state: 'busy', codexModel: 'gpt-6.1-sol' },
+          ],
+          tasks: [{ title: '会話の表示の単位を調べる', state: 'doing', updatedMin: 8, criteria: [{ t: 'resume の前後で同じ行に出る', met: false }] }],
+          tasksUpdatedMin: 8, decisions: [], lastUpdatedMin: 2,
+        },
       ],
     },
   ],
@@ -1202,6 +1214,7 @@ function renderSummary() {
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
 function modelLine(s, lead = '') {
+  if (s.codexModel) return `<div class="models">${lead}<span class="model gpt">Codex ${esc(s.codexModel)}</span></div>`;
   if (!s.model && !s.gpt && !lead) return '';
   const claude = s.model ? `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>` : '';
   const arrow = s.model ? '<span class="arrow">→</span>' : '';
@@ -1293,7 +1306,9 @@ function mainRow(p, session, withTag) {
   const status = nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
   const stateClass = nonInteractiveUnknown ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
-  const model = nonInteractive ? '<div class="models"><span class="model claude">Claude (API)</span></div>' : '';
+  const resumes = session.codex?.resumes ? `<span class="route-tag" title="同じ会話を再開しても 1 行にまとめて表示する">再開 ${session.codex.resumes} 回</span>` : '';
+  const model = nonInteractive ? '<div class="models"><span class="model claude">Claude (API)</span></div>'
+    : session.codex ? `<div class="models"><span class="model gpt">Codex ${esc(session.codex.model)}</span>${resumes}</div>` : '';
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}${model}`;
   return `<div class="now-row main-row">
       <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<strong>${status}</strong></div>
