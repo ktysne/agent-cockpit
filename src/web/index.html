@@ -1865,12 +1865,17 @@ function pullRequestReservationWaitReasons(pullRequest, group = null, method = n
   if (group) {
     if (group.openStateUnknown === true) waiting.push('PR の状態を確認できない');
     if (!group.defaultBranch) waiting.push('既定ブランチを確認できない');
-    else if (pullRequest.baseRefName !== group.defaultBranch || pullRequest.effectiveBase !== group.defaultBranch) {
-      waiting.push(`既定ブランチ ${group.defaultBranch} へのマージ待ち`);
+    else if (pullRequest.mergeTarget && (pullRequest.baseRefName !== pullRequest.mergeTarget || pullRequest.effectiveBase !== pullRequest.mergeTarget)) {
+      waiting.push(`${pullRequest.mergeTarget} へのマージ待ち`);
     }
     if (!Array.isArray(group.mergeMethods) || !group.mergeMethods.length) waiting.push('リポジトリのマージ方式を確認できない');
     else if (method && !group.mergeMethods.includes(method)) waiting.push('選んだマージ方式が許可されていない');
   }
+  if (pullRequest.reservation && pullRequest.mergeTarget) {
+    const targetBranch = pullRequest.reservation.targetBranch || group?.defaultBranch;
+    if (targetBranch && targetBranch !== pullRequest.mergeTarget) waiting.push(`予約時のマージ先 ${targetBranch} と現在のマージ先 ${pullRequest.mergeTarget} が異なる`);
+  }
+  if (method && pullRequest.mergeMethodFixed && method !== pullRequest.mergeMethodFixed) waiting.push('マージ方式がマージコミットに固定のため、予約の方式では実行しない');
   return waiting;
 }
 
@@ -1982,14 +1987,15 @@ function pullRequestMergeKey(pullRequest) {
 
 function pullRequestMergeOptionsFor(group, pullRequest) {
   const key = pullRequestMergeKey(pullRequest);
-  const methods = Array.isArray(group.mergeMethods) ? group.mergeMethods : [];
+  const methods = (Array.isArray(group.mergeMethods) ? group.mergeMethods : [])
+    .filter((method) => !pullRequest.mergeMethodFixed || method === pullRequest.mergeMethodFixed);
   const previous = pullRequestMergeOptions.get(key);
   const method = methods.includes(previous?.method) ? previous.method
     : methods.includes(group.lastMethod) ? group.lastMethod
       : methods[0] || '';
   return {
     method,
-    deleteBranch: pullRequest.isCrossRepository || group.autoDeleteBranch === true ? false : previous?.deleteBranch ?? true,
+    deleteBranch: pullRequest.headRefName === group.defaultBranch || pullRequest.isCrossRepository || group.autoDeleteBranch === true ? false : previous?.deleteBranch ?? true,
   };
 }
 
@@ -2004,7 +2010,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   panel.dataset.mergeConfirm = key;
   panel.setAttribute('aria-label', `PR #${pullRequest.number} のマージ確認`);
   const heading = element('div');
-  heading.append(element('strong', '', `#${pullRequest.number}`), document.createTextNode(` を `), element('code', '', group.defaultBranch || ''), document.createTextNode(' へマージする'));
+  heading.append(element('strong', '', `#${pullRequest.number}`), document.createTextNode(` を `), element('code', '', pullRequest.mergeTarget || pullRequest.effectiveBase || ''), document.createTextNode(' へマージする'));
   panel.append(heading);
   if (waiting.length) {
     const warning = element('p', 'merge-condition-warning', `選択した条件の未達: ${waiting.join('、')}`);
@@ -2015,7 +2021,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   const methods = element('div', 'methods');
   methods.setAttribute('role', 'radiogroup');
   methods.setAttribute('aria-label', 'マージの方式');
-  for (const method of group.mergeMethods || []) {
+  for (const method of (group.mergeMethods || []).filter((method) => !pullRequest.mergeMethodFixed || method === pullRequest.mergeMethodFixed)) {
     const label = element('label');
     const input = element('input');
     input.type = 'radio';
@@ -2028,10 +2034,11 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
     label.append(input, document.createTextNode(MERGE_METHOD_LABELS[method] || method));
     methods.append(label);
   }
-  if ((group.mergeMethods || []).length === 1) methods.append(element('span', 'meta', 'リポジトリで許可されている方式です'));
+  if (pullRequest.mergeMethodFixed) methods.append(element('span', 'meta', '集約ブランチと同期 PR はマージコミットで入れます'));
+  else if ((group.mergeMethods || []).length === 1) methods.append(element('span', 'meta', 'リポジトリで許可されている方式です'));
   panel.append(methods);
 
-  if (group.autoDeleteBranch !== true) {
+  if (pullRequest.headRefName !== group.defaultBranch && group.autoDeleteBranch !== true) {
     const branchChoice = element('label', 'opt');
     const deleteBranch = element('input');
     deleteBranch.type = 'checkbox';
@@ -2046,17 +2053,17 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
 
   const effects = element('ul', 'effects');
   const review = crossReviewState(pullRequest);
-  const childNumbers = (pullRequest.children || []).map((child) => `#${child.number}`).join('、');
+  const childNumbers = (pullRequest.headRefName === group.defaultBranch ? [] : pullRequest.children || []).map((child) => `#${child.number}`).join('、');
   const branchDeleted = !pullRequest.isCrossRepository && (group.autoDeleteBranch === true || options.deleteBranch);
   const effectItems = [
     review.warn ? { text: review.warn, warn: true } : null,
     { headSha: true },
     pullRequest.isCrossRepository ? { text: 'fork の head ブランチは登録先リポジトリから削除しない。', warn: true } : null,
     childNumbers ? { text: branchDeleted
-      ? `${childNumbers} の base を ${group.defaultBranch} に付け替える`
+      ? `${childNumbers} の base を ${pullRequest.mergeTarget} に付け替える`
       : `ブランチを残すので、${childNumbers} の base は ${pullRequest.headRefName} のまま付け替えない` } : null,
     childNumbers && !branchDeleted && ['squash', 'rebase'].includes(options.method)
-      ? { text: `次に ${pullRequest.headRefName} を既定ブランチへマージするときは、同じ変更が再び差分に入らないようマージコミットを推奨します。`, warn: true } : null,
+      ? { text: `次に ${pullRequest.headRefName} を ${pullRequest.mergeTarget} へマージするときは、同じ変更が再び差分に入らないようマージコミットを推奨します。`, warn: true } : null,
     childNumbers && branchDeleted && ['squash', 'rebase'].includes(options.method)
       ? { text: `スカッシュまたはリベースでは ${childNumbers} に #${pullRequest.number} のコミットが残るため、セッションに積み直しを依頼する。`, warn: true } : null,
   ].filter(Boolean);
@@ -2077,7 +2084,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   go.type = 'button';
   go.dataset.mergeGo = key;
   go.dataset.mergeKey = key;
-  go.disabled = pullRequestMergeInFlight.has(key) || !(group.mergeMethods || []).length;
+  go.disabled = pullRequestMergeInFlight.has(key) || !options.method;
   const cancel = element('button', 'ghost', 'やめる');
   cancel.type = 'button';
   cancel.disabled = merging;
@@ -3923,13 +3930,15 @@ async function runPullRequestMergeAction(button) {
       pullRequestMergeConfirmations.delete(key);
       if (result.queued === true) queuedPullRequestMerges.set(key, { headRefOid: pullRequest.headRefOid || '' });
       if (result.merged === true) {
-        const retargetedNumbers = pullRequest.children.map((child) => child.number);
+        const branchDeleted = pullRequest.headRefName !== group.defaultBranch && !pullRequest.isCrossRepository &&
+          (group.autoDeleteBranch === true || options.deleteBranch);
+        const retargetedNumbers = (branchDeleted ? pullRequest.children : []).map((child) => child.number);
         rememberPullRequestMergeResult(group, {
           number,
           method: options.method,
           branchDeleted: result.branchDeleted === true,
           isCrossRepository: pullRequest.isCrossRepository === true,
-          retargetedBase: retargetedNumbers.length ? group.defaultBranch : null,
+          retargetedBase: retargetedNumbers.length ? pullRequest.mergeTarget : null,
           retargetedNumbers,
           warning: result.warning || null,
         });
