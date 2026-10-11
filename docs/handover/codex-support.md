@@ -694,7 +694,7 @@ Q3/CP4の外側値を保存正本とし、旧projectionは読み取り専用に�
 正のI grant加算、CP/Iなしの合法Q保存、close時のqueued save拒否とqueue0・raw不変・予約復帰も確認した。
 指定Claude R2は試験補強を妥当と確認し、I上流拒否の文書参照を要修正1件として指摘した。既存whole試験のB+G境界と全体検証の成功を照合し、設計資料へ試験名を追記した。
 総予算の1byte境界はQ保存を対象とし、CP保存のtarget tempの独立した予算境界は未固定である。
-文書修正37d873fは指定Claude R3でblockerと要修正0件となり、3往復で収束した。PR #348はReadyで、PR #347、#348の順にマージできる。
+文書修正37d873fは指定Claude R3でblockerと要修正0件となり、3往復で収束した。PR #348はレビュー収束し、#347の後にfeatureへ通常merge済みである。
 最終の結果記録と任意の文言調整だけの文書差分は、cross-reviewの軽微例外により追加レビューを省略する。
 後続はfixture専有の限定操作facadeで、操作受付から最新candidate生成、保存とclose/reopenを接続する。
 通常native factory、既存user directory、外process排他、runtime authority、OS耐久性、新受付と件数枠解放は別gateに残る。
@@ -706,10 +706,44 @@ fixture専有の限定操作ライフサイクルは`codex/question-capsule-rest
 関連18件は成功、失敗とskipは0件、84.29秒だった。後着回答10件保存と11件目の無保存拒否、元selectionのハッシュ維持も確認した。構文、空白とCodeGraph同期・調査は成功した。
 PR #349はPR #348を親にしたスタックである。確定604ddddの追跡済み全体検証は2850件成功、失敗0件、Windows symlink権限による3件skip、341439.0968msだった。
 指定Claude R1のdispose失敗時cleanupと再試行の要修正1件を補強した。固定cleanup境界故障の再試行、未知fileの所有ガード拒否、disposing/blocked表示、上限専用理由と同時reopenを含む関連22件は成功、失敗とskipは0件、58940.6133msだった。
-source/backend/workspaceは変更せず、test/helperの補強後は関連検証を行い、全体検証は604ddddの結果と分ける。指定Claude R2は53f6bcfを妥当と確認し、blockerと要修正0件で2往復のレビューが収束した。PR #349はReadyで、#347、#348、#349の順にマージできる。
+source/backend/workspaceは変更せず、test/helperの補強後は関連検証を行い、全体検証は604ddddの結果と分ける。指定Claude R2は53f6bcfを妥当と確認し、blockerと要修正0件で2往復のレビューが収束した。PR #349はレビュー収束し、#347、#348の後にfeatureへ通常merge済みである。
 最終の結果記録と既存のcleanup制約の文書化だけの差分は、cross-reviewの軽微文書例外として追加レビューを省略する。
 後続は既存explicit reclamation factoryのservice queueと回収core/schedulerの受付停止・settlement gateを統合する。既存context.closeの開始順を保ち、native長時間待機の取消と協調writer ownershipは別段階で確認する。
 通常新schema writerへの接続、外process排他、runtime authority、OS耐久性と件数枠解放は未達である。
+
+## 回収機能のレビュー済みPRと後続
+
+2026-10-11の再照合で、以下のレビュー済みPRは#347、#348、#349の順にfeatureへ通常merge済みである。
+作業PRのbaseをfeatureに統一する規則に合わせ、#348と#349もbaseをfeatureへ変更した。
+headの内容は変更していない。
+
+| 順序 | PRとhead | 内容 | 検証とレビュー |
+|---|---|---|---|
+| 1 | [#347](https://github.com/ktysne/agent-cockpit/pull/347)、`2228696` | capsule移行状態の読み取り専用inspection | source `8ed160c`で全体2804成功、失敗0、Windows権限skip3。最終test追加後もClaude R3で必須0 |
+| 2 | [#348](https://github.com/ktysne/agent-cockpit/pull/348)、`5457dce` | fixture専有の既存更新backend | source `8c335d5`で全体2829成功、失敗0、Windows権限skip3。補強後関連27成功、Claude R3で必須0 |
+| 3 | [#349](https://github.com/ktysne/agent-cockpit/pull/349)、`c05c564` | fixture限定操作とclose/reopen/dispose | `604dddd`で全体2850成功、失敗0、Windows権限skip3。test/helper補強後関連22成功、Claude R2で必須0 |
+
+featureの現在のheadは`aa84489`で、三つのレビュー済みheadとmerge commitを祖先に保持する。
+fixtureの合格を通常native factoryへの新schema接続や実runtimeの成功には数えない。
+
+後続の`codex/native-factory-lifetime-gate-feature-209-20261011`は、最新featureの`c731abe`から作成した。
+既存factoryとserviceの対象sourceは#347〜#349の前後で同じため、そのマージを前提にせず統合を進める。
+質問と指示の共通queue、回収coreとschedulerで操作の受付と終了を追跡し、closeで新受付を同期的に停止する。
+既存context.closeの開始順を保ち、受理済み処理の取消や失敗も終了として待つ。
+両providerの機能適合シナリオは[ID-F209-L01](../design/provider-conformance-testing.md)に定義した。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)はfeature向けで、現在のfeature `aa84489`を通常mergeして引き継ぎ資料の競合を解消する。両系列の記録を保持し、製品sourceとtestは各系列のレビュー済み内容から変更しない。
+source `4db527e`の関連11ファイル248件と全体`npm test`2802件は成功し、失敗0、全体のWindows実symlink権限skip2である。
+標準挙動の追加subset26件も成功した。
+指定Claudeレビューは1往復でblocker・要修正なしとなり、追跡入口と同期scheduler起動の限定を文書へ補足した。
+新factory fixture15件はacceptedへの実到達と後着拒否を両provider、保存中closeをunknown両provider・applied Codexで確認する。
+Claude live appliedと両providerの実runtimeは未確認であり、skip0を適合済みとは読み替えない。
+feature `aa84489`との統合head 8dc8f4eで、lifetime gateとcapsule両系列の関連5ファイル97件中96件が成功し、失敗0件、Windows実symlink権限によるskip1件だった。
+競合解消で手修正したのはこの引き継ぎ資料だけで、各系列の製品sourceとtestはそれぞれレビュー済みheadから不変である。
+文書競合と現在地の記録だけのため、cross-reviewの軽微例外として追加レビューを省略する。PR #351の既存指定Claudeレビューは収束済みで、#347〜#349のマージ後に取り込める。
+
+nativeの長時間startと観測readの取消は別段階で確認する。
+epochやdetachによる論理失効を、I/O終了や保存先所有の解放へ読み替えない。
+同rootの協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
 
 ## 起票していない候補
 

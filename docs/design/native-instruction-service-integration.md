@@ -279,3 +279,27 @@ contextの開始・終了と所有世代の変更でrevisionを単調に進め�
 128件を保持しただけでは容量超過と推定せず、runnerのstickyな容量保留を投影する。
 `failed`は起動失敗の正当な状態として表示し、停止できる所有実行を一覧から除かない。
 これらの境界はfake childと製品HTTP経路のfixtureで確認し、実Codex・Claudeの停止結果とは区別する。
+
+## 明示的回収modeの操作受付と終了
+
+回収を明示的に有効にしたfactoryは、操作の受付と終了を追跡するlifetime gateを内部に保持する。
+質問と指示serviceの共通queueで受付時にticketを取得し、未着手の仕事も追跡する。
+timerとproviderの後着callbackも同じ受付点を通し、成功、取消または失敗で処理が終了したときにticketを一度だけ返す。
+回収coreとschedulerはfactoryの同じgateを使い、外部facadeとschedulerの入口で同じ操作を重複して数えない。
+外向きAPIへgateやticketを返さず、標準modeではgateを生成しない。
+ticketの対象は共通enqueueとfactoryの回収facadeを通る処理である。
+serviceのflushと直接のsnapshot/body scopeは既存closeのtail待ちで扱い、gateによる全入口網羅とは数えない。
+scheduler起動のticketは同期呼出しの例外も解放するためのもので、非同期passのdrainを担わない。
+
+closeは最初のawaitより前に新受付を停止する。
+回収modeでは共有close Promiseをsettings解除などの同期callbackより先に確立し、再入しても停止処理を二重実行しない。
+既存context.closeの同期的な保存禁止とready拒否は、ticketのdrain前に開始する。
+producer、service、schedulerと既存closeの終了を待ち、gateのticketが残っていないことを確認する。
+起動失敗のcleanupでも同じ受付停止を行い、準備待ちの処理とdrainを循環させない。
+受理済みの全操作が正常保存に成功することや、全ticketが返るまで容量leaseを必ず保持することは契約に含めない。
+
+nativeの長時間startと観測readは、この段階のticket網羅に含めない。
+その待機をprivate stopで終了できることを段階別に確認してから、factoryの追跡へ接続する。
+epochによる結果無効化、detach、timeoutを物理停止やI/O終了の証拠にしない。
+協調するprocess間の保存先lock、新schema writerの許可、実runtime適合、電源断耐久性と件数枠解放は別の条件である。
+共通のfixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-L01`に定義する。
