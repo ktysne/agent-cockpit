@@ -27,6 +27,10 @@ const WAIT_TOOL_SPEC = Object.freeze({
   }),
 });
 const ENVIRONMENT_ALLOWLIST = Object.freeze(['PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC']);
+const TRANSPORT_ENVIRONMENT_ALLOWLIST = Object.freeze([
+  'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS',
+]);
+const CA_FILE_ENVIRONMENT_VARIABLES = new Set(['SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS']);
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_INPUT_BYTES = 256 * 1024;
 const MAX_LINES = 100_000;
@@ -58,6 +62,35 @@ class OwnedNativeRunnerError extends Error {
 
 function runnerError(code) {
   return new OwnedNativeRunnerError(code);
+}
+
+function isFullyQualifiedCaFile(value) {
+  if (process.platform !== 'win32') return path.posix.isAbsolute(value);
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+  const unc = /^(?:\\\\|\/\/)([^\\/]+)[\\/]([^\\/]+)(?:[\\/]|$)/.exec(value);
+  return Boolean(unc && unc[1] !== '.' && unc[1] !== '?');
+}
+
+function readTransportEnvironment(sourceEnvironment) {
+  const values = [];
+  try {
+    for (const key of TRANSPORT_ENVIRONMENT_ALLOWLIST) {
+      const value = sourceEnvironment[key];
+      if (value === undefined || value === '') continue;
+      if (typeof value !== 'string' || /[\u0000\r\n]/.test(value) ||
+          (CA_FILE_ENVIRONMENT_VARIABLES.has(key) && !isFullyQualifiedCaFile(value))) {
+        throw runnerError('invalid_transport_environment');
+      }
+      values.push([key, value]);
+    }
+  } catch {
+    throw runnerError('invalid_transport_environment');
+  }
+  return values;
+}
+
+function deleteEnvironment(environment) {
+  for (const key of Object.keys(environment)) delete environment[key];
 }
 
 function isRecord(value) {
@@ -207,6 +240,12 @@ function makeEnvironment(provider, homePath, oauthToken) {
   if (provider === 'claude') {
     environment.CLAUDE_CONFIG_DIR = homePath;
     environment.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+  }
+  try {
+    for (const [key, value] of readTransportEnvironment(process.env)) environment[key] = value;
+  } catch {
+    deleteEnvironment(environment);
+    throw runnerError('invalid_transport_environment');
   }
   return environment;
 }
@@ -1877,34 +1916,41 @@ function createOwnedNativeRunner(options) {
 
   async function spawnOwnedProcess(authentication, expectedGeneration) {
     requireOwnerCurrent(expectedGeneration);
-    const environment = makeEnvironment(provider, homePath, provider === 'claude' ? authentication.oauthToken : null);
     let argumentsList = buildArguments(provider);
+    let endpoint = null;
     if (claudeMcpWait) {
-      const endpoint = await awaitCurrent(claudeMcpWait.controller.start(), expectedGeneration, timeouts.startupMs, 'claude_wait_start_timeout');
+      endpoint = await awaitCurrent(claudeMcpWait.controller.start(), expectedGeneration, timeouts.startupMs, 'claude_wait_start_timeout');
       requireOwnerCurrent(expectedGeneration);
-      environment.COCKPIT_NATIVE_MCP_SECRET = endpoint.secret;
-      environment.MCP_TOOL_TIMEOUT = '420000';
-      environment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT = '420000';
-      environment.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS = '0';
-      environment.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
       argumentsList = [...argumentsList, '--allowedTools', CLAUDE_WAIT_TOOL, '--permission-mode', 'dontAsk', '--mcp-config', endpoint.mcpConfig];
     }
+    requireOwnerCurrent(expectedGeneration);
+    const environment = makeEnvironment(provider, homePath, provider === 'claude' ? authentication.oauthToken : null);
     let childProcess;
     try {
-      childSpawnAttempted = true;
-      childProcess = spawnImpl(executablePath, argumentsList, {
-        cwd,
-        env: environment,
-        shell: false,
-        windowsHide: true,
-        detached: false,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch {
-      for (const key of Object.keys(environment)) delete environment[key];
-      throw runnerError('spawn_failed');
+      if (endpoint) {
+        environment.COCKPIT_NATIVE_MCP_SECRET = endpoint.secret;
+        environment.MCP_TOOL_TIMEOUT = '420000';
+        environment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT = '420000';
+        environment.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS = '0';
+        environment.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
+      }
+      requireOwnerCurrent(expectedGeneration);
+      try {
+        childSpawnAttempted = true;
+        childProcess = spawnImpl(executablePath, argumentsList, {
+          cwd,
+          env: environment,
+          shell: false,
+          windowsHide: true,
+          detached: false,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch {
+        throw runnerError('spawn_failed');
+      }
+    } finally {
+      deleteEnvironment(environment);
     }
-    for (const key of Object.keys(environment)) delete environment[key];
     attachChild(childProcess, expectedGeneration);
     requireCurrent(expectedGeneration);
     await waitForSpawn(expectedGeneration);

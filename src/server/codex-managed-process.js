@@ -17,6 +17,10 @@ const MAX_TIMEOUT_MS = 60_000;
 const ENVIRONMENT_ALLOWLIST = Object.freeze([
   'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
 ]);
+const TRANSPORT_ENVIRONMENT_ALLOWLIST = Object.freeze([
+  'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS',
+]);
+const CA_FILE_ENVIRONMENT_VARIABLES = new Set(['SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS']);
 
 class ManagedProcessError extends Error {
   constructor(code) {
@@ -28,6 +32,35 @@ class ManagedProcessError extends Error {
 
 function processError(code) {
   return new ManagedProcessError(code);
+}
+
+function isFullyQualifiedCaFile(value) {
+  if (process.platform !== 'win32') return path.posix.isAbsolute(value);
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+  const unc = /^(?:\\\\|\/\/)([^\\/]+)[\\/]([^\\/]+)(?:[\\/]|$)/.exec(value);
+  return Boolean(unc && unc[1] !== '.' && unc[1] !== '?');
+}
+
+function readTransportEnvironment(sourceEnvironment) {
+  const values = [];
+  try {
+    for (const key of TRANSPORT_ENVIRONMENT_ALLOWLIST) {
+      const value = sourceEnvironment[key];
+      if (value === undefined || value === '') continue;
+      if (typeof value !== 'string' || /[\u0000\r\n]/.test(value) ||
+          (CA_FILE_ENVIRONMENT_VARIABLES.has(key) && !isFullyQualifiedCaFile(value))) {
+        throw processError('invalid_transport_environment');
+      }
+      values.push([key, value]);
+    }
+  } catch {
+    throw processError('invalid_transport_environment');
+  }
+  return values;
+}
+
+function clearEnvironment(environment) {
+  for (const key of Object.keys(environment)) delete environment[key];
 }
 
 function isRecord(value) {
@@ -216,8 +249,15 @@ function chooseLoopbackPort(netImpl = net) {
 
 function createChildEnvironment(sourceEnvironment, managedHomePath, tokenVariable, token) {
   const result = {};
-  for (const key of ENVIRONMENT_ALLOWLIST) {
-    if (typeof sourceEnvironment[key] === 'string') result[key] = sourceEnvironment[key];
+  try {
+    for (const key of ENVIRONMENT_ALLOWLIST) {
+      if (typeof sourceEnvironment[key] === 'string') result[key] = sourceEnvironment[key];
+    }
+    const transportValues = readTransportEnvironment(sourceEnvironment);
+    for (const [key, value] of transportValues) result[key] = value;
+  } catch (error) {
+    clearEnvironment(result);
+    throw error;
   }
   const temporaryPath = path.join(managedHomePath, 'tmp');
   result.CODEX_HOME = managedHomePath;
@@ -435,12 +475,7 @@ function createCodexManagedProcessManager(options = {}) {
       } catch {
         throw processError('server_spawn_failed');
       } finally {
-        for (const key of Object.keys(childEnvironment)) {
-          if (key === 'CODEX_HOME' || key === 'HOME' || key === 'USERPROFILE' || key === 'APPDATA' ||
-              key === 'LOCALAPPDATA' || key === 'TEMP' || key === 'TMP' || key.startsWith('XDG_')) {
-            childEnvironment[key] = '';
-          }
-        }
+        for (const key of Object.keys(childEnvironment)) childEnvironment[key] = '';
       }
       serverRecord = registerOwnedChild(child, ownedChildren, 'app-server');
       child.once('exit', () => {

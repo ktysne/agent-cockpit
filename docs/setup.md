@@ -15,6 +15,11 @@ native actorと登録済みexecutionを結ぶ証拠が確認されるまでは�
 npmの`codex.cmd`などのshell wrapperは使えず、`executable_format_unsupported`になります。設定を確認し、providerが提供するnative実行ファイルの場所を明示してください。
 この診断は認証や隔離HOME配下の作成より前に行います。`.exe`という拡張子だけでインストールや実行の成功を保証するものではありません。
 
+実験用runnerは、起動元の信頼済み環境から`HTTPS_PROXY`、`HTTP_PROXY`、`NO_PROXY`、`SSL_CERT_FILE`、`NODE_EXTRA_CA_CERTS`だけを通信設定として継承します。
+CAの二つの変数には完全な絶対パスを指定します。不正な型や制御文字、相対CAパスは、値を表示せず`invalid_transport_environment`で起動を拒否します。
+proxyを設定する場合は、起動元の`NO_PROXY`へloopbackの除外を設定してください。`127.0.0.1,localhost,::1`は例で、IPv6の表記と解釈はproviderごとに未確認です。認証付きのCockpit loopback通信をproxyへ送らないための条件です。値は自動補完しません。実providerでloopbackが直結することを確認してから使用してください。
+変数を渡す検査は、実providerでのproxyやCAを使った通信成功を保証しません。供給元と検証範囲は[通信環境の契約](design/native-transport-environment.md)にあります。
+
 ## 進め方の決まり
 
 - `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。
