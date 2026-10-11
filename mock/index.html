@@ -2071,16 +2071,30 @@ function renderReloadNote() {
   const html = DATA.uiUpdatePending
     ? '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
     : ui.refreshConfirmPending
-      ? '<span>書きかけの回答があります。読み込み直すと消えます。</span><button type="button" class="link-btn" data-reload-now>回答を消して読み込み直す</button>'
+      ? '<span>書きかけの回答があります。読み込み直すと消えます。</span><button type="button" class="link-btn" data-reload-discard>回答を消して読み込み直す</button>'
       : '';
   note.hidden = !html;
   note.innerHTML = html;
 }
-function hasUnsentAnswerDraft() {
-  return Object.values(ui.answers).some(a => !a.sent && (a.choice != null || a.picks?.length || a.note));
+function unsentAnswerDecisions() {
+  return allSessions().flatMap(s => s.decisions).filter(d => {
+    const a = ui.answers[d.id];
+    return a && isActiveDecision(d) && answerDirty(a, d) && (a.sent || a.choice != null || a.note);
+  });
+}
+const hasUnsentAnswerDraft = () => unsentAnswerDecisions().length > 0;
+// モックは回答を localStorage に保存するので、実装と同じく書きかけが消えるよう、送信時の値へ戻してから読み込み直す。
+function discardUnsentAnswers() {
+  for (const d of unsentAnswerDecisions()) {
+    const sent = ui.answers[d.id].sent;
+    if (sent) ui.answers[d.id] = { choice: sent.choice, picks: [...(sent.picks || [])], note: sent.note, sent };
+    else delete ui.answers[d.id];
+  }
+  save();
 }
 document.getElementById('reload-note').addEventListener('click', e => {
-  if (e.target.closest('[data-reload-now]')) location.reload();
+  if (e.target.closest('[data-reload-discard]')) discardUnsentAnswers();
+  if (e.target.closest('[data-reload-now], [data-reload-discard]')) location.reload();
 });
 
 function orderControls(p, idx, total, pinnedCount) {
