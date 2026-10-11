@@ -802,3 +802,97 @@ instruction journal単体の予約計算はcheckpointの現在stateを持たな�
 instructionの作成前・作成中の状態文字列の成長は、準備期限をsafe integerで表せるかにかかわらず予約する。
 呼び出し側が渡す候補は内部候補との最大値に加え、候補の省略で予約量を減らさない。
 この予約量は厳密な到達可能最大値や回収許可を表さず、回収操作のstateと時刻はstore間照合で別に検査する。
+
+### 実保存先の読み取り専用inspection
+
+`openQuestionCapsuleInspection({dataDirectory, normalByteLimitsBySlot})`は、既存の絶対pathと質問・checkpoint・instructionの通常byte上限を受け取り、凍結した`{inspect, close}`だけを返す。
+質問の上限は必須で、checkpointとinstructionはnullの上限とファイル不在を対応させる。
+既存のnative service factoryを呼ばず、ディレクトリ作成、修復、保存、移行の継続、providerとschedulerの起動は行わない。
+
+固定した四正本を通常ファイルとして読み、path componentのsymlink、開いたfileのidentity、実readの上限、読み取り後のidentityを検査する。
+四正本を再読してraw指紋とidentityを照合し、対象basenameに続くtemp・backup候補があれば停止する。
+この検査は観測した変更の検出であり、外process排他、path componentの差し替え競合、ABA、返却後の最新性、未知残留物の完全な検出を証明しない。
+
+旧Q2/CP3は局所検査後に元snapshotのreadyと修復要否を確認し、修復が必要ならsnapshot_requires_repairで停止する。
+元snapshotがreadyの場合は、存在slotの上限を固定MAXにした全体検査と自己遷移検査を先に行う。
+新Q3/CP4も存在slotの固定MAXによるjoint検査を先に行い、旧形式とともに実際の設定Bで全容量表を作ってから不足を判定する。
+意味検査が成立した範囲で設定Bが不足する場合は、件数と容量表を保持してcapacity_not_fitを返す。
+最後に実際の設定Bによる全体検査を行い、その失敗を容量不足と推測しない。
+canonical prepared materialは外部anchor/Iとの完全照合、設定Bとの一致、条件付き容量評価、現在CPのbyte境界分類を行う。
+未知schema、混在形式、修復必要、欠落、上限不一致と容量不足は固定した理由でblockedとし、書き換えない。
+Iの有効grantはIだけのB+Gで照合し、Q/CPへ借用しない。
+初版の旧Q/CPはgrantのない形式に限定し、局所検査に合格したgrantあり形式は未対応の理由で停止する。
+固定MAXによる全体検査にもアンカーの固定上限と復元将来予約の上限が残るため、そこで失敗した入力の意味破損と容量超過を完全には分類しない。
+
+結果の`inspectionStatus`は`inspected`または`blocked`であり、service readyや保存・復旧の権限を表さない。
+診断にはrawサイズとhash、形式、準備済み境界、容量表、件数表を返し、raw本文、store、token、内部識別子と例外本文は返さない。
+容量は実際の四正本byte、旧形へ復元した将来予約、新外側の固定構造将来予約を区別する。
+件数は質問detailと通常reservation、capsule wrapperとentry、復元総reservationを分け、CPでも通常deliveryと復元総deliveryを分ける。
+準備済みでは旧sourceと予定targetの件数を物理的な現在境界と区別する。
+旧展開形式の件数上限を維持し、空き件数枠が増えたとは返さない。
+
+同時inspectは一つの読み取りを共有し、各呼び出しへ分離した診断を返す。
+closeは新しい読み取りを直ちに禁止し、実行中の読み取りを待ち、同じPromiseを返す。
+この入口を標準起動へ接続する前に、capsuleを保存正本として保持する限定writer、admissionと排他、実保存と復旧、件数枠の解放を別に検証する。
+旧展開snapshotを既存旧writerへ渡して保存するとcapsuleと新形式が失われるため、保存の正本には使わない。
+
+### fixture専有保存先での既存更新backend
+
+`createQuestionCapsuleExistingUpdateBackend`はfixtureが所有する一時ディレクトリに限定した内部factoryである。
+標準起動や既存ユーザーディレクトリへ接続せず、constructorのpath、fingerprint、budgetは呼び出し元の認証を証明しない。
+固定した四正本をcanonical形式としてcold検査し、A/Iの期待raw指紋とQ3/CP4の結合検査が成立した場合だけ既存更新を受け付ける。
+旧Q2/CP3と未知entryを拒否し、inspectionの結果を保存権限へ昇格しない。
+
+外側Q3/CP4を保存正本として保持し、旧展開projectionは凍結した読み取り値だけに使う。
+質問はlateAnswers、checkpointは許可された非質問deliveryの進行だけを既存guardで検査する。
+単一queueで対象のrevision/size/hashを期待headと照合し、対象外slotにはその時点の最新値を使う。
+保存前と追加lease取得後に四正本のraw指紋を再照合し、観測した外部変更では全slotを停止する。
+
+追加leaseは、各slotの更新前後の保護量の最大値を合計し、対象の完全なtemp byteを加えた量を独立して確保する。
+Q/CPは実raw、新外側の現在と将来予約、旧展開の将来予約、旧容量計測の予約量の最大を保護する。
+Aはraw、canonical、pending period projectionと旧予約の最大を保護する。
+Iはraw、現在、将来、旧予約の最大をB+Gと照合してからGを加えて保護するため、grantを保守的に過剰予約する場合がある。
+baseline lease、B、Gから追加leaseを控除しない。
+IのB+G照合はcold joint検査と旧容量計測でも行うため、後段の保護量計算だけで不足を拒否する合法入口は作らない。
+上流のI容量拒否は`test/question-capsule-whole-validation.test.js`の`whole validation enforces each legacy future-reservation byte limit exactly`で、将来予約と現在byteのB+G境界を確認する。
+backend試験は合法grantの追加予約量と総予算境界を確認し、後段の保護量計算だけの拒否到達を確認対象に含めない。
+
+内部filesystem adapterはtempのexclusive open直前でclosing/blockedを検査する。
+保存後は対象のexact raw readback、対象外指紋、結合検査と既存更新guardを確認してからheadをinstallする。
+結果不明のI/Oでは全slotを停止し、操作leaseはcloseまで保持する。
+入力不正、stale head、guardと容量の書込前拒否では、既知headが変わっていなければ次の合法操作を受け付ける。
+
+closeは即時受付を閉じ、未着手queueを拒否して進行中I/Oとreadbackを待つ。
+同じPromiseを返し、drain後に操作leaseとprocess内path ownerを返す。
+fresh instanceは全正本をcold検査し、未知orphanを自動削除しない。
+固定pause/fault enumはfixtureの試験制御であり、任意callbackを保存判定に使わない。
+
+同processの同path二重ownerを拒否するが、外process排他、path差替え競合、ABA、OS電源断耐久性を証明しない。
+両providerのnative file fixtureは実runtimeの結果ではなく、source authority、通常起動、移行開始と復旧、新受付、件数枠解放は別のgateに残る。
+
+### fixture専有の限定操作ライフサイクル
+
+限定操作facadeはtest helper内に置き、専有workspace、backend、時計、queueと固定故障scenarioを所有する。
+呼出し側へpath、budget、raw正本、candidateと保存APIを返さない。
+操作は選択済みの保持中ordinary質問への後着回答と、fixture内の非質問deliveryの固定進行に限定する。
+queue内で最新の保存済みQ3/CP4を読み、変更したordinary rowだけを外側正本へ反映する。
+元のselection、capsule/chunkとorderを保ち、duplicateは保存しない。
+未選択、capsule内、retired、missingや入力不正は保存前に拒否する。
+固定配送相関はfixtureの制御値であり、runtime observation authorityの証拠には使わない。
+
+closeは同期で受付を閉じ、backend closeとqueue settlementを待つ。
+closingまたはblocked中にloadが終わってもreadyへ戻さない。
+closeはworkspaceとbaseline leaseを保持し、reopenは同じ保存先へ新しいbackendを作ってcold検査する。
+保存結果不明では全操作を停止し、再検査で読めた状態を元操作の成功証明へ読み替えない。
+disposeは終端で、close/drain後にfixtureが所有する既知故障tempとworkspaceを検証付きで片付ける。
+不明なtempや所有を照合できない保存先を削除しない。
+dispose要求で受付を終端停止し、workspace解放の完了までdisposingを表示する。削除開始前のcleanup失敗は再試行できるが、backend closeが失敗してdrainを確認できない場合は削除へ進まない。
+backendはcloseの拒否Promiseも保持するため、この失敗はdisposeを再試行しても回復しない。
+workspaceは所有検査前にbaseline leaseを解放する。未知entry拒否後のlease保持や、一部unlink後の再開は未対応である。
+既知orphanのcleanupが失敗した後もworkspaceの所有検査を行い、解放できても最初のcleanup失敗は呼出し側へ返す。
+start失敗はblocked理由を保持し、同じstartの再実行では復旧せず、close/reopenのcold再検査またはdisposeへ進む。
+
+試験は両provider、Q/CPの操作順、後着回答上限、duplicate、限定受付、capsuleとorderの保持、追加lease、close時の未着手操作、rename前後の故障とcold reopenを扱う。
+拒否確認は固定fixtureのIDと構造照合に限り、全lookupの一般的な同値性やclose競合の全実行順を証明しない。
+retired質問の固定IDはcapsuleまたはmissing判定でも拒否されるため、retired専用分岐の独立した検出は未確認である。
+通常native factory、provider listener、schedulerとserviceへの配線は別段階である。
