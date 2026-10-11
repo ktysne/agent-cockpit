@@ -198,7 +198,7 @@ function makeEnvironment(provider, homePath, oauthToken) {
   });
   if (process.platform === 'win32') {
     environment.HOMEDRIVE = path.parse(homePath).root.replace(/[\\/]$/, '');
-    environment.HOMEPATH = path.relative(path.parse(homePath).root, homePath);
+    environment.HOMEPATH = path.sep + path.relative(path.parse(homePath).root, homePath);
   }
   if (provider === 'codex') environment.CODEX_HOME = path.join(homePath, '.codex');
   if (provider === 'claude') {

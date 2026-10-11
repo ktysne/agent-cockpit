@@ -195,7 +195,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | #368 | MCP専用policyとfetch開始境界による結果不明時の再送抑止はレビュー収束。実runtimeは未確認 |
 | #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | #369、#370、#371 | 計測、session索引、保持契約と反例fixtureはClaudeレビュー収束、Ready。診断getterのcopy化は開発者の確認待ち。GCの全入口拒否境界と件数上限は未解決 |
 | #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはレビュー収束。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
-| #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
+| #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | PR #373で観測器と実測を追加。通常解放は進行、再接続後旧handle拒否と90秒B未到着を確認。進行方法は未解決 | #174の後続(handoffとreconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
 
 main 側の不具合として #316(idle で補った後の古い推定の再表示)と #317(マニュアルの回答画像が等倍)も 2026-10-09 に起票した。マイルストーンは付けていない。
@@ -1205,3 +1205,34 @@ PR #371はReadyで、#370の後にマージ可能である。
 src/test/toolsは全体試験headから不変で、製品GCと件数上限の解決は後続に残す。
 次は#314の実Claude wait解放と次context取得の観測準備を進める。
 fixtureを実runtimeの確認へ読み替えず、認証と専用rootの境界を確認して実測入口を準備する。
+
+## Claude wait再接続の観測準備の現在地 (#314)
+
+最新featureからcodex/claude-wait-reconnect-observation-314-20261011を作り、Readyの#371最終head `a51c944` を通常mergeした。
+過去のignored実測harnessは現worktreeと元リポジトリに残っていなかった。
+Astraへ既存APIでの実現性を相談し、通常wait ownerによる一回のsettleと独立したB観測を採用する。
+[限定観測設計](../design/claude-wait-reconnect-probe.md)とID-F314-WRP01〜WRP08を実装前に記録した。
+fixed profileの観測器と明示live実行器を準備し、製品の認可を緩めない。
+失効後の拒否、Bなし、control未達は有効な未確認の結果として残す。
+実CLIと通常認証の境界を監査し、停止を確認した自己rootだけをcleanupする。
+実測と観測器のfixtureを分け、#314と#174の実runtime gateは完了扱いにしない。
+実行前の環境監査でWindowsのHOMEPATHの先頭separator欠落を再現し、[#372](https://github.com/ktysne/agent-cockpit/issues/372)へ記録した。
+既存owned runnerとversion childのhome指定を補正し、両providerのfake-spawnで結合値を検証してからliveへ進む。
+Luna MaxとLuna Highの編集停止後にrootが監査し、専用fixture18件を含む関連277件が成功した。
+構文確認4件と差分検査も成功し、無spawnのpreflightで既知CLIの存在を確認した。
+baseline proof欠落と観測終了後callbackの直接fixtureは未確認として残す。
+固定headの全体試験と指定Claudeレビュー後に実測し、実runtime結果を別に記録する。
+PR [#373](https://github.com/ktysne/agent-cockpit/pull/373)の初回固定head `db648b9` は全体3,095件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+Claude R1の要修正3件を反映し、再接続前の有効性と切断・接続の成立を必須にした。
+通知は単一listenerで数え、製品callbackの戻り値を維持する。
+専用fixtureは補強後19件成功し、修正後の固定head `b4c5e69` の全体試験は3,096件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+Claude R2の要修正1件は切断・接続失敗分岐の未確認記載であり、提示された文書補足案をAstraへ相談して採用した。
+sourceとtestを維持した文書補足をR3で確認し、blockerと要修正0件で収束した。
+PR #373はReadyで、#371の後にマージ可能である。
+Claude 2.1.296の隔離live観測を固定head `b441088` で一度行い、controlで次contextとfresh current proofを確認した。
+reconnectは旧handle失効と通常settle拒否を確認したが、90秒以内に次contextは到着しなかった。
+両processのexit・close、childとendpointの非稼働、自己root削除を確認した。
+実response writeは未観測で、観測器のobserved分類を#314の完了へ読み替えない。
+manifestと観測範囲は限定観測設計に置き、再接続後の進行方法は後続に残す。
+最終更新は検証と実測結果の文書のみで、src/test/toolsは全体試験headから不変である。
+次は#210の新規質問登録の保存後失効を取消終端へ進め、接続復帰後の自動回答を抑止する製品修正へ着手する。

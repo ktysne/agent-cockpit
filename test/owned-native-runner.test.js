@@ -102,6 +102,7 @@ function createSpawnHarness(workspace, onWrite) {
     harness.options = { ...options, env: undefined };
     harness.home = options.env.HOME;
     harness.codexHome = options.env.CODEX_HOME;
+    harness.windowsHome = { HOMEDRIVE: options.env.HOMEDRIVE, HOMEPATH: options.env.HOMEPATH };
     harness.claudeTokenPresent = typeof options.env.CLAUDE_CODE_OAUTH_TOKEN === 'string';
     harness.environment = options.env;
     harness.child = new FakeChild(onWrite);
@@ -122,6 +123,15 @@ function baseOptions(workspace, provider, values = {}) {
     profile: 'cockpit-native-v1',
     ...values,
   };
+}
+
+function assertWindowsHomePair(environment, homePath, cwd) {
+  if (process.platform !== 'win32') return;
+  const drivePath = `${environment.HOMEDRIVE}${environment.HOMEPATH}`;
+  assert.equal(path.win32.isAbsolute(environment.HOMEPATH), true);
+  assert.equal(path.win32.isAbsolute(drivePath), true);
+  assert.equal(path.win32.resolve(drivePath).toLowerCase(), path.win32.resolve(homePath).toLowerCase());
+  assert.equal(path.win32.resolve(cwd, drivePath).toLowerCase(), path.win32.resolve(homePath).toLowerCase());
 }
 
 function requiredHomeDirectories(homePath) {
@@ -232,6 +242,7 @@ test('construction does not spawn and Claude reports only native main-message co
         assert.deepEqual(spawnOptions.stdio, ['pipe', 'pipe', 'pipe']);
         assert.equal(spawnOptions.env.HOME, workspace.homePath);
         assert.equal(spawnOptions.env.USERPROFILE, workspace.homePath);
+        assertWindowsHomePair(spawnOptions.env, workspace.homePath, workspace.cwd);
         assert.equal(spawnOptions.env.CLAUDE_CONFIG_DIR, workspace.homePath);
         assert.equal(spawnOptions.env.CLAUDE_CODE_OAUTH_TOKEN, token);
         assert.equal(spawnOptions.env.OWNED_NATIVE_RUNNER_TEST_SECRET, undefined);
@@ -340,6 +351,7 @@ test('Codex presents same-process managed login once and waits for its matching 
   assert.equal(harness.options.shell, false);
   assert.equal(harness.options.windowsHide, true);
   assert.equal(harness.home, workspace.homePath);
+  assertWindowsHomePair(harness.windowsHome, workspace.homePath, workspace.cwd);
   assert.equal(harness.codexHome, path.join(workspace.homePath, '.codex'));
   assert.equal(harness.claudeTokenPresent, false);
   assert.deepEqual(harness.args.slice(0, 3), ['app-server', '--listen', 'stdio://']);
