@@ -1072,3 +1072,20 @@ PR #371はReadyで、#370の後にマージ可能である。
 src/test/toolsは全体試験headから不変で、製品GCと件数上限の解決は後続に残す。
 次は#314の実Claude wait解放と次context取得の観測準備を進める。
 fixtureを実runtimeの確認へ読み替えず、認証と専用rootの境界を確認して実測入口を準備する。
+
+## Claude wait再接続の観測準備の現在地 (#314)
+
+最新featureからcodex/claude-wait-reconnect-observation-314-20261011を作り、Readyの#371最終head `a51c944` を通常mergeした。
+過去のignored実測harnessは現worktreeと元リポジトリに残っていなかった。
+Astraへ既存APIでの実現性を相談し、通常wait ownerによる一回のsettleと独立したB観測を採用する。
+[限定観測設計](../design/claude-wait-reconnect-probe.md)とID-F314-WRP01〜WRP08を実装前に記録した。
+fixed profileの観測器と明示live実行器を準備し、製品の認可を緩めない。
+失効後の拒否、Bなし、control未達は有効な未確認の結果として残す。
+実CLIと通常認証の境界を監査し、停止を確認した自己rootだけをcleanupする。
+実測と観測器のfixtureを分け、#314と#174の実runtime gateは完了扱いにしない。
+実行前の環境監査でWindowsのHOMEPATHの先頭separator欠落を再現し、[#372](https://github.com/ktysne/agent-cockpit/issues/372)へ記録した。
+既存owned runnerとversion childのhome指定を補正し、両providerのfake-spawnで結合値を検証してからliveへ進む。
+Luna MaxとLuna Highの編集停止後にrootが監査し、専用fixture18件を含む関連277件が成功した。
+構文確認4件と差分検査も成功し、無spawnのpreflightで既知CLIの存在を確認した。
+baseline proof欠落と観測終了後callbackの直接fixtureは未確認として残す。
+固定headの全体試験と指定Claudeレビュー後に実測し、実runtime結果を別に記録する。

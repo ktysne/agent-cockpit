@@ -773,6 +773,33 @@ R03/R04は既存rowへの質問統合の変化を確認し、操作認可の証�
 指定Claude R1の文書指摘を補正し、R2はblockerと要修正0件で収束した。
 両provider実runtime、全入口の永続拒否と製品GCは未確認である。
 
+## Claude wait再接続の観測器 (#314)
+
+以下は[限定観測設計](claude-wait-reconnect-probe.md)の実装前期待値である。
+観測器のfixtureと実CLIを分け、未実行runtimeを成功としない。
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-F314-WRP01 | import、defaultとpreflight | spawn、secret取得、networkと通常HOMEの認証や設定の読書き0 |
+| ID-F314-WRP02 | verified callbackと二重通知 | callbackは同期保存だけ、完了後のsettleは一回 |
+| ID-F314-WRP03 | controlのsettleと次context | 有効baselineを前提に受付、distinct B到着と通知後checkpointのcurrent fresh proofを別々に観測 |
+| ID-F314-WRP04 | reconnect後に旧handleへ通常settle | 既存owner経路の拒否を維持。Bなしを未確認と記録 |
+| ID-F314-WRP05 | B到着後のterminal、BからCへの進行または世代増加だけ | native到着とcheckpointを区別し、current proofのB対応や過去のproof不存在を主張しない。世代だけで成功にしない |
+| ID-F314-WRP06 | spawn、初期化、wait期限とstop失敗 | 終了処理を試み、exit、close、childとendpointを確認できないrootは削除しない |
+| ID-F314-WRP07 | secret、nonce、IDと例外messageのsentinel | 結果とログへ含めず、raw result hashなし |
+| ID-F314-WRP08 | control未達または停止未確認 | reconnect runを開始せず比較不能または残存状態を報告 |
+
+実装と検証は未完了である。
+両providerの共通runtime適合と#314の実Claude実測は、専用fixtureとは別に記録する。
+
+## Windowsの専有home環境 (#372)
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-ENV-W01 | ClaudeとCodexのowned runner、および観測器version childの環境取得 | WindowsのHOMEDRIVEとHOMEPATHの結合が絶対pathで、HOMEとUSERPROFILEへ一致する |
+
+fake-spawnの環境を検証し、実CLIによる全書込みの監査とは扱わない。
+
 ## provider別表示墓標の計測 (#312)
 
 以下は[先行計測](projection-display-baseline.md)の実装前期待値である。
