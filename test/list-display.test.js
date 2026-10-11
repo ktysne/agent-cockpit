@@ -133,7 +133,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     mainRow: () => fakeElement('div', 'now-row main-row'),
     appendAgents() {},
   });
-  vm.runInContext(`${webSession}\nthis.renderSession = sessionBlock;`, webContext);
+  vm.runInContext(`${webSession}\n${functionSource(web, 'sessionDisplayName')}\nthis.renderSession = sessionBlock;`, webContext);
   const webVisible = webContext.renderSession({ key: 'p', name: 'P' }, {
     session_id: 'active', status: '不明', title: '稼働中', decisions: [], tasks: [], permissionWaits: [], agents: [],
   }, true);

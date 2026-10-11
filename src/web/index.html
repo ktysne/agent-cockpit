@@ -1217,14 +1217,30 @@ function routeTag(agent) {
   return tag;
 }
 
-// セッションにモデル名が無いときは、非対話の実行を API として札に出す。
+// 非対話の Claude にモデル名が無いときは、API として札に出す。
 function appendSessionModelLine(target, session) {
   const models = element('div', 'models');
+  if (session.provider === 'codex') {
+    models.append(element('span', 'model gpt', `Codex ${session.codex?.model || ''}`));
+    if (session.codex?.resumes > 0) {
+      const resumes = element('span', 'route-tag', `再開 ${session.codex.resumes} 回`);
+      resumes.title = '同じ会話を再開しても 1 行にまとめて表示する';
+      models.append(resumes);
+    }
+    target.append(models);
+    return;
+  }
   models.append(element('span', 'model claude', session.modelName ? `Claude ${session.modelName}` : 'Claude (API)'));
   target.append(models);
 }
 
-function appendModelLine(target, agent) {
+function appendModelLine(target, agent, provider = 'claude') {
+  if (provider === 'codex') {
+    const models = element('div', 'models');
+    models.append(element('span', 'model gpt', `Codex ${agent.model || ''}`));
+    target.append(models);
+    return;
+  }
   const claudeModel = !agent.isCodex && agent.model ? (agent.modelName || agent.model) : '';
   const gpt = agent.isCodex
     ? { model: agent.model, effort: agent.effort, codex_home: agent.codex_home, unavailable: agent.unavailable }
@@ -2099,11 +2115,16 @@ function pullRequestConflictUiKey(group, pullRequest) {
   return `${group.owner.toLowerCase()}/${group.repo.toLowerCase()}#${pullRequest.number}`;
 }
 
+// Codex にはセッション名が無く、thread ID は利用者に意味を持たないので題に使わない。
+function sessionDisplayName(session) {
+  return session.title || (session.provider === 'codex' ? 'Codex のセッション' : session.session_id);
+}
+
 function pullRequestConflictSessionNames(sessionIds) {
   const sessions = Array.isArray(lastState?.sessions) ? lastState.sessions : [];
   return [...new Set((Array.isArray(sessionIds) ? sessionIds : []).map((sessionId) => {
     const session = sessions.find((item) => item.session_id === sessionId);
-    return session?.title || session?.session_id || sessionId;
+    return session ? sessionDisplayName(session) : sessionId;
   }))];
 }
 
@@ -2544,7 +2565,7 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
   const detail = element('div', 'detail');
   if (doingTask) detail.append(element('div', 'activity-title', doingTask.title));
   if (mainTool) appendToolLine(detail, mainTool);
-  if (session.nonInteractive) appendSessionModelLine(detail, session);
+  if (session.nonInteractive || session.provider === 'codex') appendSessionModelLine(detail, session);
   row.append(who);
   if (!isUnknown) {
     // 非対話の行は hook の時刻が無いことがあるので、セッションファイルの更新時刻で代える。
@@ -2592,7 +2613,7 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     const detail = element('div', 'detail');
     if (agent.description) detail.append(element('div', 'agent-description', agent.description));
     else if (agent.lastTool) appendToolLine(detail, agent.lastTool);
-    appendModelLine(detail, agent);
+    appendModelLine(detail, agent, session.provider);
     row.append(who, relativeTimeElement(agent.startedAt, 'since', agent.startedAt ? durationAgoLabel(agent.startedAt) : ''));
     if (detail.childNodes.length) row.append(detail);
     list.append(row);
@@ -2617,10 +2638,6 @@ function itemTimestamp(item) {
 
 function newestFirst(items) {
   return [...items].sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
-}
-
-function sessionDisplayName(session) {
-  return session.title || session.session_id;
 }
 
 function appendContextTags(target, product, session, withTags, multipleSessions) {
@@ -3123,7 +3140,7 @@ function sessionBlock(product, session, multipleSessions) {
   const block = element(multipleSessions ? 'section' : 'div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
   if (multipleSessions) {
     const head = element('div', 'session-head');
-    head.append(element('h3', '', session.title || session.session_id));
+    head.append(element('h3', '', sessionDisplayName(session)));
     if (!sharedBranch(product) && session.product?.branch) head.append(element('span', 'meta branch', session.product.branch));
     block.append(head);
   }
