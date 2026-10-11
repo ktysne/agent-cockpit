@@ -1062,3 +1062,21 @@ main に feature へ未同期の変更があれば、先に同期 PR を feature
 fixture の合格を実 runtime の合格と読み替えず、未実施を成功に数えないでください。
 PR のマージや Issue のクローズをしたら、この資料の表を同じ PR で更新してください。
 ```
+指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
+PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
+
+### 停止結果codecの独立実装
+
+停止全体のPR #364は3往復でも本文/適合表と未確認所有scopeの起動判断の2件が残り、Draftでマージ不可である。
+推奨はscope新規launch禁止、管理者による検出とW09手動回復を定義し、適合表をそろえて追加レビューすることで、再開の判断を待つ。
+初回の純粋codecには残存指摘の影響がないため、レビュー済み#363最終headを通常mergeした別branchで先行する。
+未収束の#364は取り込まない。
+[codec設計](../design/stop-ensure-record-codec.md)とC01〜C07の独立期待条件を実装前に記録した。
+純粋codecと関連試験を実装し、IDの固定長を明示してBuffer実byte長の検査を補強した。関連17件と構文確認は成功した。
+ブランチはcodex/stop-record-codec-313-20261011、PR #365のbaseはcodex/feature-codex-supportで、全体試験head `6884318`とtest補強後のレビューhead `7894492`をGitHubと照合した。
+同headの全体試験は2,986件成功、失敗0件、Windows実symlink2件skipだった。
+指定Claude R1はblocker0、要修正1件で、合法JSONによる4097 byte上限超過と偽装Bufferの反例を補強し、関連17件と構文確認が成功した。
+全体試験headから製品src不変を確認し、test入力の補強だけのため全体は反復しなかった。
+Claude増分R2はblockerと要修正0件で収束した。結果記録だけの最終追記ではsrc/testを変えず、全体試験と追加レビューを反復しない。
+PR #365はマージ可能で、#363の後に取り込む。未収束#364は前提にせず、次はbounded result storeの内部fixtureへ進む。
+ファイル保存、private controller、管理排他、ACL、tray/ensure接続、全writerと実providerは未実装または未確認のままである。
