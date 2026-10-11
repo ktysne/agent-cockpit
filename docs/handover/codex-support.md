@@ -20,7 +20,7 @@ main の変更は同期 PR で随時 feature へ取り込む。
 
 ### 最新の状態 (2026-10-11照合)
 
-feature の基点は`codex/feature-codex-support`の`3124ad5`で、PR #381と#364を通常merge済みである。main の PR #384 でテスト方針と整理計画が追加されたため、現在`codex/sync-main-384-20261011`でmainを通常mergeし、feature向け同期PRを作成・レビュー中である。PR番号は作成後に追記する。
+feature の基点は`codex/feature-codex-support`の`3124ad5`で、PR #381と#364を通常merge済みである。main の PR #384 でテスト方針と整理計画が追加されたため、現在`codex/sync-main-384-20261011`でmainを通常mergeし、feature向け同期PR #385を作成し、Claudeレビュー中である。
 
 テスト整理の開発者決定により、新規機能実装のPRを整理完了まで停止する。同期PRがマージされたら、featureの最新headで未接続モジュールと専用テストの一覧を作り直す。削除PRでは削除直前のfeature SHAを固定参照に記録し、#209の段階2〜3、#313、#175/#177-Aの台帳、#174/#216のサービスを設計済みとして状態表を更新する。SHAは削除PR作成時に確定する。
 
