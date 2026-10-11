@@ -17,6 +17,7 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 
 ## Codex機能のブランチ運用
 
+- この節の運用は 2026-10-11 に終了した。codex/feature-codex-support は凍結した固定参照であり、新しい作業ブランチと PR を作らない。Codex 対応の正本は main の docs/handover/2026-10-11-codex-rebuild.md である。以下は記録として残す。
 - 集約先の codex/feature-codex-support は main から作成する。
 - Codexの本実装と、それに関連するPoCや修正作業は、最新の codex/feature-codex-support から codex/ で始まる作業ブランチを作成する。
 - 作業PRのbaseは codex/feature-codex-support とし、レビュー済みの変更を集約先へ取り込む。
@@ -46,6 +47,7 @@ ClaudeとCodexで同じ結果を期待するCockpit機能は、本実装に合�
 
 ## テスト
 
+- テストを書く、直す、消す基準は [docs/testing.md](docs/testing.md) に従う。製品の入口から到達しないモジュールの単体テストと、信頼境界の内側への防御検査は書かない
 - 全体のテストは `npm test` で流す
 - 子プロセスを起動できない環境(Codex の Windows サンドボックスなど。`npm test` が `spawn EPERM` で止まる)では、`npm run test:inprocess` を使う。テストファイルを 1 つのプロセスで流すので、テストランナーが子プロセスを起動しない
   - `test/ensure-server.test.js` は常駐サーバーを子プロセスで起動して確かめるので、この環境では失敗する。報告では、その失敗を「子プロセスを起動できないため未確認」と書き、ほかのテストの合否と分ける

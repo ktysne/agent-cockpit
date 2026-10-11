@@ -22,6 +22,7 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | [docs/architecture.html](architecture.html) / [docs/architecture-detail.html](architecture-detail.html) | 構成要素と通信経路の図。回答の届け方、PR の登録からマージまでの流れ |
 | [docs/poc-results.md](poc-results.md) | PoC で確かめたことと、分かった制約。再現の一式は固定したコミットの `poc/` を参照する |
 | [docs/cross-review.md](cross-review.md) / [.cross-review.md](../.cross-review.md) | AI クロスレビューの手順と、このリポジトリのレビュー観点 |
+| [docs/testing.md](testing.md) | テストを書く、直す、消す基準。何を対象にし、何を書かないか |
 | [docs/japanese-guard.md](japanese-guard.md) | 開発者に見える文を日本語に保つフック(クラウドセッション向け) |
 
 ## ディレクトリの構成
