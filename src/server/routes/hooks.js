@@ -75,11 +75,24 @@ function createHookRoutes(ctx) {
       },
     },
     {
+      matches: (body) => body.action === 'post-tool-use' && body.event_name === 'PostToolUse' && body.provider === 'codex',
+      run: (body) => {
+        const additionalContext = answerDelivery.deliverPostToolBatch(body.session_id);
+        return { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext } } : null };
+      },
+    },
+    {
       matches: (body) => body.action === 'user-prompt-submit' && body.event_name === 'UserPromptSubmit',
       run: (body) => {
         const additionalContext = answerDelivery.deliverPrompt(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined);
         return { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } } : null };
       },
+    },
+    {
+      matches: (body) => body.action === 'stop-check' && body.event_name === 'Stop' && body.provider === 'codex',
+      run: (body) => ({
+        hookOutput: answerDelivery.checkStop(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined),
+      }),
     },
     {
       matches: (body) => body.action === 'stop-start' && body.event_name === 'Stop',
