@@ -1103,3 +1103,13 @@ reconnectは旧handle失効と通常settle拒否を確認したが、90秒以内
 manifestと観測範囲は限定観測設計に置き、再接続後の進行方法は後続に残す。
 最終更新は検証と実測結果の文書のみで、src/test/toolsは全体試験headから不変である。
 次は#210の新規質問登録の保存後失効を取消終端へ進め、接続復帰後の自動回答を抑止する製品修正へ着手する。
+
+## 質問登録の保存後失効の現在地 (#210)
+
+最新featureからcodex/question-registration-cancel-210-20261011を作り、Readyの#373最終head `abe949b` を通常mergeした。
+Astraが現行registerの保存後再検証失敗と、正規接続復帰後に自動回答候補へ戻り得る経路を確認した。
+旧Issue本文で診断された再起動時の質問隔離とstate表示全体の例外は既対応であり、今回の対象に含めない。
+[保存後失効と取消の設計](../design/question-registration-cancellation.md)とID-F210-QRF01〜QRF06を実装前に記録した。
+初回保存成功後の再検証失敗だけを同queue内で取消し、補償保存の未知結果はblockして配送0を維持する。
+既存period gate、予約とcapsule、旧質問quarantineを維持し、保存権限を緩めない。
+gate閉鎖のservice fixtureと実kernelの競合、実provider適合は区別する。

@@ -1,0 +1,36 @@
+# 質問登録の保存後失効と取消
+
+新規質問の保存が成功した後にwriter再検証で受付を拒否した場合、記録を取消終端へ進める。
+接続復帰後に未受付の質問が離席時の自動回答候補へ戻ることを防ぐ。
+対象は#210の保存後失効であり、再起動後の登録履歴全体の再照合や保存自動再開とは分ける。
+
+## 取消する範囲
+
+新規registerのaddRecord成功後のfindLiveWriterとlaunch・binding一致確認だけを捕捉する。
+初回保存の失敗、既存質問の重複登録、成功確認後の応答整形や配送の失敗を補償取消へ巻き込まない。
+取消は同じqueue operation内で既存commitRecordを使い、public cancelの再enqueueによる自己待ちを避ける。
+cancelledAtを保存し、recordと質問ID予約は保持する。
+同じIDを削除して新規質問として再利用しない。
+取消保存成功後も元の再検証errorを返し、受付成功を報告しない。
+
+## 取消保存を確認できない場合
+
+取消保存の失敗や結果不明はwriterをblockし、timerを止める。
+固定codeはquestion_cancelled_journal_save_failedとし、元の再検証理由と取消失敗理由は外部ログへ出さない内部causeとして保持する。
+失敗有無を理由値のtruthinessで判定しない。
+journalStateへ取消成功を仮書込みせず、保存済み状態と未確認を区別する。
+再起動時は既存の旧質問quarantine契約を維持し、旧deliveryを再送しない。
+
+reclamationでは同じcaptured period tokenの既存commit経路を使う。
+period gateが閉じた場合、取消を保存するために権限を緩めずblockへ進む。
+予約やcapsuleを削除して保存失敗を解消しない。
+補償成功は別の正常質問を巻き込まず、補償失敗時はサービスを安全側へ止める。
+
+## 検証範囲
+
+ID-F210-QRF01〜QRF06で、正規kernelの接続失効・再確立、actorやexecutionの終端、保存前後の失敗と再起動を検証する。
+normal serviceは実保存barrierを使い、reclamationのcurrent gateは実compositionのrename前barrierで接続失効を起こす。
+保存成功後から補償前だけgateが閉じる競合は既存integration barrierで直接注入できないため、既存service fixtureのfake gateによる分岐検証と区別する。
+fake gateを実kernelの競合や実runtime適合の証拠としない。
+実providerの再接続、保存排他、process crashと電源断のdurabilityはこの修正のfixtureで証明しない。
+PR #364の未収束管理protocolは採用しない。

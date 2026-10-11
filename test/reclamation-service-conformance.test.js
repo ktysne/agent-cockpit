@@ -110,6 +110,29 @@ function reclaimedQuestionSeed({ primary, emptyAnchor, emptyStores, product }) {
 }
 
 for (const provider of PROVIDERS) {
+  test(`actual ${provider} registration cancels after disconnect while its captured period gate remains open`, async (t) => {
+    const harness = await createReclamationServiceHarness(provider);
+    t.after(() => harness.close());
+
+    const barrier = harness.holdNextPersistenceWrite('questions');
+    const registration = registerQuestion(harness, harness.resumed, `question-disconnect-${provider}`);
+    await barrier.entered;
+    assert.equal(harness.context.periodGate.snapshot().open, true);
+    assert.equal(harness.product.disconnectActor(harness.resumed.childActor), true);
+    assert.equal(harness.context.periodGate.snapshot().open, true);
+    barrier.release();
+
+    await assert.rejects(registration, hasCode('question_writer_inactive'));
+    const saved = harness.questionBackend.getSnapshot().questions.find((item) =>
+      item.questionId === `question-disconnect-${provider}`);
+    assert.ok(saved);
+    assert.notEqual(saved.cancelledAt, null);
+    assert.equal(saved.selection, null);
+    assert.equal(saved.deliveryIntent, null);
+    assert.equal(harness.persistenceCounts.questions.writes, 2);
+    assert.equal((await harness.deliveryStore.snapshot()).deliveries.length, 0);
+  });
+
   test(`actual ${provider} composition preserves live periods and retires only the selected question period`, async (t) => {
     const harness = await createReclamationServiceHarness(provider);
     t.after(() => harness.close());

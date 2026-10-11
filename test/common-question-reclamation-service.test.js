@@ -343,6 +343,32 @@ async function register(fixture, questionId = 'question-1') {
   return fixture.service.register(fixture.writer, questionInput(questionId));
 }
 
+test('registration blocks when the captured period gate closes before its compensation write', async (t) => {
+  const fixture = makeFixture();
+  t.after(() => fixture.service.close());
+  await install(fixture);
+  const save = fixture.backendState.backend.save;
+  fixture.backendState.backend.save = async (candidate) => {
+    const saved = await save(candidate);
+    if (candidate.questions.some((record) => record.questionId === 'gate-closes-before-cancellation')) {
+      fixture.periodGate.beginRetirement(identity, 'period-1');
+      fixture.writer.token = 'b'.repeat(43);
+    }
+    return saved;
+  };
+
+  await assert.rejects(register(fixture, 'gate-closes-before-cancellation'),
+    { code: 'question_cancelled_journal_save_failed' });
+  assert.equal(fixture.backendState.calls.save, 1);
+  const saved = fixture.backendState.backend.getSnapshot().questions[0];
+  assert.equal(saved.cancelledAt, null);
+  const diagnostics = fixture.service.getQuarantineDiagnostics();
+  assert.equal(diagnostics.status, 'blocked');
+  assert.equal(diagnostics.reason, 'question_cancelled_journal_save_failed');
+  assert.equal(fixture.deliveries.size, 0);
+  assert.equal(fixture.deliveryEvents.some((event) => event === 'createQuestionDelivery' || event === 'sendStart'), false);
+});
+
 test('the opt-in adapter installs only a prepared snapshot and never loads the legacy journal', async () => {
   const fixture = makeFixture();
   assert.deepEqual(fixture.backendState.calls,

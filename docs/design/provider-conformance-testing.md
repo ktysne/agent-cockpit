@@ -856,3 +856,24 @@ E01〜E09の関連fixture試験84件と構文確認は成功した。
 固定head `3bfd407` の全体試験は3,069件成功、失敗0件、Windows実symlink権限によるskip2件だった。
 開発者指定のClaude R1はblockerと要修正0件で収束した。
 両provider実runtimeは未確認である。
+
+## 質問登録の保存後失効 (#210)
+
+以下は実装前に記録した適合の期待値である。
+設計は[保存後失効と取消](question-registration-cancellation.md)に置く。
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-F210-QRF01 | 両providerの正規kernelで初回保存中に接続を切断 | registerは元の再検証codeでreject。record1件は取消済み、selectionとdeliveryIntentはnull |
+| ID-F210-QRF02 | 同period・actorの正規新connectionで復帰しaway期限後tick | 旧未受付質問は取消のまま。回答delivery作成・送信0。旧tokenを偽復活しない |
+| ID-F210-QRF03 | 保存中にactorまたはexecutionを終端化 | 登録失敗を取消保存し、終端を解除しない。正常登録と既存duplicateは不変 |
+| ID-F210-QRF04 | 補償取消保存の副作用前・後に失敗し再起動 | 固定codeとwriter blocked、auto/manual配送0、取消成功を偽装しない。再起動後は旧質問quarantine |
+| ID-F210-QRF05 | 初回保存の副作用前・後に失敗 | 補償取消writeを行わず既存未知保存停止を保持。取消成功では別の正常質問を巻き込まない |
+| ID-F210-QRF06 | reclamation current gateで接続失効、fake gateで保存後失効 | currentなら既存権限で取消保存。閉鎖後は無許可writeなし、固定blocked。fake gateを実kernel競合と混同しない |
+
+実provider再接続と登録履歴全体の再照合は未確認であり、上記fixtureの成功へ含めない。
+
+実装後の関連3ファイルの試験は86件成功、失敗・skipなしだった。
+両providerの正規kernelで接続失効・復帰とactor終端、初回保存と補償保存の副作用前後の失敗、再起動後のquarantineを確認した。
+execution終端を独立に注入した新規fixture、falsyの直接再検証例外、実provider runtimeと電源断は未確認である。
+reclamationの閉鎖gateは既存fake gateの分岐試験であり、current gateの実composition試験と区別する。
