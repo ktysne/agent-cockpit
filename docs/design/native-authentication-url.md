@@ -26,6 +26,8 @@ responseのtypeとloginIdを検査してからURLを検査し、その後で早�
 早着の成功通知があっても不正URLを受理しない。
 拒否時はtrusted認証callbackとthread/startを呼ばず、既存の失敗・停止経路を使う。
 この時点ではchild起動とlogin/startの送信は済んでいるため、認証処理自体を開始していないとは扱わない。
+trusted callbackの同期throwはstartを`authentication_prompt_failed`で拒否する。非同期rejectは既存の取消経路によりstartを`operation_stopped`で拒否し、snapshotのfailureCodeに`authentication_prompt_failed`を残す。
+callbackの元例外とURLは公開せず、両方ともthread/startへ進めない。
 
 ## 適用範囲と検証
 

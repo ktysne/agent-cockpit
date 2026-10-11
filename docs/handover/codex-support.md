@@ -1286,5 +1286,9 @@ Astraの助言と公式公開実装、公式protocolの例を確認し、[認証
 PR #379をfeature向けDraftとして作成した。固定head `2890629`の初回全体試験は3,263件中3,193件成功、65件失敗、Windows実symlink権限によるskip5件だった。
 指定Claude R1も、実runnerを通るsource collectorとinstruction dispatchの旧正常系URLを要修正として挙げた。全65件の失敗はこの2ファイルに限られた。
 二つのfixtureを許可originへ修正し、停止後の不正URL応答とcallbackの同期throw・非同期rejectを検証に追加した。sourceとruntimeは変更していない。
-修正後の関連3ファイルは241件中240件成功、失敗0件、Windows実symlink権限によるskip1件だった。次に固定headの全体試験とClaude R2を行う。
+修正後の関連3ファイルは241件中240件成功、失敗0件、Windows実symlink権限によるskip1件だった。
+固定head `c32fed6`の全体再確認は3,265件中3,260件成功、失敗0件、Windows実symlink権限によるskip5件だった。先行実行のHTTP target試験のファイル単位失敗は単独10件と全体再確認で再現せず、原因未特定として残す。
+指定Claude R2はblockerと要修正0件で収束した。提案に従ってcallback失敗分類を設計正本に補足し、最終更新は文書と結果記録に限る。
+PR #379はReadyとする。取り込み順は#378→#379で、feature向けPRのマージ承認は別途必要である。
+次は#215のowned Codexログイン直列化へ進む。同module内の論理loginをFIFOで直列化し、異常時はchildのexitとcloseの双方まで保持する。OS port解放、別processと実認証を証明したとは扱わない。
 今回の変更は認証再利用とlogin直列化から独立した部分対応で、実認証と後続redirectの互換性を確認したとは扱わない。

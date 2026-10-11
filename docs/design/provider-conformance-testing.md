@@ -991,6 +991,7 @@ ClaudeはOAuth token供給を維持し、このbrowser URL検査の対象では�
 | ID-F215-AU06 | compositionの実runner正常系 | 許可originのfixtureで既存起動を維持。fake DI透過はorigin証明に含めない |
 
 実認証、installed provider版、SSOと後続redirectの互換性は未確認として分ける。
-Windowsの関連2ファイルは223件中222件成功、失敗0件、実symlink権限によるskip1件だった。
-Claude R1で見つかった実runnerの旧正常系URLを修正し、AU05のケースを追加した。
-修正後の関連3ファイルは241件中240件成功、失敗0件、実symlink権限によるskip1件だった。全体試験と再レビューは未完了である。
+Windowsの関連3ファイルは241件中240件成功、失敗0件、実symlink権限によるskip1件だった。
+固定head `c32fed6`の全体試験再確認は3,265件中3,260件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+同headの先行全体実行ではHTTP target試験がファイル単位で失敗した。単独10件と全体再確認では再現せず、原因は未特定である。
+指定Claude R2はblockerと要修正0件で収束した。最終更新は文書と結果記録のみで、sourceとtestは全体試験headから不変である。
