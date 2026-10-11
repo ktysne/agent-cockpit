@@ -1584,6 +1584,17 @@ function mergeTarget(p, pr) {
   return base === p.repo.defaultBranch || !p.prs.some(x => x.head === base) ? base : null;
 }
 
+function reservationTarget(p, pr) {
+  const seen = new Set();
+  while (pr && !seen.has(pr.number)) {
+    seen.add(pr.number);
+    const target = mergeTarget(p, pr);
+    if (target) return target;
+    pr = parentPr(p, pr);
+  }
+  return null;
+}
+
 function mergeMethodFixed(p, pr) {
   return mergeTarget(p, pr) && mergeTarget(p, pr) !== p.repo.defaultBranch ? 'merge' : null;
 }
@@ -1659,6 +1670,9 @@ function reservationWaitReasons(p, pr, method = null) {
   const actualBase = value.retargetedFrom ? effectiveBase : pr.base;
   if (!p.repo.defaultBranch) waiting.push('既定ブランチを確認できない');
   else if (mergeTarget(p, pr) && (actualBase !== mergeTarget(p, pr) || effectiveBase !== mergeTarget(p, pr))) waiting.push(`${mergeTarget(p, pr)} へのマージ待ち`);
+  const reservation = ui.reserved[prKey(p, pr.number)];
+  const targetBranch = reservation?.targetBranch || p.repo.defaultBranch;
+  if (reservation && mergeTarget(p, pr) && targetBranch !== mergeTarget(p, pr)) waiting.push(`予約時のマージ先 ${targetBranch} と現在のマージ先 ${mergeTarget(p, pr)} が異なる`);
   if (method && mergeMethodFixed(p, pr) && method !== mergeMethodFixed(p, pr)) waiting.push('マージ方式がマージコミットに固定のため、予約の方式では実行しない');
   if (!Array.isArray(p.repo.methods) || !p.repo.methods.length) waiting.push('リポジトリのマージ方式を確認できない');
   else if (method && !p.repo.methods.includes(method)) waiting.push('選んだマージ方式が許可されていない');
@@ -2541,12 +2555,12 @@ document.addEventListener('change', e => {
       ui.lastMethod[p.repo.name] = o.method;
       delete ui.reservationNotices[k];
       if (reservationWaitReasons(p, pr, o.method).length === 0) {
-        ui.reserved[k] = { method: o.method, del: o.del, at: new Date().toISOString() };
+        ui.reserved[k] = { method: o.method, del: o.del, targetBranch: reservationTarget(p, pr), at: new Date().toISOString() };
         ui.confirm = null;
         startMockMerge(p, pr, o, true);
         return;
       }
-      ui.reserved[k] = { method: o.method, del: o.del, at: new Date().toISOString() };
+      ui.reserved[k] = { method: o.method, del: o.del, targetBranch: reservationTarget(p, pr), at: new Date().toISOString() };
       ui.confirm = null;
     } else {
       delete ui.reserved[k];

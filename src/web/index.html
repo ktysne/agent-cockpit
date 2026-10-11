@@ -1871,6 +1871,10 @@ function pullRequestReservationWaitReasons(pullRequest, group = null, method = n
     if (!Array.isArray(group.mergeMethods) || !group.mergeMethods.length) waiting.push('リポジトリのマージ方式を確認できない');
     else if (method && !group.mergeMethods.includes(method)) waiting.push('選んだマージ方式が許可されていない');
   }
+  if (pullRequest.reservation && pullRequest.mergeTarget) {
+    const targetBranch = pullRequest.reservation.targetBranch || group?.defaultBranch;
+    if (targetBranch && targetBranch !== pullRequest.mergeTarget) waiting.push(`予約時のマージ先 ${targetBranch} と現在のマージ先 ${pullRequest.mergeTarget} が異なる`);
+  }
   if (method && pullRequest.mergeMethodFixed && method !== pullRequest.mergeMethodFixed) waiting.push('マージ方式がマージコミットに固定のため、予約の方式では実行しない');
   return waiting;
 }

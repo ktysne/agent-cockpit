@@ -462,7 +462,10 @@ class PullRequestMergeManager {
       return actionResult(409, 'この PR にはすでにマージ予約があります');
     }
 
+    const targetBranch = this.reservationTarget(candidate);
+    if (!validBranchName(targetBranch)) return actionResult(409, '予約のマージ先を確認できません');
     const reservation = {
+      targetBranch,
       session_id: registration.session_id,
       owner: registration.owner,
       repo: registration.repo,
@@ -534,12 +537,25 @@ class PullRequestMergeManager {
     return this.performMerge(registration, reservationStatus.input, true);
   }
 
+  reservationTarget(candidate) {
+    const seen = new Set();
+    while (candidate?.pullRequest && !seen.has(candidate.pullRequest.number)) {
+      const pullRequest = candidate.pullRequest;
+      seen.add(pullRequest.number);
+      if (pullRequest.mergeTarget) return pullRequest.mergeTarget;
+      if (!pullRequest.parentNumber) break;
+      candidate = this.tracker.mergeCandidate({ ...candidate.registration, number: pullRequest.parentNumber });
+    }
+    return null;
+  }
+
   reservationMergeInput(candidate, reservation) {
     const pullRequest = candidate?.pullRequest;
     if (!candidate?.repository?.listAvailable || !candidate.repository.configAvailable || !pullRequest) return null;
     const review = pullRequest.crossReview;
     const triage = review?.triage;
     if (triage?.outcome === 'halted') return { halted: true };
+    if (pullRequest.mergeTarget !== (reservation.targetBranch || candidate.repository.defaultBranch)) return null;
     if (review?.notRequired === true || triage?.outcome !== 'converged' || triage.round !== review?.round ||
       !crossReviewConvergedAtHead(pullRequest) || !isCompleteCommitSha(triage.sha) || pullRequest.ci !== 'pass' ||
       !['approved', 'none'].includes(pullRequest.review)) return null;

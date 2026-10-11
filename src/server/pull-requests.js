@@ -16,6 +16,7 @@ const { findWorktreeRoot } = require('./git-worktree');
 
 const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
 const MERGED_PULL_REQUEST_LIMIT = 1000;
+const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 
@@ -386,6 +387,7 @@ function assemblePullRequestStacks({
   listAvailable = false,
   mergedPullRequests = null,
   mergedCandidates = [],
+  mergeTargetHeadChecks = new Map(),
   uninspectedNumbers = new Set(),
   mergeMethods = [],
   knownRegistrations = registrations,
@@ -405,11 +407,10 @@ function assemblePullRequestStacks({
 
   const known = [...nodes, ...mergedCandidates, ...knownRegistrations.map(storedPullRequest).filter(Boolean)];
   const knownHeads = new Set(known.map((pr) => pr.headRefName));
-  // 検索期間より前や検索上限を超えてマージされた PR の残存ブランチは、この取得結果だけでは判定できない。
   const absenceConfirmed = listAvailable && openPullRequests.length < 500 &&
-    mergedPullRequests !== null && uninspectedNumbers.size === 0;
+    uninspectedNumbers.size === 0;
   const mergeTargetFor = (base) => base === defaultBranch ? base
-    : absenceConfirmed && !knownHeads.has(base) ? base : null;
+    : absenceConfirmed && !knownHeads.has(base) && mergeTargetHeadChecks.get(base) === true ? base : null;
 
   function effective(pr) {
     const explicit = retargetedPrs.find((record) => record.number === pr.number);
@@ -493,6 +494,7 @@ function assemblePullRequestStacks({
       const mergedBase = known.some((candidate) => candidate.headRefName === value.base &&
         (candidate.state === 'merged' || mergedCandidates.includes(candidate)));
       if (mergedBase) return `base の ${value.base} はマージ済みの PR の head のため、ダッシュボードではマージしない`;
+      if (mergeTargetHeadChecks.get(value.base) === false) return `base の ${value.base} は PR の head のため、ダッシュボードではマージしない`;
       if (knownHeads.has(value.base)) return `base の ${value.base} に対応する PR が見つからない`;
       return `base の ${value.base} がどの PR の head でもないことを確認できない`;
     }
@@ -1243,7 +1245,7 @@ class PullRequestTracker {
 
   updateProductMembership(owner, repo, {
     registrations, relatedPullRequests, openPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
-    mergedPullRequests, mergedCandidates, uninspectedNumbers, mergeMethods,
+    mergedPullRequests, mergedCandidates, mergeTargetHeadChecks, uninspectedNumbers, mergeMethods,
   }) {
     if (listAvailable) {
       const registeredNumbers = new Set(registrations.map((record) => record.number));
@@ -1253,7 +1255,7 @@ class PullRequestTracker {
       for (const group of productGroups.values()) {
         const assembled = assemblePullRequestStacks({
           defaultBranch,
-          listAvailable, mergedPullRequests, mergedCandidates, uninspectedNumbers, mergeMethods,
+          listAvailable, mergedPullRequests, mergedCandidates, mergeTargetHeadChecks, uninspectedNumbers, mergeMethods,
           knownRegistrations: registrations,
           openPullRequests,
           registrations: group.registrations,
@@ -1356,9 +1358,37 @@ class PullRequestTracker {
     // base を付け替えた子も親のプロダクトに数えるため、所属は積み直しの判定の後に、画面と同じ結果で集める。
     const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
     const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
+    const openHeads = new Set(openPullRequests.map((pr) => pr.headRefName));
+    const candidateBases = new Set(openPullRequests.map((pr) => pr.baseRefName));
+    const assembled = assemblePullRequestStacks({
+      defaultBranch, openPullRequests, registrations, relatedPullRequests, restackResults, liveMergedBranches,
+      retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
+    });
+    const collectBases = (nodes) => {
+      for (const node of nodes) {
+        candidateBases.add(node.effectiveBase);
+        collectBases(node.children);
+      }
+    };
+    collectBases(assembled.trees);
+    const candidates = [...candidateBases].filter((base) => base !== defaultBranch && !openHeads.has(base));
+    const mergeTargetHeadChecks = new Map(candidates.map(branch => [branch, null]));
+    if (listAvailable) {
+      await Promise.all(candidates.slice(0, MERGE_TARGET_HEAD_CHECK_LIMIT).map(async (branch) => {
+        try {
+          const result = JSON.parse(await this.execute([
+            'pr', 'list', '-R', repository, '--state', 'all', '--head', branch, '--limit', '1', '--json', 'number',
+          ]));
+          if (!Array.isArray(result)) throw new Error('PR の一覧が配列ではありません');
+          mergeTargetHeadChecks.set(branch, result.length === 0);
+        } catch (error) {
+          errors.push(`base の ${branch} が PR の head か確認できません: ${error.message}`);
+        }
+      }));
+    }
     this.updateProductMembership(owner, repo, {
       registrations, relatedPullRequests, openPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
-      mergedPullRequests, mergedCandidates, uninspectedNumbers, mergeMethods,
+      mergedPullRequests, mergedCandidates, mergeTargetHeadChecks, uninspectedNumbers, mergeMethods,
     });
 
     this.repositories.set(key, {
@@ -1375,6 +1405,7 @@ class PullRequestTracker {
       listAvailable,
       mergedPullRequests,
       mergedCandidates,
+      mergeTargetHeadChecks,
       uninspectedNumbers,
       restackResults,
       liveMergedBranches,
