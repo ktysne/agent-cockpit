@@ -1,6 +1,6 @@
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
-const { sanitizeQuestions, sanitizeDecisionResolution } = require('../server/events');
+const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
 const { readRouting } = require('../server/routing');
 const {
   HOOK_TIMEOUT_MS,
@@ -278,7 +278,12 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
   } else if (isCodex && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName)) {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
-    if (eventName === 'PreToolUse') event.summary = inputSummary(event.tool_name, input.tool_input);
+    if (eventName === 'PreToolUse') {
+      event.summary = inputSummary(event.tool_name, input.tool_input);
+      if (isQuestionTool('codex', event.tool_name) && !input.agent_id) {
+        event.questions = sanitizeCodexQuestions(event.tool_name, input.tool_input?.questions);
+      }
+    }
   } else if (eventName === 'PreToolUse') {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);

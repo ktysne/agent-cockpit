@@ -634,7 +634,14 @@ const DATA = {
             { type: 'default', text: 'collaborationwait_agent', since: '2 分前', state: 'busy', codexModel: 'gpt-6.1-sol' },
           ],
           tasks: [{ title: '会話の表示の単位を調べる', state: 'doing', updatedMin: 8, criteria: [{ t: 'resume の前後で同じ行に出る', met: false }] }],
-          tasksUpdatedMin: 8, decisions: [], lastUpdatedMin: 2,
+          tasksUpdatedMin: 8, decisions: [{
+            id: 'codex-question-1', waitMin: 2,
+            title: '会話の表示をどの単位でまとめますか', kind: 'waiting', ctx: '',
+            options: [
+              { t: 'thread ごとにまとめる', why: '', rec: true },
+              { t: 'ターンごとにまとめる', why: '' },
+            ],
+          }], lastUpdatedMin: 2,
         },
       ],
     },
