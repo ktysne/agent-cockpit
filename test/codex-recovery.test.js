@@ -96,6 +96,28 @@ test('再起動後のイベントは保存したモデルを使い再開を重�
   assert.deepEqual((await c.rows())[0].codex, { model: 'gpt-6-sol', resumes: 2 });
 });
 
+test('再起動後にモデル名の無いイベントが先に届いても、時刻の順で最後に明示されたモデル名を出す', async (t) => {
+  const c = await cockpit(t);
+  const at = Date.now() + 10_000;
+  await c.event('SessionStart', { codexPid: 1234, model: 'gpt-6', hookAt: at });
+  await c.restart();
+  await c.event('Stop', { hookAt: at + 2 });
+  await c.event('UserPromptSubmit', { model: 'gpt-6-sol', hookAt: at + 1 });
+  assert.equal((await c.rows())[0].codex.model, 'gpt-6-sol');
+});
+
+test('最後に記録した時刻は 1 分以上進んだイベントで保存し、再起動後の行に出す', async (t) => {
+  const c = await cockpit(t);
+  const at = Date.now() - 120_000;
+  await c.event('SessionStart', { codexPid: 1234, hookAt: at });
+  await c.event('Stop', { hookAt: at + 30_000 });
+  assert.equal((await c.store()).codexRecovery.thread.updatedAt, new Date(at).toISOString());
+  await c.event('Stop', { hookAt: at + 90_000 });
+  assert.equal((await c.store()).codexRecovery.thread.updatedAt, new Date(at + 90_000).toISOString());
+  await c.restart();
+  assert.equal((await c.rows())[0].sessionFileUpdatedAt, new Date(at + 90_000).toISOString());
+});
+
 test('終了したプロセスの Codex は再起動で戻さず保存からも捨てる', async (t) => {
   const c = await cockpit(t);
   await c.event('SessionStart', { codexPid: 1234 });
@@ -160,8 +182,9 @@ test('保存の上限を超えた Codex は最後の更新が古いものから�
   for (let index = 0; index < 200; index += 1) {
     await c.event('SessionStart', { codexPid: 1234 }, `thread-${index}`);
   }
-  await c.event('Stop', {}, 'thread-0');
-  await c.event('SessionStart', { codexPid: 1234 }, 'thread-200');
+  const later = Date.now() + 120_000;
+  await c.event('Stop', { hookAt: later }, 'thread-0');
+  await c.event('SessionStart', { codexPid: 1234, hookAt: later + 1 }, 'thread-200');
   const saved = (await c.store()).codexRecovery;
   assert.equal(Object.keys(saved).length, 200);
   assert.ok(saved['thread-0']);

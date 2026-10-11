@@ -17,6 +17,7 @@ const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_AWAY_PERIODS = 50;
 const MAX_CODEX_RECOVERY_SESSIONS = 200;
+const CODEX_RECOVERY_ACTIVITY_STEP_MS = 60_000;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
@@ -2258,12 +2259,14 @@ class DashboardState {
       cwd: event.cwd || previous?.cwd || '',
       model: session.codex.model,
       resumes: session.codex.resumes + (this.codexResumesBeforeEnd.get(event.session_id) || 0),
-      updatedAt: isoTime(event.hookAt),
+      updatedAt: previous?.updatedAt || isoTime(event.hookAt),
     };
+    // updatedAt は再起動の後の行の無操作の判定にも使う。イベントのたびに保存しないよう、1 分以上進んだときだけ進める。
+    const activityAdvanced = event.hookAt - Date.parse(record.updatedAt) >= CODEX_RECOVERY_ACTIVITY_STEP_MS;
+    if (activityAdvanced) record.updatedAt = isoTime(event.hookAt);
     this.codexRecovery.set(event.session_id, record);
     this.sessionFileLastSeenAt.set(event.session_id, event.hookAt);
-    // updatedAt は上限を超えたときの捨てる順にだけ使うので、ほかの値が変わらなければ保存しない。
-    const changed = !previous || ['pid', 'cwd', 'model', 'resumes'].some((key) => previous[key] !== record[key]);
+    const changed = !previous || activityAdvanced || ['pid', 'cwd', 'model', 'resumes'].some((key) => previous[key] !== record[key]);
     if (!changed) return;
     const oldest = [...this.codexRecovery].sort(([, left], [, right]) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt));
     for (const [id] of oldest.slice(0, Math.max(0, oldest.length - MAX_CODEX_RECOVERY_SESSIONS))) {
@@ -2616,9 +2619,6 @@ class DashboardState {
 
     const correctedAsk = this.correctInferredAskWithdrawal(event);
     const withdrawnAsk = this.withdrawFinishedDesktopAsks(event);
-    if (event.provider === 'codex' && !event.agent_id && !event.model) {
-      event.model = this.codexRecovery.get(event.session_id)?.model || '';
-    }
     const entries = this.entries.get(event.session_id) || [];
     const eventSequence = this.sequence++;
     entries.push({ event, sequence: eventSequence });
