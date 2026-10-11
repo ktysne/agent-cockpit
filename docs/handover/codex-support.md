@@ -1231,3 +1231,5 @@ AstraとLunaXHighの読取調査に基づき、owned runnerの両providerとmana
 既存のpathと通常fileの診断を優先し、Windowsの非.exeを認証、HOME配下の作成、spawnより前に固定codeで拒否する。
 shell fallbackと自動探索は追加しない。導入手順でnative.exeの絶対pathを案内する。
 認証保持、環境変数伝播、機能の実効性と実runtimeは残るため、#215全体の完了には含めない。
+実装後にfeature `aa84489`と、#351の競合解消最終head `dc4de64`を通常mergeで取り込んだ。各系列の製品sourceとtestはレビュー済み内容を保持する。
+Windowsの関連3ファイルは221件成功、失敗0件、実symlink権限によるskip2件だった。symlinkの優先診断と非Windows条件、実provider runtimeは未確認として分ける。
