@@ -415,8 +415,8 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
   const settings = web.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   assert.ok(settings);
   const minuteInputs = {
-    longWaitMinutesInput: {}, awayAnswerWaitMinutesInput: {}, idleHideMinutesInput: {}, mergeResultHideMinutesInput: {},
-    longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {}, mergeResultHideMinutesError: {},
+    longWaitMinutesInput: {}, awayAnswerWaitMinutesInput: {}, idleHideMinutesInput: {},
+    longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {},
   };
   const context = pageContext(web, {
     ...minuteInputs,
@@ -424,7 +424,6 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
     DEFAULT_IDLE_HIDE_MINUTES: 30,
-    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
     FILTERS: ['permission', 'blocking', 'provisional', 'agents', 'prs'].map((key) => ({ key })),
   });
   vm.runInContext(`${settings}\n${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
@@ -436,7 +435,6 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     longWaitMinutes: 15,
     awayAnswerWaitMinutes: 5,
     idleHideMinutes: 30,
-    mergeResultHideMinutes: 5,
     hideFinished: true,
     mergeableCondition: 'cross-review',
   });
@@ -448,12 +446,6 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
   }
   for (const idleHideMinutes of [5, 1440]) {
     assert.equal(context.normalizeDisplay({ ...base, idleHideMinutes }).idleHideMinutes, idleHideMinutes);
-  }
-  for (const mergeResultHideMinutes of [0, 61, 5.5]) {
-    assert.equal(context.normalizeDisplay({ ...base, mergeResultHideMinutes }).mergeResultHideMinutes, 5);
-  }
-  for (const mergeResultHideMinutes of [1, 60]) {
-    assert.equal(context.normalizeDisplay({ ...base, mergeResultHideMinutes }).mergeResultHideMinutes, mergeResultHideMinutes);
   }
   assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeDisplay({ ...base, hidden: ['held'] }).hidden)), []);
 });
@@ -500,22 +492,19 @@ test('表示時間の保存に失敗した数値設定を元に戻す', async ()
   const longWaitMinutesInput = { valueAsNumber: 15, value: '15' };
   const awayAnswerWaitMinutesInput = {};
   const idleHideMinutesInput = {};
-  const mergeResultHideMinutesInput = {};
   const longWaitMinutesError = { hidden: true, textContent: '' };
   const awayAnswerWaitMinutesError = { hidden: true, textContent: '' };
   const idleHideMinutesError = { hidden: true, textContent: '' };
-  const mergeResultHideMinutesError = { hidden: true, textContent: '' };
   const context = pageContext(web, {
     displayPreferences: { longWaitMinutes: 15 },
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
     DEFAULT_IDLE_HIDE_MINUTES: 30,
-    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
     displayPreferencesReady: true,
     displayPreferenceSaveStates: new Map(),
     pendingDisplayChanges: {},
-    longWaitMinutesInput, awayAnswerWaitMinutesInput, idleHideMinutesInput, mergeResultHideMinutesInput,
-    longWaitMinutesError, awayAnswerWaitMinutesError, idleHideMinutesError, mergeResultHideMinutesError,
+    longWaitMinutesInput, awayAnswerWaitMinutesInput, idleHideMinutesInput,
+    longWaitMinutesError, awayAnswerWaitMinutesError, idleHideMinutesError,
     lastState: null,
     renderDisplaySettings() {},
     renderSectionOrder() {},
@@ -543,11 +532,9 @@ test('モックの待ち時間設定を localStorage の UI 状態へ保存す�
   const input = { valueAsNumber: 24, value: '24' };
   const idleSettingInput = {};
   const awaySettingInput = {};
-  const resultSettingInput = {};
   const longError = { hidden: true, textContent: '' };
   const awayError = { hidden: true, textContent: '' };
   const idleError = { hidden: true, textContent: '' };
-  const resultError = { hidden: true, textContent: '' };
   const context = pageContext(mock, {
     ui: { longWaitMinutes: 15, idleHideMinutes: 30 },
     captureDisplayPreferences: () => ({}),
@@ -556,11 +543,9 @@ test('モックの待ち時間設定を localStorage の UI 状態へ保存す�
     longWaitMinutesInput: input,
     awayAnswerWaitMinutesInput: awaySettingInput,
     idleHideMinutesInput: idleSettingInput,
-    mergeResultHideMinutesInput: resultSettingInput,
     longWaitMinutesError: longError,
     awayAnswerWaitMinutesError: awayError,
     idleHideMinutesError: idleError,
-    mergeResultHideMinutesError: resultError,
   });
   vm.runInContext(`${settings}\n${settingError}\n${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
   assert.equal(context.changeDisplaySetting('longWaitMinutes', input), true);
@@ -1124,9 +1109,8 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   const longWaitMinutesInput = { value: '120' };
   const awayAnswerWaitMinutesInput = { value: '9' };
   const idleHideMinutesInput = { value: '90' };
-  const mergeResultHideMinutesInput = { value: '15' };
   const errors = {
-    longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {}, mergeResultHideMinutesError: {},
+    longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {},
   };
   const hideFinishedInput = { checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
@@ -1135,15 +1119,13 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
-    mergeResultHideMinutesInput,
     ...errors,
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
     DEFAULT_IDLE_HIDE_MINUTES: 30,
-    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
     hideFinishedInput,
     mergeableConditionInputs,
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: false, mergeableCondition: 'ci' },
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: false, mergeableCondition: 'ci' },
   });
   vm.runInContext(`${settings}\n${render}`, context);
   context.renderDisplaySettings();
@@ -1151,7 +1133,6 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.equal(longWaitMinutesInput.value, '120');
   assert.equal(awayAnswerWaitMinutesInput.value, '5');
   assert.equal(idleHideMinutesInput.value, '30');
-  assert.equal(mergeResultHideMinutesInput.value, '5');
   assert.equal(hideFinishedInput.checked, false);
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, true, false]);
 });
@@ -1164,17 +1145,15 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
   const longWaitMinutesInput = { value: '15' };
   const awayAnswerWaitMinutesInput = { value: '5' };
   const idleHideMinutesInput = { value: '30' };
-  const mergeResultHideMinutesInput = { value: '5' };
   const hideFinishedInput = { checked: true };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { mergeableCondition: 'cross-review', mergeResultHideMinutes: 5 };
+  const displayPreferences = { mergeableCondition: 'cross-review' };
   let activeElement = null;
   const context = pageContext(web, {
     document: { get activeElement() { return activeElement; } },
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
-    mergeResultHideMinutesInput,
     hideFinishedInput,
     displayPreferences,
     displayPreferenceSaveStates: new Map(),
@@ -1183,7 +1162,6 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
       { key: 'longWaitMinutes', input: longWaitMinutesInput, error: null, min: 1, max: 120, default: 15 },
       { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: null, min: 1, max: 30, default: 5 },
       { key: 'idleHideMinutes', input: idleHideMinutesInput, error: null, min: 5, max: 1440, default: 30 },
-      { key: 'mergeResultHideMinutes', input: mergeResultHideMinutesInput, error: null, min: 1, max: 60, default: 5 },
     ],
     mergeableConditionInputs,
     lastState: null,
