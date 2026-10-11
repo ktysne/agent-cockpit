@@ -27,7 +27,12 @@ cockpit 本体と同じ流儀で、入口から 1 機能ずつ実 runtime で確
 
 集約先 `claude/feature-codex-support` は main の eb85530 から作った。
 旧計画の判断待ち 4 点と、実装の分担は 2026-10-11 に開発者が決め、「決定済みの判断」に移した。
-順序 1 の残りは、モック差分の採用範囲の確認と main のモックへの反映、欠陥 Issue の転記である。
+順序 1 は 2026-10-11 に終えた。
+欠陥 Issue は要件 Issue へ転記して閉じ、旧モックの差分は「旧モックの差分の採用」の表のとおり段階ごとに入れる。
+
+集約ブランチを base にした PR をダッシュボードでマージできるようにする変更を、main 向けの [PR #390](https://github.com/ktysne/agent-cockpit/pull/390) で作った。
+PR #390 が main に入ったら、同期 PR で集約先へ取り込む。
+次は順序 2(登録と識別)の設計から始める。
 
 ## 決定済みの判断
 
@@ -40,7 +45,9 @@ cockpit 本体と同じ流儀で、入口から 1 機能ずつ実 runtime で確
 | Codex への依頼文(2026-10-11) | 到達させる入口、触ってよいファイル、その回に効く「作り直しの原則」を毎回書く。監査では差分が入口から到達するかを最初に見る | 既存の集約ブランチで、Codex が部品を下から積み、接続を後回しにしたため |
 | テストの実行(2026-10-11) | Codex の担当は `npm run test:inprocess` まで流す。常駐サーバーを起動するテストと全体の `npm test` は、マージ前に Claude 側で流す | Codex のサンドボックスは子プロセスを起動できないため |
 | 集約先(2026-10-11) | `claude/feature-codex-support` を main から作る。`codex/feature-codex-support` はブランチを残して固定参照にする | 開発者の決定 |
-| モック(2026-10-11) | 既存ブランチのモック差分は、採用する部分を開発者が選び、順序 1 で main のモックへ入れる | 開発者の決定。画面はモックが正本で、#221 で合意なく足された状態があったため |
+| モック(2026-10-11) | 既存ブランチのモック差分は、「旧モックの差分の採用」の表のとおり、その段階の設計と一緒に書き直して入れる。順序 1 ではモックを変えない | 開発者の決定。大きいまとまりは旧実装の内部 ID で表示を分けており、新しい設計に合わせて書き直す必要があるため |
+| 中断の状態(2026-10-11) | Codex 対応とは別に、main 向けの #391 で扱う | 開発者の決定。中断は Claude のセッションでも起き、main には検出も表示も無いため |
+| ダッシュボードのマージ先(2026-10-11) | base が既定ブランチか、どの PR の head でもないブランチである、スタックの一番下の PR をマージできるようにする(main 向けの PR #390) | 開発者の決定。集約先向けの PR を毎回 GitHub で手でマージしないため |
 | 欠陥 Issue(2026-10-11) | 既存実装の欠陥 Issue は、要件に当たる部分を要件 Issue に転記して閉じる | 開発者の決定。作り直しで実装自体が無くなり、Issue の対象が消えるため |
 | 容量回収(2026-10-11) | #209 の容量回収は作らない。保存は上限付きにし、上限に達したら受付を止めて画面に出す | 開発者の決定。肥大化は実際に起きてから設計するほうが要件が確かになるため |
 | テストの基準(2026-10-11) | [docs/testing.md](../testing.md) に従う | PR #384 で定めた。入口から到達しないモジュールの単体テストと、信頼境界の内側への防御検査を書かない |
@@ -65,7 +72,7 @@ cockpit 本体と同じ流儀で、入口から 1 機能ずつ実 runtime で確
 | [Claude/Codex適合試験](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/provider-conformance-testing.md) | 入口からの操作と観測で書かれたシナリオ(ID-F01〜F11)だけを引き継ぐ。内部 fixture の条件の節は引き継がない |
 | 既存 runner の runtime 知識([native-transport-environment.md](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/native-transport-environment.md)、[native-authentication-url.md](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/native-authentication-url.md)、[native-login-serialization.md](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/native-login-serialization.md)、[windows-native-executable.md](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/windows-native-executable.md)と `src/server/owned-native-runner.js`) | 環境変数の allowlist、認証 URL の origin、ログインの直列化、Windows の実行ファイル、HOME の分離は実測に基づく制約として引き継ぐ。コードは読んで要る関数だけを本体の流儀で書き直す |
 | 機能ごとの設計資料([common-questions.md](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/common-questions.md)、[instruction-delivery.md](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/instruction-delivery.md)、[managed-collector.md](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/managed-collector.md)、[native-launch-composition.md](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/native-launch-composition.md)) | 機能の着手前に読み、採った判断と理由を新しい設計資料に引き継ぐ |
-| 既存ブランチの `mock/index.html` の差分 | 採用する部分を選び、main のモックへ入れる |
+| 既存ブランチの `mock/index.html` の差分 | 「旧モックの差分の採用」の表の段階で、その段階の設計に合わせて書き直して入れる |
 | 既存ブランチの [codex-support.md](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/handover/codex-support.md) | 「決定済みの判断」と「判断待ち」だけを読む。進みの記録は引き継がない |
 
 ## 対応順序、ブランチ、PR
@@ -74,7 +81,7 @@ cockpit 本体と同じ流儀で、入口から 1 機能ずつ実 runtime で確
 
 | 順 | 対象 | 入口と実 runtime の確認 | 持ち込む PoC | 委譲の区分 | 状態(2026-10-11) |
 |---|---|---|---|---|---|
-| 1 | feature ブランチの作成、この計画の更新、モックの合意、欠陥 Issue の転記、`AGENTS.md` と `CLAUDE.md` のブランチ運用の節 | モックを開発者が確認する | | メインセッション | 進行中(feature 作成済み) |
+| 1 | feature ブランチの作成、この計画の更新、モックの採用範囲の合意、欠陥 Issue の転記、`AGENTS.md` と `CLAUDE.md` のブランチ運用の節 | 採用範囲を開発者が確認する | | メインセッション | 完了(PR #389 ほか) |
 | 2 | 登録と識別(#166、#167)。Codex のフックを共通イベントへ変換し、MCP の書込先を provider と native の ID で照合する | Codex デスクトップと CLI のフックが常駐サーバーに届き、セッション行が出る | #157、#159 | Codex、実測は Claude | 未着手 |
 | 3 | 実接続(#170、#171)。managed app-server への接続と観測、bridge の起動登録との結合 | app-server の接続世代の更新と再接続を実 runtime で確かめる | #158、#159、#163 | 実測しながらの接続は Claude、残りは Codex | 未着手 |
 | 4 | 共通質問(#174)。質問の MCP、回答の配信、離席時の推奨適用。#216 の問題を設計に含める | Codex の質問に画面から答え、実 runtime で反映される | #160 | Codex、実測は Claude | 未着手 |
@@ -104,6 +111,25 @@ cockpit 本体と同じ流儀で、入口から 1 機能ずつ実 runtime で確
 - **保存と復旧(7)**: 保存は機能ごとに既存の保存ファイルへ上限付きで足す。再起動後は、保存した対応関係を現在の証拠と照合してから回答を届け、照合できないものは保留する。unknown を復元しても再送は 0 回にする(PoC #162)。
 - **PR とレビューの通知(8)**: PR 通知は正規化した明示の宛先に送る。作成者と current owner を分け、終了した実行には送らない(PoC #164)。
 
+## 旧モックの差分の採用
+
+旧集約ブランチのモックの差分(固定参照 e56e4c1、+1,260 / −77 行)を、画面のまとまりごとに次のとおり扱う。
+採用するものも写さず、その段階の設計に合わせて書き直す。
+旧モックで丸ごと上書きすると、main が後から足した「読み込み直す」ボタンが消えるので、差分は部分ごとに入れる。
+
+| まとまり | 合意 | 扱い |
+|---|---|---|
+| Codex の会話を 1 行にまとめる(再開 N 回の札)、委譲した Codex の終了行 | PR #230 で合意済み | 順序 2、3 で入れる |
+| native の質問待ちと許可待ちの表示(種類と件数) | #205 で合意済み | 順序 3 で入れる |
+| 共通質問のカード、「質問対応」の件数、隠す条件への組み込み | #221、PR #260 で形を合意済み | 順序 4 で、内部 ID を使わない形に書き直して入れる |
+| 追加指示(入力欄、送信、取り下げ、差し替え、宛先の選択) | PR #260 で形を合意済み。復旧パネルなどの細かい表示は合意の記録が無い | 順序 5 で、合意した形だけを書き直して入れる |
+| 未構成の機能を隠す(質問、指示) | PR #230 で合意済み | 隠す対象と一緒に、順序 4、5 で入れる |
+| 明示停止と受付上限 | 合意の記録が無い(#221 で停止は合意に含まないと明記) | 順序 6 で設計し直し、モックで合意してから入れる |
+| 中断の状態 | PR #230 で合意済み | Codex 対応の外で、main 向けの #391 で扱う |
+| 合成行の「終了済み」と「状態不明」 | 合意の記録が無い | 採用しない |
+| フックを照合できないときの札と、設定の「診断」欄 | 合意の記録が無い | 採用しない(旧実装の欠陥 #207 に付随) |
+| 背景で動く Claude サブエージェントを閉じられるようにする | 合意の記録が無い | 採用しない。要るなら main 向けに別に起こす |
+
 ## 誤りの検出が難しい設計
 
 次の設計は誤りの検出が難しく、グローバルの CLAUDE.md の運用で Fable に相談する基準に当たりやすい。
@@ -125,14 +151,14 @@ cockpit 本体と同じ流儀で、入口から 1 機能ずつ実 runtime で確
 - 対象外にする: #209(容量回収。上限付き保存で代替)。
 - 調査が PoC で終わったもの: #156。PoC 資料を固定参照として示して閉じる候補にする。
 
-欠陥 Issue は転記して閉じると 2026-10-11 に決めた。転記の内容は Issue ごとに開発者に見せてから閉じる。
+2026-10-11 に、欠陥 Issue 15 件の要件を要件 Issue(#166、#167、#170、#171、#174、#175、#177、#180、#310)へコメントで転記し、#156、#209 と合わせて 17 件を閉じた。
+各段階の着手時は、対応する要件 Issue の転記コメントも読む。
 
 ## 判断待ち
 
 | 事項 | 推奨 | 理由 |
 |---|---|---|
-| モック差分のうち採用する部分 | 機能ごとに分けた一覧を見て開発者が選ぶ | 選ぶのは開発者で、一覧はメインセッションが作る |
-| 欠陥 Issue の転記の内容と #156 を閉じること | Issue ごとの転記案を見て開発者が了承する | GitHub 上の変更で戻しにくいため |
+| なし | | |
 
 ## 資料の扱い
 
