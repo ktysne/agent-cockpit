@@ -3442,7 +3442,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     root: { replaceChildren() {} },
     liveStatus: { textContent: '' },
   });
-  vm.runInContext(`${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = 7, lastStateAt = null, connectionLost = false, hasRenderedState = true, sinceSeenMode = 'always';`, context);
+  vm.runInContext(`${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = 7, lastStateAt = null, connectionLost = false, hasRenderedState = true, refreshConfirmPending = false, sinceSeenMode = 'always';`, context);
 
   await context.refresh();
   assert.equal(renders, 0);
@@ -4186,7 +4186,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       root: { replaceChildren() {} },
       liveStatus: { textContent: '' },
     });
-    vm.runInContext(`${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, sinceSeenMode = '${mode}';`, context);
+    vm.runInContext(`${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, refreshConfirmPending = false, sinceSeenMode = '${mode}';`, context);
     for (let step = 0; step < awaySequence.length; step += 1) await context.refresh();
     return renders;
   };
@@ -4377,4 +4377,29 @@ test('非対話の行は作業中と待機中を対話と同じ文言と色に�
     assert.equal(row.match(/<strong>([^<]*)<\/strong>/)[1], label, `モックの文言: ${JSON.stringify(mockSession)}`);
     assert.equal(row.match(/<span class="dot ([^"]+)"><\/span>/)[1], tone, `モックの色: ${JSON.stringify(mockSession)}`);
   }
+});
+
+test('読み込み直すボタンは書きかけの回答が無ければ読み込み直し、あれば案内で確かめる', () => {
+  const handler = pageHtml.match(/refreshButton\.addEventListener\('click', (\(\) => \{[\s\S]*?\n\})\);/)?.[1];
+  assert.ok(handler);
+  const run = (hasDraft) => {
+    let reloads = 0;
+    const context = pageContext(pageHtml, {
+      lastState: { sessions: [] },
+      hasUnsentAnswerDraft: () => hasDraft,
+      location: { reload() { reloads += 1; } },
+      reloadNote: { hidden: true, innerHTML: '' },
+      uiUpdatePending: false,
+      refreshConfirmPending: false,
+    });
+    vm.runInContext(['renderReloadNote', 'setRefreshConfirmPending'].map((name) => functionSource(pageHtml, name)).join('\n'), context);
+    vm.runInContext(`(${handler})()`, context);
+    return { reloads, hidden: context.reloadNote.hidden, html: context.reloadNote.innerHTML };
+  };
+
+  assert.deepEqual(run(false), { reloads: 1, hidden: true, html: '' });
+  const withDraft = run(true);
+  assert.equal(withDraft.reloads, 0);
+  assert.equal(withDraft.hidden, false);
+  assert.match(withDraft.html, /data-reload-now>回答を消して読み込み直す</);
 });
