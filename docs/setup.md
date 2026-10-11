@@ -24,6 +24,8 @@ owned Codexのbrowser認証URLは`https://auth.openai.com`と`https://chatgpt.co
 
 同module内のowned Codexのログインは順番に開始します。queueの期限切れは`authentication_queue_timeout`になります。開始済みloginの停止が未確認の場合、childのexitとcloseを両方確認するまで後続を開始しません。別processや外部CLIとの競合とOS portの解放は、この制御から保証しません。[ログイン直列化の契約](design/native-login-serialization.md)に待機と解放の条件があります。
 
+`stop_unconfirmed`のloginが残ると、後続も`authentication_queue_timeout`になり得ます。対象実行と関連processの停止を確認してください。Cockpitの再起動は旧childの停止確認の代わりにならず、終了不明のまま再起動して認証競合が解消することは保証できません。
+
 ## 進め方の決まり
 
 - `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。

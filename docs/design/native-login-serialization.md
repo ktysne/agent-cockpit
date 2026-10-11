@@ -33,6 +33,8 @@ thread/startはゲートの外で行い、正常ログイン後のrunning child�
 既存のchildTerminationPromiseでexitとcloseの双方を確認した独立handlerから自己tokenを解放する。
 killの戻り値、片方のeventとstop timeoutは終了証明にしない。
 stop_unconfirmedではholderを保持し、遅れて両eventが揃えば解放する。
+終了eventが揃わない間は、同moduleの後続loginもqueue期限切れになり得る。
+Cockpitの再起動で新moduleのゲートが空になっても、旧childや関連processの停止証明にはならない。
 旧tokenの解放や旧completionは新holderへ作用しない。
 
 stopはstartやゲートの空き待ちを待たず、startの失敗処理もゲート解放のためにstopをawaitしない。

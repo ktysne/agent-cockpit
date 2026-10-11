@@ -3976,6 +3976,13 @@ function createControlledCodexLoginFixture(t, values = {}) {
       ...(values.childOptions || {}),
       onWriteCallback(text, callback) {
         const request = JSON.parse(text);
+        if (request.method === 'account/login/start' && values.loginWriteFailure) {
+          signal('login-write-failure-injected');
+          const error = new Error(values.loginWriteError);
+          if (values.loginWriteFailure === 'sync-throw') throw error;
+          queueMicrotask(() => callback(error));
+          return;
+        }
         queueMicrotask(() => {
           callback();
           if (request.method === 'initialized') signal('initialized-complete');
@@ -4398,4 +4405,79 @@ test('termination and completion from an older login cannot release the current 
   await third.wait('request:account/login/start');
   third.respondLogin();
   assert.equal((await third.state.startObserved).status, 'resolved');
+});
+
+for (const mode of ['callback-error', 'sync-throw']) {
+  test(`an account login write ${mode} keeps the gate until both child termination events`, { timeout: 8000 }, async (t) => {
+    const privateSentinel = `fixture-login-write-${mode}-private-sentinel`;
+    const authUrl = `https://auth.openai.com/device?fixture=${privateSentinel}`;
+    const writeFailure = `${authUrl} ${privateSentinel}`;
+    const first = createControlledCodexLoginFixture(t, {
+      loginWriteFailure: mode,
+      loginWriteError: writeFailure,
+      childOptions: { autoKillEvents: false },
+    });
+    const second = createControlledCodexLoginFixture(t);
+    first.start();
+    await first.wait('login-write-failure-injected');
+    second.start();
+    await second.wait('initialized-complete');
+    assert.equal(hasMethod(first, 'account/login/start'), true);
+    assert.equal(first.state.writes.some((line) => JSON.parse(line).method === 'account/login/start'), true);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    const result = await first.state.startObserved;
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.error.code, 'operation_failed');
+    assert.equal(result.error.cause, undefined);
+    assert.equal(result.error.message.includes(privateSentinel), false);
+    assert.equal(result.error.stack.includes(privateSentinel), false);
+    assert.equal(result.error.message.includes(authUrl), false);
+    assert.equal(result.error.stack.includes(authUrl), false);
+    assert.equal(first.runner.snapshot().failureCode, 'operation_failed');
+    assert.equal(JSON.stringify(first.runner.snapshot()).includes(privateSentinel), false);
+    assert.equal(JSON.stringify(first.runner.snapshot()).includes(authUrl), false);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    await first.runner.stop();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('exit');
+    await nextImmediate();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('close');
+    await second.wait('request:account/login/start');
+    second.respondLogin();
+    assert.equal((await second.state.startObserved).status, 'resolved');
+  });
+}
+
+test('source expiry before login gate grant returns its ticket without affecting owner authority', { timeout: 8000 }, async (t) => {
+  const holder = createControlledCodexLoginFixture(t);
+  const ownerCurrent = true;
+  let sourceCurrent = true;
+  const sourceExpired = createControlledCodexLoginFixture(t, {
+    isCurrent: () => ownerCurrent,
+    isSourceCurrent: () => sourceCurrent,
+  });
+  const next = createControlledCodexLoginFixture(t);
+  holder.start();
+  await holder.wait('request:account/login/start');
+  sourceExpired.start();
+  await sourceExpired.wait('initialized-complete');
+  next.start();
+  await next.wait('initialized-complete');
+  await nextImmediate();
+  assert.equal(hasMethod(sourceExpired, 'account/login/start'), false);
+  assert.equal(hasMethod(next, 'account/login/start'), false);
+
+  sourceCurrent = false;
+  assert.equal(ownerCurrent, true);
+  holder.respondLogin();
+  const result = await sourceExpired.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'authority_expired');
+  assert.equal(hasMethod(sourceExpired, 'account/login/start'), false);
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
 });

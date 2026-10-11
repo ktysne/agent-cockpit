@@ -1006,12 +1006,14 @@ Claudeはこのゲートに参加せず、既存のtoken供給と開始・停止
 | ID-F215-LG01 | 同moduleの複数owned Codexを同時開始 | initializeは並行、login RPCはFIFOで高々一つ。正常matching completionと検査後に次へ進む |
 | ID-F215-LG02 | 正常login後のrunning childと後続runner | thread/startはゲート外。成功後のchildの生存で後続loginを止めない |
 | ID-F215-LG03 | queue待機中のstopとloginMs期限切れ | recordとtimerを回収、login RPC0。期限切れはauthentication_queue_timeout、停止は既存分類 |
-| ID-F215-LG04 | grantと取消の同turn競合、取得後owner失効 | 未開始の自己tokenを回収、login RPC0。第三runnerの進行を妨げない |
+| ID-F215-LG04 | grantと取消の同turn競合、取得後ownerまたはsourceだけの失効 | 未開始の自己tokenを回収、login RPC0。第三runnerの進行を妨げない |
 | ID-F215-LG05 | 早着success、不正URL/type/loginId、重複・不一致・失敗completion | responseとcompletionを全て検査。正常検査前の解放0、異常後はexitとcloseの両方まで後続login0 |
-| ID-F215-LG06 | login timeout、callback同期throw・非同期reject、開始後stop | 固定診断と秘匿を維持。exitだけまたはcloseだけでは解放0、両方で一度だけ解放 |
+| ID-F215-LG06 | login timeout、callback同期throw・非同期reject、RPC write同期throw・callback error、開始後stop | 固定診断と秘匿を維持。送信成否不明を未開始へ戻さず、exitだけまたはcloseだけでは解放0、両方で一度だけ解放 |
 | ID-F215-LG07 | stop_unconfirmed後の遅延両eventと旧token/completion | 未確認中は保持、後着両eventで次へ進む。旧tokenが新holderを解放しない |
 | ID-F215-LG08 | trusted callbackへの同期再入で別runnerをstart/stop | loginのholderは高々一つ。stopとstartの相互待ちを作らない |
 | ID-F215-LG09 | fixture assertion失敗と同module共有の関連試験 | 自己fake childの両eventを後片付けで確認。global resetでholder漏れを隠さない |
 
 関連2ファイルは241件中240件成功、失敗0件、Windows実symlink権限によるskip1件だった。同moduleを共有するtest-isolation=noneでも同じ件数と合否を確認した。
-全体試験と指定Claudeレビューは未完了である。fixtureの成功を実runtime、OS port解放、別process間の排他や認証再利用の証明に含めない。
+固定head `c8d2f0c`の全体試験は3,281件中3,276件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+指定Claude R1はblockerと要修正0件だった。追加fixture後の関連2ファイルとtest-isolation=noneはそれぞれ244件中243件成功、失敗0件、Windows実symlink権限によるskip1件だった。sourceは全体試験headから不変で、追加testと文書をClaude R2で確認する。
+fixtureの成功を実runtime、OS port解放、別process間の排他や認証再利用の証明に含めない。
