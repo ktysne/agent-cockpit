@@ -656,6 +656,24 @@ fixtureのpause通知はIPC親の有無に依存し、同process試験のpause�
 closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
 標準runtime、外process排他、OS耐久性は未達として扱う。
 
+## native起動取消の段階別検証
+
+作成時点では#347、#348、#349がReadyだったが、現在はこの順でfeatureへマージ済みである。
+baseはすべてfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
+#351（`62e18b2`）とmain #350の同期#352（`2ea0c83`）は当時Readyだった。#351は現在featureへマージ済みで、#352は修正headを作成し、#353の親として連結している。
+#351はsource `4db527e`で全体2802成功、失敗0、Windows実symlink権限skip2、Claudeレビュー1往復で必須指摘なしである。
+#352はfeature/mainを祖先として保持する通常mergeで、関連2件、CLI定義読み取り5条件と上流同期checkが成功し、Claudeレビュー1往復で必須指摘なしである。
+
+元の`codex/native-start-cancellation-209-20261011`は当時のfeature `c731abe`から作成し、#351と#352のsourceには依存しない構成だった。現在は修正済み#352を通常mergeしている。
+native起動の段階別取消を、実runnerとcompositionの保持点で確認する。
+共通の適合条件は[ID-F209-S01](../design/provider-conformance-testing.md)に定義した。
+[PR #353](https://github.com/ktysne/agent-cockpit/pull/353)の`cd39352`で全体2794件成功、失敗0、Windows実symlink権限skip2である。
+製品sourceは無変更で、段階別取消の追加14件を含む関連2ファイルはin-processで192件成功した。
+Claude R1の必須指摘として後着による追加writeの直接比較を全11stageへ補強した。
+`1912130`の関連192件は成功し、製品sourceは全体検証済みheadから変わっていない。
+Claude R2はblockerと要修正なしとなり、PR #353はReadyとして扱える。
+Codex login、thread、turnの個別write callback保留とwait profile固有待機は未確認であり、追加の検証候補として残す。
+観測readの取消とdrain、factory ticketへの接続、協調writer ownership、新schemaの通常接続と実runtimeは後続に残す。
 ## main配布物同期と次の作業
 
 2026-10-11の後続作業では、mainの配布物更新PR #350（`518b946`）を`codex/sync-main-350-20261011`へ通常mergeした。
