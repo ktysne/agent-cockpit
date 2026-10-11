@@ -195,7 +195,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | #368 | MCP専用policyとfetch開始境界による結果不明時の再送抑止はレビュー収束。実runtimeは未確認 |
 | #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | #369、#370、#371 | 計測、session索引、保持契約と反例fixtureはClaudeレビュー収束、Ready。診断getterのcopy化は開発者の確認待ち。GCの全入口拒否境界と件数上限は未解決 |
 | #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはレビュー収束。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
-| #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
+| #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | PR #373で観測器と実測を追加。通常解放は進行、再接続後旧handle拒否と90秒B未到着を確認。進行方法は未解決 | #174の後続(handoffとreconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
 
 main 側の不具合として #316(idle で補った後の古い推定の再表示)と #317(マニュアルの回答画像が等倍)も 2026-10-09 に起票した。マイルストーンは付けていない。
@@ -1094,4 +1094,12 @@ Claude R1の要修正3件を反映し、再接続前の有効性と切断・接�
 通知は単一listenerで数え、製品callbackの戻り値を維持する。
 専用fixtureは補強後19件成功し、修正後の固定head `b4c5e69` の全体試験は3,096件成功、失敗0件、Windows実symlink権限によるskip2件だった。
 Claude R2の要修正1件は切断・接続失敗分岐の未確認記載であり、提示された文書補足案をAstraへ相談して採用した。
-sourceとtestを維持した文書補足をR3で確認する。
+sourceとtestを維持した文書補足をR3で確認し、blockerと要修正0件で収束した。
+PR #373はReadyで、#371の後にマージ可能である。
+Claude 2.1.296の隔離live観測を固定head `b441088` で一度行い、controlで次contextとfresh current proofを確認した。
+reconnectは旧handle失効と通常settle拒否を確認したが、90秒以内に次contextは到着しなかった。
+両processのexit・close、childとendpointの非稼働、自己root削除を確認した。
+実response writeは未観測で、観測器のobserved分類を#314の完了へ読み替えない。
+manifestと観測範囲は限定観測設計に置き、再接続後の進行方法は後続に残す。
+最終更新は検証と実測結果の文書のみで、src/test/toolsは全体試験headから不変である。
+次は#210の新規質問登録の保存後失効を取消終端へ進め、接続復帰後の自動回答を抑止する製品修正へ着手する。

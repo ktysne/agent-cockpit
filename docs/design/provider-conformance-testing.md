@@ -791,6 +791,12 @@ R03/R04は既存rowへの質問統合の変化を確認し、操作認可の証�
 
 実装と検証は未完了である。
 両providerの共通runtime適合と#314の実Claude実測は、専用fixtureとは別に記録する。
+専用ファイルのnode --test報告件数19件と、固定head `b4c5e69` の全体3,096件が成功し、失敗0件、Windows実symlink権限によるskip2件だった。
+指定Claude R3はblockerと要修正0件で収束した。
+Claude 2.1.296の明示liveでcontrolのsettle受付、distinct contextとfresh current proofを確認した。
+reconnectは旧handleの失効とsettle拒否を確認したが、90秒以内にdistinct contextは到着せず、#314の進行は未解決である。
+両caseの物理停止と自己root削除を確認し、response writeは未観測nullのままである。
+実測manifestと範囲は[限定観測設計](claude-wait-reconnect-probe.md#実claudeの観測結果)に記録した。
 
 ## Windowsの専有home環境 (#372)
 

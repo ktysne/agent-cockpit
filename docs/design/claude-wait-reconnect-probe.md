@@ -77,7 +77,7 @@ raw frameや秘密を含む値のhashを共有証拠へ残さない。
 
 [provider適合試験](provider-conformance-testing.md)のID-F314-WRP01〜WRP08を実装前に記録する。
 fixtureは観測器の計測と終了条件を確かめ、実CLI能力の証明とは分ける。
-専用fixture19件が成功した。
+専用ファイルのnode --test報告件数はsubtestを含む19件で、すべて成功した。
 baseline proof欠落の分岐と、観測終了後のcallback guardへ直接到達するfixtureは未確認であり、source監査の結果と区別する。
 disconnectがdisconnected以外を返す場合とconnectがconnected以外を返す場合は、実装上settle前にunknownへ進む。
 この2分岐を直接通すfixtureは未実行で、当該分岐のsettle回数0、物理停止確認とroot削除の組合せを検証した証拠はない。
@@ -88,3 +88,27 @@ finallyへの到達は物理停止やroot削除の成功と別であり、停止
 既存fakepipeで旧waitの拒否を確認しても、実Claudeがその後に進むという期待を捏造しない。
 実測でparserの非対応、認証失敗、隔離不能またはcontrol未達が見つかったら固定分類で停止し、製品修正へ範囲を広げない。
 常駐server、tray、ensure、PRマージと未収束#364の管理protocolを操作しない。
+
+## 実Claudeの観測結果
+
+2026-10-11、Windows、Node 24.15.0、Claude 2.1.296で明示live観測を一度実行した。
+source revisionは`b4410883c9ccd4d80e5336de0611e1f318deccca`、profileは`cockpit-native-wait-v1`である。
+script SHA-256は`8f5d0852e960d3cb3356d7001b7ded254daa8082f3eba5f82f13a9c2486f7d8d`、sanitized result SHA-256は`9cd1ddee9524dc8dd5e1e97ddf1fb351a05953e945b45a3f2244ad9a17b3e38a`である。
+
+| 観測 | control | reconnect |
+| --- | --- | --- |
+| wait通知回数 | 1 | 1 |
+| 操作前handle有効 | true | true |
+| collector切断・再接続 | 対象外 | 正規操作で成立 |
+| 再接続後旧handle有効 | 対象外 | false |
+| settle試行回数・受付 | 1・true | 1・false |
+| distinct context到着 | true | 90秒の観測期間内に到着せず |
+| proof checkpoint・fresh current proof | 完了・true | 未到達・null |
+| child exit・close・child inactive・endpoint inactive | すべてtrue | すべてtrue |
+| 自己root削除 | true | true |
+
+reconnectのinvalidation通知はfalseで、controlは非観測の初期値である。
+実response writeは両caseで未観測nullのままである。
+観測器全体のstatusはobservedだが、再接続後の進行と#314の完了を示さない。
+失効後の通常settle拒否と観測期間内のB未到着を確認した結果であり、再接続後の進行方法は未解決である。
+旧handleの再送、raw操作、新promptによる救済は行っていない。
