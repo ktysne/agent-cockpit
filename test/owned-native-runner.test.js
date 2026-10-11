@@ -2269,6 +2269,229 @@ function ownedCodexInstructionMetadata({ mode = 'steer', expectedTurnId = 'turn_
   };
 }
 
+async function createReadCancellationFixture(t) {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace);
+  let capability;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => { capability = value; },
+    timeouts: { startupMs: 1000, rpcMs: 5000, loginMs: 1000, stopMs: 100 },
+  });
+  t.after(() => runner.stop());
+  await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  assert.equal(source.bindOwner(claim), true);
+  const lease = source.acquireReadLease(Object.freeze({}));
+  return { harness, runner, source, lease, capability };
+}
+
+function holdNextOwnedRead(t, fixture, method, { responseFirst = false, callbackFirst = false, onWrite } = {}) {
+  const { harness } = fixture;
+  const stdin = harness.child.stdin;
+  const originalWrite = stdin.write.bind(stdin);
+  const reached = deferred();
+  let held = false;
+  let respond;
+  let completeWrite;
+  let responseReleased = false;
+  let writeReleased = false;
+  const releaseResponse = () => {
+    if (!respond || responseReleased) return;
+    responseReleased = true;
+    respond();
+  };
+  const releaseWrite = (error) => {
+    if (!completeWrite || writeReleased) return;
+    writeReleased = true;
+    completeWrite(error);
+  };
+  t.after(() => { try { releaseResponse(); } finally { releaseWrite(); } });
+  stdin.write = (line, callback) => {
+    const request = JSON.parse(line.toString());
+    if (request.method !== method || held) return originalWrite(line, callback);
+    held = true;
+    stdin.writes.push(line.toString());
+    harness.methods.push(method);
+    harness.requests.push({ method, id: request.id });
+    respond = () => {
+      harness.child.send(codexResponse(request.id, method === 'thread/loaded/list'
+        ? { data: ['thread_native_1'], nextCursor: null }
+        : { thread: { id: 'thread_native_1', turns: [{ id: 'turn_native_1', status: 'inProgress' }] } }));
+    };
+    completeWrite = (error) => callback(error);
+    if (responseFirst) releaseResponse();
+    if (callbackFirst) releaseWrite();
+    onWrite?.();
+    reached.resolve();
+    return true;
+  };
+  return { reached: reached.promise, respond: releaseResponse, completeWrite: releaseWrite };
+}
+
+for (const method of ['thread/loaded/list', 'thread/read']) {
+  for (const phase of ['response-first', 'callback-first', 'both-pending']) {
+    test(`ID-F209-R01 ${method} ${phase}: release alone settles read before raw work completes`, { timeout: 3000 }, async (t) => {
+      const fixture = await createReadCancellationFixture(t);
+      const held = holdNextOwnedRead(t, fixture, method, {
+        responseFirst: phase === 'response-first', callbackFirst: phase === 'callback-first',
+      });
+      const pending = fixture.source.readCurrent(fixture.lease);
+      await held.reached;
+      assert.equal(fixture.source.releaseReadLease(fixture.lease), true);
+      assert.equal(fixture.source.releaseReadLease(fixture.lease), false);
+      const result = await pending;
+      assert.equal(result.status, 'unknown');
+      assert.equal(result.receipt, null);
+      assert.equal(fixture.runner.snapshot().state, 'running');
+      assert.equal(fixture.harness.child.killCalls.length, 0);
+      const methodsBeforeLate = [...fixture.harness.methods];
+      if (phase !== 'response-first') held.respond();
+      if (phase !== 'callback-first') held.completeWrite();
+      await nextImmediate();
+      assert.deepEqual(fixture.harness.methods, methodsBeforeLate);
+      const nextLease = fixture.source.acquireReadLease(Object.freeze({}));
+      const fresh = await fixture.source.readCurrent(nextLease);
+      assert.equal(fresh.status, 'attested');
+      assert.equal(fixture.source.consumeReadReceipt(nextLease, fresh.receipt), true);
+    });
+  }
+}
+
+test('ID-F209-R01 old raw response and write callback do not disturb a new lease receipt', { timeout: 3000 }, async (t) => {
+  const fixture = await createReadCancellationFixture(t);
+  const held = holdNextOwnedRead(t, fixture, 'thread/read');
+  const oldRead = fixture.source.readCurrent(fixture.lease);
+  await held.reached;
+  fixture.source.releaseReadLease(fixture.lease);
+  assert.equal((await oldRead).status, 'unknown');
+  const nextLease = fixture.source.acquireReadLease(Object.freeze({}));
+  const fresh = await fixture.source.readCurrent(nextLease);
+  held.respond();
+  held.completeWrite();
+  await nextImmediate();
+  assert.equal(fresh.status, 'attested');
+  assert.equal(fixture.source.consumeReadReceipt(nextLease, fresh.receipt), true);
+  assert.equal(fixture.runner.snapshot().state, 'running');
+});
+
+test('ID-F209-R01 release after raw loaded-list response and write settlement prevents thread-read', { timeout: 3000 }, async (t) => {
+  const fixture = await createReadCancellationFixture(t);
+  const held = holdNextOwnedRead(t, fixture, 'thread/loaded/list');
+  const read = fixture.source.readCurrent(fixture.lease);
+  await held.reached;
+  held.respond();
+  held.completeWrite();
+  queueMicrotask(() => fixture.source.releaseReadLease(fixture.lease));
+  assert.equal((await read).status, 'unknown');
+  assert.equal(fixture.harness.methods.includes('thread/read'), false);
+});
+
+for (const callbackTiming of ['synchronous', 'late-success', 'late-error']) {
+  test(`ID-F209-R01 synchronous write release with ${callbackTiming} consumes raw settlement`, { timeout: 3000 }, async (t) => {
+    const fixture = await createReadCancellationFixture(t);
+    const held = holdNextOwnedRead(t, fixture, 'thread/loaded/list', {
+      responseFirst: true,
+      onWrite: () => {
+        fixture.source.releaseReadLease(fixture.lease);
+        if (callbackTiming === 'synchronous') held.completeWrite();
+      },
+    });
+    const read = fixture.source.readCurrent(fixture.lease);
+    await held.reached;
+    assert.equal((await read).status, 'unknown');
+    assert.equal(fixture.harness.methods.includes('thread/read'), false);
+    if (callbackTiming !== 'synchronous') held.completeWrite(callbackTiming === 'late-error' ? new Error('physical pipe failure') : undefined);
+    await nextImmediate();
+    assert.equal(fixture.runner.snapshot().state, callbackTiming === 'late-error' ? 'failed' : 'running');
+    assert.equal(fixture.runner.snapshot().failureCode, callbackTiming === 'late-error' ? 'stdin_write_failed' : null);
+    if (callbackTiming !== 'late-error') {
+      const nextLease = fixture.source.acquireReadLease(Object.freeze({}));
+      assert.equal((await fixture.source.readCurrent(nextLease)).status, 'attested');
+    }
+  });
+}
+
+test('ID-F209-R01 source invalidation by stop cancels a response-first pending write', { timeout: 3000 }, async (t) => {
+  const fixture = await createReadCancellationFixture(t);
+  const held = holdNextOwnedRead(t, fixture, 'thread/loaded/list', { responseFirst: true });
+  const pending = fixture.source.readCurrent(fixture.lease);
+  await held.reached;
+  const stop = fixture.runner.stop();
+  assert.equal((await pending).status, 'unknown');
+  await stop;
+  held.completeWrite(new Error('old generation error'));
+  await nextImmediate();
+  assert.equal(fixture.runner.snapshot().state, 'stopped');
+  assert.equal(fixture.runner.snapshot().failureCode, null);
+});
+
+test('ID-F209-R01 cancelling one runner read preserves another runner pending read', { timeout: 3000 }, async (t) => {
+  const first = await createReadCancellationFixture(t);
+  const second = await createReadCancellationFixture(t);
+  const firstHeld = holdNextOwnedRead(t, first, 'thread/read');
+  const secondHeld = holdNextOwnedRead(t, second, 'thread/read');
+  const firstRead = first.source.readCurrent(first.lease);
+  let secondSettled = false;
+  const secondRead = second.source.readCurrent(second.lease).then((result) => { secondSettled = true; return result; });
+  await Promise.all([firstHeld.reached, secondHeld.reached]);
+  first.source.releaseReadLease(first.lease);
+  assert.equal((await firstRead).status, 'unknown');
+  await nextImmediate();
+  assert.equal(secondSettled, false);
+  assert.equal(second.source.checkLease(second.lease), true);
+  secondHeld.respond();
+  secondHeld.completeWrite();
+  const fresh = await secondRead;
+  assert.equal(fresh.status, 'attested');
+  assert.equal(second.source.consumeReadReceipt(second.lease, fresh.receipt), true);
+  firstHeld.respond();
+  firstHeld.completeWrite();
+});
+
+test('ID-F209-R01 read cancellation leaves pending instruction transport until the authority-checked ACK', { timeout: 3000 }, async (t) => {
+  const fixture = await createReadCancellationFixture(t);
+  const writer = getOwnedInstructionWriter(fixture.capability);
+  const metadata = ownedCodexInstructionMetadata();
+  const token = writer.prepare(metadata);
+  assert.ok(token);
+  const stdin = fixture.harness.child.stdin;
+  const originalOnWrite = stdin.onWrite;
+  let instructionId;
+  let instructionAckReleased = false;
+  const releaseInstructionAck = () => {
+    if (instructionId === undefined || instructionAckReleased) return;
+    instructionAckReleased = true;
+    fixture.harness.child.send(codexResponse(instructionId, { turnId: 'turn_native_1' }));
+  };
+  t.after(releaseInstructionAck);
+  stdin.onWrite = (line) => {
+    const request = JSON.parse(line);
+    if (request.method === 'turn/steer') { instructionId = request.id; return; }
+    originalOnWrite(line);
+  };
+  let instructionSettled = false;
+  const input = [{ type: 'text', text: 'instruction input', text_elements: [] }];
+  const ack = writer.dispatchNow(token, { ...metadata, input }, () => true).then(
+    (value) => { instructionSettled = true; return { value }; },
+    (error) => { instructionSettled = true; return { error }; },
+  );
+  assert.ok(instructionId);
+  const held = holdNextOwnedRead(t, fixture, 'thread/read');
+  const read = fixture.source.readCurrent(fixture.lease);
+  await held.reached;
+  fixture.source.releaseReadLease(fixture.lease);
+  assert.equal((await read).status, 'unknown');
+  await nextImmediate();
+  assert.equal(instructionSettled, false);
+  assert.equal(fixture.runner.snapshot().state, 'running');
+  releaseInstructionAck();
+  assert.ok((await ack).error);
+  assert.equal(fixture.runner.snapshot().state, 'running');
+  held.respond();
+  held.completeWrite();
+});
+
 test('owned Codex source reads only its current loaded turn over the existing pipe', async (t) => {
   const workspace = createWorkspace(t);
   const claim = Object.freeze({});
