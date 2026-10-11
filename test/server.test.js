@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
+const os = require('node:os');
 const path = require('node:path');
 const { makeHookEvent, runHook } = require('../src/hooks/event');
 const { productFromCwd } = require('../src/server/identity');
@@ -2330,6 +2331,113 @@ test('server.json は待ち受け成功後にだけ書く', async (t) => {
   const runtime = await starting;
   t.after(() => runtime.close());
   assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'server.json'), 'utf8')).port, runtime.info.port);
+});
+
+function shutdownCloseOutcome(promise) {
+  return promise.then(
+    () => ({ status: 'fulfilled' }),
+    (reason) => ({ status: 'rejected', reason }),
+  );
+}
+
+function assertTemporaryDirectory(directory) {
+  const root = path.resolve(os.tmpdir());
+  const target = path.resolve(directory);
+  const relative = path.relative(root, target);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('temporary cleanup target is outside os.tmpdir');
+  }
+}
+
+async function cleanupShutdownFixture(temporary, runtime) {
+  if (runtime) {
+    try { await runtime.close(); } catch {}
+    if (runtime.server.listening) throw new Error('server listener remains open after close');
+  }
+  assertTemporaryDirectory(temporary.directory);
+  await temporary.cleanup();
+}
+
+test('server close は falsy な shutdown reason を初回と再 close に保持する', async (t) => {
+  const reasons = [
+    ['false', false], ['null', null], ['undefined', undefined], ['zero', 0], ['empty string', ''],
+  ];
+  const modes = ['synchronous throw', 'asynchronous reject'];
+  for (const [reasonName, reason] of reasons) {
+    for (const mode of modes) {
+      await t.test(`${reasonName}: ${mode}`, async (subtest) => {
+        const temporary = createTemporaryHome(subtest, 'agent-cockpit-shutdown-falsy-', { deferCleanup: true });
+        let runtime;
+        subtest.after(() => cleanupShutdownFixture(temporary, runtime));
+        let shutdownCalls = 0;
+        runtime = await startServer({
+          homeDir: temporary.homeDir,
+          claudeHome: temporary.claudeHome,
+          port: 0,
+          onShutdown() {
+            shutdownCalls += 1;
+            if (mode === 'synchronous throw') throw reason;
+            return Promise.reject(reason);
+          },
+        });
+
+        const first = await shutdownCloseOutcome(runtime.close());
+        const second = await shutdownCloseOutcome(runtime.close());
+        for (const outcome of [first, second]) {
+          assert.equal(outcome.status, 'rejected');
+          assert.strictEqual(outcome.reason, reason);
+        }
+        assert.equal(shutdownCalls, 1);
+        assert.equal(runtime.server.listening, false);
+        assert.equal(runtime.shutdownError, 'shutdown_incomplete');
+        await assert.rejects(fs.access(path.join(temporary.homeDir, 'server.json')), { code: 'ENOENT' });
+      });
+    }
+  }
+});
+
+test('server close は先行する falsy flush reason を保持して後続 cleanup を続ける', async (t) => {
+  const reasons = [
+    ['false', false], ['null', null], ['undefined', undefined], ['zero', 0], ['empty string', ''],
+  ];
+  const modes = ['synchronous throw', 'asynchronous reject'];
+  for (const [reasonName, reason] of reasons) {
+    for (const mode of modes) {
+      await t.test(`${reasonName}: ${mode}`, async (subtest) => {
+        const temporary = createTemporaryHome(subtest, 'agent-cockpit-shutdown-order-', { deferCleanup: true });
+        let runtime;
+        subtest.after(() => cleanupShutdownFixture(temporary, runtime));
+        let flushCalls = 0;
+        let shutdownCalls = 0;
+        runtime = await startServer({
+          homeDir: temporary.homeDir,
+          claudeHome: temporary.claudeHome,
+          port: 0,
+          onShutdown() {
+            shutdownCalls += 1;
+            throw new Error('later shutdown callback failure');
+          },
+        });
+        runtime.state.flushPersistence = () => {
+          flushCalls += 1;
+          if (mode === 'synchronous throw') throw reason;
+          return Promise.reject(reason);
+        };
+
+        const first = await shutdownCloseOutcome(runtime.close());
+        const second = await shutdownCloseOutcome(runtime.close());
+        for (const outcome of [first, second]) {
+          assert.equal(outcome.status, 'rejected');
+          assert.strictEqual(outcome.reason, reason);
+        }
+        assert.equal(flushCalls, 1);
+        assert.equal(shutdownCalls, 1);
+        assert.equal(runtime.server.listening, false);
+        assert.equal(runtime.shutdownError, 'shutdown_incomplete');
+        await assert.rejects(fs.access(path.join(temporary.homeDir, 'server.json')), { code: 'ENOENT' });
+      });
+    }
+  }
 });
 
 test('EADDRINUSE で負けた同時起動は server.json に触れない', async (t) => {
