@@ -1,7 +1,7 @@
 # Codex 対応の作り直しの計画(2026-10-11)
 
 agent-cockpit を Codex デスクトップと Codex CLI にも対応させる作業を、main から Claude が作り直す計画である。
-起点は main の 00e9114(PR #384 のマージ)で、既存の集約ブランチ `codex/feature-codex-support` は PR #385 のマージ後の head を固定参照として残し、以後は変更しない。
+起点は、PR #384 のマージ(00e9114)を含む main の最新で、既存の集約ブランチ `codex/feature-codex-support` は PR #385 のマージ後の head を固定参照として残し、以後は変更しない。
 PoC の一式と資料は、同じく固定参照 8c701b1 で読む。
 
 対象から外したもの:
