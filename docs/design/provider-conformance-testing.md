@@ -654,9 +654,9 @@ writer排他の製品接続、graceful再起動と両provider実runtimeはこの
 | ID-F313-ST03 | 内部fixture | 同じ停止requestは一度のprivate operationを共有。公開async wrapperのPromise参照同一性は検査しない。別requestと旧instanceは受理しない |
 | ID-F313-ST04 | 内部fixture | 単一controllerのメモリ内starting/stopping中は新attemptを拒否し、旧attemptの結果でcurrentを更新しない。blockedの明示retryだけでメモリ内世代を進める。共有current fileは対象外 |
 | ID-F313-ST05 | 内部fixture | 停止手続きがfalsyで失敗しても理由を保持。通知側切断で停止を破棄せず、fixtureの完了を製品writer解放と表現しない |
-| ID-F313-ST06 | 製品管理protocol | ACLと管理権限を実processで照合。旧管理者の遅延再開、TTLとcrash後に新currentの上書きやlaunchを許さない。attempt結果を採用する管理者が未確認所有を検出、保持し、ensureが同じ起動判定を使う。管理者交代、crashと設定世代変更で対象source setの禁止を失わず、旧managerの遅延通知でcurrent更新や禁止解除を行わない。W09復旧確認を採用できる主体と手段の実証が製品接続条件 |
+| ID-F313-ST06 | 製品管理protocol | ACLと管理権限を実processで照合。旧管理者の遅延再開、TTLとcrash後に新currentの上書きやlaunchを許さない。attempt結果を採用する管理者が未確認所有を検出、保持し、ensureが同じ起動判定を使う。管理者交代、crashと設定世代変更で対象source setの禁止を失わず、旧managerの遅延通知でcurrent更新や禁止解除を行わない。starting世代識別子、起動操作識別子と認可済み状態の保持および管理者交代/crash後の再構成を検証し、同じ操作への追加launch認可は0回。保持や再構成が不明なら新操作への付替えで再認可しない。W09復旧確認を採用できる主体と手段の実証が製品接続条件 |
 | ID-F313-ST07 | 製品管理protocol | HTTP終了後のfinal release保留もstoppingとして共有し、並行ensureが後継を開始しない |
-| ID-F313-ST08 | 停止接続 | Host、uiSecretとOrigin拒否、二重要求、自己drain、HTTP自己待ち、response切断後の停止継続を確認。idle、signalと公開closeも同じ停止手続きへ入り、非HTTP停止先行時の新要求は非受理409。Windows PowerShell 5.1でHTTP例外がApplication.Runへ伝播せず再起動を中止する。非HTTP先行は409 reason=stopping、別request競合は409 reason=request_conflict。両方でtrayが診断を表示して再起動を中止し、listener閉鎖後の停止HTTP再送は0回。非受理requestへ内部requestのcompletedを割り当てない。非HTTP停止でlistenerが既に閉じ、trayの要求が未受理で自身のrequestIdのcompletedもない場合は、再送0回のまま再起動を中止し、W09の全停止確認へ案内する |
+| ID-F313-ST08 | 停止接続 | Host、uiSecretとOrigin拒否、二重要求、自己drain、HTTP自己待ち、response切断後の停止継続を確認。idle、signalと公開closeも同じ停止手続きへ入り、非HTTP停止先行時の新要求は非受理409。Windows PowerShell 5.1でHTTP例外がApplication.Runへ伝播せず再起動を中止する。非HTTP先行は409 reason=stopping、別request競合は409 reason=request_conflict。両方でtrayが診断を表示して再起動を中止し、listener閉鎖後の停止HTTP再送は0回。非受理requestへ内部requestのcompletedを割り当てない。非HTTP停止でlistenerが既に閉じ、trayの要求が未受理で自身のrequestIdのcompletedもない場合は、再送0回のまま再起動を中止し、W09の全停止確認へ案内する。取得済み旧process handleで終了確認済みでも、自身のrequestIdのcompletedが無ければtrayの再起動0回。内部requestの結果を借用せず、サーバー側の停止手続きは継続する |
 | ID-F313-ST08A | 停止接続 | 変更route、hook/MCP更新、native start/read、定期処理、settings通知と副作用GETの新規受付を拒否し、既受付を追跡する。新規merge/gh起動を拒否、既起動ghの完了と結果処理を追跡し、停止前の承認を新規mergeへ流用しない。cleanup中に承認済み予約を評価する故障入力でも、新規mergeとgh merge開始は0回 |
 | ID-F313-ST09 | ensure接続 | healthy現在instanceを古い拒否より優先。起動前/待機中とstart lock敗者で拒否を共有し、eventごとの全deadline反復を避ける。拒否してもhookはproviderセッションを止めず、出力なしで正常終了する |
 | ID-F313-ST10 | ensure接続 | 古いrecord、破損と通知不能をunknownとして扱う。手動再attemptはmarkerを削除せず実取得をやり直す |
@@ -671,24 +671,30 @@ ST15の分類名は期待値を表すための記述で、codecのstatusとreaso
 管理者の新規launch認可と、実child生成、子の全writer取得、内容I/O、provider起動とreadyを区別する。
 正常系は起動要求があり、管理権限とfresh照合が成功し、healthyな再利用先、進行中の別starting/stopping、未確認所有、旧形式や不整合なinstance情報、未解除の確定拒否がなく、認可時点で必要な観測が全て既知である入力を用いる。
 一つのstarting世代の正常起動操作ではちょうど1回認可し、同じ操作の再評価では追加0回とする。
-fixtureは管理者のstarting世代識別子と起動操作識別子を注入し、同じ識別子の観測列を繰り返して重複認可を検査する。評価のたびに識別子を採番せず、同じ操作を別世代に付け替えて追加認可することも拒否する。識別子の製品上の保存と管理者交代時の再構成はST06で検証する。
-各正常系条件を一つだけ欠いた入力も独立に検査し、以下の拒否行では対象条件以外の正常系条件を成立させる。
+起動操作識別子とstarting世代識別子は管理者が割り当て、同じ操作の再評価では両方を維持する。fixtureはこれらの識別子と認可済み状態を注入する。
+停止完了後の新規要求、W09復旧確認採用後の新規要求、正当な明示再attemptは新操作とし、新操作識別子と新starting世代を割り当てる。停止完了や復旧確認の到着だけでは起動要求を生成しない。
+同じ操作を別世代へ付け替えて追加認可することも拒否する。任意callerのID変更だけで新操作を認めず、新IDの採番でも未確認所有の禁止を解除しない。これらは管理protocolの識別概念で、既存codecのfield追加ではない。製品上の保持と再構成はST06で検証する。
+認可の各阻害条件を独立入力として検査し、対象条件以外の独立した認可条件は成立させる。同じ原因から派生するfresh照合失敗などを成功へ偽装しない。
+複数条件を列挙した行は各条件を一つずつ与えるparameterized fixtureとし、複合入力だけで代替しない。認可時点で必要な観測の不明と既知の不存在を区別し、初回起動で旧attemptや不要なW09確認が存在しないことをunknownとしない。
 全writer取得をchild認可前の条件へ移さず、実生成と取得、失敗処理とready到達はST10/ST11/ST12で確認する。分類fixtureの成功で製品試験を代替しない。
 
 | ST15への注入観測列 | 分類と再利用 | 新規launch認可 |
 |---|---|---|
 | 上記正常系の条件を全て満たす | 通常の新規起動、再利用先なし | 同starting世代でちょうど1回。後続の同じ操作の評価で追加0回 |
+| 起動要求がない | 起動操作を開始しない | 0回 |
+| 同じ操作を同ID・同世代で再評価、または同IDを別世代へ不正に付け替える | 認可済み状態を維持 | 追加0回 |
 | 管理権限を取得していない | 管理権限不足、再利用先なし | 0回 |
 | fresh照合が失敗する | 照合不成立、再利用先なし | 0回 |
 | 進行中の別startingが存在する | 既存の起動操作を維持し、追加起動しない | 0回 |
-| 認可に必要な観測が不明。record破損と通知不能を別入力で与える | 不明を成功扱いせず、再利用先なし | 0回 |
+| 認可に必要な管理権限、health/instance照合、marker状態、対象attemptの取得/解放/終了、必要なrecordの破損/通知不能、必要なW09確認が不明。各観測を独立入力で与える | 不明を成功扱いせず、再利用先なし | 0回 |
 | 同scopeの一致running healthyと古い単なる敗者拒否 | healthy再利用。敗者結果でcurrentを上書きしない | 0回 |
 | 同scopeの一致running healthyと敗者の所有不明 | 不整合を診断してhealthy再利用。未確認所有は保持 | 0回。勝者の一致completedと旧process終了を後続入力にしても0回 |
-| listener閉鎖、既存stopping、停止完了未確認 | 停止未確認、再利用なし | 0回 |
-| 旧形式でinstanceId欠落、またはstopping | 旧形式は照合不能、stoppingは停止未完了。強制終了fallbackなし | 0回 |
+| 停止完了未確認の旧instanceのlistener閉鎖、既存stopping、対象停止手続き完了未確認を独立入力で与える | 停止未確認、再利用なし | 0回 |
+| 旧形式でinstanceId欠落 | 照合不能、強制終了fallbackなし | 0回 |
+| instanceId/app/pid/startedAt/scope/stateの不一致を各fieldの独立入力で与える | 照合不能、強制終了fallbackなし | 0回 |
 | server.json.state=running、旧process消失、marker無し、旧participant全停止未確認 | 所有/停止未確認、再利用なし | 0回 |
 | healthy無し、残留markerあり | writer取得拒否とW09案内 | 0回 |
-| 対象instance/requestに一致した停止completedと旧process終了を確認。他attemptの未確認所有を含む全阻害条件がなく、fresh管理権限と照合を含め正常系条件が成立 | 正常な停止完了後の新規起動 | 新しいstarting世代でちょうど1回。同じ操作の再評価で追加0回 |
+| 対象instance/requestに一致した停止completedと旧process終了を確認。他attemptの未確認所有を含む全阻害条件がなく、fresh管理権限と照合を含め正常系条件が成立 | 正常な停止完了後の新規起動 | 管理者が受け付けた新規要求の新操作ID・新starting世代でちょうど1回。同じ操作の再評価で追加0回 |
 | W09復旧確認を正当な管理者が採用し、対象source setの未確認所有の禁止が解除済みで、全正常系条件が成立 | 通常の起動認可へ復帰 | 新しいstarting世代でちょうど1回。同じ操作の再評価で追加0回 |
 | 同scopeの確定拒否だけが残り、未知所有と進行中停止はなく、明示再attempt前 | 確定拒否を維持 | 0回 |
 | 上の確定拒否に正当な明示再attemptを行い、管理権限とfresh照合をやり直して正常系条件が成立 | 拒否抑止だけ更新して新規取得を試みる。marker削除と未知所有解除はしない | 新しいstarting世代でちょうど1回。同じ操作の再評価で追加0回 |
@@ -697,7 +703,7 @@ fixtureは管理者のstarting世代識別子と起動操作識別子を注入�
 | 無関係なport応答に全正常系条件を併せる | 通常の新規起動、再利用先なし | 同starting世代でちょうど1回。同じ操作の再評価で追加0回 |
 | 無関係なport応答にstoppingを併せる | 停止未完了、再利用なし | 0回 |
 
-明示再attemptの行は本文の仮推奨方式を前提とし、公開操作の確定時に期待値との整合を再確認する。
+明示再attemptの行は[停止設計の「ensureと起動拒否」](server-stop-ensure.md#ensureと起動拒否)の仮推奨方式を前提とし、公開操作の確定時に期待値との整合を再確認する。
 明示再attemptはfresh取得の再試行だけを許し、writer占有など後段の実取得失敗を成功へ変換しない。
 ST10/ST11/ST12の成功経路には拒否原因が解消し、実writer取得が成功する入力を用いる。
 
