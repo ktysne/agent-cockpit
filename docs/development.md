@@ -104,6 +104,26 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 
 画面のアイコンは、`src/web/index.html` と `mock/index.html` にこの 64×64 の画像を data URI で埋め込んでいます(タブのアイコンとタイトルの左の 2 か所ずつ)。元画像を差し替えたら、作り直した画像の base64 でこの 4 か所も書き換えてください。
 
+## Codex の実機検証
+
+Codex のフックと MCP の挙動は、通常の `~/.codex` を書き換えずに確かめます。
+`tools/codex-probe/launch.js` は、検証用のフックを `-c` の設定の上書きでその起動だけに渡し、`--dangerously-bypass-hook-trust` で信頼の確認を省いて Codex を起動します。
+
+```bash
+node tools/codex-probe/launch.js --exec -- "Run pwd, then reply with OK only."
+```
+
+- `--exec` を付けると `codex exec`(読み取り専用、保存しない)を、付けないと対話の画面(TUI)を起動します。
+- `--hook <イベント名>=<スクリプト>` で渡すフックを選びます。指定しなければ、`tools/codex-probe/record.js` を主なイベントに渡します。
+- `record.js` は、`--out` のディレクトリ(既定は `tools/codex-probe/out/`)の `hooks.jsonl` に、入力の項目名と型、識別子と状態の値だけを書きます。会話の本文とツールの入出力は残しません。
+- TUI は Claude Code のターミナルの道具で起動でき、画面を読み、Ctrl+C を送れます。起動した後に文字を打ち足すことと Esc を押すことはできません。
+
+守ること:
+
+- `--dangerously-bypass-hook-trust` は、`-c` で渡したフックに加えて、有効なフックをすべて信頼の確認なしで動かします。渡すフックは、`tools/codex-probe/` のものか、そのセッションで書いて中身を確かめたものに限ります。`launch.js` は、通常の設定、プロジェクト(`.codex/hooks.json` と `.codex/config.toml`)、有効なプラグイン(`hooks/hooks.json` と manifest の `hooks`)のフックに信頼の記録が無いものや、解釈できない定義があると、起動せずに一覧を出して止まります。Codex に同梱されたプラグイン(`openai-bundled`)は Codex 本体の一部として扱い、検査しません。信頼した後に定義が変わったかまでは確かめられません。
+- Codex のアカウントは、通常の `~/.codex` を使います。`~/.codex-subagent` は委譲した実装の用途なので使いません。
+- `/hooks` の信頼の操作のように、`~/.codex` を書き換えないと確かめられないことは、開発者の承認を得てから行います。書き換えるときはバックアップを取り、作業後に sha256 で照合して戻します。
+
 ## 文書を直すとき
 
 - 導入の手順(フック、MCP サーバー、スキル、連携ツールごとの設定と確認)を変えたら [setup.md](setup.md) を直します。

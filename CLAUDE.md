@@ -31,6 +31,13 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 - main への最終 PR は、全機能の実 runtime の確認を終えてから作る
 - `codex/feature-codex-support` は凍結した固定参照で、作業ブランチを作らず更新もしない
 
+## Codex の実機検証
+
+- Codex のフックと MCP の挙動は、`tools/codex-probe/` を使い、通常の `~/.codex` を書き換えずに確かめる。手順は [docs/development.md](docs/development.md) の「Codex の実機検証」にある
+- `--dangerously-bypass-hook-trust` で渡すフックは、`tools/codex-probe/` のものか、そのセッションで書いて中身を確かめたものに限る。このフラグは、有効なフックをすべて信頼の確認なしで動かすため。`launch.js` が信頼の記録の無い既存のフックを見つけて止まったら、開発者に知らせる
+- 記録に、会話の本文とツールの入出力を残さない
+- 通常の `~/.codex` を書き換えるのは、開発者が承認したときだけにする。書き換えるときはバックアップを取り、作業後に sha256 で照合して戻す
+
 ## AIクロスレビュー
 
 手順は [docs/cross-review.md](docs/cross-review.md) と cross-review スキルに従う。観点は [.cross-review.md](.cross-review.md)。
