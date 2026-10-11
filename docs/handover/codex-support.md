@@ -187,7 +187,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #212 | イベント投影が欠落を検出すると固まる | 4 | #375(部分) | 注入registryの終了実行の不在保護解除はレビュー収束。collectorの復帰証拠と指示projectionの接続条件、実runtimeが残る |
 | #213 | 合成するセッション行が親へ寄らない | 4 | #230(mock 案) | #376で状態表示を部分対応。親配置とresume統合は残る。#167-B、#171-B、#177-B と連動 |
 | #214 | managed app-server の要求期限と異常終了時の残留 | 4 | #232(部分) | 異常終了時に app-server が残る件 |
-| #215 | owned runner の起動が毎回ログインなどを前提にする | 4 | #377（部分対応） | Windows非.exeの専用診断を#377で集約。認証保存先の分離、機能の実効性と環境変数伝播は残る |
+| #215 | owned runner の起動が毎回ログインなどを前提にする | 4 | #377（部分対応）、#378、#379 | #377はfeature集約済み。通信環境の限定伝播#378と認証URL origin限定#379はReady。次の論理login直列化は関連fixture確認済みで全体試験とClaudeレビュー前。認証再利用、隔離HOMEのACL/cleanup、機能の実効性と実runtimeは残る |
 | #216 | 共通質問の自動適用が申告に依存する | 4 | #258、#279、#284(段階 1)、#286(段階 2)、#290、#293 | 段階 3(設定画面と標準起動への接続)。#209 の回収条件が前提 |
 | #217 | 通常指示の適用証拠を 60 秒しか待たない | 4 | #257 | 実 Codex で 60 秒超の遅延適用の測定 |
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
@@ -1292,3 +1292,17 @@ PR #379をfeature向けDraftとして作成した。固定head `2890629`の初�
 PR #379はReadyとする。取り込み順は#378→#379で、feature向けPRのマージ承認は別途必要である。
 次は#215のowned Codexログイン直列化へ進む。同module内の論理loginをFIFOで直列化し、異常時はchildのexitとcloseの双方まで保持する。OS port解放、別processと実認証を証明したとは扱わない。
 今回の変更は認証再利用とlogin直列化から独立した部分対応で、実認証と後続redirectの互換性を確認したとは扱わない。
+
+### ログイン直列化の現在地 (#215)
+
+最新feature `6c5854b`から`codex/login-serialization-215-20261011`を作り、Ready PR #379の最終head `36e6e5f`を通常mergeした。起点mergeは`e6791bb`である。
+Astraの設計助言と既存fixtureの限定監査を採用し、[ログイン直列化の契約](../design/native-login-serialization.md)とLG01〜LG09を記録して実装を開始した。
+同moduleのowned Codexで一つのFIFOを共有し、正常な検証済みcompletionで解放する。開始後異常はexitとcloseの双方まで保持する。
+queueには既存loginMsの独立期限を使い、取得後のRPCとcompletionの期限は維持する。認証再利用と別process間排他は追加しない。
+sourceと関連fixtureを実装し、関連2ファイルと同module共有の関連実行はそれぞれ241件中240件成功、失敗0件、Windows実symlink権限によるskip1件だった。
+rootは取消とgrantの競合、正常解放位置、異常時の両event待機、旧token隔離、fixture cleanupの差分を監査して採用し、PR #380をfeature向けDraftとして作成した。
+固定head `c8d2f0c`の全体試験は3,281件中3,276件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+指定Claude R1はblockerと要修正0件で、任意提案として書込み成否不明とsourceだけの失効のfixtureを追加する。終了未確認時の症状も手順へ補足し、再起動を停止証明の代わりにする案は採用しない。
+追加fixture後の関連2ファイルとtest-isolation=noneはそれぞれ244件中243件成功、失敗0件、Windows実symlink権限によるskip1件だった。sourceは全体試験headから不変で、追加testと文書は指定Claude R3でblockerと要修正0件に収束した。認証再利用は専用credential owner、Windows ACL、更新とrun HOMEの分離が前提で、account/readの追加だけでは完了しない。
+
+PR #380はReadyで、取り込み順は#378→#379→#380である。次はマージ済みPRに対応するIssueの完了条件と文書の状態を照合し、クローズ可能な単独不具合を整理する。

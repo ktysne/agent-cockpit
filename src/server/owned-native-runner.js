@@ -65,6 +65,87 @@ function runnerError(code) {
   return new OwnedNativeRunnerError(code);
 }
 
+function createOwnedCodexLoginGate() {
+  let holder = null;
+  const queue = [];
+
+  function removeQueued(record) {
+    const index = queue.indexOf(record);
+    if (index !== -1) queue.splice(index, 1);
+  }
+
+  function grantNext() {
+    if (holder) return;
+    while (queue.length > 0) {
+      const record = queue.shift();
+      if (record.status !== 'queued') continue;
+      if (record.timer) clearTimeout(record.timer);
+      record.timer = null;
+      record.status = 'granted';
+      holder = record;
+      record.resolve();
+      return;
+    }
+  }
+
+  return function acquire(timeoutMs) {
+    let resolve;
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    promise.catch(() => {});
+    const record = { status: 'queued', loginStarted: false, timer: null, resolve, reject };
+    const ticket = Object.freeze({
+      promise,
+      markLoginStarted() {
+        if (holder !== record || record.status !== 'granted') return false;
+        record.loginStarted = true;
+        return true;
+      },
+      release() {
+        if (holder !== record || record.status !== 'granted') return false;
+        record.status = 'released';
+        holder = null;
+        grantNext();
+        return true;
+      },
+      cancel() {
+        if (record.status === 'queued') {
+          record.status = 'cancelled';
+          if (record.timer) clearTimeout(record.timer);
+          record.timer = null;
+          removeQueued(record);
+          record.reject(runnerError('operation_stopped'));
+          grantNext();
+          return true;
+        }
+        if (holder === record && record.status === 'granted' && !record.loginStarted) {
+          record.status = 'cancelled';
+          holder = null;
+          grantNext();
+          return true;
+        }
+        return false;
+      },
+    });
+    queue.push(record);
+    record.timer = setTimeout(() => {
+      if (record.status !== 'queued') return;
+      record.status = 'cancelled';
+      record.timer = null;
+      removeQueued(record);
+      record.reject(runnerError('authentication_queue_timeout'));
+      grantNext();
+    }, timeoutMs);
+    grantNext();
+    return ticket;
+  };
+}
+
+const acquireOwnedCodexLoginGate = createOwnedCodexLoginGate();
+
 function isFullyQualifiedCaFile(value) {
   if (process.platform !== 'win32') return path.posix.isAbsolute(value);
   if (/^[A-Za-z]:[\\/]/.test(value)) return true;
@@ -535,6 +616,50 @@ function createOwnedNativeRunner(options) {
         },
         () => finish(reject, runnerError('operation_failed')),
       );
+    });
+  }
+
+  function waitForCodexLoginGate(expectedGeneration) {
+    const ticket = acquireOwnedCodexLoginGate(timeouts.loginMs);
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const cancel = () => {
+        ticket.cancel();
+        cancellations.delete(cancel);
+        if (settled) return;
+        settled = true;
+        reject(runnerError('operation_stopped'));
+      };
+      const rejectAcquisition = (error) => {
+        if (settled) return;
+        settled = true;
+        cancellations.delete(cancel);
+        reject(error);
+      };
+      cancellations.add(cancel);
+      if (!isCurrent(expectedGeneration)) {
+        cancel();
+        return;
+      }
+      ticket.promise.then(() => {
+        if (settled) return;
+        if (!isCurrent(expectedGeneration)) {
+          cancel();
+          return;
+        }
+        try {
+          requireOwnerCurrent(expectedGeneration);
+        } catch (error) {
+          ticket.cancel();
+          rejectAcquisition(error instanceof OwnedNativeRunnerError ? error : runnerError('authority_expired'));
+          return;
+        }
+        if (settled) return;
+        settled = true;
+        resolve({ ticket, disarmCancellation: () => cancellations.delete(cancel) });
+      }, (error) => {
+        rejectAcquisition(error instanceof OwnedNativeRunnerError ? error : runnerError('operation_failed'));
+      });
     });
   }
 
@@ -1980,19 +2105,34 @@ function createOwnedNativeRunner(options) {
     requireCurrent(expectedGeneration);
     await writeLine(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }), expectedGeneration);
     requireOwnerCurrent(expectedGeneration);
-    const loginAttempt = createLoginAttempt();
-    activeLogin = loginAttempt;
-    const login = await sendRpc('account/login/start', { type: 'chatgpt' }, expectedGeneration);
-    requireOwnerCurrent(expectedGeneration);
-    if (!isRecord(login) || login.type !== 'chatgpt' || !isIdentifier(login.loginId)) {
-      throw runnerError('authentication_response_invalid');
+    let loginGateAcquisition = null;
+    let loginLease = null;
+    try {
+      loginGateAcquisition = await waitForCodexLoginGate(expectedGeneration);
+      loginLease = loginGateAcquisition.ticket;
+      requireOwnerCurrent(expectedGeneration);
+      requireCurrent(expectedGeneration);
+      const loginAttempt = createLoginAttempt();
+      activeLogin = loginAttempt;
+      if (!loginLease.markLoginStarted()) throw runnerError('operation_stopped');
+      loginGateAcquisition.disarmCancellation();
+      childTerminationPromise.then(() => loginLease.release(), () => {});
+      const login = await sendRpc('account/login/start', { type: 'chatgpt' }, expectedGeneration);
+      requireOwnerCurrent(expectedGeneration);
+      if (!isRecord(login) || login.type !== 'chatgpt' || !isIdentifier(login.loginId)) {
+        throw runnerError('authentication_response_invalid');
+      }
+      const authUrl = validateAuthenticationUrl(login.authUrl);
+      reconcileEarlyLogin(loginAttempt, login.loginId);
+      if (!loginAttempt.completionSeen) requestAuthenticationPrompt(login.loginId, authUrl, expectedGeneration);
+      await awaitCurrent(loginAttempt.completion, expectedGeneration, timeouts.loginMs, 'authentication_timeout');
+      requireOwnerCurrent(expectedGeneration);
+      loginLease.release();
+      if (activeLogin === loginAttempt) activeLogin = null;
+    } finally {
+      loginGateAcquisition?.disarmCancellation();
+      loginLease?.cancel();
     }
-    const authUrl = validateAuthenticationUrl(login.authUrl);
-    reconcileEarlyLogin(loginAttempt, login.loginId);
-    if (!loginAttempt.completionSeen) requestAuthenticationPrompt(login.loginId, authUrl, expectedGeneration);
-    await awaitCurrent(loginAttempt.completion, expectedGeneration, timeouts.loginMs, 'authentication_timeout');
-    requireOwnerCurrent(expectedGeneration);
-    if (activeLogin === loginAttempt) activeLogin = null;
     requireCurrent(expectedGeneration);
     const threadStartParams = {
       cwd,

@@ -1271,6 +1271,11 @@ test('a parent period that ends during Codex login prevents thread and turn crea
   const bindCalls = fixture.launchCalls.bindExecution;
   const adoptCalls = fixture.runtimeCalls.adoptExecution;
   const pendingStart = fixture.composition.start(childAdmission, { inputText: 'private child prompt' });
+  const pendingStartObserved = observeStart(pendingStart);
+  t.after(async () => {
+    await fixture.composition.stop(childAdmission);
+    await pendingStartObserved;
+  });
   const loginChallenge = await challenge;
   assert.equal(loginChallenge.loginId, 'login-integration');
   assert.equal(fixture.registrationKernel.registry.snapshot().executions.length, 1);

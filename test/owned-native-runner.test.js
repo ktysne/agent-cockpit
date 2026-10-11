@@ -441,6 +441,7 @@ test('Codex presents same-process managed login once and waits for its matching 
     },
     onNative: (event) => events.push(event),
   }));
+  t.after(() => runner.stop());
   const snapshot = await runner.start({ inputText: 'private task prompt' });
   assert.equal(harness.calls, 1);
   assert.equal(harness.options.shell, false);
@@ -666,6 +667,7 @@ test('a successful login notification that precedes its RPC response is correlat
     spawnImpl: harness.spawnImpl,
     onNative() {},
   }));
+  t.after(() => runner.stop());
   const snapshot = await runner.start({ inputText: 'task' });
   assert.equal(prompts, 0);
   assert.deepEqual(methods, ['initialize', 'account/login/start', 'thread/start', 'turn/start']);
@@ -697,6 +699,7 @@ test('owner expiry at the authentication callback prevents thread start despite 
     spawnImpl: harness.spawnImpl,
     onNative() {},
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'task' }), (error) => error.code === 'authority_expired');
   assert.equal(prompts, 1);
   assert.deepEqual(methods, ['initialize', 'account/login/start']);
@@ -1006,6 +1009,7 @@ test('a mismatched login completion fails closed without starting a thread or ex
     onNative() {},
     onDisconnect: (event) => { disconnect = event; },
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'private' }), (error) => {
     assert.equal(error.message.includes(LOGIN_URL), false);
     assert.equal(error.message.includes(LOGIN_ID), false);
@@ -1037,6 +1041,7 @@ test('a login completion that arrives before the start response must match its l
     spawnImpl: harness.spawnImpl,
     onNative() {},
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'task' }));
   assert.equal(runner.snapshot().failureCode, 'authentication_login_mismatch');
   assert.equal(prompts, 0);
@@ -1065,6 +1070,7 @@ test('the authentication prompt promise does not substitute for the native login
     onDisconnect: (event) => { disconnect = event; },
     timeouts: { loginMs: 50 },
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'task' }), (error) => error.code === 'authentication_timeout');
   assert.equal(prompts, 1);
   assert.deepEqual(methods, ['initialize', 'account/login/start']);
@@ -1113,6 +1119,7 @@ test('stopping from the authentication callback invalidates the pending attempt 
     spawnImpl: harness.spawnImpl,
     onNative() {},
   }));
+  t.after(() => runner.stop());
   await assert.rejects(runner.start({ inputText: 'task' }), (error) => error.code === 'operation_stopped');
   const snapshot = await runner.stop();
   assert.equal(snapshot.state, 'stopped');
@@ -3917,3 +3924,558 @@ function readTransportValues(environment) {
 function assertForbiddenEnvironmentAbsent(environment) {
   for (const key of FORBIDDEN_INHERITED_ENVIRONMENT_KEYS) assert.equal(Object.hasOwn(environment, key), false);
 }
+
+function createControlledCodexLoginFixture(t, values = {}) {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const barriers = new Map();
+  const state = {
+    child: null,
+    methods: [],
+    writes: [],
+    loginRequest: null,
+    threadStartRequest: null,
+    promptCalls: 0,
+    exitSeen: false,
+    closeSeen: false,
+    startPromise: null,
+    startObserved: null,
+  };
+  const barrier = (name) => {
+    if (!barriers.has(name)) barriers.set(name, deferred());
+    return barriers.get(name);
+  };
+  const signal = (name) => barrier(name).resolve();
+  const spawnImpl = () => {
+    const child = new FakeChild((line, currentChild) => {
+      state.writes.push(line);
+      const request = JSON.parse(line);
+      if (request.method === 'initialized') {
+        signal('initialized-write');
+        return;
+      }
+      if (!request.method || !Object.hasOwn(request, 'id')) return;
+      state.methods.push(request.method);
+      signal(`request:${request.method}`);
+      if (request.method === 'initialize') {
+        currentChild.send(codexResponse(request.id, {
+          serverInfo: { name: 'codex', version: 'test' },
+          codexHome: path.join(workspace.homePath, '.codex'),
+        }));
+      } else if (request.method === 'account/login/start') {
+        state.loginRequest = { id: request.id };
+      } else if (request.method === 'thread/start') {
+        if (values.holdThreadStartResponse) {
+          state.threadStartRequest = { id: request.id };
+          signal('thread-start-held');
+        } else currentChild.send(codexResponse(request.id, { thread: { id: 'thread_native_1' } }));
+      } else if (request.method === 'turn/start') {
+        currentChild.send(codexResponse(request.id, { turn: { id: 'turn_native_1' } }));
+      }
+    }, {
+      ...(values.childOptions || {}),
+      onWriteCallback(text, callback) {
+        const request = JSON.parse(text);
+        if (request.method === 'account/login/start' && values.loginWriteFailure) {
+          signal('login-write-failure-injected');
+          const error = new Error(values.loginWriteError);
+          if (values.loginWriteFailure === 'sync-throw') throw error;
+          queueMicrotask(() => callback(error));
+          return;
+        }
+        queueMicrotask(() => {
+          callback();
+          if (request.method === 'initialized') signal('initialized-complete');
+        });
+      },
+    });
+    state.child = child;
+    child.on('exit', () => { state.exitSeen = true; });
+    child.on('close', () => { state.closeSeen = true; });
+    setImmediate(() => child.emit('spawn'));
+    return child;
+  };
+  let runner;
+  runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    ownedSourceClaim: claim,
+    onSourceReady: () => {},
+    isCurrent: () => values.isCurrent ? values.isCurrent() : true,
+    isSourceCurrent: () => values.isSourceCurrent ? values.isSourceCurrent() : true,
+    onAuthenticationRequired: (input) => {
+      state.promptCalls += 1;
+      signal('authentication-prompt');
+      if (values.onAuthenticationRequired) return values.onAuthenticationRequired(input, state);
+      state.child.send(codexLoginCompleted(input.loginId));
+    },
+    spawnImpl,
+    onNative: () => {},
+    timeouts: { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: 100, ...values.timeouts },
+  }));
+  const fixture = {
+    runner,
+    state,
+    start(inputText = 'fixed task') {
+      state.startPromise = runner.start({ inputText });
+      state.startObserved = observeStart(state.startPromise);
+      return state.startPromise;
+    },
+    wait(name) { return barrier(name).promise; },
+    respondLogin(result = { type: 'chatgpt', loginId: LOGIN_ID, authUrl: values.authUrl || LOGIN_URL }) {
+      if (!state.loginRequest) throw new Error('login request has not been written');
+      state.child.send(codexResponse(state.loginRequest.id, result));
+    },
+    completeLogin(loginId = LOGIN_ID, success = true) {
+      state.child.send(codexLoginCompleted(loginId, success));
+    },
+    respondThreadStart() {
+      if (!state.threadStartRequest) throw new Error('thread start response is not held');
+      state.child.send(codexResponse(state.threadStartRequest.id, { thread: { id: 'thread_native_1' } }));
+    },
+    emitTermination(event) {
+      if (event === 'exit') state.child.exited = true;
+      state.child.emit(event, 0, null);
+    },
+  };
+  t.after(async () => {
+    try { await runner.stop(); } catch {}
+    if (state.child) {
+      if (!state.exitSeen) fixture.emitTermination('exit');
+      if (!state.closeSeen) fixture.emitTermination('close');
+      await nextImmediate();
+    }
+    if (state.startObserved) await state.startObserved;
+  });
+  return fixture;
+}
+
+function hasMethod(fixture, method) {
+  return fixture.state.methods.includes(method);
+}
+
+test('owned Codex login attempts are granted FIFO and release before thread startup only after success', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, { holdThreadStartResponse: true });
+  const second = createControlledCodexLoginFixture(t);
+  const third = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  third.start();
+  await third.wait('initialized-complete');
+  await nextImmediate();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  assert.equal(hasMethod(third, 'account/login/start'), false);
+
+  first.respondLogin();
+  await first.wait('thread-start-held');
+  await second.wait('request:account/login/start');
+  assert.equal(first.state.threadStartRequest !== null, true);
+  assert.equal(hasMethod(third, 'account/login/start'), false);
+  first.respondThreadStart();
+  assert.equal((await first.state.startObserved).status, 'resolved');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+  await third.wait('request:account/login/start');
+  third.respondLogin();
+  assert.equal((await third.state.startObserved).status, 'resolved');
+});
+
+test('queued stop and owner expiry remove login waiters without starting login RPCs', { timeout: 8000 }, async (t) => {
+  const holder = createControlledCodexLoginFixture(t);
+  const stopped = createControlledCodexLoginFixture(t);
+  let ownerCurrent = true;
+  const expired = createControlledCodexLoginFixture(t, { isCurrent: () => ownerCurrent });
+  const next = createControlledCodexLoginFixture(t);
+  holder.start();
+  await holder.wait('request:account/login/start');
+  stopped.start();
+  await stopped.wait('initialized-complete');
+  await nextImmediate();
+  const stoppedResult = stopped.state.startObserved;
+  await stopped.runner.stop();
+  assert.equal((await stoppedResult).status, 'rejected');
+  assert.equal(hasMethod(stopped, 'account/login/start'), false);
+
+  expired.start();
+  await expired.wait('initialized-complete');
+  next.start();
+  await next.wait('initialized-complete');
+  await nextImmediate();
+  ownerCurrent = false;
+  holder.respondLogin();
+  const expiredResult = await expired.state.startObserved;
+  assert.equal(expiredResult.status, 'rejected');
+  assert.equal(expiredResult.error.code, 'authority_expired');
+  assert.equal(hasMethod(expired, 'account/login/start'), false);
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});
+
+test('queue timeout removes its waiter and leaves the active Codex login intact', { timeout: 8000 }, async (t) => {
+  const holder = createControlledCodexLoginFixture(t);
+  const timedOut = createControlledCodexLoginFixture(t, { timeouts: { loginMs: 80 } });
+  const next = createControlledCodexLoginFixture(t);
+  holder.start();
+  await holder.wait('request:account/login/start');
+  timedOut.start();
+  await timedOut.wait('initialized-complete');
+  next.start();
+  await next.wait('initialized-complete');
+  const result = await timedOut.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'authentication_queue_timeout');
+  assert.equal(hasMethod(timedOut, 'account/login/start'), false);
+  assert.equal(hasMethod(next, 'account/login/start'), false);
+
+  holder.respondLogin();
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});
+
+test('a synchronous stop during post-grant owner checking returns the unused ticket before login RPC', { timeout: 8000 }, async (t) => {
+  let stopAtNextOwnerCheck = false;
+  let reentrant;
+  const holder = createControlledCodexLoginFixture(t);
+  reentrant = createControlledCodexLoginFixture(t, {
+    isCurrent: () => {
+      if (stopAtNextOwnerCheck) {
+        stopAtNextOwnerCheck = false;
+        reentrant.state.stopPromise = reentrant.runner.stop();
+      }
+      return true;
+    },
+  });
+  const next = createControlledCodexLoginFixture(t);
+  holder.start();
+  await holder.wait('request:account/login/start');
+  reentrant.start();
+  await reentrant.wait('initialized-complete');
+  next.start();
+  await next.wait('initialized-complete');
+  await nextImmediate();
+  stopAtNextOwnerCheck = true;
+  holder.respondLogin();
+
+  const result = await reentrant.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'operation_stopped');
+  await reentrant.state.stopPromise;
+  assert.equal(hasMethod(reentrant, 'account/login/start'), false);
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});
+
+test('early login success cannot release a bad authentication response before child termination', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, {
+    childOptions: { killEvents: ['exit'] },
+  });
+  const second = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  first.completeLogin();
+  first.respondLogin({
+    type: 'chatgpt', loginId: LOGIN_ID, authUrl: 'https://auth.example.test/oauth/authorize?fixture=bad-url',
+  });
+  const result = await first.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'authentication_response_invalid');
+  await nextImmediate();
+  assert.equal(first.state.exitSeen, true);
+  assert.equal(first.state.closeSeen, false);
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  await first.runner.stop();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+
+  first.emitTermination('close');
+  await second.wait('request:account/login/start');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+});
+
+test('close without exit does not release a started login until the late exit arrives', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, { childOptions: { killEvents: ['close'] } });
+  const second = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  first.respondLogin({ type: 'invalid-provider', loginId: LOGIN_ID, authUrl: LOGIN_URL });
+  assert.equal((await first.state.startObserved).status, 'rejected');
+  await nextImmediate();
+  assert.equal(first.state.closeSeen, true);
+  assert.equal(first.state.exitSeen, false);
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  await first.runner.stop();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  first.emitTermination('exit');
+  await second.wait('request:account/login/start');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+});
+
+test('explicit stop keeps a started login slot through stop_unconfirmed until late termination completes', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, {
+    childOptions: { autoKillEvents: false },
+    onAuthenticationRequired: () => {},
+  });
+  const second = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  first.respondLogin();
+  await first.wait('authentication-prompt');
+  const stopped = await first.runner.stop();
+  assert.equal(stopped.state, 'stop_unconfirmed');
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  first.emitTermination('exit');
+  await nextImmediate();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  first.emitTermination('close');
+  await second.wait('request:account/login/start');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+});
+
+test('authentication callback can synchronously start and stop another runner while the gate is held', { timeout: 8000 }, async (t) => {
+  let reentrant;
+  const first = createControlledCodexLoginFixture(t, {
+    onAuthenticationRequired: ({ loginId }, state) => {
+      reentrant.start();
+      state.reentrantStop = reentrant.runner.stop();
+      state.child.send(codexLoginCompleted(loginId));
+    },
+  });
+  reentrant = createControlledCodexLoginFixture(t);
+  const next = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  next.start();
+  await next.wait('initialized-complete');
+  first.respondLogin();
+  assert.equal((await first.state.startObserved).status, 'resolved');
+  await first.state.reentrantStop;
+  assert.equal((await reentrant.state.startObserved).status, 'rejected');
+  assert.equal(hasMethod(reentrant, 'account/login/start'), false);
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});
+
+for (const scenario of ['invalid-type', 'early-mismatch', 'duplicate-completion', 'failed-completion']) {
+  test(`started login ${scenario} holds the gate until both child termination events`, { timeout: 8000 }, async (t) => {
+    const first = createControlledCodexLoginFixture(t, {
+      childOptions: { autoKillEvents: false },
+      onAuthenticationRequired: scenario === 'duplicate-completion'
+        ? ({ loginId }, state) => {
+          state.child.send(codexLoginCompleted(loginId));
+          state.child.send(codexLoginCompleted(loginId));
+        }
+        : () => {},
+    });
+    const second = createControlledCodexLoginFixture(t);
+    first.start();
+    await first.wait('request:account/login/start');
+    second.start();
+    await second.wait('initialized-complete');
+    if (scenario === 'early-mismatch') first.completeLogin('login_mismatch_fixture');
+    if (scenario === 'invalid-type') {
+      first.respondLogin({ type: 'wrong-provider', loginId: LOGIN_ID, authUrl: LOGIN_URL });
+    } else {
+      first.respondLogin();
+      if (scenario === 'failed-completion') {
+        await first.wait('authentication-prompt');
+        first.completeLogin(LOGIN_ID, false);
+      }
+    }
+    const result = await first.state.startObserved;
+    assert.equal(result.status, 'rejected');
+    await nextImmediate();
+    assert.equal(first.state.exitSeen, false);
+    assert.equal(first.state.closeSeen, false);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    await first.runner.stop();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('exit');
+    await nextImmediate();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('close');
+    await second.wait('request:account/login/start');
+    second.respondLogin();
+    assert.equal((await second.state.startObserved).status, 'resolved');
+  });
+}
+
+for (const mode of ['sync-throw', 'async-reject']) {
+  test(`${mode} authentication callback failure is sanitized and retains the login gate until termination`, { timeout: 8000 }, async (t) => {
+    const privateSentinel = `fixture-callback-${mode}-private-sentinel`;
+    const authUrl = `https://auth.openai.com/oauth/authorize?fixture=${privateSentinel}`;
+    const first = createControlledCodexLoginFixture(t, {
+      authUrl,
+      childOptions: { autoKillEvents: false },
+      onAuthenticationRequired: () => {
+        if (mode === 'sync-throw') throw new Error(privateSentinel);
+        return Promise.reject(new Error(privateSentinel));
+      },
+    });
+    const second = createControlledCodexLoginFixture(t);
+    first.start();
+    await first.wait('request:account/login/start');
+    second.start();
+    await second.wait('initialized-complete');
+    first.respondLogin({ type: 'chatgpt', loginId: LOGIN_ID, authUrl });
+    const result = await first.state.startObserved;
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.error.code, mode === 'sync-throw' ? 'authentication_prompt_failed' : 'operation_stopped');
+    await nextImmediate();
+    assert.equal(first.runner.snapshot().failureCode, 'authentication_prompt_failed');
+    assert.equal(result.error.cause, undefined);
+    assert.equal(result.error.message.includes(privateSentinel), false);
+    assert.equal(result.error.stack.includes(privateSentinel), false);
+    assert.equal(JSON.stringify(first.runner.snapshot()).includes(privateSentinel), false);
+    assert.equal(JSON.stringify(first.runner.snapshot()).includes(authUrl), false);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    await first.runner.stop();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('exit');
+    await nextImmediate();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('close');
+    await second.wait('request:account/login/start');
+    second.respondLogin();
+    assert.equal((await second.state.startObserved).status, 'resolved');
+  });
+}
+
+test('authentication timeout keeps the login gate until exit and close both arrive', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t, {
+    childOptions: { autoKillEvents: false },
+    onAuthenticationRequired: () => {},
+    timeouts: { loginMs: 60 },
+  });
+  const second = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  second.start();
+  await second.wait('initialized-complete');
+  first.respondLogin();
+  await first.wait('authentication-prompt');
+  const result = await first.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'authentication_timeout');
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  await first.runner.stop();
+  first.emitTermination('exit');
+  await nextImmediate();
+  assert.equal(hasMethod(second, 'account/login/start'), false);
+  first.emitTermination('close');
+  await second.wait('request:account/login/start');
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+});
+
+test('termination and completion from an older login cannot release the current Codex holder', { timeout: 8000 }, async (t) => {
+  const first = createControlledCodexLoginFixture(t);
+  const second = createControlledCodexLoginFixture(t);
+  const third = createControlledCodexLoginFixture(t);
+  first.start();
+  await first.wait('request:account/login/start');
+  first.respondLogin();
+  assert.equal((await first.state.startObserved).status, 'resolved');
+
+  second.start();
+  await second.wait('request:account/login/start');
+  third.start();
+  await third.wait('initialized-complete');
+  first.emitTermination('exit');
+  first.emitTermination('close');
+  first.completeLogin();
+  await nextImmediate();
+  assert.equal(hasMethod(third, 'account/login/start'), false);
+
+  second.respondLogin();
+  assert.equal((await second.state.startObserved).status, 'resolved');
+  await third.wait('request:account/login/start');
+  third.respondLogin();
+  assert.equal((await third.state.startObserved).status, 'resolved');
+});
+
+for (const mode of ['callback-error', 'sync-throw']) {
+  test(`an account login write ${mode} keeps the gate until both child termination events`, { timeout: 8000 }, async (t) => {
+    const privateSentinel = `fixture-login-write-${mode}-private-sentinel`;
+    const authUrl = `https://auth.openai.com/device?fixture=${privateSentinel}`;
+    const writeFailure = `${authUrl} ${privateSentinel}`;
+    const first = createControlledCodexLoginFixture(t, {
+      loginWriteFailure: mode,
+      loginWriteError: writeFailure,
+      childOptions: { autoKillEvents: false },
+    });
+    const second = createControlledCodexLoginFixture(t);
+    first.start();
+    await first.wait('login-write-failure-injected');
+    const result = await first.state.startObserved;
+    const failureSnapshot = first.runner.snapshot();
+    second.start();
+    await second.wait('initialized-complete');
+    assert.equal(hasMethod(first, 'account/login/start'), true);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    assert.equal(result.status, 'rejected');
+    assert.equal(result.error.code, 'operation_failed');
+    assert.equal(result.error.cause, undefined);
+    assert.equal(result.error.message.includes(privateSentinel), false);
+    assert.equal(result.error.stack.includes(privateSentinel), false);
+    assert.equal(result.error.message.includes(authUrl), false);
+    assert.equal(result.error.stack.includes(authUrl), false);
+    assert.equal(failureSnapshot.failureCode, 'operation_failed');
+    assert.equal(JSON.stringify(failureSnapshot).includes(privateSentinel), false);
+    assert.equal(JSON.stringify(failureSnapshot).includes(authUrl), false);
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+
+    await first.runner.stop();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('exit');
+    await nextImmediate();
+    assert.equal(hasMethod(second, 'account/login/start'), false);
+    first.emitTermination('close');
+    await second.wait('request:account/login/start');
+    second.respondLogin();
+    assert.equal((await second.state.startObserved).status, 'resolved');
+  });
+}
+
+test('source expiry before login gate grant returns its ticket without sending login', { timeout: 8000 }, async (t) => {
+  const holder = createControlledCodexLoginFixture(t);
+  let sourceCurrent = true;
+  const sourceExpired = createControlledCodexLoginFixture(t, {
+    isCurrent: () => true,
+    isSourceCurrent: () => sourceCurrent,
+  });
+  const next = createControlledCodexLoginFixture(t);
+  holder.start();
+  await holder.wait('request:account/login/start');
+  sourceExpired.start();
+  await sourceExpired.wait('initialized-complete');
+  next.start();
+  await next.wait('initialized-complete');
+  await nextImmediate();
+  assert.equal(hasMethod(sourceExpired, 'account/login/start'), false);
+  assert.equal(hasMethod(next, 'account/login/start'), false);
+
+  sourceCurrent = false;
+  holder.respondLogin();
+  const result = await sourceExpired.state.startObserved;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.error.code, 'authority_expired');
+  assert.equal(hasMethod(sourceExpired, 'account/login/start'), false);
+  await next.wait('request:account/login/start');
+  next.respondLogin();
+  assert.equal((await next.state.startObserved).status, 'resolved');
+});

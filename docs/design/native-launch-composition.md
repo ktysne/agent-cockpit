@@ -22,6 +22,7 @@ default owned runnerはWindowsで通常の`.exe`だけを受け付け、非対�
 実fileと拡張子の検査は`start`時のrunner生成で行い、`admitLaunch`の受理だけでは実行ファイルの検証は完了しない。
 owned runnerへ渡すproxyとCAの固定変数、検査と一時環境の寿命は[通信環境の供給契約](native-transport-environment.md)に従う。
 owned Codexのbrowser login応答は[認証URLの契約](native-authentication-url.md)の二つのoriginに限定する。実runtimeと後続redirectはこの文字列検査から保証しない。
+同module内のowned Codexは[ログイン直列化の契約](native-login-serialization.md)に従って論理loginをFIFOで開始する。停止未確認のloginは後続へ順番を渡さない。
 
 `admitLaunch`は`launchId`、`runId`、`attemptId`、`profileId`、`origin`、`purpose`と、delegatedまたはreview用のopaque `originReceipt`だけを受ける。
 
