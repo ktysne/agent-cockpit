@@ -1054,7 +1054,8 @@ test('予約待ち条件は承認任意ならレビュー承認を待たない',
     ui: { reviewSkips: {} },
   });
   vm.runInContext(`${webWaitReasonsSource}\n${webWaitSource}\nthis.reservationWaits = pullRequestReservationWaits;`, webContext);
-  vm.runInContext(`${mockWaitReasonsSource}\n${mockWaitSource}\nthis.reservationWaits = reservationWait;`, mockContext);
+  vm.runInContext([functionSource(mock, 'mergeTarget'), functionSource(mock, 'mergeMethodFixed'),
+    mockWaitReasonsSource, mockWaitSource, 'this.reservationWaits = reservationWait;'].join('\n'), mockContext);
 
   const group = { defaultBranch: 'main', mergeMethods: ['squash'] };
   const product = { repo: { defaultBranch: 'main', methods: ['squash'] } };

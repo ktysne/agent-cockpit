@@ -82,6 +82,80 @@ function mergedPullRequest(number, headRefOid, mergedAt = '2026-10-03T11:00:00.0
   return { number, headRefOid, headRefName, baseRefName, mergedAt };
 }
 
+function aggregateStack(changes = {}) {
+  const openPullRequests = [pullRequest(31, 'feat/child', 'feature/aggregate')];
+  return assemblePullRequestStacks({
+    defaultBranch: 'main', openPullRequests, registrations: [pullRequestRegistration(31)],
+    listAvailable: true, mergedPullRequests: [], mergedCandidates: [], mergeMethods: ['merge', 'squash'],
+    restackResults: new Map([[31, { checked: true, parent: null }]]), ...changes,
+  });
+}
+
+test('既知の PR の head でない集約ブランチはマージコミットでマージできる', () => {
+  const result = aggregateStack();
+  assert.equal(result.trees[0].mergeTarget, 'feature/aggregate');
+  assert.equal(result.trees[0].mergeMethodFixed, 'merge');
+  assert.equal(result.trees[0].canMerge, true);
+  assert.deepEqual(result.orphanedOpenNumbers, []);
+});
+
+test('PR の一覧や登録詳細を確認できなければ集約ブランチへマージできない', () => {
+  const atLimit = Array.from({ length: 500 }, (_, index) => pullRequest(index + 1, `feat/${index}`, 'feature/aggregate'));
+  for (const changes of [
+    { listAvailable: false }, { mergedPullRequests: null },
+    { uninspectedNumbers: new Set([99]) }, { openPullRequests: atLimit },
+  ]) {
+    const result = aggregateStack(changes);
+    assert.equal(result.trees[0].mergeTarget, null);
+    assert.equal(result.trees[0].canMerge, false);
+    assert.equal(result.trees[0].blocker, 'base の feature/aggregate がどの PR の head でもないことを確認できない');
+    assert.deepEqual(result.orphanedOpenNumbers, [31]);
+  }
+});
+
+test('マージ済み検索で見つかった head ブランチは集約先として認めない', () => {
+  const merged = mergedPullRequest(30, 'a'.repeat(40), undefined, 'feature/aggregate', 'main');
+  const result = aggregateStack({ mergedPullRequests: [merged], mergedCandidates: [merged] });
+  assert.equal(result.trees[0].mergeTarget, null);
+  assert.equal(result.trees[0].blocker, 'base の feature/aggregate はマージ済みの PR の head のため、ダッシュボードではマージしない');
+});
+
+test('別のプロダクトに登録された閉じた PR の head も集約先として認めない', () => {
+  const record = pullRequestRegistration(30, { state: 'closed', lastOpen: {
+    headRefName: 'feature/aggregate', baseRefName: 'main', headRefOid: 'a'.repeat(40),
+  } });
+  const result = aggregateStack({ knownRegistrations: [record] });
+  assert.equal(result.trees[0].mergeTarget, null);
+  assert.equal(result.trees[0].blocker, 'base の feature/aggregate に対応する PR が見つからない');
+});
+
+test('集約ブランチの最終 PR を開くとその配下は最終 PR のマージ待ちになる', () => {
+  const result = aggregateStack({ openPullRequests: [
+    pullRequest(30, 'feature/aggregate', 'main'), pullRequest(31, 'feat/child', 'feature/aggregate'),
+  ] });
+  const child = result.trees[0].children[0];
+  assert.equal(child.mergeTarget, null);
+  assert.equal(child.canMerge, false);
+  assert.equal(child.blocker, '下の #30 のマージ待ち');
+});
+
+test('集約先でマージコミットが許可されていなければマージできない', () => {
+  const result = aggregateStack({ mergeMethods: ['squash', 'rebase'] });
+  assert.equal(result.trees[0].canMerge, false);
+  assert.match(result.trees[0].blocker, /マージコミットが必要だが、このリポジトリでは許可されていない/);
+  assert.deepEqual(result.orphanedOpenNumbers, []);
+});
+
+test('同期 PR は既定ブランチを base にする PR の親にも表示上の関連にもならない', () => {
+  const prs = [pullRequest(30, 'main', 'feature/aggregate'), pullRequest(31, 'feat/child', 'main')];
+  const result = aggregateStack({ openPullRequests: prs, restackResults: checkedRestackResults(prs) });
+  assert.equal(result.trees.length, 1);
+  assert.equal(result.trees[0].number, 31);
+  assert.equal(result.trees[0].parentNumber, null);
+  assert.equal(result.trees[0].mergeTarget, 'main');
+  assert.equal(result.trees[0].canMerge, true);
+});
+
 test('非表示にしたマージ履歴は再記録と復元で戻らず、新しいマージ日時で表示する', async (t) => {
   const homeDir = await temporaryDirectory(t);
   const now = Date.parse('2026-10-08T00:00:00.000Z');
@@ -243,7 +317,7 @@ for (const exists of [true, false]) {
     const tree = tracker.snapshot()[0].trees[0];
     assert.equal(tree.effectiveBase, exists ? branch : 'main');
     assert.equal(tree.needsRestack, !exists);
-    if (exists) assert.match(tree.blocker, /base の codex\/feature は既定ブランチではない/);
+    if (exists) assert.match(tree.blocker, /base の codex\/feature はマージ済みの PR の head/);
     assert.ok(calls.some((args) => args[0] === 'api' && args[1].endsWith(`/compare/${exists ? 'codex%2Ffeature' : 'main'}...${childSha}`)));
   });
 }
@@ -410,7 +484,7 @@ test('マージできない理由は base、スタック、ドラフト、積み
     {
       pullRequests: [pullRequest(20, 'child', 'missing/base', { draft: true, conflict: true, ci: 'fail', review: 'changes' })],
       number: 20,
-      expected: 'base の missing/base は既定ブランチではないため、ダッシュボードではマージしない',
+      expected: 'base の missing/base がどの PR の head でもないことを確認できない',
     },
     {
       pullRequests: [pullRequest(36, 'child', 'closed/base')],
@@ -725,7 +799,8 @@ test('集約ブランチを base にした PR は集約ブランチとの差分�
   const [group] = tracker.snapshot();
   assert.equal(group.trees[0].needsRestack, false);
   assert.ok(calls.some((args) => args[0] === 'api' && args[1].endsWith(`/compare/codex%2Ffeature...${childSha}`)));
-  assert.equal(group.trees[0].blocker, 'base の codex/feature は既定ブランチではないため、ダッシュボードではマージしない');
+  assert.equal(group.trees[0].blocker, null);
+  assert.equal(group.trees[0].mergeTarget, 'codex/feature');
 });
 
 test('比較経路に含まれない既定ブランチへマージした PR の head は積み直し扱いにしない', async (t) => {
@@ -885,7 +960,7 @@ test('マージ後に head が進んだ集約ブランチは比較 base と実�
   const [group] = tracker.snapshot();
   assert.equal(group.trees[0].effectiveBase, branch);
   assert.equal(group.trees[0].needsRestack, false);
-  assert.equal(group.trees[0].blocker, 'base の codex/feature は既定ブランチではないため、ダッシュボードではマージしない');
+  assert.equal(group.trees[0].blocker, 'base の codex/feature はマージ済みの PR の head のため、ダッシュボードではマージしない');
   assert.ok(calls.some((args) => args[0] === 'api' && args[1].endsWith(`/compare/codex%2Ffeature...${childSha}`)));
   assert.ok(!calls.some((args) => args[0] === 'api' && args[1].endsWith(`/compare/main...${childSha}`)));
   assert.equal(calls.filter((args) => args[0] === 'api' && args[1].includes('/git/ref/heads/')).length, 1);

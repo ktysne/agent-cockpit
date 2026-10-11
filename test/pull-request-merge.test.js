@@ -57,6 +57,8 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     queueMerge: false,
     failView: false,
     defaultBranch: 'main',
+    allowMerge: true,
+    failMergedList: false,
     waitForMerge: null,
     crossReviews: new Map(),
     afterEdit: null,
@@ -66,6 +68,10 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     calls.push([...args]);
     const finish = (error, output = '', stderr = '') => callback(error, output, stderr);
     if (args[0] === 'pr' && args[1] === 'list') {
+      if (args.includes('merged') && control.failMergedList) {
+        finish(Object.assign(new Error('merged list failed'), { code: 'EIO' }));
+        return;
+      }
       const stateIndex = args.indexOf('--state');
       if (args[stateIndex + 1] === 'open' && control.failOpenList) {
         finish(Object.assign(new Error('list failed'), { code: 'EIO' }));
@@ -76,7 +82,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     }
     if (args[0] === 'api' && args[1] === 'repos/example/project') {
       finish(null, JSON.stringify({
-        default_branch: control.defaultBranch, allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true,
+        default_branch: control.defaultBranch, allow_merge_commit: control.allowMerge, allow_squash_merge: true, allow_rebase_merge: true,
         delete_branch_on_merge: control.autoDeleteBranch,
       }));
       return;
@@ -172,6 +178,117 @@ function mergeInput(number = 1, changes = {}) {
   };
 }
 
+for (const automatic of [false, true]) {
+  test(`集約ブランチへの${automatic ? '予約' : '即時'}マージは子の base を集約先に付け替える`, async (t) => {
+    const fixture = await mergeFixture(t, [
+      ghPullRequest(1, 'feature/one', 'feature/aggregate'), ghPullRequest(2, 'feature/two', 'feature/one'),
+    ]);
+    if (automatic) fixture.control.crossReviews.set(1, convergedReview(1));
+    const result = await fixture.manager[automatic ? 'reserve' : 'merge'](mergeInput(1, { method: 'merge', deleteBranch: true }));
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.merged, true);
+    assert.equal(fixture.github.openPullRequests[0].baseRefName, 'feature/aggregate');
+    assert.ok(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'edit' && args.at(-1) === 'feature/aggregate'));
+    assert.ok(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'merge' && args.includes('--merge')));
+    assert.equal(fixture.state.pullRequestRetargetsForRepo('example', 'project')[0].base, 'feature/aggregate');
+    if (automatic) assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].automaticResult.retargetedBase, 'feature/aggregate');
+  });
+
+  test(`同期 PR の${automatic ? '予約' : '即時'}マージは main を削除せず他の PR を付け替えない`, async (t) => {
+    const fixture = await mergeFixture(t, [
+      ghPullRequest(1, 'main', 'feature/aggregate'), ghPullRequest(2, 'feature/two', 'main'),
+    ]);
+    if (automatic) fixture.control.crossReviews.set(1, convergedReview(1));
+    const result = await fixture.manager[automatic ? 'reserve' : 'merge'](mergeInput(1, { method: 'merge', deleteBranch: true }));
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.branchDeleted, false);
+    assert.equal(fixture.github.openPullRequests[0].baseRefName, 'main');
+    assert.equal(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'edit' || args.includes('DELETE')), false);
+    assert.equal(fixture.tracker.snapshot()[0].trees[0].mergeTarget, 'main');
+    assert.equal(fixture.tracker.snapshot()[0].trees[0].canMerge, true);
+    assert.doesNotMatch(fixture.notices.map(notice => notice.message).join('\n'), /main は残したので/);
+  });
+}
+
+test('集約ブランチと同期 PR への squash と rebase は即時マージも予約も拒否する', async (t) => {
+  for (const head of ['feature/one', 'main']) {
+    for (const method of ['squash', 'rebase']) {
+      const fixture = await mergeFixture(t, [ghPullRequest(1, head, 'feature/aggregate')]);
+      for (const operation of ['merge', 'reserve']) {
+        const result = await fixture.manager[operation](mergeInput(1, { method }));
+        assert.equal(result.ok, false);
+        assert.match(result.error, /マージコミットに固定/);
+      }
+      assert.equal(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'merge'), false);
+    }
+  }
+});
+
+test('予約後に base を集約先へ変えると squash の予約ではマージしない', async (t) => {
+  const fixture = await mergeFixture(t);
+  assert.equal((await fixture.manager.reserve(mergeInput())).reserved, true);
+  fixture.github.openPullRequests[0].baseRefName = 'feature/aggregate';
+  fixture.control.crossReviews.set(1, convergedReview(1));
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.ok(fixture.state.pullRequestMergeReservation('example', 'project', 1));
+  assert.equal(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
+test('マージ済み一覧の取得に失敗すると集約ブランチへの操作を拒否する', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'feature/aggregate')]);
+  fixture.control.failMergedList = true;
+  const result = await fixture.manager.merge(mergeInput(1, { method: 'merge' }));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /一覧を取得できません/);
+  assert.equal(fixture.tracker.snapshot()[0].trees[0].mergeTarget, null);
+  assert.match(fixture.tracker.snapshot()[0].trees[0].blocker, /どの PR の head でもないことを確認できない/);
+});
+
+test('登録詳細の取得に失敗すると他の PR も集約ブランチへマージできない', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'feature/aggregate'), ghPullRequest(2, 'feature/two', 'main')]);
+  fixture.github.openPullRequests.pop();
+  const result = await fixture.manager.merge(mergeInput(1, { method: 'merge' }));
+  assert.equal(result.ok, false);
+  assert.equal(fixture.tracker.snapshot()[0].trees[0].mergeTarget, null);
+  assert.match(fixture.tracker.snapshot()[0].trees[0].blocker, /どの PR の head でもないことを確認できない/);
+});
+
+test('マージコミットが禁止なら集約ブランチ向け PR は画面でも操作でもマージできない', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'feature/aggregate')]);
+  fixture.control.allowMerge = false;
+  const result = await fixture.manager.merge(mergeInput(1, { method: 'merge' }));
+  assert.equal(result.ok, false);
+  assert.equal(fixture.tracker.snapshot()[0].trees[0].canMerge, false);
+  assert.match(fixture.tracker.snapshot()[0].trees[0].blocker, /マージコミットが必要だが、このリポジトリでは許可されていない/);
+});
+
+test('同期 PR の外部マージ検出でも main 向け PR を子として通知しない', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'main', 'feature/aggregate'), ghPullRequest(2, 'feature/two', 'main')]);
+  await fixture.tracker.refreshRepo('example', 'project');
+  const pr = fixture.github.openPullRequests.shift();
+  fixture.github.views.set(1, mergedView(pr));
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.equal(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'edit' || args.includes('DELETE')), false);
+  assert.doesNotMatch(fixture.notices[0].message, /#2|main は残したので/);
+  assert.equal(fixture.tracker.snapshot()[0].trees[0].mergeTarget, 'main');
+});
+
+test('集約先を持つマージ意図を保存して復元し後続の完了結果に使う', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'feature/aggregate')]);
+  const intent = { session_id: 'session-1', owner: 'example', repo: 'project', number: 1,
+    url: fixture.github.openPullRequests[0].url, headRefOid: sha(1), headRefName: 'feature/one',
+    defaultBranch: 'main', targetBranch: 'feature/aggregate', method: 'merge', deleteBranch: false,
+    automatic: true, createdAt: new Date(NOW).toISOString(), stackedPullRequests: [{ number: 2, baseRefName: 'feature/one' }] };
+  assert.equal(fixture.state.setPullRequestMergeIntent(intent), true);
+  await fixture.state.flushPersistence();
+  const restored = await DashboardState.load(fixture.homeDir, { now: NOW });
+  assert.equal(restored.pullRequestMergeIntent('example', 'project', 1).targetBranch, 'feature/aggregate');
+  await fixture.manager.handleDetectedMerge({ owner: 'example', repo: 'project',
+    pullRequest: fixture.github.openPullRequests[0], mergedAt: new Date(NOW).toISOString(),
+    confirmedIntent: { ...intent, retargetedNumbers: [2] } });
+  assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].automaticResult.retargetedBase, 'feature/aggregate');
+});
+
 for (const scenario of [
   { name: '削除オフ', deleteBranch: false, autoDeleteBranch: false, fork: false, kept: true },
   { name: '自動削除', deleteBranch: false, autoDeleteBranch: true, fork: false, kept: false },
@@ -261,7 +378,7 @@ test('スタック最下段でない PR は状態を取り直して拒否する'
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
 });
 
-test('既定ブランチを base にしない PR は即時マージも予約マージもしない', async (t) => {
+test('既定ブランチ以外への squash は即時マージも予約も拒否する', async (t) => {
   const cases = [
     { baseRefName: 'release', defaultBranch: 'main' },
     { baseRefName: 'main', defaultBranch: 'develop' },
@@ -274,7 +391,7 @@ test('既定ブランチを base にしない PR は即時マージも予約マ�
     setCandidateMergeable(immediate.tracker);
     const result = await immediate.manager.merge(mergeInput(1));
     assert.equal(result.ok, false, `即時マージ: ${scenario.defaultBranch}/${scenario.baseRefName}`);
-    assert.match(result.error, /既定ブランチ/);
+    assert.match(result.error, /マージコミットに固定/);
     assert.equal(immediate.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
 
     const reserved = await mergeFixture(t, [pullRequest]);
@@ -282,8 +399,9 @@ test('既定ブランチを base にしない PR は即時マージも予約マ�
     reserved.control.crossReviews.set(1, convergedReview(1));
     setCandidateMergeable(reserved.tracker);
     const reservation = await reserved.manager.reserve(mergeInput(1));
-    assert.equal(reservation.ok, true, `予約: ${scenario.defaultBranch}/${scenario.baseRefName}`);
-    assert.ok(reserved.state.pullRequestMergeReservation('example', 'project', 1));
+    assert.equal(reservation.ok, false, `予約: ${scenario.defaultBranch}/${scenario.baseRefName}`);
+    assert.match(reservation.error, /マージコミットに固定/);
+    assert.equal(reserved.state.pullRequestMergeReservation('example', 'project', 1), null);
     assert.equal(reserved.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
   }
 });

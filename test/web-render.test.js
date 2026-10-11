@@ -10,6 +10,53 @@ const { cssDeclarations, functionSource, pageContext, sourceBetween } = require(
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
+function mergeTargetConfirmation(pullRequest) {
+  const element = (tagName, className = '', textContent = '') => ({
+    tagName, className, textContent, children: [], dataset: {}, attributes: {},
+    append(...nodes) { this.children.push(...nodes); },
+    setAttribute(name, value) { this.attributes[name] = value; },
+  });
+  const context = pageContext(pageHtml, {
+    element, document: { createTextNode: text => element('text', '', text) },
+    pullRequestMergeKey: () => 'pr-key', pullRequestMergeOptions: new Map([['pr-key', { method: 'squash', deleteBranch: true }]]),
+    pullRequestMergeInFlight: new Set(), pullRequestMergeConditionWaits: () => [], crossReviewState: () => ({}),
+    shortShaElement: () => element('code', '', 'a'.repeat(7)),
+    MERGE_METHOD_LABELS: { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' },
+  });
+  vm.runInContext(['pullRequestMergeOptionsFor', 'appendPullRequestMergeConfirmation'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  const root = element('div');
+  context.appendPullRequestMergeConfirmation(root, { defaultBranch: 'main', mergeMethods: ['merge', 'squash', 'rebase'], lastMethod: 'squash' }, pullRequest);
+  const flatten = node => [node, ...node.children.flatMap(flatten)];
+  return flatten(root);
+}
+
+test('集約先の確認欄はマージ先と付け替え先を表示しマージコミットだけを選べる', () => {
+  const nodes = mergeTargetConfirmation({ number: 42, headRefName: 'feature/one', mergeTarget: 'feature/aggregate',
+    effectiveBase: 'feature/aggregate', mergeMethodFixed: 'merge', children: [{ number: 43 }] });
+  assert.deepEqual(nodes.filter(node => node.type === 'radio').map(node => node.value), ['merge']);
+  assert.equal(nodes.find(node => node.type === 'radio').checked, true);
+  assert.ok(nodes.some(node => node.textContent === 'feature/aggregate'));
+  assert.ok(nodes.some(node => node.textContent === '#43 の base を feature/aggregate に付け替える'));
+  assert.ok(nodes.some(node => node.textContent === '集約ブランチと同期 PR はマージコミットで入れます'));
+});
+
+test('同期 PR の確認欄には main の削除選択と子の付け替え説明を出さない', () => {
+  const nodes = mergeTargetConfirmation({ number: 42, headRefName: 'main', mergeTarget: 'feature/aggregate',
+    mergeMethodFixed: 'merge', children: [{ number: 43 }] });
+  assert.equal(nodes.some(node => node.type === 'checkbox'), false);
+  assert.equal(nodes.some(node => node.textContent.includes('base を')), false);
+  assert.deepEqual(nodes.filter(node => node.type === 'radio').map(node => node.value), ['merge']);
+});
+
+test('予約の方式がマージコミットの固定と違うと画面に実行しない理由を表示する', () => {
+  const context = pageContext(pageHtml, { convergedAtHead: () => true, pushedAfterConvergence: () => false });
+  vm.runInContext(functionSource(pageHtml, 'pullRequestReservationWaitReasons'), context);
+  const waiting = context.pullRequestReservationWaitReasons({ canMerge: true, ci: 'pass', review: 'none',
+    baseRefName: 'feature/aggregate', effectiveBase: 'feature/aggregate', mergeTarget: 'feature/aggregate', mergeMethodFixed: 'merge' },
+  { defaultBranch: 'main', mergeMethods: ['merge', 'squash'] }, 'squash');
+  assert.deepEqual(Array.from(waiting), ['マージ方式がマージコミットに固定のため、予約の方式では実行しない']);
+});
+
 test('終了した行だけを持つ待機中セッションは更新の無い設定で隠れる', () => {
   const context = pageContext(pageHtml, {
     displayPreferences: { idleHideMinutes: 30 }, isActiveDecision: () => false,
@@ -2709,7 +2756,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
   const pullRequest = {
     mergeSessionId: 'session-pr', number: 42, title: 'Feature PR', url: 'https://github.com/acme/widget/pull/42',
     mergeRecordKey: key,
-    headRefOid: 'abc123', headRefName: 'feature/pr-42', effectiveBase: 'main', canMerge: true,
+    headRefOid: 'abc123', headRefName: 'feature/pr-42', effectiveBase: 'main', mergeTarget: 'main', canMerge: true,
     isCrossRepository: true,
     blocker: null, review: 'approved', children: [], stackPosition: { depth: 1, total: 1 },
   };

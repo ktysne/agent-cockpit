@@ -602,7 +602,11 @@ const DATA = {
       ],
       decisions: [],
       repo: { name: 'ktysne/agent-cockpit', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '5 秒前' },
-      prs: [],
+      prs: [
+        { number: 201, title: 'Codex セッションの受付', head: 'feat/codex-session', base: 'claude/feature-codex-support', sha: 'c01de01', ci: 'pass', review: 'none', conflict: false, draft: false,
+          xr: { round: 1, reviewedSha: 'c01de01', dismissed: 0, triage: { round: 1, sha: 'c01de01', outcome: 'converged' } } },
+        { number: 202, title: 'Codex の状態表示', head: 'feat/codex-display', base: 'feat/codex-session', sha: 'c01de02', ci: 'pass', review: 'none', conflict: false, draft: false, xr: null },
+      ],
       extraSessions: [
         {
           id: 'agent-cockpit-unknown', title: 'ターミナルから起動したセッション', status: 'unknown', branch: 'plan/pr-stack-view',
@@ -1551,7 +1555,8 @@ const prByHead = (p, head) => p.prs.find(pr => pr.head === head);
 // squash で入った PR の上に積んでいたものは、積み直すまで下の PR のコミットが差分に残る。
 function effective(p, pr) {
   let base = pr.base, retargetedFrom = null, squashedUnder = null;
-  for (let m = prByHead(p, base); m && isMerged(p, m); m = prByHead(p, base)) {
+  for (let m = prByHead(p, base); base !== p.repo.defaultBranch && m && isMerged(p, m); m = prByHead(p, base)) {
+    if (m.isCrossRepository || (!ui.merged[prKey(p, m.number)].del && !p.repo.autoDeleteBranch)) break;
     retargetedFrom = retargetedFrom || m;
     if (ui.merged[prKey(p, m.number)].method === 'squash') squashedUnder = squashedUnder || m;
     base = m.base;
@@ -1562,9 +1567,9 @@ function effective(p, pr) {
 
 function parentPr(p, pr) {
   const b = effective(p, pr).base;
-  return openPrs(p).find(x => x.head === b) || null;
+  return openPrs(p).find(x => x.head !== p.repo.defaultBranch && x.head === b) || null;
 }
-const childPrs = (p, pr) => openPrs(p).filter(x => parentPr(p, x) === pr);
+const childPrs = (p, pr) => pr.head === p.repo.defaultBranch ? [] : openPrs(p).filter(x => parentPr(p, x) === pr);
 
 // 下から数えた位置と、スタック全体の段数
 function stackPos(p, pr) {
@@ -1574,11 +1579,22 @@ function stackPos(p, pr) {
   return { depth, total: height(root) };
 }
 
+function mergeTarget(p, pr) {
+  const base = effective(p, pr).base;
+  return base === p.repo.defaultBranch || !p.prs.some(x => x.head === base) ? base : null;
+}
+
+function mergeMethodFixed(p, pr) {
+  return mergeTarget(p, pr) && mergeTarget(p, pr) !== p.repo.defaultBranch ? 'merge' : null;
+}
+
 function mergeBaseConflictBlocker(p, pr) {
   const e = effective(p, pr);
   const parent = parentPr(p, pr);
   if (parent) return `下の #${parent.number} のマージ待ち`;
-  if (e.base !== p.repo.defaultBranch) return `base の ${e.base} は既定ブランチではないため、ダッシュボードではマージしない`;
+  if (!mergeTarget(p, pr)) return `base の ${e.base} はマージ済みの PR の head のため、ダッシュボードではマージしない`;
+  if (!e.retargetedFrom && pr.base !== e.base) return `base を ${e.base} に付け替える必要がある`;
+  if (mergeMethodFixed(p, pr) && !p.repo.methods.includes('merge')) return 'マージコミットが必要だが、このリポジトリでは許可されていない';
   if (pr.draft) return 'ドラフト';
   if (e.needsRestack) return `積み直し待ち (squash で入った #${e.squashedUnder.number} のコミットが差分に残っている)`;
   if (pr.conflict) return 'コンフリクトあり';
@@ -1638,9 +1654,12 @@ function reservationWaitReasons(p, pr, method = null) {
   const blocker = mergeOperationBlocker(p, pr);
   if (!['approved', 'none'].includes(pr.review) && !['レビューの承認待ち', '変更を求められている'].includes(blocker)) waiting.push('GitHub のレビュー承認待ち');
   if (blocker) waiting.push(`マージ条件待ち: ${blocker}`);
-  const effectiveBase = effective(p, pr).base;
+  const value = effective(p, pr);
+  const effectiveBase = value.base;
+  const actualBase = value.retargetedFrom ? effectiveBase : pr.base;
   if (!p.repo.defaultBranch) waiting.push('既定ブランチを確認できない');
-  else if (pr.base !== p.repo.defaultBranch || effectiveBase !== p.repo.defaultBranch) waiting.push(`既定ブランチ ${p.repo.defaultBranch} へのマージ待ち`);
+  else if (mergeTarget(p, pr) && (actualBase !== mergeTarget(p, pr) || effectiveBase !== mergeTarget(p, pr))) waiting.push(`${mergeTarget(p, pr)} へのマージ待ち`);
+  if (method && mergeMethodFixed(p, pr) && method !== mergeMethodFixed(p, pr)) waiting.push('マージ方式がマージコミットに固定のため、予約の方式では実行しない');
   if (!Array.isArray(p.repo.methods) || !p.repo.methods.length) waiting.push('リポジトリのマージ方式を確認できない');
   else if (method && !p.repo.methods.includes(method)) waiting.push('選んだマージ方式が許可されていない');
   return waiting;
@@ -1708,16 +1727,18 @@ function closePullRequestMergeResult(id) {
 
 function finishMockMerge(product, pullRequest, options, automatic = false) {
   const key = prKey(product, pullRequest.number);
-  const children = childPrs(product, pullRequest).map(child => child.number);
+  const branchDeleted = pullRequest.head !== product.repo.defaultBranch && !pullRequest.isCrossRepository &&
+    (product.repo.autoDeleteBranch === true || options.del);
+  const children = (branchDeleted ? childPrs(product, pullRequest) : []).map(child => child.number);
   const at = absoluteTimeLabel(new Date());
   ui.lastMethod[product.repo.name] = options.method;
   ui.merged[key] = { method: options.method, del: options.del, at, auto: automatic };
   rememberPullRequestMergeResult(product, {
     number: pullRequest.number,
     method: options.method,
-    branchDeleted: options.del,
-    autoDeleteBranch: product.repo.autoDeleteBranch === true && pullRequest.isCrossRepository !== true,
-    ...(children.length ? { retargetedBase: product.repo.defaultBranch, retargetedNumbers: children } : {}),
+    branchDeleted: pullRequest.head !== product.repo.defaultBranch && options.del,
+    autoDeleteBranch: pullRequest.head !== product.repo.defaultBranch && product.repo.autoDeleteBranch === true && pullRequest.isCrossRepository !== true,
+    ...(children.length ? { retargetedBase: mergeTarget(product, pullRequest), retargetedNumbers: children } : {}),
     ...(pullRequest.headMismatch === true ? { warning: '予約時と異なる head SHA がマージされました' } : {}),
   });
   if (automatic) delete ui.reserved[key];
@@ -1740,7 +1761,10 @@ function mergeOpts(p, pr) {
   const k = prKey(p, pr.number);
   const last = ui.lastMethod[p.repo.name];
   const method = p.repo.methods.includes(last) ? last : p.repo.methods[0];
-  return { method, del: !p.repo.autoDeleteBranch, ...ui.mergeOpts[k] };
+  const options = { method, del: !p.repo.autoDeleteBranch, ...ui.mergeOpts[k] };
+  if (mergeMethodFixed(p, pr)) options.method = p.repo.methods.includes('merge') ? 'merge' : '';
+  if (pr.head === p.repo.defaultBranch) options.del = false;
+  return options;
 }
 
 function prBadges(p, pr) {
@@ -1770,20 +1794,20 @@ function mergeConfirm(p, pr) {
     reviewWarning ? `<span>${esc(reviewWarning)}</span>` : '',
     `照合する head SHA: ${shortShaLabel(pr.sha)}`,
     kids.length ? esc(branchDeleted
-      ? `${kidNames} の base を ${p.repo.defaultBranch} に付け替える`
+      ? `${kidNames} の base を ${mergeTarget(p, pr)} に付け替える`
       : `ブランチを残すので、${kidNames} の base は ${pr.head} のまま付け替えない`) : '',
-    kids.length && !branchDeleted && ['squash', 'rebase'].includes(o.method) ? `<span>${esc(`次に ${pr.head} を既定ブランチへマージするときは、同じ変更が再び差分に入らないようマージコミットを推奨します。`)}</span>` : '',
+    kids.length && !branchDeleted && ['squash', 'rebase'].includes(o.method) ? `<span>${esc(`次に ${pr.head} を ${mergeTarget(p, pr)} へマージするときは、同じ変更が再び差分に入らないようマージコミットを推奨します。`)}</span>` : '',
     kids.length && branchDeleted && ['squash', 'rebase'].includes(o.method) ? `<span>スカッシュまたはリベースでは ${kidNames} に #${pr.number} のコミットが残るため、セッションに積み直しを依頼する。</span>` : '',
   ].filter(Boolean);
   return `<div class="merge-confirm ${conditionPending ? 'pending' : ''}" data-pr="${prKey(p, pr.number)}">
-    <div><strong>#${pr.number}</strong> を <code>${esc(p.repo.defaultBranch)}</code> へマージする</div>
+    <div><strong>#${pr.number}</strong> を <code>${esc(mergeTarget(p, pr) || effective(p, pr).base)}</code> へマージする</div>
     ${waiting.length ? `<p class="merge-condition-warning" role="status">選択した条件の未達: ${waiting.map(esc).join('、')}</p>` : ''}
-    <div class="methods" role="radiogroup" aria-label="マージの方式">${p.repo.methods.map(m =>
+    <div class="methods" role="radiogroup" aria-label="マージの方式">${p.repo.methods.filter(m => !mergeMethodFixed(p, pr) || m === mergeMethodFixed(p, pr)).map(m =>
       `<label><input type="radio" name="m-${prKey(p, pr.number)}" data-method="${m}" ${o.method === m ? 'checked' : ''} ${merging ? 'disabled' : ''}>${METHOD_LABEL[m]}</label>`).join('')}
-    ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリで許可されている方式です</span>' : ''}</div>
-    ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''} ${merging ? 'disabled' : ''}>マージ後にリモートブランチを削除する</label>`}
+    ${mergeMethodFixed(p, pr) ? '<span class="meta">集約ブランチと同期 PR はマージコミットで入れます</span>' : p.repo.methods.length === 1 ? '<span class="meta">リポジトリで許可されている方式です</span>' : ''}</div>
+    ${pr.head === p.repo.defaultBranch || p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''} ${merging ? 'disabled' : ''}>マージ後にリモートブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
-    <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
+    <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging || !o.method ? 'disabled' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
       <button type="button" class="link-btn" data-mock-merge-failure="${prKey(p, pr.number)}">モック: 失敗の知らせを表示</button>
       <button type="button" class="ghost" data-merge-cancel ${merging ? 'disabled' : ''}>やめる</button></div>
   </div>`;
