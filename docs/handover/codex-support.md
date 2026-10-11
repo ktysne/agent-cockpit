@@ -1113,3 +1113,11 @@ Astraが現行registerの保存後再検証失敗と、正規接続復帰後に�
 初回保存成功後の再検証失敗だけを同queue内で取消し、補償保存の未知結果はblockして配送0を維持する。
 既存period gate、予約とcapsule、旧質問quarantineを維持し、保存権限を緩めない。
 gate閉鎖のservice fixtureと実kernelの競合、実provider適合は区別する。
+
+QRF07を追加し、取消済み同ID・同内容の再登録を既存question_cancelledで拒否する。
+通常取消にも適用し、未取消duplicateのexisting成功と内容不一致の先行拒否を維持する。
+関連123件と固定source head `572e628` の全体3,116件が成功し、失敗0件、Windows実symlink権限のskip2件だった。
+指定Claude R1の再登録成功誤認を修正し、R2の旧schema文書の未取消条件を補正した。
+R3で文書補正を確認し、収束を記録するまではPR #374をDraftとする。
+MCP409文言の取消理由の粒度不足、実provider適合、登録履歴全体の再照合は後続に残す。
+次は#212の注入registry構成で終了済み登録の不在保護を解除する修正へスタックして進む。

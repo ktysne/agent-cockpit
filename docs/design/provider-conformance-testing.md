@@ -878,3 +878,10 @@ E01〜E09の関連fixture試験84件と構文確認は成功した。
 両providerの正規kernelで接続失効・復帰とactor終端、初回保存と補償保存の副作用前後の失敗、再起動後のquarantineを確認した。
 execution終端を独立に注入した新規fixture、falsyの直接再検証例外、実provider runtimeと電源断は未確認である。
 reclamationの閉鎖gateは既存fake gateの分岐試験であり、current gateの実composition試験と区別する。
+
+QRF07を含む関連4ファイルは123件成功、失敗0件だった。
+固定source head `572e628` の全体試験は3,116件成功、失敗0件、Windows実symlink権限のskip2件だった。
+Claude R1の取消済み再登録拒否を実装し、通常取消にも適用する互換変更として記録した。
+R2では製品修正を確認し、旧schema文書の未取消条件を補正した。
+実provider runtime、execution終端単独の新規fixture、falsy直接再検証例外、電源断は未確認である。
+MCPの共通409文言は取消の理由を正確に説明しないため、操作ごとの案内改善を後続に残す。
