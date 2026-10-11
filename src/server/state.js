@@ -62,7 +62,8 @@ function validStoredPlan(plan) {
       Array.isArray(decision.questions) && decision.questions.every((question) => isRecord(question) && Array.isArray(question.options)) &&
       validTimestamp(decision.createdAt) && validTimestamp(decision.updatedAt) &&
       (decision.provisionalAt === undefined || validTimestamp(decision.provisionalAt)) &&
-      (decision.finishedByToolUseId === undefined || typeof decision.finishedByToolUseId === 'string'));
+      (decision.finishedByToolUseId === undefined || typeof decision.finishedByToolUseId === 'string') &&
+      (decision.inferredWithdrawalHookAt === undefined || Number.isFinite(decision.inferredWithdrawalHookAt)));
 }
 
 function pullRequestRegistrationKey(record) {
@@ -723,8 +724,10 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
     const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
     if (decisionId !== event.tool_use_id) return [];
     const stored = storedAskDecisions.get(decisionId);
+    // 推定の取り下げの訂正は保存側で済ませるため、ここでは保存済みの取り下げを保つ。
     const keepStored = isFinishedAskDecision(stored) && finishedOutsideEventsIds.has(decisionId) &&
-      !(latestAskFinishAt.get(decisionId) >= Date.parse(stored.resolvedAt || stored.updatedAt));
+      (Boolean(stored.state === 'withdrawn' && stored.finishedByToolUseId) ||
+        !(latestAskFinishAt.get(decisionId) >= Date.parse(stored.resolvedAt || stored.updatedAt)));
     return keepStored ? [] : [decisionId];
   }));
   return {
@@ -830,6 +833,7 @@ function applyAskQuestionStart(session, event) {
       existing.updatedAt = isoTime(event.hookAt);
       existing.resolvedAt = null;
       existing.resolution = null;
+      delete existing.inferredWithdrawalHookAt;
       existing.title = event.questions[0].question.slice(0, 200);
       existing.questions = event.questions;
       session.decisionBindings[toolUseId] = existing.id;
@@ -970,6 +974,7 @@ function applyAskQuestionCompletion(session, event) {
       // 最後に判断事項を終えた呼び出し。再起動の後に同じ呼び出しの開始が新しい時刻で届いても重複と分かるよう、
       // waiting に戻っても消さずに残す(開始から終わりまで進んだ呼び出しの開始が、正当に新しく届くことは無い)。
       decision.finishedByToolUseId = toolUseId;
+      delete decision.inferredWithdrawalHookAt;
     }
   }
 }
@@ -1325,7 +1330,7 @@ class DashboardState {
     this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
     this.askDecisionBindings = new Map();
-    // 読み込んだ時点で終わっていたか、イベントから作る前に MCP で終えた離席中の質問の判断事項。終わりのイベントはメモリーに無い。
+    // 保存済み、MCP、後続イベントで終えた質問は、開始と終了のフックだけで再現できないため状態を保つ。
     this.finishedOutsideEventsAskDecisionIds = new Map();
     this.decisionOverrides = new Map();
     this.decisionLifecycles = new Map();
@@ -2342,6 +2347,73 @@ class DashboardState {
     }
   }
 
+  correctInferredAskWithdrawal(event) {
+    if (event.agent_id || event.tool_name !== 'AskUserQuestion' || !event.tool_use_id ||
+      !['PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) return false;
+    // 推定の取り下げは最新の呼び出しを finishedByToolUseId に持つ。出し直し前の呼び出しの終了は結果を説明しない。
+    const stored = this.plans.get(event.session_id)?.decisions.find((decision) => decision.source === 'ask' &&
+      decision.finishedByToolUseId === event.tool_use_id);
+    if (!stored || stored.state !== 'withdrawn' || !Number.isFinite(stored.inferredWithdrawalHookAt) ||
+      event.hookAt >= stored.inferredWithdrawalHookAt) return false;
+    // 終了フックは別プロセスから遅れて届くため、推定の根拠より前の終了だけで保存状態を訂正する。
+    Object.assign(stored, {
+      state: event.hook_event_name === 'PostToolUse' ? 'resolved' : 'withdrawn',
+      updatedAt: isoTime(event.hookAt),
+      resolvedAt: isoTime(event.hookAt),
+      resolution: event.hook_event_name === 'PostToolUse'
+        ? cloneResolution(event.decisionResolution || { chosen: [], note: '' })
+        : null,
+      finishedByToolUseId: event.tool_use_id,
+    });
+    delete stored.inferredWithdrawalHookAt;
+    return true;
+  }
+
+  withdrawFinishedDesktopAsks(event) {
+    if (event.agent_id) return false;
+    const isNextTool = event.hook_event_name === 'PreToolUse' && event.tool_use_id;
+    if (!isNextTool && !['UserPromptSubmit', 'Stop'].includes(event.hook_event_name)) return false;
+    const sessionId = event.session_id;
+    const bindings = this.askDecisionBindings.get(sessionId) || new Map();
+    const entries = this.entries.get(sessionId) || [];
+    let changed = false;
+    for (const decision of this.decisionsFor(sessionId)) {
+      if (decision.source !== 'ask' || decision.state !== 'waiting') continue;
+      // フックの回答待ちは再起動で期限を消しても配信を続けるため、記録の存在で保護する。
+      if (this.decisionLifecycles.get(sessionId)?.has(decision.id)) continue;
+      const stored = this.plans.get(sessionId)?.decisions.find((item) => item.id === decision.id);
+      if (!stored) continue;
+      const starts = entries.filter(({ event: start }) => start.hook_event_name === 'PreToolUse' &&
+        start.tool_name === 'AskUserQuestion' && !start.agent_id && bindings.get(start.tool_use_id) === decision.id);
+      starts.sort((left, right) => right.event.hookAt - left.event.hookAt || right.sequence - left.sequence);
+      const start = starts[0]?.event;
+      const storedStartAt = Date.parse(stored.updatedAt);
+      const toolUseId = start && start.hookAt >= storedStartAt
+        ? start.tool_use_id
+        : [...bindings].reverse().find(([, id]) => id === decision.id)?.[0];
+      if (!toolUseId || event.hookAt <= Math.max(start?.hookAt ?? -Infinity, storedStartAt)) continue;
+      if (isNextTool && event.tool_use_id === toolUseId) continue;
+      // 同じ質問の出し直しは既存の判断事項と回答を引き継ぐため、取り下げずに結び付ける。
+      if (isNextTool && event.tool_name === 'AskUserQuestion' && sameQuestionSet(decision.questions, event.questions || [])) continue;
+      Object.assign(stored, {
+        state: 'withdrawn',
+        updatedAt: isoTime(event.hookAt),
+        resolvedAt: isoTime(event.hookAt),
+        resolution: null,
+        finishedByToolUseId: toolUseId,
+        inferredWithdrawalHookAt: event.hookAt,
+      });
+      let finishedIds = this.finishedOutsideEventsAskDecisionIds.get(sessionId);
+      if (!finishedIds) {
+        finishedIds = new Set();
+        this.finishedOutsideEventsAskDecisionIds.set(sessionId, finishedIds);
+      }
+      finishedIds.add(decision.id);
+      changed = true;
+    }
+    return changed;
+  }
+
   addEvent(input, metadata = {}) {
     const event = sanitizeEvent(input, metadata);
     if (!event) return false;
@@ -2369,6 +2441,8 @@ class DashboardState {
       this.sessionFileLastSeenAt.set(event.session_id, event.hookAt);
     }
 
+    const correctedAsk = this.correctInferredAskWithdrawal(event);
+    const withdrawnAsk = this.withdrawFinishedDesktopAsks(event);
     const entries = this.entries.get(event.session_id) || [];
     const eventSequence = this.sequence++;
     entries.push({ event, sequence: eventSequence });
@@ -2394,7 +2468,7 @@ class DashboardState {
     const clearedClosedAgent = this.reconcileClosedAgents(event.session_id) || reopenedClosedAgent;
     if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden || clearedClosedAgent) this.touch();
     if (wasHidden) this.requestStoreWrite();
-    if (askDecisionStateChanged) this.requestStoreWrite();
+    if (askDecisionStateChanged || withdrawnAsk || correctedAsk) this.requestStoreWrite();
     return true;
   }
 
