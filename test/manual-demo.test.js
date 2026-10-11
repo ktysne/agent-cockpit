@@ -104,6 +104,18 @@ test('偽の gh はマージ、base の付け替え、ブランチの削除を�
   assert.deepEqual(repository.deletedBranches, ['feature/a']);
 });
 
+test('偽の gh は撮影シナリオで指定したブランチ削除失敗を返し、ref を残す', async () => {
+  const definition = ghDefinition();
+  definition.repositories['example-team/app'].branchDeleteFailures = ['feature/a'];
+  const gh = createFakeGh(definition);
+
+  const deletion = await run(gh, ['api', '-X', 'DELETE', 'repos/example-team/app/git/refs/heads/feature/a']);
+  assert.equal(deletion.error.code, 'DEMO_BRANCH_DELETE_FAILED');
+  assert.equal((await run(gh, ['api', 'repos/example-team/app/git/ref/heads/feature/a'])).error, null);
+  assert.deepEqual(gh.repository('example-team/app').deletedBranches, []);
+  assert.deepEqual(gh.unexpectedCalls(), []);
+});
+
 test('偽の gh は定義に無い呼び出しをエラーにして記録する', async () => {
   const seen = [];
   const gh = createFakeGh(ghDefinition(), { onUnexpected: (message) => seen.push(message) });
