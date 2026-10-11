@@ -16,6 +16,7 @@ const TRANSIENT_NOTICE_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_AWAY_PERIODS = 50;
+const MAX_CODEX_RECOVERY_SESSIONS = 200;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
@@ -242,6 +243,21 @@ function validPullRequestMergeIntent(record) {
     record.stackedPullRequests.every((item) => isRecord(item) && Number.isSafeInteger(item.number) && item.number > 0 && validBranchName(item.baseRefName));
 }
 
+function normalizeCodexRecovery(value) {
+  if (!isRecord(value)) return new Map();
+  return new Map(Object.entries(value)
+    .filter(([id, record]) => validStoredSessionId(id) && isRecord(record) &&
+      Number.isInteger(record.pid) && record.pid > 0 && typeof record.cwd === 'string' &&
+      typeof record.model === 'string' && Number.isInteger(record.resumes) && record.resumes >= 0 &&
+      validTimestamp(record.updatedAt))
+    .sort(([, left], [, right]) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .slice(0, MAX_CODEX_RECOVERY_SESSIONS)
+    .map(([id, record]) => [id, {
+      pid: record.pid, cwd: record.cwd.slice(0, 4096), model: record.model.slice(0, 160),
+      resumes: record.resumes, updatedAt: record.updatedAt,
+    }]));
+}
+
 function normalizeStore(value) {
   if (!isRecord(value) || !Number.isInteger(value.version)) throw new Error('Invalid store version');
   if (value.version > 1) throw Object.assign(new Error('Store version is newer'), { newerVersion: true });
@@ -363,6 +379,7 @@ function normalizeStore(value) {
   }
   return {
     display,
+    codexRecovery: normalizeCodexRecovery(value.codexRecovery),
     plans,
     askDecisionBindings,
     decisionLifecycles,
@@ -1403,8 +1420,9 @@ class DashboardState {
     this.ciFailures = [];
     this.crossReviewSkips = new Map();
     this.closedAgents = new Map();
-    // SessionEnd でイベントを捨てても、同じ thread の再開の回数は続けて数える。
+    // イベントから再構成できない復元済みの回数と、SessionEnd で捨てた回数を保持する。
     this.codexResumesBeforeEnd = new Map();
+    this.codexRecovery = new Map();
     this.display = null;
     this.storeWriteTimer = null;
     this.storeWritePending = false;
@@ -1449,6 +1467,8 @@ class DashboardState {
     this.restoreSessionCleanupPending = true;
     this.restoredAt = now;
     this.display = store.display;
+    this.codexRecovery = store.codexRecovery;
+    this.codexResumesBeforeEnd = new Map([...store.codexRecovery].map(([id, record]) => [id, record.resumes]));
     this.deletedSessions = store.deletedSessions;
     this.plans = store.plans;
     this.askDecisionBindings = store.askDecisionBindings;
@@ -1668,6 +1688,7 @@ class DashboardState {
     }));
     return {
       version: 1,
+      codexRecovery: Object.fromEntries(this.codexRecovery),
       display: cloneDisplay(this.display),
       plans,
       askDecisionBindings,
@@ -2227,15 +2248,61 @@ class DashboardState {
     await this.waitForPersistence();
   }
 
+  recordCodexRecovery(event, session) {
+    if (session.provider !== 'codex') return;
+    const previous = this.codexRecovery.get(event.session_id);
+    const pid = (!event.agent_id && event.codexPid) || previous?.pid;
+    if (!pid) return;
+    const record = {
+      pid,
+      cwd: event.cwd || previous?.cwd || '',
+      model: session.codex.model,
+      resumes: session.codex.resumes + (this.codexResumesBeforeEnd.get(event.session_id) || 0),
+      updatedAt: isoTime(event.hookAt),
+    };
+    this.codexRecovery.set(event.session_id, record);
+    this.sessionFileLastSeenAt.set(event.session_id, event.hookAt);
+    // updatedAt は上限を超えたときの捨てる順にだけ使うので、ほかの値が変わらなければ保存しない。
+    const changed = !previous || ['pid', 'cwd', 'model', 'resumes'].some((key) => previous[key] !== record[key]);
+    if (!changed) return;
+    const oldest = [...this.codexRecovery].sort(([, left], [, right]) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt));
+    for (const [id] of oldest.slice(0, Math.max(0, oldest.length - MAX_CODEX_RECOVERY_SESSIONS))) {
+      this.codexRecovery.delete(id);
+      this.sessionFileLastSeenAt.delete(id);
+      if (this.sessionFiles.get(id)?.provider === 'codex') this.sessionFiles.delete(id);
+    }
+    this.requestStoreWrite();
+  }
+
+  liveCodexSessionFiles(isAlive) {
+    const files = [];
+    for (const [sessionId, record] of this.codexRecovery) {
+      if (!isAlive(record.pid)) {
+        this.codexRecovery.delete(sessionId);
+        this.requestStoreWrite();
+        continue;
+      }
+      files.push({
+        session_id: sessionId, provider: 'codex', pid: record.pid, cwd: record.cwd,
+        updatedAt: record.updatedAt, codex: { model: record.model, resumes: record.resumes },
+      });
+    }
+    return files;
+  }
+
   // フックがまだ届いていないセッションも一覧に出し、題名の変更を拾うために使う。
-  syncSessionFiles(files, now = Date.now()) {
+  syncSessionFiles(files, now = Date.now(), { codexOnly = false } = {}) {
     if (!Array.isArray(files)) return;
+    if (codexOnly) files = [...this.sessionFiles.values()].filter((file) => file.provider !== 'codex').concat(files);
     const next = new Map(files.map((file) => [file.session_id, file]));
     const previous = this.sessionFiles;
+    const shouldSyncSession = (sessionId) => !codexOnly || next.get(sessionId)?.provider === 'codex' ||
+      previous.get(sessionId)?.provider === 'codex' || this.sessions.get(sessionId)?.provider === 'codex';
     let changed = JSON.stringify([...next.entries()]) !== JSON.stringify([...previous.entries()]);
     let persistentChanged = false;
     this.sessionFiles = next;
     for (const sessionId of this.deletedSessions.keys()) {
+      if (!shouldSyncSession(sessionId)) continue;
       const file = next.get(sessionId);
       if (file && Date.parse(file.updatedAt) > Date.parse(this.deletedSessions.get(sessionId))) {
         this.acceptSessionWrite(sessionId, Date.parse(file.updatedAt));
@@ -2244,6 +2311,7 @@ class DashboardState {
     }
 
     for (const [sessionId, plan] of this.plans) {
+      if (!shouldSyncSession(sessionId)) continue;
       const product = cloneProduct(next.get(sessionId)?.product || this.sessions.get(sessionId)?.product);
       if (product && stableStringify(plan.product) !== stableStringify(product)) {
         plan.product = product;
@@ -2251,7 +2319,7 @@ class DashboardState {
       }
     }
 
-    if (this.restoreSessionCleanupPending) {
+    if (this.restoreSessionCleanupPending && !codexOnly) {
       this.restoreSessionCleanupPending = false;
       this.pruneExpiredStoreRecords(now);
       for (const sessionId of this.hiddenSessions) {
@@ -2263,14 +2331,18 @@ class DashboardState {
       }
     }
 
-    for (const sessionId of next.keys()) this.sessionFileLastSeenAt.set(sessionId, now);
+    for (const [sessionId, file] of next) {
+      if (!codexOnly || file.provider === 'codex') this.sessionFileLastSeenAt.set(sessionId, now);
+    }
     for (const sessionId of this.endedByAbsence.keys()) {
+      if (!shouldSyncSession(sessionId)) continue;
       if (next.has(sessionId)) {
         this.reopenAbsentSession(sessionId);
         changed = true;
       }
     }
     for (const sessionId of this.hiddenSessions) {
+      if (!shouldSyncSession(sessionId)) continue;
       if (!next.has(sessionId) && previous.has(sessionId) && !this.sessions.has(sessionId)) {
         this.hiddenSessions.delete(sessionId);
         this.hiddenSessionUpdatedAt.delete(sessionId);
@@ -2279,12 +2351,14 @@ class DashboardState {
       }
     }
     for (const sessionId of this.estimates.keys()) {
+      if (!shouldSyncSession(sessionId)) continue;
       if (!next.has(sessionId)) {
         this.estimates.delete(sessionId);
         changed = true;
       }
     }
     for (const [sessionId, lastSeenAt] of this.sessionFileLastSeenAt) {
+      if (!shouldSyncSession(sessionId)) continue;
       if (!next.has(sessionId) && this.sessions.has(sessionId) && !this.endedAt.has(sessionId)) {
         if (now - lastSeenAt >= SESSION_FILE_ABSENCE_END_MS) {
           this.endSessionByAbsence(sessionId, now);
@@ -2298,6 +2372,8 @@ class DashboardState {
   }
 
   endSession(sessionId, endedAt) {
+    const hadRecovery = this.codexRecovery.delete(sessionId);
+    if (this.sessionFiles.get(sessionId)?.provider === 'codex') this.sessionFiles.delete(sessionId);
     const resumes = (this.entries.get(sessionId) || []).filter(({ event }) => event.provider === 'codex' && !event.agent_id &&
       event.hook_event_name === 'SessionStart' && event.source === 'resume').length;
     if (resumes) this.codexResumesBeforeEnd.set(sessionId, (this.codexResumesBeforeEnd.get(sessionId) || 0) + resumes);
@@ -2311,7 +2387,7 @@ class DashboardState {
     this.hiddenSessionUpdatedAt.delete(sessionId);
     this.closedAgents.delete(sessionId);
     this.sessionFileLastSeenAt.delete(sessionId);
-    if (wasHidden) this.requestStoreWrite();
+    if (wasHidden || hadRecovery) this.requestStoreWrite();
   }
 
   endSessionByAbsence(sessionId, endedAt) {
@@ -2400,6 +2476,9 @@ class DashboardState {
       first.delegatedFrom = parentSessionId;
       this.entries.set(threadId, [entries[0]]);
       this.sessions.delete(threadId);
+      if (this.codexRecovery.delete(threadId)) this.requestStoreWrite();
+      if (this.sessionFiles.get(threadId)?.provider === 'codex') this.sessionFiles.delete(threadId);
+      this.sessionFileLastSeenAt.delete(threadId);
     }
   }
 
@@ -2498,7 +2577,8 @@ class DashboardState {
     const event = sanitizeEvent(input, metadata);
     if (!event) return false;
     const existingProvider = this.entries.get(event.session_id)?.[0]?.event.provider
-      || this.sessions.get(event.session_id)?.provider;
+      || this.sessions.get(event.session_id)?.provider || this.sessionFiles.get(event.session_id)?.provider
+      || (this.codexRecovery.has(event.session_id) ? 'codex' : null);
     if (existingProvider && existingProvider !== event.provider) return false;
     // 委譲した Codex の thread は行を作らない。分類は thread の最初のイベントで決め、そのイベントだけを保持する(docs/design/codex-delegation.md)。
     if (event.provider === 'codex') {
@@ -2536,6 +2616,9 @@ class DashboardState {
 
     const correctedAsk = this.correctInferredAskWithdrawal(event);
     const withdrawnAsk = this.withdrawFinishedDesktopAsks(event);
+    if (event.provider === 'codex' && !event.agent_id && !event.model) {
+      event.model = this.codexRecovery.get(event.session_id)?.model || '';
+    }
     const entries = this.entries.get(event.session_id) || [];
     const eventSequence = this.sequence++;
     entries.push({ event, sequence: eventSequence });
@@ -2543,7 +2626,11 @@ class DashboardState {
     const nextSessions = deriveSessions(entries, this.askDecisionStateFor(event.session_id), eventSequence);
     let askDecisionStateChanged = false;
     if (nextSessions.length > 0) {
+      if (nextSessions[0].codex && !nextSessions[0].codex.model) {
+        nextSessions[0].codex.model = this.codexRecovery.get(event.session_id)?.model || '';
+      }
       this.sessions.set(event.session_id, nextSessions[0]);
+      this.recordCodexRecovery(event, nextSessions[0]);
       askDecisionStateChanged = this.persistAskDecisionState(event.session_id, nextSessions[0]);
     }
     else this.sessions.delete(event.session_id);
@@ -2939,6 +3026,7 @@ class DashboardState {
       const plan = this.plans.get(sessionId);
       const base = session || {
         session_id: sessionId,
+        ...(file?.provider === 'codex' ? { provider: 'codex', codex: { ...file.codex } } : {}),
         product: file?.product || null,
         title: file?.name || null,
         status: '不明',
@@ -2959,7 +3047,7 @@ class DashboardState {
       const current = {
         ...visible,
         provider: base.provider || 'claude',
-        ...(base.codex ? { codex: { ...base.codex, resumes: base.codex.resumes + (this.codexResumesBeforeEnd.get(sessionId) || 0) } } : {}),
+        ...(base.codex ? { codex: { ...base.codex, resumes: base.codex.resumes + (session ? this.codexResumesBeforeEnd.get(sessionId) || 0 : 0) } } : {}),
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,
         sessionFileUpdatedAt: file?.updatedAt || null,

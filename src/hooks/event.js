@@ -2,6 +2,8 @@ const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
 const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
 const { readRouting } = require('../server/routing');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const {
   HOOK_TIMEOUT_MS,
   acquireStartLock,
@@ -21,6 +23,48 @@ const {
   shouldRefreshPullRequests,
 } = require('../server/pull-request-utils');
 
+const execFileAsync = promisify(execFile);
+const CODEX_PARENT_TIMEOUT_MS = 3000;
+
+async function findCodexParentPid() {
+  const deadline = Date.now() + CODEX_PARENT_TIMEOUT_MS;
+  let pid = process.ppid;
+  if (process.platform === 'win32') {
+    const script = `$ancestorPid = ${pid}; for ($depth = 0; $depth -lt 4 -and $ancestorPid -gt 0; $depth++) { ` +
+      '$ancestor = Get-CimInstance Win32_Process -Filter "ProcessId = $ancestorPid"; ' +
+      'if (!$ancestor) { break }; if ($ancestor.Name -match "^(?i:codex(?:\\.exe)?)$") { ' +
+      '$ancestor.ProcessId; break }; $ancestorPid = $ancestor.ParentProcessId }';
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
+      timeout: CODEX_PARENT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4096,
+    });
+    const found = Number(stdout.trim());
+    return Number.isInteger(found) && found > 0 ? found : null;
+  }
+  for (let depth = 0; depth < 4 && pid > 0; depth += 1) {
+    const timeout = deadline - Date.now();
+    if (timeout <= 0) return null;
+    const { stdout } = await execFileAsync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { timeout, maxBuffer: 4096 });
+    const match = stdout.trim().match(/^(\d+)\s+(.+)$/);
+    if (!match) return null;
+    if (/^codex(?:\.exe)?$/i.test(match[2].trim())) return pid;
+    pid = Number(match[1]);
+  }
+  return null;
+}
+
+async function codexParentPid(findParent) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(findParent),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), CODEX_PARENT_TIMEOUT_MS); }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function pickString(value) {
   return typeof value === 'string' ? value : '';
@@ -369,6 +413,10 @@ async function postEvent(event, options = {}) {
 async function runHook(input, options = {}) {
   const event = makeHookEvent(input, options.now === undefined ? Date.now() : options.now, options);
   if (!event) return { exitCode: 0, additionalContext: null };
+  if (event.provider === 'codex' && event.hook_event_name === 'SessionStart') {
+    const pid = await codexParentPid(options.findCodexParentPid || findCodexParentPid);
+    if (Number.isInteger(pid) && pid > 0) event.codexPid = pid;
+  }
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   if (event.provider !== 'codex' && event.hook_event_name === 'SubagentStart') event.route = (await readRouting(homeDir)).agents;
   let dashboardUrl = null;

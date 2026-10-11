@@ -11,7 +11,7 @@ const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers')
 const { readTaskNotifications } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { isShortSessionId } = require('./session-ids');
-const { listLiveSessionFiles, findLiveSessionIdByPid } = require('./session-files');
+const { listLiveSessionFiles, findLiveSessionIdByPid, processIsAlive } = require('./session-files');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
 const { DEFAULT_PORT, APP_NAME } = require('./server-constants');
@@ -515,11 +515,13 @@ async function startServer(options = {}) {
   logLine(homeDir, `started on 127.0.0.1:${info.port}`);
   pullRequestTracker.start();
   pullRequestMergeManager.start?.();
-  async function refreshSessionFiles() {
-    const files = await listLiveSessionFiles(claudeHome);
-    if (files) state.syncSessionFiles(files.map((file) => ({ ...file, product: productFromCwd(file.cwd) })));
-    // 読めないときは生死を判定できないので同期せず、猶予の後の期限切れの片付けだけを進める。
-    else state.pruneExpiredStoreRecords(Date.now());
+  async function refreshSessionFiles(now = Date.now()) {
+    const files = await listLiveSessionFiles(claudeHome, { isAlive: options.isAlive || processIsAlive });
+    const codexFiles = state.liveCodexSessionFiles(options.isAlive || processIsAlive);
+    state.syncSessionFiles([...(files || []), ...codexFiles]
+      .map((file) => ({ ...file, product: productFromCwd(file.cwd) })), now, { codexOnly: files === null });
+    // Claude の一覧を読めないときは生死を保留し、保存の期限切れの片付けだけを進める。
+    if (!files) state.pruneExpiredStoreRecords(now);
   }
   await refreshSessionFiles().catch(() => {});
   for (const session of state.snapshot().sessions) scheduleTaskNotifications(session.session_id);
@@ -559,7 +561,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
+  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, info, homeDir, close, refreshSessionFiles };
 }
 
 function parseArguments(argv) {
