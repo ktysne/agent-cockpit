@@ -2723,6 +2723,18 @@ for (const failed of [false, true]) {
   });
 }
 
+test('集約ブランチの head 検索が失敗しても既定ブランチ向けの PR はマージ候補のまま残る', async (t) => {
+  const { github, tracker, state } = await trackerFixture(t, [31, 32]);
+  github.openPullRequests = [ghPullRequest(31, 'feat/child', 'feature/aggregate'), ghPullRequest(32, 'feat/main', 'main')];
+  github.headSearchErrors.add('feature/aggregate');
+  await tracker.refreshRepo('example', 'project');
+  const registration = state.pullRequestRegistrationsForRepo('example', 'project').find(record => record.number === 32);
+  const candidate = tracker.mergeCandidate(registration);
+  assert.equal(candidate.error, undefined);
+  assert.equal(candidate.pullRequest.mergeTarget, 'main');
+  assert.equal(tracker.snapshot()[0].error, null);
+});
+
 test('head の確認候補が上限を超えると超えたマージ先は認めない', async (t) => {
   const { github, tracker, calls } = await trackerFixture(t, Array.from({ length: 21 }, (_, index) => index + 1));
   github.openPullRequests = Array.from({ length: 21 }, (_, index) => ghPullRequest(index + 1, `feat/${index}`, `aggregate/${index}`));

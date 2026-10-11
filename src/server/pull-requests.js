@@ -1381,8 +1381,9 @@ class PullRequestTracker {
           ]));
           if (!Array.isArray(result)) throw new Error('PR の一覧が配列ではありません');
           mergeTargetHeadChecks.set(branch, result.length === 0);
-        } catch (error) {
-          errors.push(`base の ${branch} が PR の head か確認できません: ${error.message}`);
+        } catch {
+          // リポジトリ全体の取得エラーにすると、無関係な既定ブランチ向けの PR のマージまで止まる。
+          // 未確認のまま残し、このブランチを base にした PR だけを止める。
         }
       }));
     }
