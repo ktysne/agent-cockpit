@@ -193,7 +193,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
 | #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | #368 | MCP専用policyとfetch開始境界による結果不明時の再送抑止はレビュー収束。実runtimeは未確認 |
-| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | | 2026-10-09 起票。計測してから回収条件と索引を決める |
+| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | #369 | 専有fixtureの先行計測はClaude R2で収束しReady。次は保持条件を維持するsession別索引。回収条件は別に検討する |
 | #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはレビュー収束。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
 | #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
@@ -1144,3 +1144,25 @@ PR #368はマージ可能で、#367の後に取り込む。
 既定readServerInfoは内部で失敗を捕捉するが、注入したreadInfoが401後にthrowした場合は保守的に結果不明へ分類する制限がある。
 次は#312の表示墓標の件数、走査量と状態取得時間を、仕様を変えない専有fixtureで先行計測する。
 実Cockpitの冪等性と両provider実runtimeの成功とは扱わない。
+
+## 表示墓標の先行計測の現在地 (#312)
+
+PR #368のレビュー済み最終head `1d5b51f` を最新feature起点の計測ブランチへ通常mergeした。
+#368はReadyで、取り込み順は#367の後である。
+停止全体の未収束PR #364は含まない。
+[計測設計](../design/projection-display-baseline.md)とID-F312-D01〜D08の期待値を実装前に記録した。
+Luna XHighが専用手動scriptと関連試験を実装し、rootが差分を監査した。
+route計測からsinkのJSON解析を除外し、providerの曖昧性と同IDの別provider削除保持、CLI診断の補強後に関連5件と構文確認2件が成功した。
+全15条件とCodex N sweep4条件の先行計測は完了し、N=10000、S/P各8では両providerとも160000 recordを訪問した。
+時間と範囲は計測設計へ記録した。
+固定headで全体検証と指定Claudeレビューを行った。
+保持期間、容量、索引と回収条件は今回決定しない。
+PR [#369](https://github.com/ktysne/agent-cockpit/pull/369)はReadyで、#368の後にマージ可能である。
+固定head `2a9d84c` の全体試験は3,065件成功、失敗0件、Windows実symlink権限skip2件だった。
+Claude R1の要修正1件で復元fixtureの書き戻し混入が見つかり、正規順と書き戻し0回の検査を加えた。
+関連6件は成功し、全19条件の再計測後の値とscript hashを更新した。
+旧計測値を正規store復元の証拠として採用せず、修正後の固定head `58e8615` を再検証した。
+全体試験は3,066件成功、失敗0件、Windows実symlink権限によるskip2件である。
+指定Claude R2はblockerと要修正0件で収束した。
+最終変更は検証結果と計測対象の文書補足だけで、sourceとtestは再検証headから不変である。
+次はレビュー済み#369を通常mergeして、保持条件を変えないsession別参照索引を実装する。

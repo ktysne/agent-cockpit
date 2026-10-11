@@ -745,3 +745,28 @@ M01〜M08の関連試験48件は成功し、失敗とskipは0件である。
 固定head `f045d13` の全体試験は3,060件成功、失敗0件、Windows実symlink権限によるskip2件である。
 両provider実runtimeは未確認である。
 製品caller、HTTP、管理protocol、ACL、全writerと両provider実runtimeは後続gateである。
+
+## provider別表示墓標の計測 (#312)
+
+以下は[先行計測](projection-display-baseline.md)の実装前期待値である。
+state fixtureとrouteの合成依存を対象にし、両provider実runtimeの合格へ読み替えない。
+
+| ID | 操作 | 合格条件 |
+| --- | --- | --- |
+| ID-F312-D01 | 固定seedの合成storeと少量の実state操作を照合する | ID、時刻、schemaと復元した表示墓標が一致 |
+| ID-F312-D02 | 削除後に別provider、古い時刻、新しい同providerでwrite操作し復元する | 別providerと古いwriteは削除を保持、新しい同providerだけ対象解除。state fixtureの証拠に限定 |
+| ID-F312-D03 | 固定S/PでNを増やし件数専用instanceのiteratorを数える | lookup回数と実yield数を観測しMap.size×回数と照合。prototypeと製品APIは不変 |
+| ID-F312-D04 | 出自Map、unknown Setと永続store byte数を測る | メモリー出自と永続表示墓標を分け、JSON byteをheapとしない |
+| ID-F312-D05 | wrapperなしの別instanceを単調時計で測る | 構築、lookup、snapshot、route/JSON、serialize、restoreを分離しsampleと環境を記録 |
+| ID-F312-D06 | 専用contextでrouteを呼びfixtureを終了する | HOME、実session、networkへアクセスせず、自己rootをhandle終了と解決path確認後にcleanup |
+| ID-F312-D07 | churnとhide/unhide/delete/繰返しdeleteを行う | providerの曖昧性と墓標保持は現仕様どおり。TTL/GC/索引/拒否/telemetryを追加しない |
+| ID-F312-D08 | 小規模testと手動CLIで不正入力と出力を確認する | 不正入力を構築前拒否。件数/schemaは再現可能、通常testに重いloopや固定ms閾値なし |
+
+D01〜D08のレビュー補強後の小規模fixture試験6件と2ファイルの構文確認は成功した。
+rootは全15条件とCodexのN sweep4条件を25 sample、warmup 1で計測した。
+N=10000、S=8、P=8では両providerともlookup 16回、実yield 160000で期待値と一致した。
+結果と実行条件は先行計測の設計資料へ記録した。
+単providerの辞書順とbothの複数provider対でも保存pendingなし、書き戻し0回を確認し、その条件で再計測した。
+両provider実runtime、実データの長期保持と並行負荷は未確認である。
+固定head `58e8615` の全体試験は3,066件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+指定Claude R2はblockerと要修正0件で収束した。
