@@ -16,6 +16,7 @@ const { findWorktreeRoot } = require('./git-worktree');
 
 const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
 const MERGED_PULL_REQUEST_LIMIT = 1000;
+const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 
@@ -383,6 +384,13 @@ function assemblePullRequestStacks({
   relatedPullRequests = [],
   restackResults = new Map(),
   liveMergedBranches = new Set(),
+  listAvailable = false,
+  mergedPullRequests = null,
+  mergedCandidates = [],
+  mergeTargetHeadChecks = new Map(),
+  uninspectedNumbers = new Set(),
+  mergeMethods = [],
+  knownRegistrations = registrations,
 }) {
   const open = openPullRequests.map((pr) => ({ ...pr })).sort((left, right) => left.number - right.number);
   const openByNumber = mapByNumber(open);
@@ -397,13 +405,20 @@ function assemblePullRequestStacks({
   const nodes = [...open, ...historical];
   const nodeByNumber = mapByNumber(nodes);
 
+  const known = [...nodes, ...mergedCandidates, ...knownRegistrations.map(storedPullRequest).filter(Boolean)];
+  const knownHeads = new Set(known.map((pr) => pr.headRefName));
+  const absenceConfirmed = listAvailable && openPullRequests.length < 500 &&
+    uninspectedNumbers.size === 0;
+  const mergeTargetFor = (base) => base === defaultBranch ? base
+    : absenceConfirmed && !knownHeads.has(base) && mergeTargetHeadChecks.get(base) === true ? base : null;
+
   function effective(pr) {
     const explicit = retargetedPrs.find((record) => record.number === pr.number);
     const check = restackResults.get(pr.number) || { checked: false, parent: null };
     let base = explicit?.base || pr.baseRefName;
     const seen = new Set([pr.number]);
     while (base) {
-      if (liveMergedBranches.has(base)) break;
+      if (base === defaultBranch || liveMergedBranches.has(base)) break;
       const merged = historical.find((candidate) => candidate.state === 'merged' &&
         candidate.headRefName === base && isCompleteCommitSha(candidate.headRefOid) && candidate.baseRefName &&
         candidate.number !== pr.number);
@@ -423,7 +438,7 @@ function assemblePullRequestStacks({
   const parentByNumber = new Map();
   for (const pr of open) {
     const base = effective(pr).base;
-    const parent = open.find((candidate) => candidate.number !== pr.number && candidate.headRefName === base);
+    const parent = open.find((candidate) => candidate.number !== pr.number && candidate.headRefName !== defaultBranch && candidate.headRefName === base);
     if (parent) parentByNumber.set(pr.number, parent.number);
   }
 
@@ -433,6 +448,7 @@ function assemblePullRequestStacks({
 
   const edges = new Map(nodes.map((pr) => [pr.number, new Set()]));
   for (const parent of nodes) {
+    if (parent.headRefName === defaultBranch) continue;
     for (const child of nodes) {
       if (parent.number !== child.number && parent.headRefName && parent.headRefName === child.baseRefName) {
         edges.get(parent.number)?.add(child.number);
@@ -447,7 +463,8 @@ function assemblePullRequestStacks({
   // base を付け替えた後はブランチ名でつながらないので、積み直しの判定で見つけた親子でもつなぐ。
   for (const [child, check] of restackResults) {
     const parent = check?.parent?.number;
-    if (!parent || !nodeByNumber.has(child) || !nodeByNumber.has(parent)) continue;
+    if (!parent || !nodeByNumber.has(child) || !nodeByNumber.has(parent) ||
+      nodeByNumber.get(parent).headRefName === defaultBranch) continue;
     edges.get(child)?.add(parent);
     edges.get(parent)?.add(child);
   }
@@ -470,21 +487,22 @@ function assemblePullRequestStacks({
   function blockerFor(pr, includeCi = true) {
     const value = effective(pr);
     if (!defaultBranch) return 'リポジトリ設定を取得できません';
-    const hasBasePullRequest = visibleOpen.some((candidate) => candidate.headRefName === value.base);
-    if (value.base !== defaultBranch && !hasBasePullRequest) {
-      const hasClosedBasePullRequest = historical.some((candidate) => (
-        candidate.state === 'closed' && candidate.headRefName === value.base
-      ));
-      return hasClosedBasePullRequest
-        ? `base の ${value.base} に対応する PR が見つからない`
-        : `base の ${value.base} は既定ブランチではないため、ダッシュボードではマージしない`;
-    }
-    const parent = visibleOpen.find((candidate) => candidate.number === parentByNumber.get(pr.number));
+    const parent = open.find((candidate) => candidate.number === parentByNumber.get(pr.number));
     if (parent) return `下の #${parent.number} のマージ待ち`;
-    if (pr.baseRefName !== defaultBranch) return `base を ${defaultBranch} に付け替える必要がある`;
+    const mergeTarget = mergeTargetFor(value.base);
+    if (!mergeTarget) {
+      const mergedBase = known.some((candidate) => candidate.headRefName === value.base &&
+        (candidate.state === 'merged' || mergedCandidates.includes(candidate)));
+      if (mergedBase) return `base の ${value.base} はマージ済みの PR の head のため、ダッシュボードではマージしない`;
+      if (mergeTargetHeadChecks.get(value.base) === false) return `base の ${value.base} は PR の head のため、ダッシュボードではマージしない`;
+      if (knownHeads.has(value.base)) return `base の ${value.base} に対応する PR が見つからない`;
+      return `base の ${value.base} がどの PR の head でもないことを確認できない`;
+    }
+    if (pr.baseRefName !== value.base) return `base を ${value.base} に付け替える必要がある`;
+    if (mergeTarget !== defaultBranch && !mergeMethods.includes('merge')) return 'マージコミットが必要だが、このリポジトリでは許可されていない';
     if (pr.draft) return 'ドラフト';
     if (value.needsRestack) {
-      return `積み直し待ち (#${value.restackPr.number} が ${defaultBranch} に入った後も、そのコミットが差分に残っている)`;
+      return `積み直し待ち (#${value.restackPr.number} が ${mergeTarget} に入った後も、そのコミットが差分に残っている)`;
     }
     if (value.restackCheckUnknown) return '積み直しが必要か確かめられない';
     if (pr.conflict) return 'コンフリクトあり';
@@ -508,6 +526,8 @@ function assemblePullRequestStacks({
     return {
       ...root,
       effectiveBase: effectiveValue.base,
+      mergeTarget: mergeTargetFor(effectiveValue.base),
+      mergeMethodFixed: mergeTargetFor(effectiveValue.base) && effectiveValue.base !== defaultBranch ? 'merge' : null,
       retargetedFrom: effectiveValue.retargetedFrom?.number || null,
       needsRestack: effectiveValue.needsRestack,
       restackPr: effectiveValue.restackPr?.number || null,
@@ -938,7 +958,8 @@ function classifyInspectedPullRequest(result, backfillNumbers) {
   return { kind: closedState, stateChanges };
 }
 
-function stackedPullRequestsForMerge({ reservation, mergeIntent, pullRequest, openPullRequests }) {
+function stackedPullRequestsForMerge({ reservation, mergeIntent, pullRequest, openPullRequests, defaultBranch }) {
+  if (pullRequest && pullRequest.headRefName === defaultBranch) return [];
   const openByNumber = new Map(openPullRequests.map((item) => [item.number, item]));
   const stackedPullRequests = new Map();
   for (const item of [...(reservation?.stackedPullRequests || []), ...(mergeIntent?.stackedPullRequests || [])]) {
@@ -1070,6 +1091,8 @@ class PullRequestTracker {
     const registrations = this.state.pullRequestRegistrationsForRepo(registration.owner, registration.repo)
       .filter((record) => (record.product?.key || `repo:${key}`) === productKey);
     const assembled = assemblePullRequestStacks({
+      ...repository,
+      knownRegistrations: this.state.pullRequestRegistrationsForRepo(registration.owner, registration.repo),
       defaultBranch: repository.defaultBranch,
       openPullRequests: repository.openPullRequests,
       registrations,
@@ -1135,7 +1158,7 @@ class PullRequestTracker {
   }
 
   async inspectDisappearedPullRequests(owner, repo, repository, {
-    registrationsBeforeInspection, relatedBeforeInspection, openPullRequests, openNumbers, errors, uninspectedNumbers,
+    registrationsBeforeInspection, relatedBeforeInspection, openPullRequests, openNumbers, errors, uninspectedNumbers, defaultBranch,
   }) {
     const { toInspect, backfillNumbers } = selectPullRequestsToInspect({
       registrationsBeforeInspection, relatedBeforeInspection, openNumbers,
@@ -1184,7 +1207,7 @@ class PullRequestTracker {
         const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
         const pullRequest = normalizeOpenPullRequest(value);
         const stackedPullRequests = stackedPullRequestsForMerge({
-          reservation, mergeIntent, pullRequest, openPullRequests,
+          reservation, mergeIntent, pullRequest, openPullRequests, defaultBranch,
         });
         await this.onMerged?.({
           owner,
@@ -1222,6 +1245,7 @@ class PullRequestTracker {
 
   updateProductMembership(owner, repo, {
     registrations, relatedPullRequests, openPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
+    mergedPullRequests, mergedCandidates, mergeTargetHeadChecks, uninspectedNumbers, mergeMethods,
   }) {
     if (listAvailable) {
       const registeredNumbers = new Set(registrations.map((record) => record.number));
@@ -1231,6 +1255,8 @@ class PullRequestTracker {
       for (const group of productGroups.values()) {
         const assembled = assemblePullRequestStacks({
           defaultBranch,
+          listAvailable, mergedPullRequests, mergedCandidates, mergeTargetHeadChecks, uninspectedNumbers, mergeMethods,
+          knownRegistrations: registrations,
           openPullRequests,
           registrations: group.registrations,
           relatedPullRequests,
@@ -1297,7 +1323,7 @@ class PullRequestTracker {
 
     if (listAvailable) {
       await this.inspectDisappearedPullRequests(owner, repo, repository, {
-        registrationsBeforeInspection, relatedBeforeInspection, openPullRequests, openNumbers, errors, uninspectedNumbers,
+        registrationsBeforeInspection, relatedBeforeInspection, openPullRequests, openNumbers, errors, uninspectedNumbers, defaultBranch,
       });
     }
 
@@ -1332,8 +1358,38 @@ class PullRequestTracker {
     // base を付け替えた子も親のプロダクトに数えるため、所属は積み直しの判定の後に、画面と同じ結果で集める。
     const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
     const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
+    const openHeads = new Set(openPullRequests.map((pr) => pr.headRefName));
+    const candidateBases = new Set(openPullRequests.map((pr) => pr.baseRefName));
+    const assembled = assemblePullRequestStacks({
+      defaultBranch, openPullRequests, registrations, relatedPullRequests, restackResults, liveMergedBranches,
+      retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
+    });
+    const collectBases = (nodes) => {
+      for (const node of nodes) {
+        candidateBases.add(node.effectiveBase);
+        collectBases(node.children);
+      }
+    };
+    collectBases(assembled.trees);
+    const candidates = [...candidateBases].filter((base) => base !== defaultBranch && !openHeads.has(base));
+    const mergeTargetHeadChecks = new Map(candidates.map(branch => [branch, null]));
+    if (listAvailable) {
+      await Promise.all(candidates.slice(0, MERGE_TARGET_HEAD_CHECK_LIMIT).map(async (branch) => {
+        try {
+          const result = JSON.parse(await this.execute([
+            'pr', 'list', '-R', repository, '--state', 'all', '--head', branch, '--limit', '1', '--json', 'number',
+          ]));
+          if (!Array.isArray(result)) throw new Error('PR の一覧が配列ではありません');
+          mergeTargetHeadChecks.set(branch, result.length === 0);
+        } catch {
+          // リポジトリ全体の取得エラーにすると、無関係な既定ブランチ向けの PR のマージまで止まる。
+          // 未確認のまま残し、このブランチを base にした PR だけを止める。
+        }
+      }));
+    }
     this.updateProductMembership(owner, repo, {
       registrations, relatedPullRequests, openPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
+      mergedPullRequests, mergedCandidates, mergeTargetHeadChecks, uninspectedNumbers, mergeMethods,
     });
 
     this.repositories.set(key, {
@@ -1348,6 +1404,9 @@ class PullRequestTracker {
       checkedAt,
       error: errors.length ? [...new Set(errors)].join('。') : null,
       listAvailable,
+      mergedPullRequests,
+      mergedCandidates,
+      mergeTargetHeadChecks,
       uninspectedNumbers,
       restackResults,
       liveMergedBranches,
@@ -1396,6 +1455,8 @@ class PullRequestTracker {
     }
     for (const [productKey, group] of productGroups) {
       const assembled = assemblePullRequestStacks({
+        ...repositoryState,
+        knownRegistrations: registrations,
         defaultBranch: repositoryState.defaultBranch,
         openPullRequests: repositoryState.openPullRequests,
         registrations: group.registrations,

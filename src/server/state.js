@@ -218,10 +218,11 @@ function validPullRequestMergeResult(value) {
 
 function validPullRequestMergeReservation(record) {
   const parsedUrl = parsePullRequestUrl(record?.url);
-  const allowedKeys = new Set(['session_id', 'owner', 'repo', 'number', 'url', 'method', 'deleteBranch', 'createdAt']);
+  const allowedKeys = new Set(['session_id', 'owner', 'repo', 'number', 'url', 'method', 'deleteBranch', 'createdAt', 'targetBranch']);
   return isRecord(record) && validStoredSessionId(record.session_id) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
     Object.keys(record).every((key) => allowedKeys.has(key)) &&
     Number.isSafeInteger(record.number) && record.number > 0 && PULL_REQUEST_MERGE_METHODS.has(record.method) &&
+    (record.targetBranch === undefined || validBranchName(record.targetBranch)) &&
     typeof record.deleteBranch === 'boolean' && validTimestamp(record.createdAt) && typeof record.url === 'string' &&
     Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo && parsedUrl.number === record.number);
 }
@@ -232,6 +233,7 @@ function validPullRequestMergeIntent(record) {
     Number.isSafeInteger(record.number) && record.number > 0 && isCompleteCommitSha(record.headRefOid) &&
     PULL_REQUEST_MERGE_METHODS.has(record.method) && typeof record.deleteBranch === 'boolean' && validTimestamp(record.createdAt) &&
     (record.automatic === undefined || typeof record.automatic === 'boolean') &&
+    (record.targetBranch === undefined || validBranchName(record.targetBranch)) &&
     validBranchName(record.headRefName) && validBranchName(record.defaultBranch) && typeof record.url === 'string' &&
     Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo && parsedUrl.number === record.number) &&
     Array.isArray(record.stackedPullRequests) && record.stackedPullRequests.length <= 100 &&
@@ -1854,6 +1856,7 @@ class DashboardState {
       method: record.method,
       deleteBranch: record.deleteBranch,
       createdAt: record.createdAt,
+      ...(record.targetBranch === undefined ? {} : { targetBranch: record.targetBranch }),
     };
     if (!validPullRequestMergeReservation(next)) return false;
     const key = relatedPullRequestRecordKey(next.owner, next.repo, next.number);
