@@ -170,16 +170,17 @@ async function runCodexStopCheck(input, options) {
   const waitMs = Number.isFinite(options.codexStopWaitMs) ? Math.max(0, options.codexStopWaitMs) : CODEX_STOP_WAIT_MS;
   const deadline = now() + waitMs;
   const parentPid = options.parentPid === undefined ? process.ppid : options.parentPid;
-  while (now() < deadline) {
+  const pollTimeoutMs = (Number.isFinite(options.maxLongPollMs) ? options.maxLongPollMs : MAX_LONG_POLL_MS) + 1_500;
+  // 問い合わせを途中で打ち切ると、常駐サーバーは打ち切りの後に届いたものを配信済みにして失うため、丸ごと待てるときだけ問い合わせる。
+  while (deadline - now() >= pollTimeoutMs) {
     const parentAlive = options.isParentAlive
       ? options.isParentAlive(parentPid)
       : isParentAlive(parentPid, options.processApi || process);
     if (!parentAlive) return { exitCode: 0, output: null, stderrText: null };
-    const timeoutMs = Math.max(1, Math.min(MAX_LONG_POLL_MS + 1_500, deadline - now()));
     const polled = await postHookRequest({
       action: 'stop-poll', event_name: 'Stop', session_id: input.session_id, id: crypto.randomUUID(),
       generation: result.generation, parent_alive: parentAlive, provider: 'codex',
-    }, { ...options, timeoutMs });
+    }, { ...options, timeoutMs: pollTimeoutMs });
     if (!polled) return { exitCode: 0, output: null, stderrText: null };
     if (polled.done === true) {
       const output = typeof polled.stderrText === 'string' && polled.stderrText

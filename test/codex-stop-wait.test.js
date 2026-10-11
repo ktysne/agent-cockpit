@@ -38,7 +38,8 @@ async function fixture(t, { answerWaitMs = 10, maxLongPollMs = 10, awayEnabled =
     provider: 'codex',
     now: () => now,
     fetchImpl: fetchToServer(),
-    codexStopWaitMs: 500,
+    codexStopWaitMs: 5_000,
+    maxLongPollMs,
     ...options,
   });
   const askForDecision = async () => runAwayHook({
@@ -120,6 +121,15 @@ test('在席中の Stop は待たずに何も返さない', async (t) => {
   assert.equal(c.actions.includes('stop-poll'), false);
 });
 
+test('離席中の Stop は残りの待ち時間が問い合わせ 1 回分に満たなければ問い合わせない', async (t) => {
+  const c = await fixture(t, { maxLongPollMs: 5 });
+
+  const result = await c.run({ hook_event_name: 'Stop' }, { codexStopWaitMs: 1_000 });
+
+  assert.equal(result.output, null);
+  assert.equal(c.actions.includes('stop-poll'), false);
+});
+
 test('セッション行の無い委譲 thread の Stop は離席中も待たない', async (t) => {
   const c = await fixture(t);
 
@@ -141,9 +151,9 @@ test('離席中の Stop は待機中に同じセッションの入力が始ま�
 
 test('離席中の Stop は待機上限に達すると何も返さずに終わる', async (t) => {
   const c = await fixture(t, { maxLongPollMs: 5 });
-  c.duringStopWait(async () => c.advance(30));
+  c.duringStopWait(async () => c.advance(2_000));
 
-  const result = await c.run({ hook_event_name: 'Stop' }, { codexStopWaitMs: 25 });
+  const result = await c.run({ hook_event_name: 'Stop' }, { codexStopWaitMs: 3_000 });
 
   assert.equal(result.exitCode, 0);
   assert.equal(result.output, null);
