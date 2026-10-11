@@ -383,7 +383,39 @@ controlが欠けるcollectorは、既知の後始末が終了しても全処理�
 非協調startやreadが保留されればticketとcloseも保留し、timeoutやepochで返さない。
 
 contextの同期保存禁止とready拒否はticket drainより先に始める。
-この順序は保存ownershipの解放順を保証しない。
+同期保存禁止の開始だけで保存ownershipの解放を許可せず、最終解放は次節の終了確認に従う。
 wrapperの終了と子の物理停止も別条件とし、exit、closeと非activeの照合を維持する。
 実runtime、raw provider I/O、外部認証元作業、電源断耐久性、新schema接続は別の検証に残す。
 共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-L02`に定義する。
+
+## 明示的回収factoryの二段階終了
+
+回収factoryはpersistenceとcontextの構築直後、処理開始前に私有制御へ一度だけ所有を設定する。
+contextはcoordinatorへ同じ管理を伝え、public optionsと返却facadeへ解放権限を追加しない。
+単独で作るcontext、coordinator、persistenceと標準factoryのcloseは従来の終了契約を維持する。
+
+第一段階はfactoryとcontextの新受付を同期に拒否し、ready待機を解除してwriterを停止する。
+受付済みwriteとreadback、startupとcontext I/Oが終端に達した後にpersistenceの受付を閉じ、pending queueを待つ。
+管理下のbackend.closeとcoordinator.closeは第一段階だけを行い、factory gateや最終解放を逆待ちしない。
+この段階では保存pathの所有Mapと実容量leaseを保持する。
+
+第二段階は各writerのstopとdrain、contextとpersistence I/O、scheduler、factory ticket、collectorと準備失敗cleanup、全nativeの停止と隔離を独立に確認した後だけ行う。
+service.closeの成功だけで確認を代用せず、保存失敗のcodeだけで解放可否を推測しない。
+設定の購読解除とrouter.closeの失敗も、終了未確認として保守的に所有を保持する。
+容量leaseの解放成功を確認してから同ownerのpath所有を解放し、解放済みフラグを実処理より先に設定しない。
+releaseが実行されてもstatusで解放を確認できなければpath所有は解放しない。
+この場合、容量予算が実際に減っている可能性と、path所有を保持する結果を区別する。
+保存が失敗してもこれらの終了を確認できれば所有を解放し、close中に捕捉した失敗があれば最初の理由を返す。
+
+停止やdrainを確認できない場合は所有を保持した終端状態にする。
+再closeと後着child通知でも再判定せず、timeoutやGCで自動解放しない。
+同じprocessの寿命中にそのpathを再取得できず、明示再確認と保持状態の詳細診断は別作業である。
+所有保持時の回収factory.closeだけはcode `reclamation_ownership_retained`のAggregateErrorを返す。
+closeまたはstartup cleanup中に捕捉した最初の失敗があればcauseのown propertyとerrors先頭へfalsy値も含めて保持し、保持原因もerrorsへ残す。
+native.stop自体のcode、所有を解放できた保存失敗、標準modeの例外理由は変更しない。
+管理下の公開createOwnedCollectorは生成前の入力検査を含む構築失敗でもadmissionを退役させ、同admissionでの再試行を許可しない。
+
+この所有は同module内のpath Mapとprocess内容量予算に限る。
+別module、別process、標準writerと任意filesystem writerを排他せず、協調lockは方式と参加writerの決定後に別途接続する。
+実runtime、OS耐久性と電源断の保証へ読み替えない。
+共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-O01`に定義する。

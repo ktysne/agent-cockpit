@@ -215,10 +215,10 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 ## 対応順序、ブランチ、PR
 
 独立した作業PRは最新のfeatureを起点にfeatureをbaseにする。
-未マージの変更に依存する後続はレビュー済みheadを起点にし、その親ブランチをbaseにする。
+未マージの変更に依存する後続も最新featureから作成し、依存先のレビュー済みheadを通常mergeしてfeatureをbaseにする。
 連続する作業はスタック式に積み、開発者が下から通常 merge で取り込む。
 マージ可能になった時点で通知し、マージ待ちで止まらず後続を積む（2026-10-09の開発者指定）。
-親のマージ後に、親headがfeatureの祖先であることを確認してから後続PRのbaseをfeatureへ移す。
+親のマージ後は、レビュー済みheadがfeatureの祖先であることを確認して後続へ通常mergeで同期する。
 マージは開発者が行い、PR 番号、head、base は GitHub で確かめた値だけを書く。
 
 | 順 | 対象 | 作業 | PR と base | 状態(2026-10-09 確認) |
@@ -385,6 +385,7 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | 停止済みの実行のカードの数え方 | 判断待ちの件数に停止済みのカードを含めるか。推奨は含めない(操作できないものを件数に出さない) | PR #274 の[コメント](https://github.com/ktysne/agent-cockpit/pull/274#issuecomment-6056718578) |
 | non-blocking の native 質問の待ち中の追加指示 | 送信を止めたままにするか、送ってよいか。推奨は実測するまで止めたままにする | PR #204 の本文 |
 | 電源断の保証 | 拒否情報の flush と保存順序の保証を電源断にも広げるか。推奨は広げない(現状はプロセスのクラッシュ後に限る) | [容量回収計画](../design/codex-capacity-reclamation.md)「容量予約と診断」 |
+| 回収factoryの停止未確認後の所有 | process寿命中に保持するか、明示再確認APIを同時に作るか。推奨の終端保持を二段階終了で仮採用する。後着通知やtimeoutで解放せず、同process中は同pathを再取得できない。再確認と詳細診断は別作業 | #209の二段階終了。自走中の推奨判断 |
 | 作業中の Claude への追加指示 | Codex の steer に当たる Claude の working steer は unsupported である。仕様差として受け入れるか、経路を設計するか。推奨は仕様差として受け入れ、Claude には待機中の次の入力だけを届ける。#175 の[コメント](https://github.com/ktysne/agent-cockpit/issues/175#issuecomment-6029239396)が残条件として挙げている | [Owned native instruction dispatch](../design/owned-native-instruction-dispatch.md)「固定する認可」 |
 | 再起動前の共通質問への回答の再開 | #283 は A 案(旧質問を隔離し、回答も再送もしない)で閉じた。旧質問へ回答を再開する B 案を採るか。推奨は採らない。採るなら provider ごとに未解決の証拠を取得できるかの調査から始める | [旧復旧計画(固定参照)](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md) |
 | #156 を閉じる時期 | main 採用時か、本実装の Issue が全部閉じた時か。推奨は main 採用時 | |
@@ -905,6 +906,31 @@ FakeChildと実owned sourceの関連123件は成功し、失敗0件である。
 固定head `d12453b`の全体テストは2889件成功、失敗0、Windows実symlink権限によるskip2である。
 Claude R1はblockerと要修正が0件で収束した。
 実runtimeと実stdio故障は未実施である。
+
+## 回収factoryの二段階終了の後続
+
+`codex/reclamation-two-phase-close-209-20261011`を最新feature `c731abe`から作成し、PR #358のレビュー済みhead `f6056a8`を通常mergeした。
+開始headは`31d0f0a`で、マージ順は#358の後である。
+実装前に[ID-F209-O01](../design/provider-conformance-testing.md)と[二段階終了の契約](../design/native-instruction-service-integration.md#明示的回収factoryの二段階終了)を定義した。
+停止未確認時はprocess寿命中に所有を保持し、再closeや後着通知で自動解放しない案を、自走中の推奨として仮採用する。
+保存失敗と終了未確認は分け、独立に終了を確認できた保存失敗では所有を解放する。
+所有保持時だけ回収factory.closeのtop-level codeを変え、元理由をAggregateErrorのcauseとerrorsに保持する。
+通常のwriteとreadbackが終わる前にpersistenceを閉じず、公開facadeから最終解放へ迂回しない。
+process間排他は[#313](https://github.com/ktysne/agent-cockpit/issues/313)の範囲へ残す。
+実runtime、電源断耐久性と新schema writer接続も未実装または未確認として残す。
+検証source`ed9e1b1`をコミットし、固定headで全体検証と指定Claudeレビューを行う。
+PR [#359](https://github.com/ktysne/agent-cockpit/pull/359)はfeature向けReadyで、#358の後にマージする。
+関連9ファイルの237成功、失敗0、Windows実symlink権限skip1は最終stop記録の補強前である。
+監査補強後のcontextとfactory112件、最終context49件とcoordinator管理終了2件はすべて成功した。
+次は#313の参加writer、ファイル単位の所有、取得前I/O禁止とcrash後の回復条件を設計し、primitiveとwriter接続を分ける。
+固定head `5a3d50f`の全体テストは2792成功、119失敗、Windows実symlink権限skip2だった。
+本文回収とgrant解放の試験helperのprivate control引継ぎを補強し、未知leaseの再起動拒否を含む4試験群120件、factory lifetime72件、question write隔離16件が成功した。
+修正後の固定headで全体再検証とClaude増分レビューを行った。
+Claude R1はblockerと要修正が0件だった。
+互換補強後の固定head `30f6e85`は全体2911成功、失敗0、Windows実symlink権限skip2だった。
+Claude R2もblockerと要修正が0件で、最終の軽微な整形後の構文確認と未知lease2件も成功した。
+レビューは2往復で収束し、PR #359はマージ可能である。
+マージ順は#351→#352→#353→#354→#356→#357→#358→#359で、モデルはマージしない。
 
 ## 起票していない候補
 

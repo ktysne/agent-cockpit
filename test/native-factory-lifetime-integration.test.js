@@ -31,6 +31,21 @@ function instruction(provider, started, id) {
     revision: 1, text: 'lifetime instruction', mode, expectedTurnId: mode === 'start' ? null : started.process.state.turnId };
 }
 
+function retained(error, reason) {
+  assert.ok(error instanceof AggregateError);
+  assert.equal(error.code, 'reclamation_ownership_retained');
+  assert.equal(Object.hasOwn(error, 'cause'), true);
+  assert.equal(error.cause, reason);
+  assert.equal(error.errors[0], reason);
+  return true;
+}
+function assertDrained(control) {
+  const drained = control.events.indexOf('drained');
+  assert.ok(drained >= 0);
+  const released = control.events.indexOf('lease-release');
+  if (released >= 0) assert.ok(drained < released);
+}
+
 function observe(promise) { return promise.then(value => ({ value }), error => ({ error })); }
 
 for (const provider of ['claude', 'codex']) {
@@ -57,6 +72,9 @@ for (const provider of ['claude', 'codex']) {
         assert.equal(harness.control.active, 2);
         let closed = false;
         close = integration.close().then(() => { closed = true; });
+        assert.equal(harness.control.leaseReleases, 0);
+        assert.ok(harness.control.budget.status().reservedBytes > 0);
+        assertPathsRetained(integration);
         await Promise.resolve();
         assert.equal(closed, false);
         assert.equal(harness.control.context.backend('questions').canWrite(), false);
@@ -70,7 +88,7 @@ for (const provider of ['claude', 'codex']) {
         await close;
         assert.equal(harness.control.active, 0);
         assert.equal(harness.control.writes[slot], previousWrites + 1);
-        assert.equal(harness.control.events.at(-1), 'drained');
+        assertDrained(harness.control);
         assert.equal(harness.control.gateCount, 1);
         assert.equal(Object.keys(integration).some(key => /gate|ticket/i.test(key)), false);
       } finally { barrier.release(); await close?.catch(() => {}); }
@@ -188,7 +206,7 @@ test('explicit factory close establishes its shared shutdown before synchronous 
   await Promise.all([integration.close(), integration.close()]);
   await reentered;
   assert.equal(harness.control.events.filter(event => event === 'settings-unsubscribe').length, 1);
-  assert.equal(harness.control.events.filter(event => event === 'context-close').length, 1);
+  assert.equal(harness.control.context.status().state, 'closed');
   assert.equal(harness.control.events.filter(event => event === 'stop-admission').length, 1);
   assert.equal(harness.control.active, 0);
 });
@@ -201,7 +219,7 @@ test('startup failure rejects cold diagnostics before ticket admission and close
   await assert.rejects(harness.control.context.backend('questions').load());
   assert.equal(harness.control.active, 0);
   assert.equal(harness.control.events.some(event => event.startsWith('enter:')), false);
-  assert.equal(harness.control.events.at(-1), 'drained');
+  assertDrained(harness.control);
 });
 
 test('subscription startup failure drains the accepted settings callback operation', async t => {
@@ -210,7 +228,7 @@ test('subscription startup failure drains the accepted settings callback operati
   assert.ok(harness.control.events.includes('enter:question-queue'));
   assert.ok(harness.control.events.includes('release:question-queue'));
   assert.equal(harness.control.active, 0);
-  assert.equal(harness.control.events.at(-1), 'drained');
+  assertDrained(harness.control);
 });
 
 test('standard factory creates no lifetime gate and retains its public shape', async t => {
@@ -240,7 +258,7 @@ for (const stage of ['failPersistence', 'failContext', 'failServiceReady', 'fail
     await assert.rejects(harness.ready, error => error === failure);
     assert.equal(harness.control.nativeStops.length, 0);
     assert.equal(harness.control.active, 0);
-    assert.equal(harness.control.events.at(-1), 'drained');
+    assertDrained(harness.control);
     if (stage === 'failPersistence' || stage === 'failContext') assert.equal(harness.control.composition, undefined);
     else assert.ok(harness.control.composition);
     if (stage === 'failSchedulerStart') {
@@ -287,6 +305,9 @@ for (const provider of ['claude', 'codex']) {
       assert.equal(child.closeEmitted, true);
       assert.equal(closed, false);
       assert.ok(harness.control.active > 0);
+      assert.equal(harness.control.leaseReleases, 0);
+      assert.ok(harness.control.budget.status().reservedBytes > 0);
+      assertPathsRetained(integration);
       barrier.release();
       assert.ok((await start).error);
       await close;
@@ -328,6 +349,9 @@ for (const kind of ['observe', 'reconcile']) {
       await held.entered;
       assert.ok(harness.control.active > 0);
       close = integration.close();
+      assert.equal(harness.control.leaseReleases, 0);
+      assert.ok(harness.control.budget.status().reservedBytes > 0);
+      assertPathsRetained(integration);
       assert.notEqual((await pending).status, 'observed');
       await close;
       assert.equal(harness.control.active, 0);
@@ -411,7 +435,7 @@ test('ID-F209-L02 one synchronous stop exception does not prevent other entry st
   harness.control.onStop = () => {
     if (harness.control.nativeStops.length === 1) throw error;
   };
-  await assert.rejects(integration.close(), failure => failure === error);
+  await assert.rejects(integration.close(), failure => retained(failure, error));
   assert.equal(harness.control.nativeStops.length, 2);
   assert.equal(harness.control.active, 0);
 });
@@ -499,7 +523,7 @@ test('ID-F209-L02 bind reentry keeps the original synchronous error and cleanup 
     assert.ok(harness.control.active > 0);
     barrier.release();
     assert.equal((await reentered).error, original);
-    assert.equal((await close).error, cleanup);
+    retained((await close).error, cleanup);
     assert.equal(harness.control.active, 0);
   } finally { barrier.release(); await close; }
 });
@@ -520,7 +544,8 @@ test('ID-F209-L02 direct collector bind failure is explicitly drained by close w
     await nextTurn();
     assert.equal(closed, false);
     barrier.release();
-    assert.equal((await close).error.code, 'owned_collector_ticket_binding_failed');
+    assert.equal((await close).error.code, 'reclamation_ownership_retained');
+    assert.equal((await close).error.cause.code, 'owned_collector_ticket_binding_failed');
     assert.equal(harness.control.nativeStops.length, 1);
   } finally { barrier.release(); await close; }
 });
@@ -530,7 +555,11 @@ for (const event of ['exit', 'close']) {
     const harness = await fixture(t, { killEvents: event });
     const integration = await harness.ready;
     const started = await harness.start('codex', event);
-    await assert.rejects(integration.close(), { code: 'native_process_stop_unconfirmed' });
+    await assert.rejects(integration.close(), error => {
+      assert.equal(error.code, 'reclamation_ownership_retained');
+      assert.equal(error.cause.code, 'native_process_stop_unconfirmed');
+      return true;
+    });
     assert.equal(harness.control.active, 0);
     assert.equal(integration.native.getOwnedStopState(started.receipt).stopConfirmed, false);
     const child = started.process.state.child;
@@ -538,6 +567,9 @@ for (const event of ['exit', 'close']) {
     assert.equal(child.closeEmitted, event === 'close');
     child.reportExit();
     child.reportClose();
+    assert.equal((await observe(integration.close())).error.code, 'reclamation_ownership_retained');
+    assert.equal(harness.control.leaseReleases, 0);
+    assertPathsRetained(integration);
   });
 }
 
@@ -572,7 +604,7 @@ for (const reason of [undefined, null, false, 0, '']) {
     assert.equal(actual, reason);
     const closed = await observe(integration.close());
     assert.equal(Object.hasOwn(closed, 'error'), true);
-    assert.equal(closed.error, reason);
+    retained(closed.error, reason);
     assert.equal(harness.control.active, 0);
   });
 }
@@ -615,7 +647,7 @@ test('ID-F209-L02 cleanup disconnect rejection remains visible after synchronous
   harness.control.onBind = () => { close = observe(integration.close()); };
   assert.throws(() => integration.native.startLaunch(harness.startInput('codex', 'disconnect-failure')),
     { code: 'owned_collector_ticket_binding_failed' });
-  assert.equal((await close).error, reason);
+  retained((await close).error, reason);
   assert.equal(harness.control.active, 0);
 });
 
@@ -627,7 +659,7 @@ test('ID-F209-L02 a collector operated before ticket binding is refused and clea
   assert.throws(() => integration.native.startLaunch(harness.startInput('codex', 'already-operated')),
     { code: 'owned_collector_ticket_binding_failed' });
   assert.notEqual((await connect).status, 'connected');
-  await assert.rejects(integration.close(), { code: 'owned_collector_ticket_binding_failed' });
+  await assert.rejects(integration.close(), { code: 'reclamation_ownership_retained' });
   assert.equal(harness.control.active, 0);
 });
 
@@ -665,7 +697,7 @@ for (const [fault, reason] of [['stopError', undefined], ['collectorDrainError',
     harness.control[fault] = reason;
     const closed = await observe(integration.close());
     assert.equal(Object.hasOwn(closed, 'error'), true);
-    assert.equal(closed.error, reason);
+    retained(closed.error, reason);
     assert.equal(harness.control.nativeStops.length, 1);
     assert.equal(harness.control.active, 0);
   });
@@ -683,4 +715,201 @@ test('standard factory close preserves every falsy service cleanup rejection rea
     assert.equal(harness.control.gateCount, 0);
     assert.equal(harness.control.active, 0);
   }
+});
+
+function persistenceOptions(integration) {
+  return { anchorPath: path.join(path.dirname(integration.checkpointPath), 'question-reclamation-anchor.json'),
+    slotPathsBySlot: { checkpoint: integration.checkpointPath, instructions: integration.journalPath,
+      questions: integration.commonQuestionJournalPath } };
+}
+function assertPathsRetained(integration) {
+  const { createReclamationPersistence } = require('../src/server/reclamation-persistence');
+  assert.throws(() => createReclamationPersistence(persistenceOptions(integration)),
+    { code: 'reclamation_persistence_path_owned' });
+}
+async function assertPathsReleased(integration) {
+  const { createReclamationPersistence } = require('../src/server/reclamation-persistence');
+  const next = createReclamationPersistence(persistenceOptions(integration));
+  await next.close();
+}
+
+test('ID-F209-O01 managed backend and coordinator first phase do not release during held service close', async t => {
+  const barrier = createBarrier();
+  const harness = await fixture(t, { serviceCloseBarrier: barrier });
+  const integration = await harness.ready;
+  let closed;
+  try {
+    closed = observe(integration.close());
+    await barrier.entered;
+    await harness.control.context.backend('questions').close();
+    await harness.control.coordinator.close();
+    assert.equal(harness.control.context.backend('questions').canWrite(), false);
+    assert.equal(harness.control.leaseReleases, 0);
+    assert.ok(harness.control.budget.status().reservedBytes > 0);
+    assertPathsRetained(integration);
+    barrier.release();
+    assert.ok(Object.hasOwn(await closed, 'value'));
+    assert.equal(harness.control.leaseReleases, 1);
+    await assertPathsReleased(integration);
+  } finally { barrier.release(); await closed; }
+});
+
+test('ID-F209-O01 accepted write retains persistence admission through its separate readback', async t => {
+  const harness = await fixture(t);
+  const integration = await harness.ready;
+  const started = await harness.start('codex', 'readback');
+  const barrier = createBarrier();
+  harness.control.readbackBarrier = { ...barrier, slot: 'questions' };
+  let closed;
+  let operation;
+  try {
+    operation = observe(integration.questionService.register(harness.writerFor(started.result.launchRef), question('readback')));
+    await barrier.entered;
+    closed = observe(integration.close());
+    assert.equal(harness.control.context.backend('questions').canWrite(), false);
+    assert.equal(harness.control.persistence.status().closed, false);
+    assert.equal(harness.control.leaseReleases, 0);
+    assertPathsRetained(integration);
+    barrier.release();
+    await operation;
+    assert.ok(Object.hasOwn(await closed, 'value'));
+    assert.equal(harness.control.persistence.status().closed, true);
+    await assertPathsReleased(integration);
+  } finally { barrier.release(); await operation; await closed; }
+});
+
+test('ID-F209-O01 service close rejection is reported after independently confirmed writer termination and release', async t => {
+  for (const reason of [undefined, null, false, 0, '']) {
+    const harness = await fixture(t);
+    const integration = await harness.ready;
+    harness.control.serviceCloseError = reason;
+    const result = await observe(integration.close());
+    assert.ok(Object.hasOwn(result, 'error'));
+    assert.equal(result.error, reason);
+    for (const slot of ['checkpoint', 'instructions', 'questions']) {
+      if (slot !== 'checkpoint') assert.ok(harness.control.events.includes('writer-drain:' + slot));
+    }
+    assert.equal(harness.control.leaseReleases, 1);
+    await assertPathsReleased(integration);
+  }
+});
+
+test('ID-F209-O01 failed save allows release after independent drains without injecting a close report failure', async t => {
+  const harness = await fixture(t);
+  const integration = await harness.ready;
+  const started = await harness.start('codex', 'save-failure');
+  const reason = fixtureError('fixture_write_failed');
+  harness.control.writeError = { slot: 'questions', reason };
+  const saved = await observe(integration.questionService.register(harness.writerFor(started.result.launchRef), question('save-failure')));
+  assert.equal(saved.error, reason);
+  const result = await observe(integration.close());
+  assert.ok(Object.hasOwn(result, 'value'));
+  assert.equal(harness.control.leaseReleases, 1);
+  await assertPathsReleased(integration);
+});
+
+test('ID-F209-O01 writer drain rejection stays terminal even after the injected work later settles', async t => {
+  for (const reason of [undefined, null, false, 0, '']) {
+    const harness = await fixture(t);
+    const integration = await harness.ready;
+    const reserved = harness.control.budget.status().reservedBytes;
+    harness.control.writerDrainError = { slot: 'questions', reason };
+    const closed = await observe(integration.close());
+    retained(closed.error, reason);
+    assert.equal(harness.control.leaseReleases, 0);
+    assert.equal(harness.control.budget.status().reservedBytes, reserved);
+    assertPathsRetained(integration);
+    delete harness.control.writerDrainError;
+    const again = await observe(integration.close());
+    assert.equal(again.error, closed.error);
+    assert.equal(harness.control.leaseReleases, 0);
+    assertPathsRetained(integration);
+  }
+});
+
+for (const fault of ['leaseReleaseError', 'leaseStatusError', 'leaseStatusMismatch']) {
+  test(`ID-F209-O01 ${fault} prevents Map release after final capacity action`, async t => {
+    const harness = await fixture(t);
+    const integration = await harness.ready;
+    harness.control[fault] = fault === 'leaseStatusMismatch' ? true : null;
+    const closed = await observe(integration.close());
+    assert.equal(closed.error.code, 'reclamation_ownership_retained');
+    if (fault !== 'leaseStatusMismatch') retained(closed.error, null);
+    assert.equal(harness.control.leaseReleases, 1);
+    assertPathsRetained(integration);
+    assert.equal((await observe(integration.close())).error, closed.error);
+    assert.equal(harness.control.leaseReleases, 1);
+  });
+}
+
+test('ID-F209-O01 old backend and provider notifications cannot mutate a new owner after confirmed release', async t => {
+  const harness = await fixture(t);
+  const integration = await harness.ready;
+  const started = await harness.start('codex', 'old-owner');
+  const oldBackend = harness.control.context.backend('questions');
+  const candidate = { ...oldBackend.getSnapshot(), revision: oldBackend.getSnapshot().revision + 1 };
+  const listeners = harness.control.listeners.get('codex');
+  await integration.close();
+  const { createReclamationPersistence } = require('../src/server/reclamation-persistence');
+  const next = createReclamationPersistence(persistenceOptions(integration));
+  try {
+    const before = await next.readSlotBytes('questions', 16 * 1024 * 1024);
+    await assert.rejects(oldBackend.save(candidate));
+    await Promise.allSettled([listeners.onUnknown('old-owner', 'source_closed'), integration.close()]);
+    assert.deepEqual(await next.readSlotBytes('questions', 16 * 1024 * 1024), before);
+    assertPathsRetained(integration);
+    assert.equal(harness.control.leaseReleases, 1);
+  } finally { await next.close(); }
+});
+
+test('ID-F209-O01 startup cleanup releases paths after absent producers or independently confirmed startup drains', async t => {
+  for (const stage of ['failContext', 'failStart', 'failServiceReady']) {
+    const harness = await fixture(t, { [stage]: stage === 'failStart' ? true : fixtureError(stage) });
+    await assert.rejects(harness.ready);
+    const { createReclamationPersistence } = require('../src/server/reclamation-persistence');
+    const next = createReclamationPersistence({ anchorPath: path.join(harness.directory, 'question-reclamation-anchor.json'),
+      slotPathsBySlot: { checkpoint: path.join(harness.directory, 'delivery-checkpoint.json'),
+        instructions: path.join(harness.directory, 'instruction-journal.json'),
+        questions: path.join(harness.directory, 'common-question-journal.json') } });
+    await next.close();
+  }
+});
+
+test('ID-F209-O01 startup original failure contains a nested retained cleanup result with falsy evidence', async t => {
+  const harness = await fixture(t, { writerDrainError: { slot: 'questions', reason: false } });
+  const result = await observe(harness.ready);
+  assert.ok(result.error instanceof AggregateError);
+  assert.equal(result.error.errors.length, 2);
+  const cleanup = result.error.errors[1];
+  assert.equal(cleanup.code, 'reclamation_ownership_retained');
+  assert.ok(cleanup.errors.includes(false));
+  assert.equal(harness.control.leaseReleases, 0);
+  const { createReclamationPersistence } = require('../src/server/reclamation-persistence');
+  assert.throws(() => createReclamationPersistence({ anchorPath: path.join(harness.directory, 'question-reclamation-anchor.json'),
+    slotPathsBySlot: { questions: path.join(harness.directory, 'common-question-journal.json') } }),
+  { code: 'reclamation_persistence_path_owned' });
+});
+
+test('ID-F209-O01 falsy report reason and native stop unknown preserve cause and retention evidence separately', async t => {
+  const harness = await fixture(t, { killEvents: 'exit' });
+  const integration = await harness.ready;
+  await harness.start('codex', 'combined-error');
+  harness.control.serviceCloseError = false;
+  const result = await observe(integration.close());
+  retained(result.error, false);
+  assert.ok(result.error.errors.some(error => error?.code === 'native_process_stop_unconfirmed'));
+  assert.equal(harness.control.leaseReleases, 0);
+  assertPathsRetained(integration);
+});
+
+test('ID-F209-O01 final capacity callback reentry settles through the published shutdown once', async t => {
+  const harness = await fixture(t);
+  const integration = await harness.ready;
+  let reentered;
+  harness.control.onLeaseRelease = () => { reentered = integration.close(); };
+  const close = integration.close();
+  await close;
+  assert.equal(await reentered, await close);
+  assert.equal(harness.control.leaseReleases, 1);
+  await assertPathsReleased(integration);
 });

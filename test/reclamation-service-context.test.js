@@ -1173,3 +1173,90 @@ test('internal reclamation candidates contain frozen IDs only and stop enumerati
   assert.deepEqual(sandbox.context.listReclamationCandidates(),
     { state: 'unavailable', bodyCandidates: [], grantSlots: [] });
 });
+
+test('ID-F209-O01 authenticated management transfers persistence release to context and requires both phases', async t => {
+  const { getReclamationPersistenceControl } = require('../src/server/reclamation-persistence');
+  const { getReclamationServiceContextControl } = require('../src/server/reclamation-service-context');
+  const sandbox = await makeSandbox(t);
+  const owner = getReclamationPersistenceControl(sandbox.persistence).bindOwner();
+  assert.equal(getReclamationServiceContextControl({ ...sandbox.context }), null);
+  const contextOwner = getReclamationServiceContextControl(sandbox.context).bindOwner(owner);
+  assert.ok(contextOwner);
+  assert.equal(getReclamationServiceContextControl(sandbox.context).bindOwner(owner), false);
+  await sandbox.context.start(sandbox.writersBySlot);
+  await sandbox.context.backend('questions').close();
+  assert.equal(sandbox.context.backend('questions').canWrite(), false);
+  assert.ok(sandbox.capacityBudget.status().reservedBytes > 0);
+  await assert.rejects(owner.finalize(), { code: 'reclamation_persistence_authority_transferred' });
+  assert.throws(() => createReclamationPersistence({ anchorPath: sandbox.anchorPath, slotPathsBySlot: sandbox.slotPathsBySlot }),
+    { code: 'reclamation_persistence_path_owned' });
+  await contextOwner.finalize();
+  assert.equal(sandbox.capacityBudget.status().reservedBytes, 0);
+  const next = createReclamationPersistence({ anchorPath: sandbox.anchorPath, slotPathsBySlot: sandbox.slotPathsBySlot });
+  await next.close();
+});
+
+test('ID-F209-O01 context bind refuses a backend operation accepted before start', async t => {
+  const { getReclamationPersistenceControl } = require('../src/server/reclamation-persistence');
+  const { getReclamationServiceContextControl } = require('../src/server/reclamation-service-context');
+  const sandbox = await makeSandbox(t);
+  const owner = getReclamationPersistenceControl(sandbox.persistence).bindOwner();
+  const pending = sandbox.context.backend('questions').load().catch(error => error);
+  assert.equal(getReclamationServiceContextControl(sandbox.context).bindOwner(owner), false);
+  await sandbox.context.close();
+  assert.ok((await pending).code);
+  await owner.finalize();
+});
+
+test('ID-F209-O01 managed startup stop callback observes the same start placeholder', async t => {
+  const { getReclamationPersistenceControl } = require('../src/server/reclamation-persistence');
+  const { getReclamationServiceContextControl } = require('../src/server/reclamation-service-context');
+  const sandbox = await makeSandbox(t);
+  const owner = getReclamationPersistenceControl(sandbox.persistence).bindOwner();
+  const contextOwner = getReclamationServiceContextControl(sandbox.context).bindOwner(owner);
+  let reentered;
+  let stops = 0;
+  sandbox.writersBySlot.questions.stop = () => {
+    stops += 1;
+    reentered = sandbox.context.start(sandbox.writersBySlot);
+    reentered.catch(() => {});
+  };
+  const start = sandbox.context.start(sandbox.writersBySlot);
+  assert.equal(reentered, start);
+  await start;
+  assert.ok(stops > 0);
+  await sandbox.context.close();
+  await contextOwner.finalize();
+});
+
+for (const stopMode of ['throw', 'reject']) {
+  test(`ID-F209-O01 qualified question failure preserves a one-time falsy stop ${stopMode} as unknown termination`, async t => {
+  const { loadQuestionWriteIsolationModules } = require('./support/question-write-isolation-loader');
+  const modules = loadQuestionWriteIsolationModules();
+  const sandbox = await makeSandbox(t, emptyStores(), emptyAnchor(), undefined, {}, limits(), undefined, modules);
+  const owner = modules.persistence.getReclamationPersistenceControl(sandbox.persistence).bindOwner();
+  const contextOwner = modules.context.getReclamationServiceContextControl(sandbox.context).bindOwner(owner);
+  let stopped = 0;
+  let armed = false;
+  sandbox.writersBySlot.questions.stop = () => {
+    if (!armed || ++stopped !== 1) return;
+    if (stopMode === 'throw') throw undefined;
+    return Promise.reject(undefined);
+  };
+  await sandbox.context.start(sandbox.writersBySlot);
+  armed = true;
+  const backend = sandbox.context.backend('questions');
+  const candidate = { ...backend.getSnapshot(), revision: 1 };
+  modules.nativeFileSystem.armRenameRetryExhaustion({ targetPath: sandbox.slotPathsBySlot.questions, phase: 'before' });
+  await assert.rejects(backend.save(candidate), { code: 'EPERM' });
+  const close = await sandbox.context.close().then(() => ({ ok: true }), error => ({ error }));
+  assert.equal(Object.hasOwn(close, 'error'), true);
+  assert.equal(close.error, undefined);
+  assert.ok(stopped > 1);
+  assert.ok(contextOwner.retentionReasons().includes(undefined));
+  await assert.rejects(contextOwner.finalize(), { code: 'reclamation_context_drain_unconfirmed' });
+  assert.throws(() => modules.persistence.createReclamationPersistence({
+    anchorPath: sandbox.anchorPath, slotPathsBySlot: sandbox.slotPathsBySlot,
+  }), { code: 'reclamation_persistence_path_owned' });
+});
+}

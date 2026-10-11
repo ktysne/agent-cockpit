@@ -521,3 +521,56 @@ runnerとsourceの関連123件は成功し、失敗0件である。
 固定head `d12453b`の全体テストは2889件成功、失敗0、Windows実symlink権限によるskip2である。
 Claude R1はblockerと要修正が0件で収束した。
 実Codex runtimeと実stdio故障は未実施である。
+
+## 回収factoryの二段階終了とprocess内所有保持 (#209)
+
+`ID-F209-O01`は明示的回収factoryで、同期の保存禁止と所有権の最終解放を分けるfixture契約である。
+ClaudeとCodexの同一終了条件を確認し、provider固有read能力と実runtimeの結果を分ける。
+
+第一段階は新規factory ticket、context保存、ready待機とwriter受付を停止する。
+受付済みwriteとreadback、writer tail、context startup/I/O、coordinator startupのsettlement後にpersistenceの新規enqueueを停止し、そのpending queueをdrainする。
+backend.closeとcoordinator.closeはfactory全体drainを逆待ちせず、Map所有権と実容量leaseを解放しない。
+
+設定購読解除とrouter.closeの失敗も保守的な所有保持の対象とする。
+これら二つの個別故障を対照にするfixtureは未追加である。
+managed collectorの生成前入力検査失敗によるadmission退役の個別fixtureも未追加で、bind失敗後のcleanupと区別する。
+
+第二段階は全native物理停止と隔離、collectorと準備失敗cleanup、serviceに依存しないwriter tail、schedulerとfactory gate、context/persistence I/Oの終了確認後にだけ行う。
+容量leaseの解放成功後に同ownerのpath Mapを解放し、解放完了のフラグを先行させない。
+leaseの実release後もstatusが不明なら、path再取得と同factoryの再起動を拒否する。
+実容量予算の減少とpath所有の保持を別に観測し、繰返しcloseでreleaseを追加しないことを確認する。
+通常の保存失敗があっても独立に終了を確認できれば解放し、close中に捕捉した失敗があれば最初の理由を返す。
+停止またはdrainを確認できない場合はstickyな所有保持とし、timeout、後着通知、再closeとGCで自動解放しない。
+同じprocess寿命中の同path再取得は拒否する。
+
+所有保持となる回収factory.closeだけはcode `reclamation_ownership_retained`のAggregateErrorで返す。
+closeまたはstartup cleanup中に捕捉した最初の失敗はcauseのown propertyとerrors先頭へfalsy値も含めて保持し、保持理由もerrorsに残す。
+confirmed release後の保存失敗、standard mode、standalone context/coordinator/persistenceとnative.stop自体の既存エラーは維持する。
+
+保持fixtureはticket、native readとwrite/readbackを別々に保留し、保存禁止後もMap所有権と容量leaseの保持を確認する。
+正常終了後の同path再取得、保存失敗後の安全な解放、writer drain失敗、control不在、exit-only/close-only、lease release throw、初期化各段階の失敗、同期再入とbackend/coordinator経由の解放迂回拒否を対照にする。
+新ownerの取得後も旧provider callbackと旧backend保存がfile bytes/revisionを変えず、旧gateを開き直さないことを確認する。
+保持点はfinallyで解放し、同pathの保持試験に使ったrootを別試験へ流用しない。
+
+対象の所有権は同module内Mapとprocess内容量予算に限る。
+他module、process間lock、標準writer、任意filesystem writer、実runtime、OS耐久性とpower lossは未確認で、fixture成功へ合算しない。
+明示再確認と所有保持の詳細診断は別作業であり、この契約は可用性回復APIを含まない。
+
+検証sourceは`ed9e1b1`である。
+関連9ファイルは237件成功、失敗0、Windows実symlink権限によるskip1だった。
+この結果は最終の質問stop失敗記録と追加試験の前である。
+所有保持と保存失敗の監査補強後はcontextとfactoryの112件が成功し、最終contextの49件とcoordinatorの管理終了2件も成功した。
+実ticket、native readとwrite/readbackの保持中は容量leaseと同pathの取得拒否を確認し、保存失敗後はclose失敗の注入を足さずに安全な解放を確認した。
+stop失敗を後続成功で消さず、同期throwと非同期rejectのfalsy理由を保持する。
+固定head `5a3d50f`の全体テストは2792件成功、119件失敗、Windows実symlink権限によるskip2だった。
+本文回収とgrant解放の既存helperが、cloneしたpersistenceとcontextへ元のprivate controlを引き継がず起動を拒否されるため、helperの互換補強を行う。
+互換補強後は、lease解放状態が不明な場合の再起動拒否を含め、4試験群120件がすべて成功した。
+factory lifetimeの72件とquestion write隔離の16件も成功した。
+未知leaseの両provider対照では同じAggregateError、release一度だけ、直接のpath再取得拒否、保存済みgrant nullとnative送信0を確認した。
+初回全体失敗後はDraftを維持し、製品条件を弱めずhelperと試験期待値を修正した。
+Claude R1はblockerと要修正が0件で、任意提案の保持範囲を文書で明確化した。
+互換補強後の固定head `30f6e85`は全体2911件成功、失敗0、Windows実symlink権限によるskip2、228867.7931msだった。
+Claude R2もblockerと要修正が0件で、実originalへの転送とcache復元、未知leaseの期待値との整合を確認した。
+restartは旧factoryのclose拒否で止まり、同pathの新owner取得拒否は直接persistenceを作る対照で確認する。
+最終の字下げ整理と重複変数除去後も構文確認と未知leaseの2件が成功した。
+製品コードは全体検証headから不変で、軽微な整形と結果記録だけのため全体再実行とR3は省略した。

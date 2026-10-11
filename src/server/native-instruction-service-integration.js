@@ -17,9 +17,9 @@ const { createProviderInstructionAdapter } = require('./provider-instruction-ada
 const { createNativeLaunchComposition } = require('./native-launch-composition');
 const { createCommonQuestionService } = require('./common-question-service');
 const { MAX_JOURNAL_RECORDS } = require('./common-question-kernel');
-const { createReclamationPersistence } = require('./reclamation-persistence');
+const { createReclamationPersistence, getReclamationPersistenceControl } = require('./reclamation-persistence');
 const { createReclamationCapacityBudget } = require('./reclamation-capacity-reservation');
-const { createReclamationServiceContext } = require('./reclamation-service-context');
+const { createReclamationServiceContext, getReclamationServiceContextControl } = require('./reclamation-service-context');
 const { createNativeFactoryLifetimeGate } = require('./native-factory-lifetime-gate');
 const { getOwnedNativeCollectorControl } = require('./owned-native-source-collector');
 const {
@@ -362,6 +362,9 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   let journal;
   let reclamationPersistence = null;
   let reclamationContext = null;
+  let persistenceOwner = null;
+  let contextOwner = null;
+  const retentionReasons = [];
   let reclamationScheduler = null;
   const lifetimeGate = options.reclamation ? createNativeFactoryLifetimeGate() : null;
   let closing = false;
@@ -415,27 +418,69 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     unsubscribe?.();
   }
 
+  async function finishOwnership(failure, confirm) {
+    for (const producer of [store, service, questionService]) {
+      if (!producer) continue;
+      const writer = producer.reclamationWriter;
+      if (!writer || typeof writer.stop !== 'function' || typeof writer.drain !== 'function') {
+        const error = integrationError('reclamation_writer_control_unavailable');
+        failure.capture(error);
+        retentionReasons.push(error);
+        continue;
+      }
+      await confirm(() => writer.stop());
+      await confirm(() => writer.drain());
+    }
+    if (reclamationScheduler) {
+      await confirm(() => {
+        const latest = reclamationScheduler.status();
+        if (latest.stopped !== true || latest.running !== false || latest.timerPending !== false) {
+          throw integrationError('reclamation_scheduler_stop_unconfirmed');
+        }
+      });
+    }
+    if (contextOwner) retentionReasons.push(...contextOwner.retentionReasons());
+    else if (reclamationContext !== null || reclamationPersistence !== null && !persistenceOwner) {
+      retentionReasons.push(integrationError('reclamation_ownership_control_unavailable'));
+    }
+    if (retentionReasons.length === 0) {
+      await confirm(() => contextOwner ? contextOwner.finalize() : persistenceOwner?.finalize());
+    }
+    if (retentionReasons.length) {
+      const errors = failure.failed ? [failure.reason, ...retentionReasons] : [...retentionReasons];
+      const retained = failure.failed
+        ? new AggregateError(errors, 'reclamation ownership remains retained', { cause: failure.reason })
+        : new AggregateError(errors, 'reclamation ownership remains retained');
+      retained.code = 'reclamation_ownership_retained';
+      throw retained;
+    }
+  }
+
   async function cleanupPartial() {
     closing = true;
     lifetimeGate?.stopAdmission();
     const failure = createFailureCapture();
     let contextClosePromise = null;
-    const attempt = async (operation) => {
-      try { await operation(); } catch (error) { failure.capture(error); }
+    const attempt = async (operation, blocksRelease = false) => {
+      try { await operation(); } catch (error) {
+        failure.capture(error);
+        if (blocksRelease && lifetimeGate !== null) retentionReasons.push(error);
+      }
     };
-    try { reclamationScheduler?.stop(); } catch (error) { failure.capture(error); }
+    const confirm = operation => attempt(operation, true);
+    try { reclamationScheduler?.stop(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
     if (reclamationContext !== null) {
       try {
-        contextClosePromise = reclamationContext.close();
+        contextClosePromise = contextOwner ? contextOwner.stopAndDrain() : Promise.reject(integrationError('reclamation_context_control_unavailable'));
         contextClosePromise.catch(() => {});
-      } catch (error) { failure.capture(error); }
+      } catch (error) { failure.capture(error); retentionReasons.push(error); }
     }
     const nativeShutdown = lifetimeGate === null ? null : beginNativeShutdown();
-    if (nativeShutdown?.failure.failed) failure.capture(nativeShutdown.failure.reason);
-    await attempt(() => stopSettingsNotifications());
+    if (nativeShutdown?.failure.failed) { failure.capture(nativeShutdown.failure.reason); retentionReasons.push(nativeShutdown.failure.reason); }
+    await confirm(() => stopSettingsNotifications());
     await attempt(() => questionService?.close?.());
     await attempt(() => service?.close?.());
-    if (nativeShutdown) await drainNativeShutdown(nativeShutdown, attempt);
+    if (nativeShutdown) await drainNativeShutdown(nativeShutdown, confirm);
     if (!service) {
       for (const adapter of Object.values(providerInstructionAdapters || {})) {
         try { adapter?.close?.(); } catch (error) { failure.capture(error); }
@@ -446,16 +491,17 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       await attempt(() => journal?.close?.());
     }
     for (const router of Object.values(routers)) {
-      try { router.close(); } catch (error) { failure.capture(error); }
+      try { router.close(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
     }
     if (reclamationContext === null) await attempt(() => store?.flush?.());
     await attempt(() => store?.close?.());
-    await attempt(() => reclamationScheduler?.drain());
-    if (contextClosePromise !== null) await attempt(() => contextClosePromise);
-    else if (reclamationContext === null) await attempt(() => reclamationPersistence?.close?.());
+    await confirm(() => reclamationScheduler?.drain());
+    if (contextClosePromise !== null) await confirm(() => contextClosePromise);
+    else if (reclamationPersistence !== null && persistenceOwner) await confirm(() => persistenceOwner.stopAndDrain());
     if (lifetimeGate !== null) {
-      await attempt(() => lifetimeGate.drain());
-      await awaitPreparationCleanups(nativeShutdown.entries, attempt);
+      await confirm(() => lifetimeGate.drain());
+      await awaitPreparationCleanups(nativeShutdown.entries, confirm);
+      await finishOwnership(failure, confirm);
     }
     if (options.reclamation) failure.throwIfFailed();
   }
@@ -471,6 +517,12 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
           questions: commonQuestionJournalPath,
         },
       });
+      persistenceOwner = getReclamationPersistenceControl(reclamationPersistence)?.bindOwner() || null;
+      if (!persistenceOwner) {
+        const error = integrationError('reclamation_persistence_control_unavailable');
+        retentionReasons.push(error);
+        throw error;
+      }
       const capacityBudget = createReclamationCapacityBudget({
         maxAdditionalBytes: options.reclamation.maxAdditionalBytes,
       });
@@ -480,6 +532,12 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         capacityBudget,
         now: reclamationNow,
       });
+      contextOwner = getReclamationServiceContextControl(reclamationContext)?.bindOwner(persistenceOwner) || null;
+      if (!contextOwner) {
+        const error = integrationError('reclamation_context_control_unavailable');
+        retentionReasons.push(error);
+        throw error;
+      }
     }
     composition = createNativeLaunchComposition({
       registrationKernel,
@@ -1106,34 +1164,39 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     lifetimeGate?.stopAdmission();
     const failure = createFailureCapture();
     let contextClosePromise = null;
-    try { reclamationScheduler?.stop(); } catch (error) { failure.capture(error); }
+    try { reclamationScheduler?.stop(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
     if (reclamationContext !== null) {
       try {
-        contextClosePromise = reclamationContext.close();
+        contextClosePromise = contextOwner ? contextOwner.stopAndDrain() : Promise.reject(integrationError('reclamation_context_control_unavailable'));
         contextClosePromise.catch(() => {});
-      } catch (error) { failure.capture(error); }
+      } catch (error) { failure.capture(error); retentionReasons.push(error); }
     }
     const nativeShutdown = lifetimeGate === null ? null : beginNativeShutdown();
-    if (nativeShutdown?.failure.failed) failure.capture(nativeShutdown.failure.reason);
+    if (nativeShutdown?.failure.failed) { failure.capture(nativeShutdown.failure.reason); retentionReasons.push(nativeShutdown.failure.reason); }
     const shutdown = (async () => {
-      const attempt = async (operation) => {
-        try { await operation(); } catch (error) { failure.capture(error); }
+      const attempt = async (operation, blocksRelease = false) => {
+        try { await operation(); } catch (error) {
+          failure.capture(error);
+          if (blocksRelease && lifetimeGate !== null) retentionReasons.push(error);
+        }
       };
-      try { stopSettingsNotifications(); } catch (error) { failure.capture(error); }
+      const confirm = operation => attempt(operation, true);
+      try { stopSettingsNotifications(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
       await attempt(() => questionService?.close());
       await attempt(() => service.close());
-      if (nativeShutdown) await drainNativeShutdown(nativeShutdown, attempt);
+      if (nativeShutdown) await drainNativeShutdown(nativeShutdown, confirm);
       else for (const entry of [...admissions].reverse()) await attempt(() => stop(entry.receipt));
       for (const router of Object.values(routers)) {
-        try { router.close(); } catch (error) { failure.capture(error); }
+        try { router.close(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
       }
       if (reclamationContext === null) await attempt(() => store.flush());
       await attempt(() => store.close());
-      await attempt(() => reclamationScheduler?.drain());
-      if (contextClosePromise !== null) await attempt(() => contextClosePromise);
+      await confirm(() => reclamationScheduler?.drain());
+      if (contextClosePromise !== null) await confirm(() => contextClosePromise);
       if (lifetimeGate !== null) {
-        await attempt(() => lifetimeGate.drain());
-        await awaitPreparationCleanups(nativeShutdown.entries, attempt);
+        await confirm(() => lifetimeGate.drain());
+        await awaitPreparationCleanups(nativeShutdown.entries, confirm);
+        await finishOwnership(failure, confirm);
       }
       failure.throwIfFailed();
     })();

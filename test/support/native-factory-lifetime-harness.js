@@ -57,13 +57,36 @@ function holdNextNativeRead(child, method = 'thread/read', responseFirst = false
 function loadFactory(control) {
   const names = ['native-factory-lifetime-gate', 'reclamation-persistence', 'reclamation-service-context',
     'common-question-service', 'instruction-delivery-service', 'provider-instruction-adapter', 'reclamation-scheduler',
-    'native-launch-composition', 'owned-native-source-collector'];
+    'native-launch-composition', 'owned-native-source-collector', 'reclamation-capacity-reservation', 'durable-delivery-store',
+    'reclamation-migration-coordinator'];
   const paths = names.map(name => require.resolve(`../../src/server/${name}`));
   const originals = paths.map(modulePath => require(modulePath));
+  const savedEntries = paths.map(modulePath => require.cache[modulePath]);
+  const savedExports = [...originals];
+  const persistenceOriginals = new WeakMap();
+  const contextOriginals = new WeakMap();
+  function withTrackedWriter(producer, slot) {
+    if (!producer.reclamationWriter) return producer;
+    const writer = producer.reclamationWriter;
+    return Object.freeze({ ...producer, reclamationWriter: Object.freeze({ ...writer,
+      stop() {
+        const result = writer.stop();
+        control.events.push('writer-stop:' + slot);
+        if (control.writerStopError?.slot === slot) throw control.writerStopError.reason;
+        return result;
+      },
+      async drain() {
+        await writer.drain();
+        control.events.push('writer-drain:' + slot);
+        if (control.writerDrainBarrier?.slot === slot) await control.writerDrainBarrier.wait();
+        if (control.writerDrainError?.slot === slot) throw control.writerDrainError.reason;
+      },
+    }) });
+  }
   const integrationPath = require.resolve('../../src/server/native-instruction-service-integration');
   const previous = require.cache[integrationPath];
   const replace = (index, name, wrapper) => {
-    require.cache[paths[index]].exports = { ...originals[index], [name]: wrapper(originals[index][name]) };
+    require.cache[paths[index]].exports = { ...require.cache[paths[index]].exports, [name]: wrapper(originals[index][name]) };
   };
   replace(0, 'createNativeFactoryLifetimeGate', create => () => {
     const gate = create();
@@ -89,7 +112,8 @@ function loadFactory(control) {
   replace(1, 'createReclamationPersistence', create => options => {
     if (control.failPersistence) throw control.failPersistence;
     const persistence = create(options);
-    return Object.freeze({ ...persistence,
+    control.persistence = persistence;
+    const wrapper = Object.freeze({ ...persistence,
       async readAnchorBytes(...args) {
         const bytes = await persistence.readAnchorBytes(...args);
         if (control.failStart) throw Object.assign(new Error('fixture start failure'), { code: 'fixture_start_failure' });
@@ -99,35 +123,54 @@ function loadFactory(control) {
         control.writes[slot] += 1;
         const barrier = control.writeBarrier;
         if (barrier?.slot === slot) { control.writeBarrier = null; await barrier.wait(); }
-        return persistence.writeSlotBytes(slot, ...args);
+        const result = await persistence.writeSlotBytes(slot, ...args);
+        if (control.writeError?.slot === slot) throw control.writeError.reason;
+        return result;
+      },
+      async readSlotBytes(slot, ...args) {
+        control.events.push('persistence-read:' + slot);
+        if (control.readbackBarrier?.slot === slot) await control.readbackBarrier.wait();
+        return persistence.readSlotBytes(slot, ...args);
       },
       async close() { await persistence.close(); control.events.push('persistence-closed'); },
     });
+    persistenceOriginals.set(wrapper, persistence);
+    return wrapper;
   });
+  replace(1, 'getReclamationPersistenceControl', lookup => value => lookup(persistenceOriginals.get(value) || value));
+  replace(11, 'createReclamationMigrationCoordinator', create => options => {
+    control.coordinator = create(options);
+    return control.coordinator;
+  });
+  delete require.cache[paths[2]];
+  originals[2] = require(paths[2]);
   replace(2, 'createReclamationServiceContext', create => options => {
     if (control.failContext) throw control.failContext;
     const context = create(options);
     control.context = context;
-    return Object.freeze({ ...context,
+    const wrapper = Object.freeze({ ...context,
       async start(writers) {
         if (control.probeCold) {
           control.coldQuestion = control.question.dashboardSnapshot().catch(error => error);
           control.coldInstruction = control.instruction.get('cold').catch(error => error);
         }
-        return context.start(writers);
+        return context.start({ ...writers, checkpoint: withTrackedWriter({ reclamationWriter: writers.checkpoint }, 'checkpoint').reclamationWriter });
       },
       close() { control.events.push('context-close'); return context.close(); },
     });
+    contextOriginals.set(wrapper, context);
+    return wrapper;
   });
+  replace(2, 'getReclamationServiceContextControl', lookup => value => lookup(contextOriginals.get(value) || value));
   replace(3, 'createCommonQuestionService', create => (options, gate) => {
-    control.question = create({ ...options,
+    control.question = withTrackedWriter(create({ ...options,
       setTimeoutImpl: callback => { const timer = { callback, unref() {} }; control.questionTimers.push(timer); return timer; },
       clearTimeoutImpl: timer => { timer.cleared = true; },
-    }, gate);
+    }, gate), 'questions');
     return control.question;
   });
   replace(4, 'createInstructionDeliveryService', create => (options, gate) => {
-    control.instruction = create(options, gate);
+    control.instruction = withTrackedWriter(create(options, gate), 'instructions');
     return Object.freeze({ ...control.instruction,
       ready() { if (control.failServiceReady) return Promise.reject(control.failServiceReady); return control.instruction.ready(); },
       async close() {
@@ -221,10 +264,33 @@ function loadFactory(control) {
       },
     });
   });
+  replace(9, 'createReclamationCapacityBudget', create => options => {
+    const budget = create(options);
+    control.budget = budget;
+    control.leaseReleases = 0;
+    return Object.freeze({ ...budget, acquire(bytes) {
+      const lease = budget.acquire(bytes);
+      let released = false;
+      return Object.freeze({ ...lease, status() {
+        if (released && Object.hasOwn(control, 'leaseStatusError')) throw control.leaseStatusError;
+        if (released && control.leaseStatusMismatch) return { bytes: 1, released: false };
+        return lease.status();
+      }, release() {
+        control.leaseReleases += 1;
+        control.events.push('lease-release');
+        control.onLeaseRelease?.();
+        if (Object.hasOwn(control, 'leaseReleaseError')) throw control.leaseReleaseError;
+        const result = lease.release();
+        released = true;
+        return result;
+      } });
+    } });
+  });
+
   delete require.cache[integrationPath];
   try { return require(integrationPath).createNativeInstructionServiceIntegration; }
   finally {
-    paths.forEach((modulePath, index) => { require.cache[modulePath].exports = originals[index]; });
+    paths.forEach((modulePath, index) => { savedEntries[index].exports = savedExports[index]; require.cache[modulePath] = savedEntries[index]; });
     if (previous) require.cache[integrationPath] = previous;
     else delete require.cache[integrationPath];
   }
@@ -317,7 +383,7 @@ async function createNativeFactoryLifetimeHarness(directory, options = {}) {
     },
   });
   ready.catch(() => {});
-  return { control, ready, settingsCallbacks, away, processes,
+  return { directory, control, ready, settingsCallbacks, away, processes,
     releaseAll() {
       for (const release of control.releases) release();
       if (control.killEvents === 'exit' || control.killEvents === 'close') {
@@ -326,7 +392,7 @@ async function createNativeFactoryLifetimeHarness(directory, options = {}) {
           process.state.child?.reportClose();
         }
       }
-      for (const name of ['writeBarrier', 'serviceCloseBarrier', 'stopBarrier', 'collectorDrainBarrier', 'readBarrier', 'startBarrier']) control[name]?.release();
+      for (const name of ['writeBarrier', 'serviceCloseBarrier', 'stopBarrier', 'collectorDrainBarrier', 'readBarrier', 'startBarrier', 'writerDrainBarrier', 'readbackBarrier']) control[name]?.release();
     },
     startInput(provider, suffix) {
       return { launchId: `life-launch-${provider}-${suffix}`, runId: `life-run-${provider}-${suffix}`,
