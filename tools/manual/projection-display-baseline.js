@@ -33,7 +33,7 @@ const LIMITS = Object.freeze({
   churn: 10000,
   recordsPerScenario: 25000,
   totalFixtureRecords: 2000000,
-  totalIteratorWork: 30000000,
+  maxEstimatedLegacyFullScanVisits: 30000000,
 });
 const PROVIDER_MODES = Object.freeze(['claude', 'codex', 'both', 'unknown']);
 const SWEEPS = Object.freeze(['all', 'tombstones', 'sessions', 'projections', 'providers', 'churn']);
@@ -170,7 +170,7 @@ function buildScenarios(options) {
 
 function validateWorkBudget(options, scenarios = buildScenarios(options)) {
   let totalFixtureRecords = 0;
-  let totalIteratorWork = 0;
+  let estimatedLegacyFullScanVisits = 0;
   const fixtureBuildsPerScenario = (options.samples + options.warmup) * 2 + 2;
   const routeRunsPerScenario = options.samples + options.warmup + 2;
 
@@ -179,15 +179,17 @@ function validateWorkBudget(options, scenarios = buildScenarios(options)) {
     if (recordCount > LIMITS.recordsPerScenario) throw new Error('scenario exceeds the per-fixture record limit');
     totalFixtureRecords += recordCount * fixtureBuildsPerScenario;
     const routeLookupCalls = scenario.sessions + scenario.projections;
-    totalIteratorWork += scenario.tombstones * (
+    estimatedLegacyFullScanVisits += scenario.tombstones * (
       routeLookupCalls * routeRunsPerScenario +
       routeLookupCalls * (options.samples + options.warmup)
     );
   }
 
   if (totalFixtureRecords > LIMITS.totalFixtureRecords) throw new Error('run exceeds the total fixture construction limit');
-  if (totalIteratorWork > LIMITS.totalIteratorWork) throw new Error('run exceeds the estimated iterator work limit');
-  return { totalFixtureRecords, totalIteratorWork };
+  if (estimatedLegacyFullScanVisits > LIMITS.maxEstimatedLegacyFullScanVisits) {
+    throw new Error('run exceeds the estimated legacy full-scan visit budget');
+  }
+  return { totalFixtureRecords, estimatedLegacyFullScanVisits };
 }
 
 function sessionId(seed, kind, index) {
@@ -432,11 +434,8 @@ function createReadRouteHarness(state, projections, webPath) {
 }
 
 function instrumentLookups(state) {
-  const metrics = { lookupCalls: 0, iteratorYields: 0 };
-  const map = state.projectionDisplaySettings;
+  const metrics = { lookupCalls: 0, lookupRecordsReturned: 0 };
   const originalMethodDescriptor = Object.getOwnPropertyDescriptor(state, 'projectionDisplayRecordsForSession');
-  const originalValuesDescriptor = Object.getOwnPropertyDescriptor(map, 'values');
-  const originalValues = Map.prototype.values;
   const originalLookup = state.projectionDisplayRecordsForSession;
 
   Object.defineProperty(state, 'projectionDisplayRecordsForSession', {
@@ -444,18 +443,10 @@ function instrumentLookups(state) {
     writable: true,
     value(sessionId) {
       metrics.lookupCalls += 1;
-      return Reflect.apply(originalLookup, state, [sessionId]);
-    },
-  });
-  Object.defineProperty(map, 'values', {
-    configurable: true,
-    writable: true,
-    value: function* countedValues() {
-      const iterator = Reflect.apply(originalValues, map, []);
-      for (const record of iterator) {
-        metrics.iteratorYields += 1;
-        yield record;
-      }
+      const records = Reflect.apply(originalLookup, state, [sessionId]);
+      if (!Array.isArray(records)) throw new Error('session lookup did not return an array');
+      metrics.lookupRecordsReturned += records.length;
+      return records;
     },
   });
 
@@ -464,8 +455,6 @@ function instrumentLookups(state) {
     stop() {
       if (originalMethodDescriptor) Object.defineProperty(state, 'projectionDisplayRecordsForSession', originalMethodDescriptor);
       else delete state.projectionDisplayRecordsForSession;
-      if (originalValuesDescriptor) Object.defineProperty(map, 'values', originalValuesDescriptor);
-      else delete map.values;
     },
   };
 }
@@ -478,12 +467,12 @@ function projectionCounts(projections) {
 }
 
 function countState(state, routeResult, measured) {
-  const records = [...state.projectionDisplaySettings.values()];
-  const mapSize = state.projectionDisplaySettings.size;
+  const diagnosticMap = state.projectionDisplaySettings;
+  const records = [...diagnosticMap.values()];
+  const mapSize = diagnosticMap.size;
   const store = state.serializeStore();
   const storeJson = JSON.stringify(store);
   const projectionJson = JSON.stringify(store.projectionDisplaySettings);
-  const expectedYields = mapSize * measured.lookupCalls;
   const routeQuestions = routeResult.body.sessions.reduce((total, session) => total + (session.commonQuestions?.length || 0), 0);
   const routeInstructions = routeResult.body.sessions.reduce((total, session) => total + (session.instructions?.length || 0), 0);
   const sourceProviderElements = [...state.sessionProviderSourcesById.values()]
@@ -514,8 +503,7 @@ function countState(state, routeResult, measured) {
     routeProjectionCounts: { questions: routeQuestions, instructions: routeInstructions },
     fixtureProjectionCounts: projectionCounts(measured.projections),
     lookupCallsMeasured: measured.lookupCalls,
-    iteratorYieldsMeasured: measured.iteratorYields,
-    iteratorYieldsExpected: expectedYields,
+    lookupRecordsReturnedMeasured: measured.lookupRecordsReturned,
     storeJsonUtf8Bytes: Buffer.byteLength(storeJson, 'utf8'),
     projectionDisplayJsonUtf8Bytes: Buffer.byteLength(projectionJson, 'utf8'),
     stateRouteJsonUtf8Bytes: Buffer.byteLength(routeResult.json, 'utf8'),
@@ -563,9 +551,6 @@ async function measureScenario(scenario, options, fixtureRoot, webPath) {
   };
   counter.stop();
   const counts = countState(countFixture.state, countRouteResult, countMetrics);
-  if (counts.iteratorYieldsMeasured !== counts.iteratorYieldsExpected) {
-    throw new Error('measured iterator yields differ from Map.size × lookup calls');
-  }
   if (counts.lookupCallsMeasured > scenario.sessions + scenario.projections) {
     throw new Error('route lookup calls exceed the scenario work estimate');
   }
@@ -744,7 +729,13 @@ async function run(options) {
       results.push(await measureScenario(scenario, options, temporary.root, temporary.webPath));
     }
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      measurementModel: {
+        name: 'session-index',
+        lookupCalls: 'observed',
+        returnedRecords: 'observed',
+        bucketVisits: 'not-observed',
+      },
       seed: options.seed,
       environment: {
         node: process.version,
