@@ -1512,7 +1512,9 @@ class PullRequestTracker {
         mergeMethods: [...group.mergeMethods],
         mergeableCount: mergeablePullRequestCount(trees),
         trees,
-        merged: structuredClone(group.merged),
+        merged: group.merged.map((pullRequest) => ({
+          ...structuredClone(pullRequest), providers: this.state.pullRequestProviders(group.owner, group.repo, pullRequest.number),
+        })),
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
         reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(group.owner, group.repo, this.now()),
         reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),

@@ -95,6 +95,45 @@ test('同じ PR の Claude と Codex の起点を木と「前回見てから」�
   assert.deepEqual(created.providers, ['claude', 'codex']);
 });
 
+test('Codex のセッションが終わった後も、タスクの完了は保存と復元を経て Codex 起点のまま渡す', async (t) => {
+  const start = Date.now();
+  const c = await cockpit(t, {
+    away: { snapshot: () => ({ enabled: true, since: new Date(start).toISOString(), periods: [{ start: start - 30_000, end: null }] }) },
+  });
+  await c.event('codex-ended', 'codex', 'SessionStart');
+  const product = c.runtime.state.productForSession('codex-ended');
+  c.runtime.state.setProductSeen(product.key, Date.now() - 10_000);
+  c.runtime.state.setTasks('codex-ended', [{ title: '終了前の完了', state: 'done', criteria: [] }], Date.now() - 500);
+  await c.event('codex-ended', 'codex', 'SessionEnd');
+
+  const items = (await c.snapshot()).sinceSeen.flatMap((entry) => entry.items);
+  assert.equal(items.find((item) => item.text === 'タスク「終了前の完了」が完了した').provider, 'codex');
+  await c.runtime.state.flushPersistence();
+  const restored = await DashboardState.load(c.homeDir);
+  assert.equal(restored.providerForSession('codex-ended'), 'codex');
+});
+
+test('マージ済みの PR とマージ履歴にも登録元の起点を渡す', async (t) => {
+  const { directory } = temporaryDirectory(t, 'agent-cockpit-codex-pr-merged-');
+  const state = new DashboardState({ homeDir: directory });
+  state.addEvent({ session_id: 'codex-merged', provider: 'codex', hook_event_name: 'SessionStart', cwd: process.cwd(), hookAt: Date.now() });
+  const url = 'https://github.com/example/project/pull/76';
+  state.registerPullRequest('codex-merged', { url });
+  state.recordMergedPullRequest({
+    owner: 'example', repo: 'project', number: 76, title: 'マージ済み', url,
+    mergedAt: new Date().toISOString(), method: 'merge', automatic: false,
+  });
+  assert.deepEqual(state.mergedPullRequestHistoryForRepo('example', 'project')[0].providers, ['codex']);
+
+  const tracker = new PullRequestTracker({ state });
+  tracker.productViews.set('test-product', {
+    owner: 'example', repo: 'project', product: { key: 'project', name: 'project' }, mergeMethods: [], autoDeleteBranch: false,
+    checkedAt: null, fetchedAt: null, error: null, registeredCount: 1, openCount: 0,
+    mergeableCount: 0, trees: [], merged: [{ number: 76, title: 'マージ済み', url }], mergeHistory: [], reservations: [], lastMethod: null,
+  });
+  assert.deepEqual(tracker.snapshot()[0].merged[0].providers, ['codex']);
+});
+
 test('Codex の PostToolUse 回答フックは PR 通知を受け取る', async (t) => {
   const c = await cockpit(t);
   await c.event('codex-notification', 'codex', 'SessionStart');

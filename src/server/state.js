@@ -57,6 +57,7 @@ function stableStringify(value) {
 function validStoredPlan(plan) {
   return isRecord(plan) && Array.isArray(plan.tasks) && validTimestamp(plan.tasksUpdatedAt, true) &&
     (plan.product === undefined || plan.product === null || validProduct(plan.product)) &&
+    (plan.provider === undefined || ['claude', 'codex'].includes(plan.provider)) &&
     plan.tasks.every((task) => isRecord(task) && typeof task.title === 'string' && task.title.length <= 200 &&
       ['todo', 'doing', 'done'].includes(task.state) && Array.isArray(task.criteria) &&
       task.criteria.every((item) => isRecord(item) && typeof item.text === 'string' && typeof item.met === 'boolean') &&
@@ -283,6 +284,7 @@ function normalizeStore(value) {
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
       product: cloneProduct(plan.product),
+      ...(plan.provider ? { provider: plan.provider } : {}),
       decisions: plan.decisions.map(cloneDecision),
     });
   }
@@ -1668,6 +1670,7 @@ class DashboardState {
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
       product: cloneProduct(plan.product),
+      ...(plan.provider ? { provider: plan.provider } : {}),
       decisions: plan.decisions.map(cloneDecision),
     }]));
     const decisionLifecycles = Object.fromEntries([...this.decisionLifecycles].flatMap(([sessionId, records]) => {
@@ -1876,7 +1879,7 @@ class DashboardState {
       .filter((record) => !record.historyDismissedAt)
       .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
       .sort((left, right) => Date.parse(right.mergedAt) - Date.parse(left.mergedAt) || right.number - left.number)
-      .map((record) => ({ ...record }));
+      .map((record) => ({ ...record, providers: this.pullRequestProviders(record.owner, record.repo, record.number) }));
   }
 
   dismissMergedPullRequestHistory(owner, repo, number, now = Date.now()) {
@@ -2908,7 +2911,10 @@ class DashboardState {
   planFor(sessionId) {
     let plan = this.plans.get(sessionId);
     if (!plan) {
-      plan = { tasks: [], tasksUpdatedAt: null, product: cloneProduct(this.productForSession(sessionId)), decisions: [] };
+      plan = {
+        tasks: [], tasksUpdatedAt: null, product: cloneProduct(this.productForSession(sessionId)),
+        provider: this.providerForSession(sessionId), decisions: [],
+      };
       this.plans.set(sessionId, plan);
     }
     return plan;
@@ -2920,7 +2926,15 @@ class DashboardState {
 
   providerForSession(sessionId) {
     return this.entries.get(sessionId)?.[0]?.event.provider || this.sessions.get(sessionId)?.provider ||
-      this.sessionFiles.get(sessionId)?.provider || (this.codexRecovery.has(sessionId) ? 'codex' : 'claude');
+      this.sessionFiles.get(sessionId)?.provider || (this.codexRecovery.has(sessionId) ? 'codex' : null) ||
+      this.plans.get(sessionId)?.provider || 'claude';
+  }
+
+  // マージ記録の保持期間は登録より短いので、マージ済みの PR の起点も登録から求められる。
+  pullRequestProviders(owner, repo, number) {
+    return orderedProviders(this.pullRequestRegistrations().filter((record) => (
+      record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase() && record.number === number
+    )).map((record) => record.provider));
   }
 
   decisionsFor(sessionId) {
@@ -3201,10 +3215,7 @@ class DashboardState {
   ciFailureCandidates({ pullRequestTitles }) {
     return this.ciFailures.map((failure) => {
       const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
-      const providers = orderedProviders(this.pullRequestRegistrations().filter((record) => (
-        record.owner.toLowerCase() === failure.owner.toLowerCase() && record.repo.toLowerCase() === failure.repo.toLowerCase() &&
-        record.number === failure.number
-      )).map((record) => record.provider));
+      const providers = this.pullRequestProviders(failure.owner, failure.repo, failure.number);
       return {
         product: failure.product,
         type: 'ci-failure',

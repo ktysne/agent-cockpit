@@ -1019,7 +1019,7 @@ test('ダッシュボード外でマージされた PR は方式なしで履歴�
   assert.deepEqual(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0], {
     owner: 'example', repo: 'project', number: 1, title: 'PR 1', url: pr.url,
     mergedAt: new Date(NOW).toISOString(), method: null, automatic: false,
-    reservedHeadRefOid: null, mergedHeadRefOid: sha(1), headMismatch: false,
+    reservedHeadRefOid: null, mergedHeadRefOid: sha(1), headMismatch: false, providers: ['claude'],
   });
   assert.equal(fixture.notices[0].sessionIds.includes('session-1'), true);
   assert.match(fixture.notices[0].message, /方式は取得できませんでした/);
