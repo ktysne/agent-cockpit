@@ -567,6 +567,7 @@ let hiddenSessionsUndo = null;
 const recordDeletionTargets = new Map();
 const recordDeletionConfirmations = new Map();
 let uiUpdatePending = false;
+let refreshConfirmPending = false;
 const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
@@ -939,7 +940,11 @@ for (const input of mergeableConditionInputs) {
 }
 
 // 表示に残った古い要素や一時的な状態を確実に捨てるため、差分の描き直しではなくページごと読み込み直す。
-refreshButton.addEventListener('click', () => location.reload());
+// 下書きはメモリーにしか無いので、書きかけがあるときは案内の操作で消してよいかを確かめる。
+refreshButton.addEventListener('click', () => {
+  if (lastState && hasUnsentAnswerDraft(lastState)) setRefreshConfirmPending(true);
+  else location.reload();
+});
 settingsButton.addEventListener('click', () => {
   settingsDialog.showModal();
   settingsSaveError.textContent = Date.now() < writeErrorUntil ? writeErrorMessage : '';
@@ -4358,10 +4363,18 @@ document.addEventListener('change', (event) => {
 });
 
 function renderReloadNote(pending) {
-  reloadNote.hidden = !pending;
-  reloadNote.innerHTML = pending
+  const html = pending
     ? '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
-    : '';
+    : refreshConfirmPending
+      ? '<span>書きかけの回答があります。読み込み直すと消えます。</span><button type="button" class="link-btn" data-reload-now>回答を消して読み込み直す</button>'
+      : '';
+  reloadNote.hidden = !html;
+  reloadNote.innerHTML = html;
+}
+
+function setRefreshConfirmPending(pending) {
+  refreshConfirmPending = pending;
+  renderReloadNote(uiUpdatePending);
 }
 
 // 下書きは送信の成功でしか消えないので、選んで戻したものや回答できなくなった判断事項のものは書きかけと数えない。
@@ -4409,6 +4422,7 @@ async function refresh() {
     connectionLost = false;
     updateConnectionNote();
     lastState = state;
+    if (refreshConfirmPending && !hasUnsentAnswerDraft(state)) setRefreshConfirmPending(false);
     const awayBefore = header.dataset.away;
     applyAwayState(state.away);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
