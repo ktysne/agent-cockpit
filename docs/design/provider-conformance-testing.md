@@ -914,3 +914,18 @@ issuer統合はsandboxのspawn EPERM後に子プロセス起動が可能な環�
 membershipのfalse返却中の実kernel revision変更、再入、method置換不可のfallback、同期DI値のPromise拒否を確認した。
 各登録rowの走査回数は独立計測しておらず、O(N+M)は一回集計のsource契約とsnapshot回数のfixtureを分けて扱う。
 実provider runtime、実file discovery、長時間polling、process終了とauthority解放は未確認である。
+
+## 合成セッション行の状態表示 (#213)
+
+期待条件は[合成行の状態表示](synthetic-session-status.md)に従う。
+
+| ID | 入力 | 期待条件 |
+|---|---|---|
+| ID-F213-SS01 | 両providerの質問だけの合成行 | active/ended/unknownを待機中/終了済み/不明へ反映。projectionOnly=true、ID維持、endedAtなし |
+| ID-F213-SS02 | 両providerの指示だけの合成行 | active/endedを反映。unknownは既存unmatched、検証条件を緩めない |
+| ID-F213-SS03 | 同sessionの複数投影 | 状態またはexecutionIdの不一致は不明を維持。質問と指示の処理順による先勝ちなし |
+| ID-F213-SS04 | 実rowへの合流、hidden/deleted、出自混在 | 実rowのstatusとmetadataを上書きせずflagなし。既存の出自と表示guardを維持 |
+| ID-F213-SS05 | 質問snapshot失敗、有効な指示 | unavailable診断維持、受理できた指示だけで状態表示。registry照会を追加しない |
+| ID-F213-SS06 | 終了と不明の画面fixture | 終了を待機中へ戻さず、未解決カードを表示。不明合成行は推定操作なし、実不明行は維持 |
+
+実provider runtimeと実画面での状態遷移は未確認である。
