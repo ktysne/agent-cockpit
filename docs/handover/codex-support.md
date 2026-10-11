@@ -424,7 +424,7 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | 回収factoryの停止未確認後の所有 | process寿命中に保持するか、明示再確認APIを同時に作るか。推奨の終端保持を二段階終了で仮採用する。後着通知やtimeoutで解放せず、同process中は同pathを再取得できない。再確認と詳細診断は別作業 | #209の二段階終了。自走中の推奨判断 |
 | 表示記録の診断propertyのmutation互換 | projectionDisplaySettingsを内部Mapとして直接変更できる挙動を維持するか、copyを返して索引との整合を守るか。既知callerは読取りだけのため、推奨のcopy化をPR #370で仮採用した。開発者の確認待ち | #312の[session索引](../design/projection-display-index.md)。自走中の推奨判断 |
 | writer lockの残留回復 | 自動stale takeoverを作るか、即時拒否と全participant停止後の手動回復に限定するか。推奨は後者で、設計上仮採用する。現行トレイの強制再起動はmarkerを残すため、標準接続前にgraceful停止と最終解放確認を実装する。残留時は起動拒否とし、PID/TTLによる奪取やトレイの自動削除は行わない。製品接続は未実装 | #313の[排他設計](../design/writer-ownership-exclusion.md)。自走中の推奨判断 |
-| 停止の権限と通知 | 推奨は既存uiSecretの認証HTTP受付とinstance/request別結果file、確定拒否の明示再attemptで、設計上仮採用する。専用権限やlocal IPCも選択肢。Windows ACLの配布準備方式、手動再attemptの公開操作、対応OS/filesystemと既存同期constructorの互換範囲は未決で、製品接続前に確定する | #313の[停止とensureの設計](../design/server-stop-ensure.md)。自走中の推奨判断 |
+| 停止の権限と通知 | 推奨は既存uiSecretの認証HTTP受付とinstance/request別結果file、確定拒否の明示再attemptで、設計上仮採用する。専用権限やlocal IPCも選択肢。Windows ACLの配布準備方式、手動再attemptの公開操作、対応OS/filesystemと既存同期constructorの互換範囲、未確認所有の保持媒体、crash後の再構成とW09復旧確認の認証方式は未決で、製品接続前に確定する | #313の[停止とensureの設計](../design/server-stop-ensure.md)。自走中の推奨判断 |
 | 作業中の Claude への追加指示 | Codex の steer に当たる Claude の working steer は unsupported である。仕様差として受け入れるか、経路を設計するか。推奨は仕様差として受け入れ、Claude には待機中の次の入力だけを届ける。#175 の[コメント](https://github.com/ktysne/agent-cockpit/issues/175#issuecomment-6029239396)が残条件として挙げている | [Owned native instruction dispatch](../design/owned-native-instruction-dispatch.md)「固定する認可」 |
 | 再起動前の共通質問への回答の再開 | #283 は A 案(旧質問を隔離し、回答も再送もしない)で閉じた。旧質問へ回答を再開する B 案を採るか。推奨は採らない。採るなら provider ごとに未解決の証拠を取得できるかの調査から始める | [旧復旧計画(固定参照)](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md) |
 | #156 を閉じる時期 | main 採用時か、本実装の Issue が全部閉じた時か。推奨は main 採用時 | |
@@ -962,7 +962,7 @@ TTL付きstart.lockとattempt別recordだけでは旧管理者のcurrent上書�
 指定Claude R1の要修正7件を受け、requestIdの生成と検証、メモリ内状態、共通停止operation、instance導入と並行起動の分類を補正した。
 R2の要修正2件を受け、本文要件の適合表への反映と並行起動の権限/current/launch数を明確化し、分類fixtureと製品試験を分けた。
 R3でも本文と適合表の漏れ、敗者の未確認所有が残るscopeの新規起動判断の2件が残り、2文書にまたがるため3往復上限で中断した。PR #364はDraftでマージ不可である。
-推奨は管理者が不整合を検出し、未確認所有が残るscopeの新規launchを禁止してW09の手動回復へ進め、適合表も補正して追加レビューすること。再開の判断を待つ。
+推奨は管理者が不整合を検出し、未確認所有が残るscopeの新規launchを禁止してW09の手動回復へ進め、適合表も補正して追加レビューすること。再開の判断を待っていた。2026-10-11に再開し、現在の状況は後述の「停止設計PR #364の再開」に記録する。
 初回codecには残存指摘の影響がないため、レビュー済み#363を親に純粋codecだけを別PRで先行し、#364の未収束headを取り込まない。
 本PRは文書のみでテストを実行せず、親#363からsrc/test不変を確認する。親の全体2,969件成功、失敗0件、実symlink2件skipは親実装の結果として保持し、新設計の成功証拠としない。
 
@@ -1056,7 +1056,7 @@ PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブラン
 ### 停止結果codecの独立実装
 
 停止全体のPR #364は3往復でも本文/適合表と未確認所有scopeの起動判断の2件が残り、Draftでマージ不可である。
-推奨はscope新規launch禁止、管理者による検出とW09手動回復を定義し、適合表をそろえて追加レビューすることで、再開の判断を待つ。
+推奨はscope新規launch禁止、管理者による検出とW09手動回復を定義し、適合表をそろえて追加レビューすることで、再開の判断を待っていた。2026-10-11に再開し、現在の状況は後述の「停止設計PR #364の再開」に記録する。
 初回の純粋codecには残存指摘の影響がないため、レビュー済み#363最終headを通常mergeした別branchで先行する。
 未収束の#364は取り込まない。
 [codec設計](../design/stop-ensure-record-codec.md)とC01〜C07の独立期待条件を実装前に記録した。
@@ -1381,4 +1381,5 @@ PR #380はReadyで、取り込み順は#378→#379→#380である。次はマ�
 状態整理PR #381のレビュー済みhead `a10881b`も通常mergeして、Issue状態と計画書を同期した。#381が未マージの間の取り込み順は#381→#364である。
 Astraの助言に従い、healthy再利用と新規launch認可を分け、敗者の未確認所有を勝者停止後も保持する。管理者交代や設定世代変更でも禁止を迂回せず、W09の全停止確認と認証された復旧確認を製品接続条件に残す。
 409の両理由とHTTP再送0、cleanupからのmerge開始0、marker不在での起動拒否、healthy勝者と未知所有の共存をST表へ同時に補正した。ST15の注入観測と分類、手順との対応、process生成から終了までの外部観測も明記した。
-指定Claudeの第4往復で本文と適合表の全差分を確認する。新規のST製品試験、ACL、管理protocol、全writer接続と実runtimeは未実行で、既存C/R/Q試験をその成功へ読み替えない。
+指定Claudeの第4往復で元の要修正2件は解消した。ST15が全起動拒否でも通る新たな要修正1件についてAstraへ再相談し、正常起動、停止完了後、W09復旧後と確定拒否の明示再attempt後の認可ちょうど1回、および同じ操作の再評価で追加0回を適合表へ追加した。
+非受理停止要求の再起動中止と手動回復も本文とST08へ同期し、第5往復で妥当性を確認する。新規のST製品試験、ACL、管理protocol、全writer接続と実runtimeは未実行で、既存C/R/Q試験をその成功へ読み替えない。
