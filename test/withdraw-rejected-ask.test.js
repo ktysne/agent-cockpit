@@ -160,6 +160,74 @@ test('再起動前に開始した未完了の質問も後続イベントで取�
   assert.equal(decision(restored).finishedByToolUseId, 'ask-1');
 });
 
+test('Stop より前の PostToolUse が遅れて届くと resolved と回答内容を復元する', () => {
+  const state = new DashboardState();
+  const resolution = { chosen: ['JSON'], note: 'JSONで出力する' };
+  state.addEvent(ask());
+  state.addEvent(progress('Stop', NOW + 20));
+  assert.equal(decision(state).inferredWithdrawalHookAt, NOW + 20);
+  state.addEvent(ask('ask-1', NOW + 10, { hook_event_name: 'PostToolUse', decisionResolution: resolution }));
+  assert.equal(decision(state).state, 'resolved');
+  assert.deepEqual(decision(state).resolution, resolution);
+  assert.equal(decision(state).resolvedAt, new Date(NOW + 10).toISOString());
+  assert.equal(decision(state).inferredWithdrawalHookAt, undefined);
+});
+
+test('Stop と同時刻か後の PostToolUse は推定の取り下げを変えない', () => {
+  for (const hookAt of [NOW + 20, NOW + 30]) {
+    const state = new DashboardState();
+    state.addEvent(ask());
+    state.addEvent(progress('Stop', NOW + 20));
+    const expected = decision(state);
+    state.addEvent(ask('ask-1', hookAt, { hook_event_name: 'PostToolUse', decisionResolution: { chosen: ['JSON'], note: '' } }));
+    assert.deepEqual(decision(state), expected);
+  }
+});
+
+test('推定の取り下げを訂正した resolved と回答内容は再起動後の再作成でも保つ', async () => {
+  const state = new DashboardState();
+  state.addEvent(ask());
+  state.addEvent(progress('Stop', NOW + 20));
+  state.addEvent(ask('ask-1', NOW + 10, { hook_event_name: 'PostToolUse', decisionResolution: { chosen: ['JSON'], note: '回答済み' } }));
+  const expected = decision(state);
+  const restored = await restart(state);
+  assert.equal(decision(restored).state, 'resolved');
+  assert.deepEqual(decision(restored), expected);
+  restored.addEvent(ask());
+  restored.addEvent(progress('Stop', NOW + 30));
+  assert.deepEqual(decision(restored), expected);
+});
+
+test('再起動後も結び付いた呼び出しの古い終了フックで推定の取り下げを訂正する', async () => {
+  for (const eventName of ['PostToolUse', 'PostToolUseFailure']) {
+    const state = new DashboardState();
+    state.addEvent(ask());
+    state.addEvent(ask('ask-2', NOW + 5));
+    state.addEvent(progress('Stop', NOW + 20));
+    const restored = await restart(state);
+    restored.addEvent(ask('ask-1', NOW + 10, { hook_event_name: eventName,
+      decisionResolution: { chosen: ['JSON'], note: '' } }));
+    assert.equal(decision(restored).state, eventName === 'PostToolUse' ? 'resolved' : 'withdrawn');
+    assert.deepEqual(decision(restored).resolution, eventName === 'PostToolUse' ? { chosen: ['JSON'], note: '' } : null);
+    assert.equal(decision(restored).resolvedAt, new Date(NOW + 10).toISOString());
+    assert.equal(decision(restored).inferredWithdrawalHookAt, undefined);
+    const reloaded = await restart(restored);
+    reloaded.addEvent(progress('Stop', NOW + 30));
+    assert.deepEqual(decision(reloaded), decision(restored));
+  }
+});
+
+test('推定の印がない保存済みの取り下げは古い終了フックで訂正しない', async () => {
+  const state = new DashboardState();
+  state.addEvent(ask());
+  state.addEvent(progress('Stop', NOW + 20));
+  delete state.plans.get('session-a').decisions[0].inferredWithdrawalHookAt;
+  const restored = await restart(state);
+  restored.addEvent(ask('ask-1', NOW + 10, { hook_event_name: 'PostToolUse', decisionResolution: { chosen: ['JSON'], note: '' } }));
+  assert.equal(decision(restored).state, 'withdrawn');
+  assert.equal(decision(restored).resolution, null);
+});
+
 test('再起動後に古い開始が届いても最新の出し直しより前のイベントでは取り下げない', async () => {
   const state = new DashboardState();
   state.addEvent(ask());
