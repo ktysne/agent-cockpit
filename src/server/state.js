@@ -1,10 +1,12 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { recommendedOptionFor, sanitizeEvent } = require('./events');
+const { recommendedOptionFor, sanitizeEvent, isQuestionTool } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, pullRequestKey, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { cloneDisplay, defaultDisplay, normalizeDisplay } = require('./display-preferences');
+
+const CODEX_UNKNOWN_ANSWER_NOTE = '元の画面で回答済み(内容は不明)';
 const { isStoredSessionId } = require('./session-ids');
 const { isRecord } = require('./value-utils');
 
@@ -594,6 +596,7 @@ function newSession(event, askDecisionState = {}) {
     permissionWaits: [],
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
+    codexQuestionTools: Object.create(null),
     stopped: false,
     turnKnown: false,
     ended: false,
@@ -724,7 +727,7 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   // 再起動の前か MCP で終わった判断事項は、その終わりのイベントがメモリーに無いので、作り直すと巻き戻る。保存済みの状態を保つ。
   // 保存済みの終わりより古い終わりのイベントは、遅れて届いた別の呼び出しの終わりなので、保存済みの状態を説明しない。
   const directlyRecreatedAskDecisionIds = new Set(entries.filter(({ sequence }) => sequence < beforeSequence).flatMap(({ event }) => {
-    if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'AskUserQuestion' || event.agent_id || !event.tool_use_id) return [];
+    if (event.hook_event_name !== 'PreToolUse' || !isQuestionTool(event.provider, event.tool_name) || event.agent_id || !event.tool_use_id) return [];
     const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
     if (decisionId !== event.tool_use_id) return [];
     const stored = storedAskDecisions.get(decisionId);
@@ -820,7 +823,7 @@ function sessionForEvent(sessions, event, initialAskDecisionState) {
 function applyAskQuestionStart(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
-  if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
+  if (isQuestionTool(event.provider, event.tool_name) && !agentId && toolUseId && event.questions?.length) {
     // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
     const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
     const existing = boundDecision || session.decisions.find((decision) => (
@@ -862,6 +865,7 @@ function applyAskQuestionStart(session, event) {
       session.decisions.push(decision);
       session.decisionBindings[toolUseId] = decision.id;
     }
+    if (event.provider === 'codex') session.codexQuestionTools[session.decisionBindings[toolUseId]] = event.tool_name;
   }
 }
 
@@ -967,16 +971,16 @@ function applyAskQuestionCompletion(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
-  if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId) {
+  if (isQuestionTool(event.provider, event.tool_name) && !agentId && toolUseId) {
     const decisionId = session.decisionBindings[toolUseId];
     const decision = session.decisions.find((item) => item.id === decisionId);
     if (decision && ['waiting', 'provisional'].includes(decision.state)) {
       decision.state = eventName === 'PostToolUse' ? 'resolved' : 'withdrawn';
       decision.updatedAt = isoTime(event.hookAt);
       decision.resolvedAt = decision.updatedAt;
-      decision.resolution = eventName === 'PostToolUse'
-        ? event.decisionResolution || { chosen: [], note: '' }
-        : null;
+      decision.resolution = eventName !== 'PostToolUse' ? null
+        : event.provider === 'codex' ? { chosen: [], note: CODEX_UNKNOWN_ANSWER_NOTE }
+          : event.decisionResolution || { chosen: [], note: '' };
       // 最後に判断事項を終えた呼び出し。再起動の後に同じ呼び出しの開始が新しい時刻で届いても重複と分かるよう、
       // waiting に戻っても消さずに残す(開始から終わりまで進んだ呼び出しの開始が、正当に新しく届くことは無い)。
       decision.finishedByToolUseId = toolUseId;
@@ -1045,8 +1049,8 @@ function applyToolStart(session, event) {
 
     if (session.provider !== 'codex') {
       applyCodexStart(session, event);
-      applyAskQuestionStart(session, event);
     }
+    applyAskQuestionStart(session, event);
 
     if (!agentId) {
       session.stopped = false;
@@ -1127,7 +1131,8 @@ function applyToolCompletion(session, event) {
         (session.provider === 'codex' && eventName === 'PostToolUse' && !wait.target_tool_use_id && wait.tool_name === event.tool_name)
       )
     ));
-    if (session.provider !== 'codex') applyAskQuestionCompletion(session, event);
+    // Codex の request_user_input_async はすぐ戻るので結果では閉じず、次の入力で閉じる。待つ形の request_user_input は Claude と同じく結果で閉じる。
+    if (session.provider !== 'codex' || event.tool_name === 'request_user_input') applyAskQuestionCompletion(session, event);
 
     if (!agentId) {
       session.stopped = false;
@@ -1184,11 +1189,24 @@ function applyPermissionPrompt(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'tools'> & SessionPermissions & Pick<SessionIdentity, 'stopped'|'turnKnown'|'ended'>} session
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions & SessionDecisions & Pick<SessionIdentity, 'provider'|'stopped'|'turnKnown'|'ended'>} session
  */
 function applySessionLifecycle(session, event) {
   const eventName = event.hook_event_name === 'Interrupt' ? 'Stop' : event.hook_event_name;
   const agentId = event.agent_id || null;
+  if (session.provider === 'codex' && eventName === 'UserPromptSubmit' && !agentId) {
+    // すぐ戻る質問は次の入力を元の画面での回答とみなす。待つ質問は結果が来ないまま入力が届いたら、Claude の中断と同じく取り下げにする。
+    // ツールの種類は保存しないので、再起動の前の質問はすぐ戻る質問として扱う。
+    for (const decision of session.decisions) {
+      if (decision.source !== 'ask' || decision.state !== 'waiting' || event.hookAt <= Date.parse(decision.updatedAt)) continue;
+      const tool = session.codexQuestionTools[decision.id] || 'request_user_input_async';
+      const answered = tool === 'request_user_input_async';
+      decision.state = answered ? 'resolved' : 'withdrawn';
+      decision.updatedAt = isoTime(event.hookAt);
+      decision.resolvedAt = decision.updatedAt;
+      decision.resolution = answered ? { chosen: [], note: CODEX_UNKNOWN_ANSWER_NOTE } : null;
+    }
+  }
   if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
     session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
     if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
@@ -2428,7 +2446,7 @@ class DashboardState {
   }
 
   withdrawFinishedDesktopAsks(event) {
-    if (event.agent_id) return false;
+    if (event.provider === 'codex' || event.agent_id) return false;
     const isNextTool = event.hook_event_name === 'PreToolUse' && event.tool_use_id;
     if (!isNextTool && !['UserPromptSubmit', 'Stop'].includes(event.hook_event_name)) return false;
     const sessionId = event.session_id;

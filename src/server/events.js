@@ -64,6 +64,34 @@ function sanitizeQuestions(value) {
   });
 }
 
+function isQuestionTool(provider, toolName) {
+  return provider === 'codex'
+    ? ['request_user_input_async', 'request_user_input'].includes(toolName)
+    : toolName === 'AskUserQuestion';
+}
+
+function sanitizeCodexQuestions(toolName, value) {
+  if (!isQuestionTool('codex', toolName) || !Array.isArray(value)) return [];
+  const isAsync = toolName === 'request_user_input_async';
+  const questions = sanitizeQuestions(value.slice(0, MAX_ASK_QUESTIONS).map((question) => {
+    if (!question || typeof question !== 'object' || Array.isArray(question)) return null;
+    return {
+      question: isAsync ? question.title ?? question.question : question.question,
+      header: isAsync ? '' : question.header,
+      multiSelect: false,
+      options: isAsync && typeof question.title === 'string'
+        ? (Array.isArray(question.options) ? question.options.slice(0, MAX_ASK_OPTIONS).map((label) => ({ label })) : [])
+        : question.options,
+    };
+  }));
+  if (isAsync) {
+    for (const question of questions) {
+      question.options.forEach((option, index) => { option.recommended = index === 0; });
+    }
+  }
+  return questions;
+}
+
 function sanitizeDecisionResolution(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const chosen = Array.isArray(value.chosen)
@@ -137,6 +165,9 @@ function sanitizeEvent(input, metadata = {}) {
       event.tool_name = shortString(input.tool_name, 100) || '';
       if (eventName !== 'PermissionRequest') event.tool_use_id = shortString(input.tool_use_id, 256) || '';
       if (['PreToolUse', 'PermissionRequest'].includes(eventName)) event.summary = shortString(input.summary, 80) || event.tool_name;
+      if (eventName === 'PreToolUse' && isQuestionTool('codex', event.tool_name) && !agentId) {
+        event.questions = sanitizeCodexQuestions(event.tool_name, input.questions);
+      }
     }
     return event;
   }
@@ -231,6 +262,8 @@ module.exports = {
   QUESTION_TEXT_LIMIT,
   parseCodexLaunch,
   sanitizeQuestions,
+  sanitizeCodexQuestions,
+  isQuestionTool,
   sanitizeDecisionResolution,
   parseCodexAuditLine,
   parseCodexResultLine,
