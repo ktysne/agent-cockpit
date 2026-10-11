@@ -133,6 +133,7 @@ function validPullRequestRecord(record) {
   if (!isRecord(record) || !validStoredSessionId(record.session_id) ||
     !validRepositoryPart(record.owner) || !validRepositoryPart(record.repo) ||
     !Number.isSafeInteger(record.number) || record.number < 1 ||
+    (record.provider !== undefined && !['claude', 'codex'].includes(record.provider)) ||
     !validTimestamp(record.addedAt) ||
     (record.cwd !== null && (typeof record.cwd !== 'string' || record.cwd.length > 4096)) ||
     (record.product !== null && (!isRecord(record.product) || typeof record.product.key !== 'string' ||
@@ -154,6 +155,7 @@ function normalizePullRequestRecord(record) {
     repo: record.repo,
     number: record.number,
     url: record.url,
+    provider: record.provider || 'claude',
     addedAt: record.addedAt,
     cwd: record.cwd || null,
     product: record.product ? { key: record.product.key, name: record.product.name } : null,
@@ -2137,6 +2139,7 @@ class DashboardState {
     const next = {
       session_id: sessionId,
       ...parsedUrl,
+      provider: previous?.provider || this.providerForSession(sessionId),
       addedAt: previous?.addedAt || isoTime(now),
       cwd: typeof location.cwd === 'string' && location.cwd.length <= 4096 ? location.cwd : previous?.cwd || null,
       product,
@@ -2915,6 +2918,11 @@ class DashboardState {
     return this.sessions.get(sessionId)?.product || this.sessionFiles.get(sessionId)?.product || this.plans.get(sessionId)?.product || null;
   }
 
+  providerForSession(sessionId) {
+    return this.entries.get(sessionId)?.[0]?.event.provider || this.sessions.get(sessionId)?.provider ||
+      this.sessionFiles.get(sessionId)?.provider || (this.codexRecovery.has(sessionId) ? 'codex' : 'claude');
+  }
+
   decisionsFor(sessionId) {
     const eventDecisions = this.sessions.get(sessionId)?.decisions || [];
     const planDecisions = this.plans.get(sessionId)?.decisions || [];
@@ -3125,7 +3133,7 @@ class DashboardState {
         if (!at) continue;
         candidates.push({
           product, type: 'task', identity: `${sessionId}\0${task.title}`, at,
-          text: `タスク「${task.title}」が完了した`, pullRequest: null,
+          text: `タスク「${task.title}」が完了した`, provider: this.providerForSession(sessionId), pullRequest: null,
         });
       }
     }
@@ -3136,12 +3144,17 @@ class DashboardState {
     return registrations.map((record) => {
       const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
       const title = pullRequestTitles.get(identity);
+      const providers = orderedProviders(registrations
+        .filter((candidate) => candidate.owner.toLowerCase() === record.owner.toLowerCase() &&
+          candidate.repo.toLowerCase() === record.repo.toLowerCase() && candidate.number === record.number)
+        .map((candidate) => candidate.provider));
       return {
         product: cloneProduct(record.product) || repoProduct(record.owner, record.repo),
         type: 'pull-request',
         identity: `${record.owner}/${record.repo}#${record.number}`,
         at: record.addedAt,
         text: `${pullRequestLabel(record.number, title)}を作成した`,
+        providers,
         pullRequest: { identity, number: record.number, action: 'created', title },
       };
     });
@@ -3161,6 +3174,7 @@ class DashboardState {
           identity: `${session.session_id}\0${decision.id}`,
           at: decision.provisionalAt || decision.updatedAt,
           text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          provider: session.provider || this.providerForSession(session.session_id),
           pullRequest: null,
         });
       }
@@ -3175,6 +3189,7 @@ class DashboardState {
           identity: `${sessionId}\0${decision.id}`,
           at: decision.provisionalAt || decision.updatedAt,
           text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          provider: this.providerForSession(sessionId),
           pullRequest: null,
         });
       }
@@ -3186,12 +3201,17 @@ class DashboardState {
   ciFailureCandidates({ pullRequestTitles }) {
     return this.ciFailures.map((failure) => {
       const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
+      const providers = orderedProviders(this.pullRequestRegistrations().filter((record) => (
+        record.owner.toLowerCase() === failure.owner.toLowerCase() && record.repo.toLowerCase() === failure.repo.toLowerCase() &&
+        record.number === failure.number
+      )).map((record) => record.provider));
       return {
         product: failure.product,
         type: 'ci-failure',
         identity: `${failure.owner}/${failure.repo}#${failure.number}`,
         at: failure.at,
         text: `PR #${failure.number} の CI が失敗した`,
+        providers,
         pullRequest: { identity, number: failure.number, action: 'ci-failure', title: pullRequestTitles.get(identity) },
       };
     });
@@ -3202,6 +3222,10 @@ class DashboardState {
     for (const merged of sources.mergedPullRequests.values()) {
       const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
       const title = sources.pullRequestTitles.get(identity);
+      const providers = orderedProviders(sources.registrations.filter((record) => (
+        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() &&
+        record.number === merged.number
+      )).map((record) => record.provider));
       for (const product of mergedPullRequestProducts(merged, sources)) {
         candidates.push({
           product,
@@ -3209,6 +3233,7 @@ class DashboardState {
           identity: `${merged.owner}/${merged.repo}#${merged.number}`,
           at: merged.mergedAt,
           text: `${pullRequestLabel(merged.number, title)}をマージした`,
+          providers,
           pullRequest: { identity, number: merged.number, action: 'merged', title },
         });
       }
@@ -3368,17 +3393,27 @@ function pullRequestLabel(number, title) {
   return `PR #${number}${title ? `(${title})` : ''}`;
 }
 
+function orderedProviders(providers) {
+  const present = new Set(providers);
+  return ['claude', 'codex'].filter((provider) => present.has(provider));
+}
+
 // 対象のプロダクトに無い候補、時刻を読めない候補、同じ内容の重複は捨てる。
 function groupSinceSeenEvents(candidates, products) {
   const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
   const eventKeys = new Set();
-  for (const { product, type, identity, at, text, pullRequest } of candidates) {
+  for (const { product, type, identity, at, text, pullRequest, provider, providers } of candidates) {
     const timestamp = Date.parse(at || '');
     if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) continue;
     const key = `${product.key}\0${type}\0${identity}\0${at}`;
     if (eventKeys.has(key)) continue;
     eventKeys.add(key);
-    eventsByProduct.get(product.key).push({ at, type, text, ...(pullRequest ? { pullRequest } : {}) });
+    eventsByProduct.get(product.key).push({
+      at, type, text,
+      ...(provider ? { provider } : {}),
+      ...(Array.isArray(providers) ? { providers: orderedProviders(providers) } : {}),
+      ...(pullRequest ? { pullRequest } : {}),
+    });
   }
   return eventsByProduct;
 }
@@ -3411,15 +3446,19 @@ function foldPullRequestEvents(events) {
     const { identity, number, action, title } = event.pullRequest;
     let summary = pullRequestSummaries.get(identity);
     if (!summary) {
-      summary = { at: event.at, number, title, actions: new Set() };
+      summary = { at: event.at, number, title, actions: new Set(), providers: new Set() };
       pullRequestSummaries.set(identity, summary);
     }
     if (Date.parse(event.at) > Date.parse(summary.at)) summary.at = event.at;
     if (!summary.title && title) summary.title = title;
     summary.actions.add(action);
+    for (const provider of event.providers || (event.provider ? [event.provider] : [])) summary.providers.add(provider);
   }
   for (const summary of pullRequestSummaries.values()) {
-    items.push({ at: summary.at, type: 'pull-request-summary', text: pullRequestSummaryText(summary) });
+    items.push({
+      at: summary.at, type: 'pull-request-summary', text: pullRequestSummaryText(summary),
+      providers: orderedProviders(summary.providers),
+    });
   }
   return items;
 }

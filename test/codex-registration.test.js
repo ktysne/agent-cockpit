@@ -242,9 +242,9 @@ test('既定のサーバーで provider の無い Claude フックと meta の�
   assert.equal(session.tasks[0].title, '従来のタスク');
 });
 
-test('Codex の runHook は Claude のツール解析と経路読み取りを行わない', async (t) => {
+test('Codex の runHook は Claude 固有のツール解析と経路読み取りを行わず、Bash の gh pr create は PR として登録する', async (t) => {
   const c = await cockpit(t);
-  const options = { homeDir: c.homeDir, provider: 'codex' };
+  const options = { homeDir: c.homeDir, provider: 'codex', findCodexParentPid: async () => null };
   const started = await runHook({ session_id: 'hook', hook_event_name: 'SessionStart', source: 'startup', model: 'x'.repeat(200) }, options);
   assert.equal(started.additionalContext, `Agent Cockpit: http://127.0.0.1:${c.info.port}/`);
   await runHook({ session_id: 'hook', hook_event_name: 'SubagentStart', agent_id: 'child', agent_type: 'default', model: 'gpt-6' }, options);
@@ -259,7 +259,7 @@ test('Codex の runHook は Claude のツール解析と経路読み取りを行
   assert.equal(session.agents.length, 1);
   assert.equal(session.agents[0].route, undefined);
   assert.deepEqual(session.decisions, []);
-  assert.deepEqual(c.runtime.state.pullRequestRegistrations(), []);
+  assert.deepEqual(c.runtime.state.pullRequestRegistrations().map(({ number, provider }) => ({ number, provider })), [{ number: 1, provider: 'codex' }]);
 });
 
 test('Codex の runHook は PermissionRequest にツール名と入力の要約を載せる', async (t) => {

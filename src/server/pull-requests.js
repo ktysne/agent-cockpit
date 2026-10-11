@@ -1563,6 +1563,7 @@ function attachMergeState(pullRequest, registrations, owner, repo, state) {
     canMerge: mergeIntent ? false : pullRequest.canMerge,
     mergeSessionId: registration?.session_id || pullRequest.mergeSessionId || null,
     mergeRecordKey: registration ? state.pullRequestRegistrationKey(registration) : pullRequest.mergeRecordKey || null,
+    providers: ['claude', 'codex'].filter((provider) => conflictRegistrations.some((record) => record.provider === provider)),
     conflictRequestKey: conflictRegistrations.length ? state.pullRequestRegistrationKey(conflictRegistrations[0]) : null,
     conflictRequestTargets: conflictRegistrations.map((record) => ({
       sessionId: record.session_id,
