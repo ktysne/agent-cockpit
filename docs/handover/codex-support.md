@@ -1303,4 +1303,6 @@ sourceと関連fixtureを実装し、関連2ファイルと同module共有の関
 rootは取消とgrantの競合、正常解放位置、異常時の両event待機、旧token隔離、fixture cleanupの差分を監査して採用し、PR #380をfeature向けDraftとして作成した。
 固定head `c8d2f0c`の全体試験は3,281件中3,276件成功、失敗0件、Windows実symlink権限によるskip5件だった。
 指定Claude R1はblockerと要修正0件で、任意提案として書込み成否不明とsourceだけの失効のfixtureを追加する。終了未確認時の症状も手順へ補足し、再起動を停止証明の代わりにする案は採用しない。
-追加fixture後の関連2ファイルとtest-isolation=noneはそれぞれ244件中243件成功、失敗0件、Windows実symlink権限によるskip1件だった。sourceは全体試験headから不変で、追加したtestと文書をClaude R2で確認する。認証再利用は専用credential owner、Windows ACL、更新とrun HOMEの分離が前提で、account/readの追加だけでは完了しない。
+追加fixture後の関連2ファイルとtest-isolation=noneはそれぞれ244件中243件成功、失敗0件、Windows実symlink権限によるskip1件だった。sourceは全体試験headから不変で、追加testと文書は指定Claude R3でblockerと要修正0件に収束した。認証再利用は専用credential owner、Windows ACL、更新とrun HOMEの分離が前提で、account/readの追加だけでは完了しない。
+
+PR #380はReadyで、取り込み順は#378→#379→#380である。次はマージ済みPRに対応するIssueの完了条件と文書の状態を照合し、クローズ可能な単独不具合を整理する。

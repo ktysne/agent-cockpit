@@ -1015,5 +1015,5 @@ Claudeはこのゲートに参加せず、既存のtoken供給と開始・停止
 
 関連2ファイルは241件中240件成功、失敗0件、Windows実symlink権限によるskip1件だった。同moduleを共有するtest-isolation=noneでも同じ件数と合否を確認した。
 固定head `c8d2f0c`の全体試験は3,281件中3,276件成功、失敗0件、Windows実symlink権限によるskip5件だった。
-指定Claude R1はblockerと要修正0件だった。追加fixture後の関連2ファイルとtest-isolation=noneはそれぞれ244件中243件成功、失敗0件、Windows実symlink権限によるskip1件だった。sourceは全体試験headから不変で、追加testと文書をClaude R2で確認する。
+指定Claude R1はblockerと要修正0件だった。追加fixture後の関連2ファイルとtest-isolation=noneはそれぞれ244件中243件成功、失敗0件、Windows実symlink権限によるskip1件だった。sourceは全体試験headから不変で、追加testと文書は指定Claude R3でblockerと要修正0件に収束した。
 fixtureの成功を実runtime、OS port解放、別process間の排他や認証再利用の証明に含めない。
