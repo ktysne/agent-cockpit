@@ -388,6 +388,12 @@ class DecisionAnswerDelivery {
     return generation;
   }
 
+  checkStop(sessionId, eventId, hookAt = this.now()) {
+    if (this.startStop(sessionId, eventId, hookAt) === null) return null;
+    const reason = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
+    return reason ? { decision: 'block', reason } : null;
+  }
+
   async waitForStopAnswer(sessionId, generation, parentAlive = true) {
     if (this.stopWaitEnded(sessionId, generation, parentAlive)) return { stderrText: null, done: true };
     const text = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');

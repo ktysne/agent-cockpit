@@ -127,6 +127,18 @@ async function runPostToolBatch(input, options) {
   return result?.hookOutput || null;
 }
 
+async function runCodexPostToolUse(input, options) {
+  if (input.agent_id || !validSessionId(input.session_id)) return null;
+  const result = await postHookRequest({
+    action: 'post-tool-use',
+    event_name: 'PostToolUse',
+    session_id: input.session_id,
+    id: crypto.randomUUID(),
+    provider: 'codex',
+  }, { ...options, timeoutMs: POST_TOOL_BATCH_TIMEOUT_MS, attemptTimeoutMs: 750 });
+  return result?.hookOutput || null;
+}
+
 async function runUserPromptSubmit(input, options) {
   if (input.agent_id || !validSessionId(input.session_id)) return null;
   const result = await postHookRequest({
@@ -134,6 +146,21 @@ async function runUserPromptSubmit(input, options) {
     id: crypto.randomUUID(), hook_at: (options.now || Date.now)(),
   }, { ...options, timeoutMs: 1_000 });
   return result?.hookOutput || null;
+}
+
+async function runCodexStopCheck(input, options) {
+  if (input.agent_id || !validSessionId(input.session_id)) {
+    return { exitCode: 0, output: null, stderrText: null };
+  }
+  const result = await postHookRequest({
+    action: 'stop-check',
+    event_name: 'Stop',
+    session_id: input.session_id,
+    id: crypto.randomUUID(),
+    hook_at: (options.now || Date.now)(),
+    provider: 'codex',
+  }, { ...options, timeoutMs: 1_000 });
+  return { exitCode: 0, output: result?.hookOutput || null, stderrText: null };
 }
 
 async function runStop(input, options) {
@@ -166,6 +193,14 @@ async function runStop(input, options) {
 
 async function runAnswerHook(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { exitCode: 0, output: null, stderrText: null };
+  const provider = options.provider === 'codex' ? 'codex' : 'claude';
+  if (provider === 'codex') {
+    let output = null;
+    if (input.hook_event_name === 'PostToolUse') output = await runCodexPostToolUse(input, options);
+    else if (input.hook_event_name === 'UserPromptSubmit') output = await runUserPromptSubmit(input, options);
+    else if (input.hook_event_name === 'Stop') return runCodexStopCheck(input, options);
+    return { exitCode: 0, output, stderrText: null };
+  }
   let output = null;
   if (input.hook_event_name === 'PreToolUse' && input.tool_name === 'AskUserQuestion') output = await runAskQuestion(input, options);
   else if (input.hook_event_name === 'PostToolBatch') output = await runPostToolBatch(input, options);
@@ -183,7 +218,7 @@ async function readStdin(stream = process.stdin) {
 async function main() {
   try {
     const input = JSON.parse(await readStdin());
-    const result = await runAnswerHook(input);
+    const result = await runAnswerHook(input, { provider: process.argv[2] === 'codex' ? 'codex' : 'claude' });
     if (result.output) process.stdout.write(`${JSON.stringify(result.output)}\n`);
     if (result.stderrText) process.stderr.write(result.stderrText);
     process.exitCode = result.exitCode;

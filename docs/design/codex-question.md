@@ -93,6 +93,9 @@ Codex のフックの既定の上限は 600 秒で、Claude の待ちの上限(3
 
 ## 導入
 
+期限の後にダッシュボードで送った判断事項の回答を、次の `PostToolUse` または `UserPromptSubmit` の `additionalContext` で届ける。
+未配信の回答があるときは、`Stop` で回答を理由に 1 回だけ続行させる。
+
 Codex の `hooks.json` に、`node "<リポジトリ>/src/hooks/away.js" codex` を同期のフックとして登録する。
 provider は `event.js` と同じく引数で決め、入力の形から推測しない。
 既存の `event.js` の登録は残す。
@@ -113,9 +116,18 @@ provider は `event.js` と同じく引数で決め、入力の形から推測�
         "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/away.js\" codex", "timeout": 5 }]
       }
     ],
-    "UserPromptSubmit": [
+    "PostToolUse": [
       {
-        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/away.js\" codex", "timeout": 5 }]
+        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 2 }]
+      }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/away.js\" codex", "timeout": 5 }] },
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 5 }] }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 10 }]
       }
     ]
   }
