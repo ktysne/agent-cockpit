@@ -5,6 +5,7 @@ const { recommendedOptionFor, sanitizeEvent } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, pullRequestKey, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { cloneDisplay, defaultDisplay, normalizeDisplay } = require('./display-preferences');
+const ProjectionDisplayIndex = require('./projection-display-index');
 const { isStoredSessionId } = require('./session-ids');
 const { isRecord } = require('./value-utils');
 
@@ -1380,6 +1381,8 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
 }
 
 class DashboardState {
+  #projectionDisplayIndex = new ProjectionDisplayIndex();
+
   constructor(options = {}) {
     this.homeDir = options.homeDir || null;
     this.fileSystem = options.fileSystem || fs;
@@ -1408,7 +1411,6 @@ class DashboardState {
     this.estimates = new Map();
     this.hiddenSessions = new Set();
     this.hiddenSessionUpdatedAt = new Map();
-    this.projectionDisplaySettings = new Map();
     this.deletedSessions = new Map();
     this.closedTasks = new Map();
     this.pullRequests = new Map();
@@ -1430,6 +1432,10 @@ class DashboardState {
     this.restoreSessionCleanupPending = false;
     this.onSessionEndedByAbsence = options.onSessionEndedByAbsence || null;
     this.onSessionReopened = options.onSessionReopened || null;
+  }
+
+  get projectionDisplaySettings() {
+    return this.#projectionDisplayIndex.snapshot();
   }
 
   static async load(homeDir, options = {}) {
@@ -1497,7 +1503,7 @@ class DashboardState {
       this.hiddenSessions.add(record.session_id);
       this.hiddenSessionUpdatedAt.set(record.session_id, record.updatedAt);
     }
-    this.projectionDisplaySettings = new Map(store.projectionDisplaySettings.map((record) => [
+    this.#projectionDisplayIndex = new ProjectionDisplayIndex(store.projectionDisplaySettings.map((record) => [
       projectionDisplayKey(record.provider, record.session_id), { ...record },
     ]));
     for (const record of store.prs) {
@@ -1688,9 +1694,8 @@ class DashboardState {
       session_id: sessionId,
       updatedAt: this.hiddenSessionUpdatedAt.get(sessionId),
     }));
-    const projectionDisplaySettings = [...this.projectionDisplaySettings.values()]
-      .sort((left, right) => projectionDisplayKey(left.provider, left.session_id).localeCompare(projectionDisplayKey(right.provider, right.session_id)))
-      .map((record) => ({ ...record }));
+    const projectionDisplaySettings = [...this.#projectionDisplayIndex.values()]
+      .sort((left, right) => projectionDisplayKey(left.provider, left.session_id).localeCompare(projectionDisplayKey(right.provider, right.session_id)));
     return {
       version: 1,
       display: cloneDisplay(this.display),
@@ -2551,11 +2556,12 @@ class DashboardState {
 
   clearHiddenSessions() {
     const hiddenIds = new Set(this.hiddenSessions);
-    for (const [key, record] of this.projectionDisplaySettings) {
+    for (const [key, record] of this.#projectionDisplayIndex.entries()) {
       if (record.hiddenAt === undefined) continue;
       hiddenIds.add(record.session_id);
       delete record.hiddenAt;
-      if (record.deletedAt === undefined) this.projectionDisplaySettings.delete(key);
+      if (record.deletedAt === undefined) this.#projectionDisplayIndex.delete(key);
+      else this.#projectionDisplayIndex.set(key, record);
     }
     if (hiddenIds.size > 0) {
       this.hiddenSessions.clear();
@@ -2567,14 +2573,11 @@ class DashboardState {
   }
 
   projectionDisplayFor(provider, sessionId) {
-    const record = this.projectionDisplaySettings.get(projectionDisplayKey(provider, sessionId));
-    return record ? { ...record } : null;
+    return this.#projectionDisplayIndex.get(projectionDisplayKey(provider, sessionId)) || null;
   }
 
   projectionDisplayRecordsForSession(sessionId) {
-    return [...this.projectionDisplaySettings.values()]
-      .filter((record) => record.session_id === sessionId)
-      .map((record) => ({ ...record }));
+    return this.#projectionDisplayIndex.recordsForSession(sessionId);
   }
 
   sessionProviderSourcesFor(sessionId) {
@@ -2595,14 +2598,15 @@ class DashboardState {
   setProjectionHidden(provider, sessionId, hidden, now = Date.now()) {
     if (!PROJECTION_DISPLAY_PROVIDERS.has(provider) || !validStoredSessionId(sessionId) || typeof hidden !== 'boolean') return false;
     const key = projectionDisplayKey(provider, sessionId);
-    const current = this.projectionDisplaySettings.get(key);
+    const current = this.#projectionDisplayIndex.get(key);
     if (hidden) {
       if (current?.deletedAt !== undefined) return false;
-      this.projectionDisplaySettings.set(key, { provider, session_id: sessionId, hiddenAt: isoTime(now) });
+      this.#projectionDisplayIndex.set(key, { provider, session_id: sessionId, hiddenAt: isoTime(now) });
     } else {
       if (current?.hiddenAt === undefined) return false;
       delete current.hiddenAt;
-      if (current.deletedAt === undefined) this.projectionDisplaySettings.delete(key);
+      if (current.deletedAt === undefined) this.#projectionDisplayIndex.delete(key);
+      else this.#projectionDisplayIndex.set(key, current);
     }
     this.touch();
     this.requestStoreWrite();
@@ -2612,9 +2616,9 @@ class DashboardState {
   deleteProjectionDisplay(provider, sessionId, now = Date.now()) {
     if (!PROJECTION_DISPLAY_PROVIDERS.has(provider) || !validStoredSessionId(sessionId)) return false;
     const key = projectionDisplayKey(provider, sessionId);
-    const current = this.projectionDisplaySettings.get(key);
+    const current = this.#projectionDisplayIndex.get(key);
     if (current?.deletedAt !== undefined) return false;
-    this.projectionDisplaySettings.set(key, { provider, session_id: sessionId, deletedAt: isoTime(now) });
+    this.#projectionDisplayIndex.set(key, { provider, session_id: sessionId, deletedAt: isoTime(now) });
     this.touch();
     this.requestStoreWrite();
     return true;
@@ -2624,10 +2628,11 @@ class DashboardState {
     if (!PROJECTION_DISPLAY_PROVIDERS.has(provider) || !validStoredSessionId(sessionId) ||
         typeof at !== 'number' || !Number.isFinite(at)) return false;
     const key = projectionDisplayKey(provider, sessionId);
-    const current = this.projectionDisplaySettings.get(key);
+    const current = this.#projectionDisplayIndex.get(key);
     if (current?.deletedAt === undefined || at <= Date.parse(current.deletedAt)) return false;
     delete current.deletedAt;
-    if (current.hiddenAt === undefined) this.projectionDisplaySettings.delete(key);
+    if (current.hiddenAt === undefined) this.#projectionDisplayIndex.delete(key);
+    else this.#projectionDisplayIndex.set(key, current);
     this.touch();
     this.requestStoreWrite();
     return true;

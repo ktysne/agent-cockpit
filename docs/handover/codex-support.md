@@ -192,10 +192,10 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #217 | 通常指示の適用証拠を 60 秒しか待たない | 4 | #257 | 実 Codex で 60 秒超の遅延適用の測定 |
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
-| #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | | 2026-10-09 起票。結果不明の書き込みを再送しない |
-| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | | 2026-10-09 起票。計測してから回収条件と索引を決める |
-| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | | 2026-10-09 起票。#210 の fsync とは別 |
-| #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
+| #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | #368 | MCP専用policyとfetch開始境界による結果不明時の再送抑止はレビュー収束。実runtimeは未確認 |
+| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | #369、#370、#371 | 計測、session索引、保持契約と反例fixtureはClaudeレビュー収束、Ready。診断getterのcopy化は開発者の確認待ち。GCの全入口拒否境界と件数上限は未解決 |
+| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはレビュー収束。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
+| #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | PR #373で観測器と実測を追加。通常解放は進行、再接続後旧handle拒否と90秒B未到着を確認。進行方法は未解決 | #174の後続(handoffとreconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
 
 main 側の不具合として #316(idle で補った後の古い推定の再表示)と #317(マニュアルの回答画像が等倍)も 2026-10-09 に起票した。マイルストーンは付けていない。
@@ -215,10 +215,10 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 ## 対応順序、ブランチ、PR
 
 独立した作業PRは最新のfeatureを起点にfeatureをbaseにする。
-未マージの変更に依存する後続はレビュー済みheadを起点にし、その親ブランチをbaseにする。
+未マージの変更に依存する後続も最新featureから作成し、依存先のレビュー済みheadを通常mergeしてfeatureをbaseにする。
 連続する作業はスタック式に積み、開発者が下から通常 merge で取り込む。
 マージ可能になった時点で通知し、マージ待ちで止まらず後続を積む（2026-10-09の開発者指定）。
-親のマージ後に、親headがfeatureの祖先であることを確認してから後続PRのbaseをfeatureへ移す。
+親のマージ後は、レビュー済みheadがfeatureの祖先であることを確認して後続へ通常mergeで同期する。
 マージは開発者が行い、PR 番号、head、base は GitHub で確かめた値だけを書く。
 
 | 順 | 対象 | 作業 | PR と base | 状態(2026-10-09 確認) |
@@ -385,6 +385,9 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | 停止済みの実行のカードの数え方 | 判断待ちの件数に停止済みのカードを含めるか。推奨は含めない(操作できないものを件数に出さない) | PR #274 の[コメント](https://github.com/ktysne/agent-cockpit/pull/274#issuecomment-6056718578) |
 | non-blocking の native 質問の待ち中の追加指示 | 送信を止めたままにするか、送ってよいか。推奨は実測するまで止めたままにする | PR #204 の本文 |
 | 電源断の保証 | 拒否情報の flush と保存順序の保証を電源断にも広げるか。推奨は広げない(現状はプロセスのクラッシュ後に限る) | [容量回収計画](../design/codex-capacity-reclamation.md)「容量予約と診断」 |
+| 回収factoryの停止未確認後の所有 | process寿命中に保持するか、明示再確認APIを同時に作るか。推奨の終端保持を二段階終了で仮採用する。後着通知やtimeoutで解放せず、同process中は同pathを再取得できない。再確認と詳細診断は別作業 | #209の二段階終了。自走中の推奨判断 |
+| 表示記録の診断propertyのmutation互換 | projectionDisplaySettingsを内部Mapとして直接変更できる挙動を維持するか、copyを返して索引との整合を守るか。既知callerは読取りだけのため、推奨のcopy化をPR #370で仮採用した。開発者の確認待ち | #312の[session索引](../design/projection-display-index.md)。自走中の推奨判断 |
+| writer lockの残留回復 | 自動stale takeoverを作るか、即時拒否と全participant停止後の手動回復に限定するか。推奨は後者で、設計上仮採用する。現行トレイの強制再起動はmarkerを残すため、標準接続前にgraceful停止と最終解放確認を実装する。残留時は起動拒否とし、PID/TTLによる奪取やトレイの自動削除は行わない。製品接続は未実装 | #313の[排他設計](../design/writer-ownership-exclusion.md)。自走中の推奨判断 |
 | 作業中の Claude への追加指示 | Codex の steer に当たる Claude の working steer は unsupported である。仕様差として受け入れるか、経路を設計するか。推奨は仕様差として受け入れ、Claude には待機中の次の入力だけを届ける。#175 の[コメント](https://github.com/ktysne/agent-cockpit/issues/175#issuecomment-6029239396)が残条件として挙げている | [Owned native instruction dispatch](../design/owned-native-instruction-dispatch.md)「固定する認可」 |
 | 再起動前の共通質問への回答の再開 | #283 は A 案(旧質問を隔離し、回答も再送もしない)で閉じた。旧質問へ回答を再開する B 案を採るか。推奨は採らない。採るなら provider ごとに未解決の証拠を取得できるかの調査から始める | [旧復旧計画(固定参照)](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md) |
 | #156 を閉じる時期 | main 採用時か、本実装の Issue が全部閉じた時か。推奨は main 採用時 | |
@@ -656,6 +659,197 @@ fixtureのpause通知はIPC親の有無に依存し、同process試験のpause�
 closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
 標準runtime、外process排他、OS耐久性は未達として扱う。
 
+## 回収機能のレビュー済みPRと後続
+
+2026-10-11のGitHub照合では、次のPRはすべてfeature向けで未マージである。
+#347〜#349、#351〜#354、#356〜#358はReadyとして扱える。
+#348と#349のbaseはfeatureへ統一し、headの内容は変更していない。
+
+| PRとhead | 内容 | 検証とレビュー |
+|---|---|---|
+| [#347](https://github.com/ktysne/agent-cockpit/pull/347)、`2228696` | capsule移行状態の読み取り専用inspection | source `8ed160c`で全体2804成功、失敗0、Windows権限skip3。追加test後のClaude R3で必須0 |
+| [#348](https://github.com/ktysne/agent-cockpit/pull/348)、`5457dce` | fixture専有の既存更新backend | source `8c335d5`で全体2829成功、失敗0、Windows権限skip3。補強後関連27成功、Claude R3で必須0 |
+| [#349](https://github.com/ktysne/agent-cockpit/pull/349)、`c05c564` | fixture限定操作とclose/reopen/dispose | `604dddd`で全体2850成功、失敗0、Windows権限skip3。補強後関連22成功、Claude R2で必須0 |
+| [#351](https://github.com/ktysne/agent-cockpit/pull/351)、`62e18b2` | 明示的回収factoryの操作受付停止と終了追跡 | source `4db527e`で関連248成功、全体2802成功、失敗0、Windows実symlink権限skip2。標準挙動subset26成功、Claude R1で必須0 |
+| [#352](https://github.com/ktysne/agent-cockpit/pull/352)、`2ea0c83` | main #350の配布物同期 | 関連2件、CLI定義読み取り5条件、構文、空白、上流同期check成功。Claude R1で必須0。アプリsource無変更 |
+| [#353](https://github.com/ktysne/agent-cockpit/pull/353)、`36c1c63` | native起動の段階別取消検証 | `cd39352`で全体2794成功、失敗0、Windows実symlink権限skip2。test補強後`1912130`で関連192成功、Claude R2で必須0。製品source無変更 |
+| [#354](https://github.com/ktysne/agent-cockpit/pull/354)、検証source `b70816d` | lease単位のnative read協調取消 | 関連120成功、全体2836成功、失敗0、Windows実symlink権限skip2。修正後関連120成功、source無変更、Claude R2で必須0 |
+| [#356](https://github.com/ktysne/agent-cockpit/pull/356)、検証source `f449304` | collectorの恒久受付停止とprivate drain | 関連145成功、全体2849成功、失敗0、Windows実symlink権限skip2。Claude R2で必須0。#354の後に取り込む |
+| [#357](https://github.com/ktysne/agent-cockpit/pull/357)、検証source `d253639` | native startとcollectorのfactory終了追跡 | `9379162`で全体2885成功、失敗0、Windows実symlink権限skip2。test補強後はlifetime52成功、全体未再実行、製品source無変更。Claude R3で必須0。#356の後に取り込む |
+| [#358](https://github.com/ktysne/agent-cockpit/pull/358)、検証source `bbd9d15` | native readの取消前write故障分類 | 関連123成功、固定head `d12453b`で全体2889成功、失敗0、Windows実symlink権限skip2。Claude R1で必須0。#357の後に取り込む |
+
+#347、#348、#349はこの順でマージする。
+#351、#352、#353はそれぞれこの系列と独立して取り込める。
+#352はfeature `c731abe`とmain `518b946`を祖先として残す通常mergeで、配布物4ファイルを取り込む。
+アプリ全体テストは重複実行せず、#351のfeature baseに対する証跡を参照する。
+配布物の関数冒頭コメントの補足は上流向けの任意候補であり、手編集しない。
+
+#351のfactory fixture15件とgate単体7件は、共通queue、回収core、schedulerで新受付を同期停止し、受付済み操作の成功、取消または失敗による終了を確認する。
+context.closeの保存禁止とready拒否はticketのdrain前に開始する。
+適合条件は[ID-F209-L01](../design/provider-conformance-testing.md)にある。
+acceptedへの実到達と登録済みlistenerの後着拒否は両providerで確認するが、後着経路はlistener直接呼出しでありadapter/router全体を通さない。
+保存中closeはunknownを両provider、appliedをCodexで確認する。
+Claude live appliedと両providerの実runtimeは未確認である。
+
+#353の追加14件は、通常起動profileの実runnerとcompositionを保持点で確認する。
+R1の必須指摘に対応し、全11stageで後着解放前後のwrite履歴を直接比較した。
+適合条件は[ID-F209-S01](../design/provider-conformance-testing.md)にある。
+Codex login、thread、turnの個別write callback保留とwait profile固有待機は未確認である。
+最終headの文書記録とtestのみの補強を、製品sourceの全体検証結果と分けて扱う。
+
+## native read取消の現在地
+
+`codex/native-read-lease-cancellation-209-20261011`は最新feature `c731abe`から作成し、#351、#352、#353のレビュー済みheadをこの順で通常mergeした。
+作業開始時のheadは`57cd63f`であり、製品sourceにmerge conflictはなく、設計と引き継ぎ資料の両方の内容を保持した。
+この後続PRは#351、#352、#353の取り込み後にマージする。
+#347〜#349の未マージsourceはこのブランチへ取り込んでいない。
+
+PR #354に、lease解放またはsource無効化によるCodex native readラッパーの協調取消を実装した。
+既存のleaseとrequest tokenを先に失効させ、対象readだけをunknownへ終了させる。
+取消権限はsource内部に保持し、正常完了したreceiptとinstruction transportの境界を維持する。
+適合条件とfixture結果は[ID-F209-R01](../design/provider-conformance-testing.md)にある。
+source `b70816d`で追加20件を含む関連120件と全体2836件が成功し、失敗0、全体はWindows実symlink権限skip2である。
+実Claude/Codex runtimeのread取消は未実施である。
+Claude R2はblockerと要修正なしで収束した。
+修正後`2dd659a`の関連120件も成功し、製品sourceは全体検証済みheadから変わっていない。
+loaded-list後のmicrotask取消は次RPC不送信を確認するが、内部continuationの各境界は独立計測していない。
+
+ラッパー終了とraw callbackの終了を分け、epochやdetachをI/O終了の証拠にしない。
+次はcollectorのprivate drainとfactory ticketへの接続を進める。
+collector単独の追跡とfactory接続は別PRに分ける。
+取消前のstdin write故障分類は[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)に記録し、read取消とは分けてPR #358で対応した。
+協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
+
+## owned collector終了追跡の現在地
+
+`codex/native-collector-private-drain-209-20261011`は最新feature `c731abe`から作成し、PR #354のレビュー済みhead `45eea5d`を通常mergeした。
+開始時のheadは`e574863`で、#351〜#354を祖先として保持する。
+この後続PRは#354の取り込み後にマージする。
+
+collectorの内部制御と最外側処理の追跡を実装した。
+PR [#356](https://github.com/ktysne/agent-cockpit/pull/356)はReadyで、#354の後に取り込む。
+sourceの検証対象は`f449304`である。
+実装前に[ID-F209-C01](../design/provider-conformance-testing.md)を定義した。
+通常disconnect後の再接続と公開APIを保ち、恒久停止、非協調readのdrain保留、同期再入を確認する。
+factory ticket接続とcloseの停止順はこの段階に含めない。
+関連するcollectorとcompositionの145件が成功し、失敗とskipは0件である。
+固定head `f449304`の全体テストは2849件成功、失敗0、Windows実symlink権限skip2である。
+ticket解放例外の失敗判定を修正し、Claude R2はblockerと要修正0件で収束した。
+非協調readは明示解放までdrainを保留し、通常disconnectのPromise契約と接続待ちの表示を維持する。
+実runtime、raw provider I/Oの終了、factory closeとの接続は未確認である。
+次は明示的回収factoryへstartとcollectorのticketを接続し、全native停止の開始後にserviceとdrainを合流する。
+
+## native factory終了追跡の後続
+
+`codex/native-factory-private-drain-209-20261011`は最新feature `c731abe`を起点に、PR #356のレビュー済みhead `f394c37`を通常mergeした。
+開始headは`358f512`で、#351〜#354と#356を祖先として保持する。
+マージ順は#356の後である。
+PR [#357](https://github.com/ktysne/agent-cockpit/pull/357)はReadyで、source検証対象は`d253639`である。
+実装前に[ID-F209-L02](../design/provider-conformance-testing.md)を定義した。
+明示的回収modeでstartとcollectorの処理を追跡し、全native停止の開始をservice待機より先に行う。
+生成済み資源の準備失敗は同期throwを保ち、後始末とticketの終了を別途待つ。
+標準mode、contextの保存禁止開始と物理停止の照合条件を維持する。
+実装済みで、補強前の関連4ファイル108件が成功し、失敗とskipは0件である。
+最初のtest-only監査修正後もlifetime51件が成功した。
+Claude R1の任意提案を反映後はlifetime52件だけを再実行し、すべて成功した。
+補強後の全体テストは未再実行で、検証source `d253639`以降に製品sourceの差分はない。
+固定head `9379162`の全体テストは2885件成功、失敗0、Windows実symlink権限によるskip2である。
+Claude R1はblockerと要修正が0件で、標準modeの例外保持を補強し、既存保持点の観測を照合した。
+R2の検証範囲記載の指摘を反映し、全体検証と補強後の関連検証を区別した。
+Claude R3はblockerと要修正が0件で収束した。
+構築中のclose再入による後着collector回収はprivate injectionであり、通常製品のcallback到達性を示さない。
+実runtime、raw I/Oと保存ownership解放順は対象外である。
+read write故障分類はPR #358で修正した。
+次はcontextの二段階終了を設計し実装する。
+contextの保存禁止開始と保存所有権の最終解放を分け、factoryの未終了処理が残る間の所有権保持を検証する。
+process間の協調lockは方式と参加writerの決定後に別PRで扱い、process内の終了順確認を排他保証へ読み替えない。
+
+## native readのwrite故障分類の後続
+
+[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)は、取消前のreadonly RPC write故障が一般のRPC拒否へ変換され、runnerがrunningのままになる不具合を扱う。
+`codex/native-read-write-failure-355-20261011`を最新feature `c731abe`から作成し、PR #357のレビュー済みhead `a69bb80`を通常mergeした。
+開始headは`bc9a331`で、マージ順は#357の後である。
+PR [#358](https://github.com/ktysne/agent-cockpit/pull/358)はReadyで、検証sourceは`bbd9d15`である。
+実装前に[ID-F209-R02](../design/provider-conformance-testing.md)を定義した。
+制御済みのwrite故障と論理取消だけを保持し、provider拒否、timeoutと失効generationの契約を維持する。
+FakeChildと実owned sourceの関連123件は成功し、失敗0件である。
+固定head `d12453b`の全体テストは2889件成功、失敗0、Windows実symlink権限によるskip2である。
+Claude R1はblockerと要修正が0件で収束した。
+実runtimeと実stdio故障は未実施である。
+
+## 回収factoryの二段階終了の後続
+
+`codex/reclamation-two-phase-close-209-20261011`を最新feature `c731abe`から作成し、PR #358のレビュー済みhead `f6056a8`を通常mergeした。
+開始headは`31d0f0a`で、マージ順は#358の後である。
+実装前に[ID-F209-O01](../design/provider-conformance-testing.md)と[二段階終了の契約](../design/native-instruction-service-integration.md#明示的回収factoryの二段階終了)を定義した。
+停止未確認時はprocess寿命中に所有を保持し、再closeや後着通知で自動解放しない案を、自走中の推奨として仮採用する。
+保存失敗と終了未確認は分け、独立に終了を確認できた保存失敗では所有を解放する。
+所有保持時だけ回収factory.closeのtop-level codeを変え、元理由をAggregateErrorのcauseとerrorsに保持する。
+通常のwriteとreadbackが終わる前にpersistenceを閉じず、公開facadeから最終解放へ迂回しない。
+process間排他は[#313](https://github.com/ktysne/agent-cockpit/issues/313)の範囲へ残す。
+実runtime、電源断耐久性と新schema writer接続も未実装または未確認として残す。
+検証source`ed9e1b1`をコミットし、固定headで全体検証と指定Claudeレビューを行う。
+PR [#359](https://github.com/ktysne/agent-cockpit/pull/359)はfeature向けReadyで、#358の後にマージする。
+関連9ファイルの237成功、失敗0、Windows実symlink権限skip1は最終stop記録の補強前である。
+監査補強後のcontextとfactory112件、最終context49件とcoordinator管理終了2件はすべて成功した。
+次は#313の参加writer、ファイル単位の所有、取得前I/O禁止とcrash後の回復条件を設計し、primitiveとwriter接続を分ける。
+固定head `5a3d50f`の全体テストは2792成功、119失敗、Windows実symlink権限skip2だった。
+本文回収とgrant解放の試験helperのprivate control引継ぎを補強し、未知leaseの再起動拒否を含む4試験群120件、factory lifetime72件、question write隔離16件が成功した。
+修正後の固定headで全体再検証とClaude増分レビューを行った。
+Claude R1はblockerと要修正が0件だった。
+互換補強後の固定head `30f6e85`は全体2911成功、失敗0、Windows実symlink権限skip2だった。
+Claude R2もblockerと要修正が0件で、最終の軽微な整形後の構文確認と未知lease2件も成功した。
+レビューは2往復で収束し、PR #359はマージ可能である。
+マージ順は#351→#352→#353→#354→#356→#357→#358→#359で、モデルはマージしない。
+
+### 保存writerのプロセス間排他
+
+`codex/writer-exclusion-design-313-20261011`を最新feature `c731abe`から作り、PR #359の最終head `8fa81f5`を通常mergeした。
+起点は`05e6f79`で、[排他設計](../design/writer-ownership-exclusion.md)と適合試験計画を先に記録する。
+PR [#360](https://github.com/ktysne/agent-cockpit/pull/360)の設計sourceは`ddbcc5e`で、R1/R2対応は`83dd295`と`bc1db69`である。
+製品src/testは親#359から不変。文書差分の指定Claudeレビューを3往復行った。
+Astraの助言を反映し、per-file sidecarを共通単位にし、factoryの全file set取得とstandalone参加をそろえる。
+private primitive、標準writer接続、factory接続と横断試験は後続であり、#313を完了扱いにしない。
+専有Windows probeは競合同時取得、正常marker残留、大小文字とjunction alias、hardlinkの反例を確認した。
+対応filesystemの検出、未対応aliasの拒否、実process crashと実runtimeは未確認で、製品排他成功へ数えない。
+設計PRのレビュー後は、候補環境の基礎操作を確認し、限定path向けprivate primitiveと実process fixtureに進む。
+Claude R1はblocker0件、要修正3件で、トレイ再起動の接続条件、lease/sidecar/Mapの解放順と一般path接続前のfilesystem/alias検証を明記して再レビューする。
+一般保存先と標準再起動への接続は限定primitiveの完了に含めず、W11の停止/再起動とW12のcaller同期失敗を後続の完了条件にする。
+Claude R2で見つかったensureの反復起動と接続/有効化の曖昧さを、standalone接続前にW08と停止/ensureの先行fixture試験を行い、接続PR自身でW11の製品統合条件を満たす順序へ修正する。
+短命状態fileや内部optionの方式は未採用で、実writer接続より先に拒否応答と再起動の手段を固定して試験する。
+R3はblocker0件、要修正1件で、設計一ファイルの手順5/6へfactoryと全参加writerのW11再確認を追記した。
+3往復後の局所修正ルールに従い、主セッションが文書整合を確認して収束とする。製品fixtureと実runtimeは未実行のままである。
+PR #360はレビュー修正後にマージ可能とし、順序は#351→#352→#353→#354→#356→#357→#358→#359→#360である。
+
+### 限定fixture向けの排他primitive
+
+`codex/writer-exclusion-primitive-313-20261011`を最新feature `c731abe`から作り、PR #360の最終head `4d7bf51`を通常mergeした。
+起点は`a456aea`で、実装前にP01〜P10のprimitive期待条件を記録した。
+Astraの実装前監査に従い、内部prepare/acquireと同一close Promiseを使い、製品callerを作らない。
+opaque集合は入力を固定する仕組みであり、一般pathのfilesystem判定やproducer停止の証明器とは扱わない。
+専有fixtureではWinAPIでC:\のNTFSとcase-sensitive無効を照合し、同fixtureのwx/write/close/EEXIST/unlink/再取得を確認した。
+primitiveと実process fixtureを実装し、関連試験は19件成功、失敗0件、新規4ファイルの構文確認も成功した。
+[PR #362](https://github.com/ktysne/agent-cockpit/pull/362)の実装head `7a4e23f`で全体検証は2,930件成功、失敗0件、Windowsの実symlink試験2件skipだった。
+指定Claude R1はblockerと要修正が0件で収束した。提案から自己待ちの検出範囲、診断nonce、実process試験の範囲を文書へ明記した。
+PRは#360の後にマージする。実装と試験のソースを固定したまま、検証結果と文書明確化を記録する。
+一般pathのW08、停止/ensureの方式、writer接続、W11の製品統合と両provider runtimeは後続のままである。
+停止の前提調査で[Issue #361](https://github.com/ktysne/agent-cockpit/issues/361)を起票した。
+serverとnative終了wrapperが失敗理由のtruthinessを判定するため、falsyなthrow/rejectを成功と取り違える。
+通常serverの専有loopback fixtureでは5種類すべての初回/再closeがresolveした。native wrapperは静的確認のみである。
+この修正はprimitiveと別PRへ分け、全writer停止通知の接続前に失敗の有無と理由を分離して検証する。
+
+### shutdown失敗保持の修正
+
+`codex/shutdown-falsy-failure-361-20261011`を最新feature `c731abe`から作り、PR #362の最終head `d3b79d5`を通常mergeした。
+起点は`87890c0`で、S01〜S03の失敗理由とcleanup継続の期待値を実装前に記録した。
+通常serverの失敗状態を理由から分離し、native server wrapperは既存のfailure captureを使う。
+公開closeの形、終了順、診断値を維持し、起動失敗cleanupと標準native stopはこの修正に含めない。
+起動失敗cleanupの追加shutdown理由にもtruthiness判定があり、falsyな追加理由をAggregateErrorへ含めない箇所を静的確認した。起動の元の失敗はthrowされるため、今回のclose成功への取り違えとは分けて後続で検証する。
+関連試験は通常server87件とnative factory38件が成功し、失敗とskipは0件だった。変更4ファイルの構文確認も成功した。
+[PR #363](https://github.com/ktysne/agent-cockpit/pull/363)の実装head `2ec748b`で全体検証は2,969件成功、失敗0件、Windowsの実symlink試験2件skipだった。
+指定Claude R1はblockerと要修正が0件で収束した。提案は範囲と既存契約を確認し、実装変更を加えなかった。
+PRは#362の後にマージし、#361の完了はfeatureへの取り込み後に照合する。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
@@ -701,6 +895,7 @@ Claude の owned wait の共通質問サービスへの接続は #174 の[コメ
 | [共通質問と回答配信](../design/common-questions.md)、[共通質問の自動適用設定](../design/common-question-settings-module.md)、[Claude owned native wait](../design/owned-native-claude-wait.md)、[ネイティブ runner の actor 寿命と固定 wait profile](../design/owned-native-wait-profile.md) | #174、#216、#211 の質問と待ち |
 | [Native 登録履歴の受動復旧](../design/native-recovery-checkpoint.md)、[Claude の delegated handoff と proof 再照合の実測](../design/native-handoff-live-reconciliation.md) | #177-B の復旧 |
 | [質問と配信記録の容量回収計画](../design/codex-capacity-reclamation.md)、[共通質問の回収 schema](../design/common-question-reclamation-schema.md)、[配信記録の回収 schema](../design/delivery-reclamation-schema.md)、[質問の永久失効と移行アンカー](../design/question-reclamation-anchor.md) | #209 の回収 |
+| [停止結果codec](../design/stop-ensure-record-codec.md)、[限定result store](../design/stop-ensure-result-store.md)、[限定shutdown coordinator](../design/stop-ensure-shutdown-coordinator.md) | #313の製品管理protocolから独立した内部moduleとfixture |
 | [Claude の writer の発行](../design/claude-local-issuer.md) | #207 の Claude 側 |
 | [docs/handover/2026-10-02.md](2026-10-02.md) | cockpit 本体(main 側)の計画書。Codex 対応の進みは書かない |
 
@@ -738,3 +933,173 @@ PR のマージや Issue のクローズをしたら、この資料の表を同�
 
 指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
 PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
+
+### 停止結果codecの独立実装
+
+停止全体のPR #364は3往復でも本文/適合表と未確認所有scopeの起動判断の2件が残り、Draftでマージ不可である。
+推奨はscope新規launch禁止、管理者による検出とW09手動回復を定義し、適合表をそろえて追加レビューすることで、再開の判断を待つ。
+初回の純粋codecには残存指摘の影響がないため、レビュー済み#363最終headを通常mergeした別branchで先行する。
+未収束の#364は取り込まない。
+[codec設計](../design/stop-ensure-record-codec.md)とC01〜C07の独立期待条件を実装前に記録した。
+純粋codecと関連試験を実装し、IDの固定長を明示してBuffer実byte長の検査を補強した。関連17件と構文確認は成功した。
+ブランチはcodex/stop-record-codec-313-20261011、PR #365のbaseはcodex/feature-codex-supportで、全体試験head `6884318`とtest補強後のレビューhead `7894492`をGitHubと照合した。
+同headの全体試験は2,986件成功、失敗0件、Windows実symlink2件skipだった。
+指定Claude R1はblocker0、要修正1件で、合法JSONによる4097 byte上限超過と偽装Bufferの反例を補強し、関連17件と構文確認が成功した。
+全体試験headから製品src不変を確認し、test入力の補強だけのため全体は反復しなかった。
+Claude増分R2はblockerと要修正0件で収束した。結果記録だけの最終追記ではsrc/testを変えず、全体試験と追加レビューを反復しない。
+PR #365はマージ可能で、#363の後に取り込む。未収束#364は前提にせず、次はbounded result storeの内部fixtureへ進む。
+ファイル保存、private controller、管理排他、ACL、tray/ensure接続、全writerと実providerは未実装または未確認のままである。
+
+### 停止結果storeの内部fixture
+
+最新featureからcodex/stop-result-store-313-20261011を作り、codec PR #365最終head aa48d7b115076bfc37ac7f269921781a6ddfa8d2を通常mergeした。
+未収束PR #364は取り込まない。
+[限定store設計](../design/stop-ensure-result-store.md)とR01〜R12を実装前に記録した。
+AstraへFS失敗境界を相談し、close不明時のtemp削除禁止、short I/O、親消失の分類とlocal latchの容量境界を採用した。
+Luna Maxへstoreとexpected-ID helperの実装を委譲し、編集停止後に差分を監査した。
+関連44件、4ファイルの構文確認と差分checkは成功した。
+実temporary rootで両kindの保存と読取りを確認し、fake filesystemで不明結果と限定cleanupを確認した。
+PR #366のhead/baseをgitとGitHubで照合し、固定head `df4fdbd`で全体試験と指定Claudeレビューを行った。
+npm test（process隔離、concurrency 2）は3,013件成功、失敗0件、Windows実symlink2件skipだった。
+inprocess全体実行は出力停滞の調査後にrootが中断し、再開した出力を停止した判断が早かったため未完了として保持する。
+単独の既存PR試験1件と同file153件は成功した。その結果で未完了の全体実行を合格にせず、同headの隔離全体試験で確認した。
+指定Claude R1はblockerと要修正が0件で収束し、任意提案4件を判断した。
+cleanupFailed:falseの意味、字句的path比較と設計の時点依存記述を文書だけで明確化した。
+追加のread open/契約外I/O返値などの故障分岐試験は後続候補として残す。
+結果記録と文言調整だけの最終追記ではsrc/testを変えず、全体試験と追加レビューを反復しない。
+PR #366はマージ可能で、#365の後に取り込む。未収束#364は除外する。
+次は単一instanceの内部shutdown coordinatorを別branchで先行し、手続き結果と通知結果を分けて検証する。
+製品caller、管理protocol、ACL、一般filesystem、全writerと実runtimeへは接続しない。
+
+### 停止手続きの内部coordinator
+
+最新featureからcodex/stop-shutdown-coordinator-313-20261011を作り、PR #366最終head e18606c5aa377f3fb52b4ba6a4d69835ed357286を通常mergeした。
+未収束PR #364は取り込まない。
+[限定coordinator設計](../design/stop-ensure-shutdown-coordinator.md)とQ01〜Q10を実装前に記録した。
+Astraへ先行範囲を相談し、手続きと通知の二軸、callback前の予約、falsy理由保持と自己待ちの限界を採用した。
+通知自体が確認できない場合はnotification_unconfirmedとcleanupFailed:nullにし、storeの既知unknownと区別する。
+Luna Maxがmoduleと関連試験の2ファイルを実装し、編集停止後に差分を監査した。
+関連fixture試験36件と構文確認2件は成功し、失敗とskipは0件である。
+CodeGraphで製品callerがないことを確認した。
+PR [#367](https://github.com/ktysne/agent-cockpit/pull/367)をfeature向けDraftで作成し、固定head `1766a90` で全体試験と指定Claudeレビューを行った。
+全体試験は3,049件成功、失敗0件、Windows実symlink権限によるskip2件である。
+Claude R1はblocker0件、要修正1件で、callback内のassertが実装に捕捉されるテストを外側の観測値検証へ補強する。
+実装本体の必須修正はなく、procedureが返すPromiseの信頼前提とfactoryのaccessor拒否試験も明確にする。
+レビュー補強後の関連試験37件と構文確認は成功した。
+全体試験のheadからsrcは不変で、testと文書の変更をClaudeの増分レビューで確認する。
+補強head `6d629df` のClaude R2はblockerと要修正が0件で、2往復で収束した。
+PR #367はマージ可能で、#366の後に取り込む。
+最終変更は検証結果と文書の整理だけで、実装と補強済み試験は増分レビュー時から不変である。
+次は停止設計の判断待ちに依存しない#311のMCP書き込み再送抑止へ進む。
+製品停止、HTTP、既存public close、scope/current/attempt、ACLとwriter所有には接続しない。
+
+### MCP書き込みの結果不明の再送抑止
+
+最新featureからcodex/mcp-unknown-write-retry-311-20261011を作り、PR #367最終head `ec2c3b6d5a196bf0f36a4a09ea84dd02c9e48e32`を通常mergeした。
+未収束PR #364を取り込まず、停止管理protocolから独立した#311へ進む。
+Astraへ設計を相談し、MCP専用policy、fetch呼出し直前の開始境界、認証拒否後の既存retry維持を採用した。
+[MCP結果不明の契約](../design/mcp-write-outcome.md)とM01〜M08の適合期待値を実装前に記録した。
+Luna Maxが送信clientとMCPの接続、関連試験の4ファイルを実装し、編集停止後に差分を監査した。
+同期fetch throw、JSON待ちtimeoutと401の既定policy対照、効果後の実HTTP切断も補強した。
+関連試験48件と構文確認4件は成功し、失敗とskipは0件である。
+両providerのwriter fixtureで効果後の切断とJSON解析失敗を確認し、POSTと効果はそれぞれ1回、追加ensureとrefreshは0回だった。
+PR [#368](https://github.com/ktysne/agent-cockpit/pull/368)の固定head `f045d13` で全体検証と指定Claudeレビューを行った。
+全体試験は3,060件成功、失敗0件、Windows実symlink権限によるskip2件である。
+指定Claude R1はblockerと要修正が0件で、1往復で収束した。
+開発者の連続作業をスタックする指示に従い、#367の後に積んでいる。
+PR #368はマージ可能で、#367の後に取り込む。
+最終変更は検証結果と文書範囲の明確化だけで、実装と試験は固定headから不変である。
+既定readServerInfoは内部で失敗を捕捉するが、注入したreadInfoが401後にthrowした場合は保守的に結果不明へ分類する制限がある。
+次は#312の表示墓標の件数、走査量と状態取得時間を、仕様を変えない専有fixtureで先行計測する。
+実Cockpitの冪等性と両provider実runtimeの成功とは扱わない。
+
+## 表示墓標の先行計測の現在地 (#312)
+
+PR #368のレビュー済み最終head `1d5b51f` を最新feature起点の計測ブランチへ通常mergeした。
+#368はReadyで、取り込み順は#367の後である。
+停止全体の未収束PR #364は含まない。
+[計測設計](../design/projection-display-baseline.md)とID-F312-D01〜D08の期待値を実装前に記録した。
+Luna XHighが専用手動scriptと関連試験を実装し、rootが差分を監査した。
+route計測からsinkのJSON解析を除外し、providerの曖昧性と同IDの別provider削除保持、CLI診断の補強後に関連5件と構文確認2件が成功した。
+全15条件とCodex N sweep4条件の先行計測は完了し、N=10000、S/P各8では両providerとも160000 recordを訪問した。
+時間と範囲は計測設計へ記録した。
+固定headで全体検証と指定Claudeレビューを行った。
+保持期間、容量、索引と回収条件は今回決定しない。
+PR [#369](https://github.com/ktysne/agent-cockpit/pull/369)はReadyで、#368の後にマージ可能である。
+固定head `2a9d84c` の全体試験は3,065件成功、失敗0件、Windows実symlink権限skip2件だった。
+Claude R1の要修正1件で復元fixtureの書き戻し混入が見つかり、正規順と書き戻し0回の検査を加えた。
+関連6件は成功し、全19条件の再計測後の値とscript hashを更新した。
+旧計測値を正規store復元の証拠として採用せず、修正後の固定head `58e8615` を再検証した。
+全体試験は3,066件成功、失敗0件、Windows実symlink権限によるskip2件である。
+指定Claude R2はblockerと要修正0件で収束した。
+最終変更は検証結果と計測対象の文書補足だけで、sourceとtestは再検証headから不変である。
+次はレビュー済み#369を通常mergeして、保持条件を変えないsession別参照索引を実装する。
+
+## 表示記録のsession索引の現在地 (#312)
+
+最新featureからcodex/projection-display-index-312-20261011を作り、Readyの#369最終head `a890ee2` を通常mergeした。
+未収束#364を含めない。
+Astraの設計助言に基づきcanonical Mapの内部所有とsession別key Setを採用する。
+[索引設計](../design/projection-display-index.md)とID-F312-E01〜E09を実装前に記録した。
+診断getterはMapとrecordのcopyを返すため、返却Mapの変更でstateを変更する内部propertyの互換挙動は維持しない。
+既知callerの読取りを維持する推奨案として自走中に仮採用し、PRで判断できる形にする。
+保持条件を変えず、旧全件走査oracleとの一致と計測modelの更新を検証する。
+Luna Maxがstate、内部collectionと独立索引試験を実装し、Luna XHighが計測toolと試験を更新した。
+両担当の編集停止後にrootが監査し、関連84件と最後の空bucket補強試験1件が成功した。
+旧基準と同じ19条件の再計測でmanifest、件数と保存byte数が一致した。
+時間と索引構築の費用は索引設計へ記録した。
+PR [#370](https://github.com/ktysne/agent-cockpit/pull/370)の固定head `3bfd407` で全体試験と指定Claudeレビューを行った。
+全体試験は3,069件成功、失敗0件、Windows実symlink権限によるskip2件である。
+Claude R1はblockerと要修正0件で収束した。
+PR #370はReadyで、#369の後にマージ可能である。
+最終変更は検証結果と文書の範囲補足だけで、src/test/toolsは固定headから不変である。
+診断getterのcopy化は推奨を仮採用した内部互換境界であり、開発者にPRで確認してもらう事項として残す。
+次はAstraの助言に基づき保持契約と反例fixtureを進める。
+現在の認証や停止だけで古いsnapshotの再登場を永久拒否したとは扱わず、製品GCは追加しない。
+
+## 表示記録の保持条件の現在地 (#312)
+
+最新featureからcodex/projection-display-retention-312-20261011を作り、Readyの#370最終head `5adbf40` を通常mergeした。
+Astraへ回収条件を相談し、現在の証拠だけでは一般GCの安全性を証明できないと確認した。
+[保持契約](../design/projection-display-retention.md)とID-F312-R01〜R08をfixture実装前に記録した。
+現在のstateとrouteで情報を忘れた候補との反例を検証し、製品回収と新しい世代拒否APIは追加しない。
+#209の世代と表示identityの対応、永続拒否境界と#313の保存所有が後続の依存であり、未収束#364を採用した前提にはしない。
+Luna Maxが反例fixtureを実装し、編集停止後にrootが監査した。
+関連8件と、両providerへ補強した不在後再登場とhidden選好の関連2件が成功した。
+PR [#371](https://github.com/ktysne/agent-cockpit/pull/371)の固定head `d57d84e` で全体試験は3,077件成功、失敗0件、Windows実symlink権限によるskip2件である。
+指定Claude R1の文書要修正1件と任意の範囲補足を修正し、R2はblockerと要修正0件で収束した。
+PR #371はReadyで、#370の後にマージ可能である。
+src/test/toolsは全体試験headから不変で、製品GCと件数上限の解決は後続に残す。
+次は#314の実Claude wait解放と次context取得の観測準備を進める。
+fixtureを実runtimeの確認へ読み替えず、認証と専用rootの境界を確認して実測入口を準備する。
+
+## Claude wait再接続の観測準備の現在地 (#314)
+
+最新featureからcodex/claude-wait-reconnect-observation-314-20261011を作り、Readyの#371最終head `a51c944` を通常mergeした。
+過去のignored実測harnessは現worktreeと元リポジトリに残っていなかった。
+Astraへ既存APIでの実現性を相談し、通常wait ownerによる一回のsettleと独立したB観測を採用する。
+[限定観測設計](../design/claude-wait-reconnect-probe.md)とID-F314-WRP01〜WRP08を実装前に記録した。
+fixed profileの観測器と明示live実行器を準備し、製品の認可を緩めない。
+失効後の拒否、Bなし、control未達は有効な未確認の結果として残す。
+実CLIと通常認証の境界を監査し、停止を確認した自己rootだけをcleanupする。
+実測と観測器のfixtureを分け、#314と#174の実runtime gateは完了扱いにしない。
+実行前の環境監査でWindowsのHOMEPATHの先頭separator欠落を再現し、[#372](https://github.com/ktysne/agent-cockpit/issues/372)へ記録した。
+既存owned runnerとversion childのhome指定を補正し、両providerのfake-spawnで結合値を検証してからliveへ進む。
+Luna MaxとLuna Highの編集停止後にrootが監査し、専用fixture18件を含む関連277件が成功した。
+構文確認4件と差分検査も成功し、無spawnのpreflightで既知CLIの存在を確認した。
+baseline proof欠落と観測終了後callbackの直接fixtureは未確認として残す。
+固定headの全体試験と指定Claudeレビュー後に実測し、実runtime結果を別に記録する。
+PR [#373](https://github.com/ktysne/agent-cockpit/pull/373)の初回固定head `db648b9` は全体3,095件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+Claude R1の要修正3件を反映し、再接続前の有効性と切断・接続の成立を必須にした。
+通知は単一listenerで数え、製品callbackの戻り値を維持する。
+専用fixtureは補強後19件成功し、修正後の固定head `b4c5e69` の全体試験は3,096件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+Claude R2の要修正1件は切断・接続失敗分岐の未確認記載であり、提示された文書補足案をAstraへ相談して採用した。
+sourceとtestを維持した文書補足をR3で確認し、blockerと要修正0件で収束した。
+PR #373はReadyで、#371の後にマージ可能である。
+Claude 2.1.296の隔離live観測を固定head `b441088` で一度行い、controlで次contextとfresh current proofを確認した。
+reconnectは旧handle失効と通常settle拒否を確認したが、90秒以内に次contextは到着しなかった。
+両processのexit・close、childとendpointの非稼働、自己root削除を確認した。
+実response writeは未観測で、観測器のobserved分類を#314の完了へ読み替えない。
+manifestと観測範囲は限定観測設計に置き、再接続後の進行方法は後続に残す。
+最終更新は検証と実測結果の文書のみで、src/test/toolsは全体試験headから不変である。
+次は#210の新規質問登録の保存後失効を取消終端へ進め、接続復帰後の自動回答を抑止する製品修正へ着手する。
