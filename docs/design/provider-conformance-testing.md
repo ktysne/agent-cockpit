@@ -682,16 +682,18 @@ ST15の分類名は期待値を表すための記述で、codecのstatusとreaso
 |---|---|---|
 | 上記正常系の条件を全て満たす | 通常の新規起動、再利用先なし | 同starting世代でちょうど1回。後続の同じ操作の評価で追加0回 |
 | 起動要求がない | 起動操作を開始しない | 0回 |
-| 同じ操作を同ID・同世代で再評価、または同IDを別世代へ不正に付け替える | 認可済み状態を維持 | 追加0回 |
+| 同じ観測列を繰り返し与えて同じ操作を同ID・同世代で再評価、または同IDを別世代へ不正に付け替える | 認可済み状態を維持 | 追加0回 |
+| 未確認所有が残る状態で新操作ID・新世代を注入する | 未確認所有を保持 | 0回 |
+| callerが操作IDだけを変更して再評価する | 管理者が受け付けた新操作とは認めない | 追加0回 |
 | 管理権限を取得していない | 管理権限不足、再利用先なし | 0回 |
 | fresh照合が失敗する | 照合不成立、再利用先なし | 0回 |
 | 進行中の別startingが存在する | 既存の起動操作を維持し、追加起動しない | 0回 |
-| 認可に必要な管理権限、health/instance照合、marker状態、対象attemptの取得/解放/終了、必要なrecordの破損/通知不能、必要なW09確認が不明。各観測を独立入力で与える | 不明を成功扱いせず、再利用先なし | 0回 |
+| 応答なし/timeout等で結果を得られず、認可に必要な管理権限、health/instance照合、marker状態、対象attemptの取得/解放/終了、必要なrecordの破損/通知不能、必要なW09確認が不明。各観測を独立入力で与える | 不明を成功扱いせず、再利用先なし | 0回 |
 | 同scopeの一致running healthyと古い単なる敗者拒否 | healthy再利用。敗者結果でcurrentを上書きしない | 0回 |
 | 同scopeの一致running healthyと敗者の所有不明 | 不整合を診断してhealthy再利用。未確認所有は保持 | 0回。勝者の一致completedと旧process終了を後続入力にしても0回 |
-| 停止完了未確認の旧instanceのlistener閉鎖、既存stopping、対象停止手続き完了未確認を独立入力で与える | 停止未確認、再利用なし | 0回 |
+| (a) 旧instanceのlistener閉鎖かつcompleted未確認、(b) 既存stopping、(c) 対象request/instanceのcompleted未観測をそれぞれ独立入力で与える | 停止未確認、再利用なし | 0回 |
 | 旧形式でinstanceId欠落 | 照合不能、強制終了fallbackなし | 0回 |
-| instanceId/app/pid/startedAt/scope/stateの不一致を各fieldの独立入力で与える | 照合不能、強制終了fallbackなし | 0回 |
+| server.jsonに記録された自instance候補のhealth/instance照合でinstanceId/app/pid/startedAt/scope/stateの不一致を各fieldの独立入力で与える | 照合不能、強制終了fallbackなし | 0回 |
 | server.json.state=running、旧process消失、marker無し、旧participant全停止未確認 | 所有/停止未確認、再利用なし | 0回 |
 | healthy無し、残留markerあり | writer取得拒否とW09案内 | 0回 |
 | 対象instance/requestに一致した停止completedと旧process終了を確認。他attemptの未確認所有を含む全阻害条件がなく、fresh管理権限と照合を含め正常系条件が成立 | 正常な停止完了後の新規起動 | 管理者が受け付けた新規要求の新操作ID・新starting世代でちょうど1回。同じ操作の再評価で追加0回 |
@@ -699,9 +701,9 @@ ST15の分類名は期待値を表すための記述で、codecのstatusとreaso
 | 同scopeの確定拒否だけが残り、未知所有と進行中停止はなく、明示再attempt前 | 確定拒否を維持 | 0回 |
 | 上の確定拒否に正当な明示再attemptを行い、管理権限とfresh照合をやり直して正常系条件が成立 | 拒否抑止だけ更新して新規取得を試みる。marker削除と未知所有解除はしない | 新しいstarting世代でちょうど1回。同じ操作の再評価で追加0回 |
 | 確定拒否に明示再attemptを行っても、他attemptの未確認所有が残る | 未確認所有を保持し、再利用先なし | 0回 |
-| 無関係なportの応答だけ | healthy、writer占有のいずれにも分類しない。この観測だけで認可も拒否も決めない | 他の必要な観測で判定 |
-| 無関係なport応答に全正常系条件を併せる | 通常の新規起動、再利用先なし | 同starting世代でちょうど1回。同じ操作の再評価で追加0回 |
-| 無関係なport応答にstoppingを併せる | 停止未完了、再利用なし | 0回 |
+| 記録済み自instance候補とは別のport、または自instance記録が無いときのport応答だけ | healthy、writer占有のいずれにも分類しない。この観測だけで認可も拒否も決めない | 他の必要な観測で判定 |
+| 上記の自instance候補と無関係なport応答に全正常系条件を併せる | 通常の新規起動、再利用先なし | 同starting世代でちょうど1回。同じ操作の再評価で追加0回 |
+| 上記の自instance候補と無関係なport応答にstoppingを併せる | 停止未完了、再利用なし | 0回 |
 
 明示再attemptの行は[停止設計の「ensureと起動拒否」](server-stop-ensure.md#ensureと起動拒否)の仮推奨方式を前提とし、公開操作の確定時に期待値との整合を再確認する。
 明示再attemptはfresh取得の再試行だけを許し、writer占有など後段の実取得失敗を成功へ変換しない。
