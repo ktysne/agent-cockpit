@@ -60,33 +60,39 @@ feature には 6 日間(2026-10-06〜10-11)で 127 本の PR がマージされ�
 
 ## 現在地と次にやること
 
-方針文書([docs/testing.md](../testing.md))とこの計画を書いた段階である。
-整理の作業はまだ始めていない。
+方針文書と計画は PR #384 で main に入り、2026-10-11 に開発者が以下の方針を決定した。
+main の変更を feature へ通常 merge する同期 PR を作成中である。
+未接続モジュールの一覧作成と削除はまだ始めていない。
 
-次のセッションは、まず「判断待ち」の 3 点を開発者に確かめ、その結果で「対応順序、ブランチ、PR」の 2 番以降を進める。
+同期 PR のレビュー収束後にマージし、feature の最新 head で一覧を作り直す。
+削除 PR から先は 1 つずつ作成し、レビューを収束させてマージしてから次へ進む。
+すべての追加、修正、削除は [docs/testing.md](../testing.md) に従う。
 
 ## 対応順序、ブランチ、PR
 
 | 順 | 対象 | 主な変更先 | 委譲の区分 | base | 状態(2026-10-11) |
 |---|---|---|---|---|---|
-| 1 | 方針文書と計画を入れ、CLAUDE.md と AGENTS.md とレビュー観点から参照する | `docs/testing.md`、この資料、`CLAUDE.md`、`AGENTS.md`、`.cross-review.md`、`docs/development.md` | メインセッション | main | PR 作成前 |
-| 2 | 1 の main の変更を feature へ同期する | 同期 PR | impl-light | feature | 未着手 |
-| 3 | 未接続のモジュールと、それだけを対象にしたテストを feature から外し、固定参照を codex-support.md に残す | `src/server/`、`test/`、`docs/handover/codex-support.md` | impl-standard | feature | 判断待ち 1 の結果で着手 |
-| 4 | 適合試験の計画資料から内部 fixture の条件の節を外し、入口からの操作と観測だけに書き直す | `docs/design/provider-conformance-testing.md` | impl-standard | feature | 3 の後 |
-| 5 | 到達するモジュールのテストを、方針の「既存のテストを見直す基準」2〜7 で刈り込む。ファイルの群ごとに PR を分ける | `test/owned-native-runner.test.js`、`test/native-launch-composition.test.js`、`test/provider-*-conformance.test.js` ほか | 選別はメインセッション、削除は impl-light | feature | 3 の後 |
-| 6 | 1 つのテストファイルからしか使われない harness をそのファイルへ戻し、`test/helpers/` を `test/support/` に統合する | `test/support/`、`test/helpers/` | impl-light | feature | 5 の後 |
+| 1 | 方針文書と計画を入れ、CLAUDE.md と AGENTS.md とレビュー観点から参照する | `docs/testing.md`、この資料、`CLAUDE.md`、`AGENTS.md`、`.cross-review.md`、`docs/development.md` | メインセッション | main | PR #384 マージ済み（2026-10-11） |
+| 2 | PR #384 の main 変更を feature へ同期する | `codex/sync-main-384-20261011` の同期 PR | Codex | feature | 作成・レビュー中（PR番号確定後に追記） |
+| 3 | 未接続のモジュールと、それだけを対象にしたテストを feature から外し、固定参照を codex-support.md に残す | `src/`、`test/`、`docs/handover/codex-support.md` | Codex | feature | 同期 PR のマージ後、最新 head で一覧を作り直して着手 |
+| 4 | 適合試験の計画資料から内部 fixture の条件の節を外し、入口からの操作と観測だけに書き直す | `docs/design/provider-conformance-testing.md` | Codex | feature | 3 の PR マージ後 |
+| 5 | 到達するモジュールのテストを、方針の「既存のテストを見直す基準」2〜7 で刈り込む。同じ harness の群ごとに PR を分ける | `test/owned-native-runner.test.js`、`test/native-launch-composition.test.js`、`test/provider-*-conformance.test.js` ほか | Codex | feature | 4 の PR マージ後 |
+| 6 | 1 つのテストファイルからしか使われない harness をそのファイルへ戻し、`test/helpers/` を `test/support/` に統合する | `test/support/`、`test/helpers/` | Codex | feature | 5 の PR 群の後 |
 
 3 を先にするのは、未接続のモジュールのテストを刈り込んでも、接続時に契約が変わって書き直しになるためである。
 5 は 1 ファイルずつではなく、同じ harness を使う群ごとに PR を分ける。
 harness の縮小と、それを使うテストの削除を別の PR にすると、間の状態でテストが通らないためである。
 
-## 判断待ち
+## 決定済みの判断 (2026-10-11)
 
-| 事項 | 推奨 | 理由 |
-|---|---|---|
-| 未接続のモジュール(62 ファイル 3.3 万行)を feature から外すか | 外し、PoC と同じ方式で固定参照を残す | 残しても製品の振る舞いは増えず、接続のたびに契約とテストを書き直す。固定参照があれば設計の成果は失われない。#209 の段階 2〜3 と #313 は「実装済み」から「設計済み」の扱いに戻る |
-| 整理を今やるか、接続が進んでから一度にやるか | 今やる | feature には 1 日 20〜30 本の PR が入り、未接続のモジュールと防御検査が同じ速さで増え続けている。先に止めないと整理の対象が増える |
-| 整理の実施者 | 消す対象の選別はメインセッションが行い、削除は impl-light へ委譲する | 消す判断は方針の解釈を伴い、自分で書いたテストを選別させると網羅を優先しやすい。削除そのものは機械的で、委譲の区分は light で足りる |
+| 事項 | 開発者の決定 |
+|---|---|
+| 未接続モジュールとその専用テスト | 製品の入口から到達しないモジュールと、それだけを対象にしたテストを feature から外す。PoC と同じ方式で削除直前の feature SHA を固定参照に残す。#209 の段階 2〜3 と #313 は製品実装済みではなく設計済みとして扱う |
+| 整理を行う時期と後続機能 | 整理を今行う。整理が終わるまで、新規の機能実装 PR は作らない。整理後は未接続モジュールを製品入口へ接続する作業を優先する |
+| 整理の実施者 | 到達するモジュールのテストの刈り込みは Codex が行う |
+| PR の進め方 | 1 つの PR を作成し、レビューを収束させてマージしてから次の PR に進む。全 PR の base は feature とする |
+
+全体の状態は[Codex対応の計画](codex-support.md)、テストの判断基準は[テストの作成方針](../testing.md)を参照する。削除直前 SHA は削除 PR の作成時に確定し、固定参照と Issue 状態を同じ PR で更新する。
 
 ## 落とし穴
 
@@ -98,7 +104,7 @@ harness の縮小と、それを使うテストの削除を別の PR にする�
 ## 次のセッションの開始用プロンプト
 
 ```
-docs/handover/2026-10-11-codex-test-cleanup.md を読んで、Codex 対応のテスト整理を進めてください。
-「判断待ち」の 3 点を私に確かめてから、「対応順序、ブランチ、PR」の 2 番以降を順に進めてください。
-feature の最新 head で、製品の入口から到達しない src と、それだけを対象にしたテストの一覧を作り直してから 3 番に着手してください。
+docs/testing.md と docs/handover/2026-10-11-codex-test-cleanup.md を読み、開発者が決定した手順に従って Codex 対応のテスト整理を進めてください。
+main の変更を feature に通常 merge する同期 PR から始め、1 つの PR のレビューを収束させてマージしてから次へ進んでください。
+同期 PR のマージ後、feature の最新 head で製品の入口から到達しない src と、それだけを対象にしたテストの一覧を作り直してください。
 ```
