@@ -1092,4 +1092,6 @@ baseline proof欠落と観測終了後callbackの直接fixtureは未確認とし
 PR [#373](https://github.com/ktysne/agent-cockpit/pull/373)の初回固定head `db648b9` は全体3,095件成功、失敗0件、Windows実symlink権限によるskip2件だった。
 Claude R1の要修正3件を反映し、再接続前の有効性と切断・接続の成立を必須にした。
 通知は単一listenerで数え、製品callbackの戻り値を維持する。
-専用fixtureは補強後19件成功し、修正後の全体試験とR2で確認する。
+専用fixtureは補強後19件成功し、修正後の固定head `b4c5e69` の全体試験は3,096件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+Claude R2の要修正1件は切断・接続失敗分岐の未確認記載であり、提示された文書補足案をAstraへ相談して採用した。
+sourceとtestを維持した文書補足をR3で確認する。
