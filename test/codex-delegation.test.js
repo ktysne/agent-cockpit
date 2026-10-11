@@ -109,11 +109,23 @@ test('並行する委譲がある親からの Codex は直接起動した thread
   assert.equal(state.snapshot().sessions[0].agents.filter(agent => agent.isCodex).length, 2);
 });
 
-test('独立と分類した thread は後から委譲行ができても独立のままである', () => {
+test('起動通知が子の Codex より後に届いても、起動以降に始まった thread は委譲に直す', () => {
   const state = new DashboardState();
   state.addEvent(codexEvent('SessionStart'));
+  assert.equal(codexSessions(state)[0].session_id, 'thread');
   launch(state);
-  state.addEvent(codexEvent('PreToolUse', { hookAt: 50, tool_name: 'exec_command', tool_use_id: 'tool' }));
+  assert.deepEqual(codexSessions(state), []);
+  state.addEvent(codexEvent('PreToolUse', { hookAt: 210, tool_name: 'exec_command', tool_use_id: 'tool' }));
+  assert.deepEqual(codexSessions(state), []);
+  assert.equal(state.entries.get('thread').length, 1);
+  assert.equal(state.entries.get('thread')[0].event.delegatedFrom, parentId);
+});
+
+test('起動より前に始まった独立の thread は後から委譲行ができても独立のままである', () => {
+  const state = new DashboardState();
+  state.addEvent(codexEvent('SessionStart'));
+  launch(state, 'launch', { hookAt: 250 });
+  state.addEvent(codexEvent('PreToolUse', { hookAt: 260, tool_name: 'exec_command', tool_use_id: 'tool' }));
   assert.equal(codexSessions(state)[0].session_id, 'thread');
   assert.ok(state.entries.get('thread').every(({ event }) => event.delegatedFrom === undefined));
 });
