@@ -968,7 +968,8 @@ owned Claude/Codexとmanaged app-server/remote CLIの4経路をfixtureで区別�
 | ID-F215-TE07 | owned MCP endpoint待機中の失敗と失効、不正環境 | 待機中に環境構築しない。endpoint開始後の不正は通常停止で閉じ、後着spawn0 |
 | ID-F215-TE08 | 環境構築後のowner失効とspawn内の停止再入 | guard失敗codeと環境消去を維持。返ったchildの停止追跡を省略しない |
 
-実providerのproxy/CA利用と通信成功、未実行OSは未確認として分ける。
+実providerのproxy/CA利用と通信成功、NO_PROXYによるloopbackへの直結、未実行OSは未確認として分ける。
 Windowsの関連2ファイルは135件中133件成功、失敗0件、実symlink権限によるskip2件だった。
 TE08の構築後失効はspawn0と停止完了をfixtureで確認し、spawn前の一時環境の消去は外側finallyの差分監査で確認した。
 CAファイルへのアクセスがないことと、返ったchildの停止追跡を維持することは差分監査で確認した。未実行OSと実通信は成功に含めない。
+固定head `639ff5b`の全体試験は3,260件中3,255件成功、失敗0件、Windows実symlink権限によるskip5件だった。

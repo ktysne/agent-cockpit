@@ -1267,5 +1267,8 @@ Astraの設計助言に基づき、[通信環境の供給契約](../design/nativ
 owned MCP endpointの待機後へ環境構築を移し、構築後の失効も検査する。
 managed app-serverの環境消去を全keyへ広げ、remote CLIの既存消去とそろえる。
 Windowsの関連2ファイルは135件中133件成功、失敗0件、実symlink権限によるskip2件だった。
-全体試験と指定Claudeレビューはこれから行う。構築後失効時の環境消去は差分監査、spawn0とendpointの物理停止はfixtureで確認した。
+構築後失効時の環境消去は差分監査、spawn0とendpointの物理停止はfixtureで確認した。
+PR #378はfeature向けのDraftとして作成し、固定head `639ff5b`の全体試験は3,260件中3,255件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+指定Claude R1はblocker0、要修正1件だった。推奨の文書対応を採用し、NO_PROXYのloopback除外を導入条件へ追加する。自動追記は行わず、実runtimeでの直結確認を残す。
+文書対応の妥当性をClaude R2で確認する。最終文書更新ではsourceとtestを変更しない。
 認証の再利用、loginの直列化、機能設定の実効性と実runtimeの通信成功は今回の完了条件に含めず、#215の残件を維持する。

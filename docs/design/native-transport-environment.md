@@ -28,6 +28,11 @@ Windowsのmain threadにおけるprocess.envの大小文字を区別しない読
 Workerや別OSで同じ結果を確認したとは扱わない。
 供給元の変更は次の起動へ反映され得るが、起動済みchildへ渡した値を撤回しない。
 
+proxyを設定する環境では、NO_PROXYに127.0.0.1、localhost、::1を含める。
+owned MCPとmanaged remote CLIはloopbackへ認証付きで接続するため、proxyを経由させない。
+NO_PROXYの値は自動で追記せず、信頼済み供給元で設定する。
+各providerのNO_PROXY解釈とloopbackへの直結は実runtimeで確認する。文字列の伝播fixtureだけではこの経路を証明しない。
+
 ## 一時環境の寿命と秘密値
 
 owned ClaudeのMCP wait endpointの開始待機を終えてから環境を構築し、構築後にもownerの有効性を検査して同期spawnする。
@@ -46,7 +51,7 @@ endpoint起動後の失敗は既存の停止経路で扱い、stop呼出だけ�
 
 4つのfake spawn経路で、値の完全一致、不正時のspawn未呼出し、供給元の保持、一時環境の消去、既存HOMEと認証の供給を検査する。
 架空のproxy credentialを使い、通常HOMEや実環境の秘密値を検証成果物に含めない。
-providerが各変数を使用すること、proxyやCAを経た接続成功、ログインの再利用と機能設定の実効性は実runtimeの別検証として残す。
+providerが各変数を使用すること、proxyやCAを経た接続成功、loopbackがproxyを経由しないこと、ログインの再利用と機能設定の実効性は実runtimeの別検証として残す。
 
 [Node.jsのprocess.env](https://nodejs.org/api/process.html#processenv)はWindows main threadとWorkerの読取の違いを説明している。
 [path.isAbsolute](https://nodejs.org/api/path.html#pathisabsolutepath)は文字列の絶対表記の判定であり、パスの安全性を証明しない。
