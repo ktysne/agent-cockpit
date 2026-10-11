@@ -3,7 +3,8 @@
 ## 設計の位置づけ
 
 この文書は#313の参加条件と後続実装の完了条件を定める。
-共通所有単位、取得前の保存内容I/O禁止、子writerの権限と自動奪取禁止を設計上採用し、具体的なOS検出とprimitiveは未実装とする。
+共通所有単位、取得前の保存内容I/O禁止、子writerの権限と自動奪取禁止を設計上採用する。
+限定fixture向けprimitiveは実装済みで、一般保存先のOS検出と製品writer接続は未実装である。
 現行製品はmodule内Mapで同一pathのwriterを拒否するが、別processの更新は直列化できない。
 本案だけで#313を完了したとは扱わず、全参加writerの接続と実process試験が必要である。
 
@@ -120,6 +121,7 @@ filesystem種別を検出して限定する手段は未確定であり、一般p
 markerが残れば起動を拒否し、回復の責任者が全participant、子process、再起動監視を停止する。
 新しい取得が始まらないことと既存ownerの終了を確認できなければ、markerを削除しない。
 PIDや時間の経過だけで停止を証明しない。
+未確認所有が残る場合はmarkerの不在でも全停止確認を省略しない。起動管理者の再起動、設定世代変更と明示retryだけで新規launchの禁止を解除しない。
 
 回復対象は特定したsource setのmarkerに限定し、未知rootの一括削除を行わない。
 markerの除去はデータの整合性を保証しない。
@@ -133,7 +135,8 @@ standalone checkpointにreclamation anchorを要求するものではない。
 現在のトレイ再起動は`src/tray/tray.ps1`で常駐サーバーを`Stop-Process -Force`により終了する。
 この終了ではwriterのcloseによるmarker除去を期待できず、排他接続後は通常の再起動でも次の取得が拒否される。
 標準writerへ接続する前に、トレイがgraceful停止を要求し、全writerの終了と最終解放の成功を確認してから再起動する手段を決め、実装と試験を行う。
-停止要求のAPIと完了通知の方式は未決で、停止要求の送信やprocess終了だけを解放成功の証明にしない。
+停止要求と完了通知は[停止とensureの設計](server-stop-ensure.md)で認証HTTP受付とinstance/request別結果fileを仮推奨とする。
+ACL、起動管理protocolと全終了確認の製品接続は未実装で、停止要求の送信やprocess終了だけを解放成功の証明にしない。
 HTTPの停止要求口を作る場合は、既存書込み口と同じHost、起動ごとの秘密値とOriginの照合条件を守る。
 Windowsのgraceful停止はprocessの強制終了やシグナルに依存せず、明示した停止手段を使う。
 完了通知は対象の旧server instanceに結び付け、server.jsonの消失を成功の証拠にしない。
@@ -145,7 +148,8 @@ Windowsのgraceful停止はprocessの強制終了やシグナルに依存せず�
 
 フックとMCPからのensureによる自動起動も、標準接続前の確認対象とする。
 保存writerの取得拒否を認識したensureは、hook eventごとに再起動とhealth待ちをdeadlineまで繰返さず、拒否理由を保ったまま速やかに失敗を返す。
-拒否状態の伝達、表示と手動回復後の再試行条件は手順3の着手時に設計として固定し、本書へ追記してから実装する。未確認の短命状態fileをここで実装方式として採用しない。
+拒否状態の伝達、表示と手動回復後の再試行条件の仮推奨は[停止とensureの設計](server-stop-ensure.md)に従う。
+共有fileの管理権限とACLは手順3の製品接続前に実証し、未確認の短命fileを製品方式として有効化しない。
 拒否理由と回復操作を表示し、その表示が元のhook処理を長時間妨げないことを確認する。
 ensureはmarkerを自動削除せず、拒否状態から成功した旧/新server instanceへ誤って状態を引き継がないことも試験する。
 

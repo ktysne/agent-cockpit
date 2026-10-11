@@ -33,6 +33,7 @@ managed runtimeの読取専用collectorは、trusted compositionが`startServer(
 失敗の有無を理由の値と分け、false、null、undefined、0と空文字列も最初の失敗理由としてrejectする。
 再closeは保存済みの終了結果を返し、任意の理由を診断へ公開せず、`shutdownError`は失敗時に`shutdown_incomplete`、成功時にnullを返す。
 この終了結果はgraceful再起動とwriterのprocess間排他を実装済みとする証拠ではない。
+後続のinstance/state導入と全停止入口の管理protocolは[停止とensureの設計](server-stop-ensure.md)で定め、現行の通信schemaと区別する。
 
 managed collectorはserverの通常起動では作成・接続しない。注入されたcollectorのallowlist済みsnapshotだけを`GET /api/state`の`managedCollectors`として返し、HTTP経路から接続、resume、登録、proof照会は行わない。
 

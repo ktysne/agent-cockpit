@@ -48,8 +48,10 @@ authority失効だけでは物理停止を証明しないため、対象process�
 Issueを新たに分割せず、各Issue内にA/B/Cのマイルストーンを置く。
 マイルストーン単位でPRを分けても、先行部分だけでIssueを完了扱いにしない。
 本実装の作業ブランチとPRは最新のcodex/feature-codex-supportを起点とし、feature向けに集約する。
-開発者がスタック式の作業を指定した場合は、featureを祖先に持つ先行作業ブランチを取り込み、その先行PRのheadブランチをbaseにする。
+スタック式の後続も最新featureから作成し、先行PRのレビュー済みheadを通常mergeで取り込む。作業PRのbaseはfeatureにそろえる。
 先行PRの取り込み後は後続PRのbaseと差分を再確認する。
+マージのたびに関連Issueの完了条件と実際の検証を照合し、全条件を満たすIssueだけをclosedにする。
+部分対応のIssueには残条件を記録し、[進捗の正本](../handover/codex-support.md)の現在地と対応表、関係する設計資料と適合試験を合わせて更新する。
 全Issue、統合検証、レビューの完了後だけfeatureからmainへの最終PRを作成し、開発者の承認後に取り込む。
 
 ## 依存関係と実装単位

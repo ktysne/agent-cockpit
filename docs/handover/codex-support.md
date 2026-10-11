@@ -1,4 +1,4 @@
-# Codex対応の計画(2026-10-10)
+# Codex対応の計画(2026-10-11)
 
 agent-cockpit を Codex デスクトップと Codex CLI にも対応させる作業の、全体の流れ、現在地、次の作業、判断待ち、資料の一覧を 1 か所に集めた資料である。
 作業は集約ブランチ `codex/feature-codex-support` で進め、一通り完成するまで main には入れない。
@@ -18,6 +18,19 @@ main の変更は同期 PR で随時 feature へ取り込む。
 
 ## 現在地と次にやること
 
+### 最新の状態 (2026-10-11照合)
+
+集約先は`codex/feature-codex-support`の`856c683`で、PR #352〜#377の対象22件と#378〜#380は通常merge済みである。各レビュー済みheadとmerge commitが集約先の祖先であることを確認した。
+PR #378、#379、#380のレビュー済みheadと各merge commitを集約先の祖先として確認した。状態整理のPR #381はこの集約先へ同期する。PR #364は最新featureとの競合を解消し、Astra相談と指定Claude第8往復でblocker・要修正0件へ収束した。取り込み順は未マージの#381→#364で、設計PRとしてReadyにする。製品接続と実runtimeは未完了である。
+単独不具合#339、#355、#361、#372、#311はIssue全体の完了条件を満たし、対応PRのfeature取り込みを確認してclosedにした。実runtimeやmain採用を条件とする親Issueはopenを維持する。
+状態整理はPR #381でレビュー収束した。#364の停止設計もレビュー収束した。次は#215の認証再利用に必要なcredential所有、更新、Windows ACLとrun HOME分離の設計へ進む。`account/read`だけの追加では認証再利用を完了できない。
+#209の世代集約はfixture専有の限定保存とnative read境界まで進んだが、製品への接続と所有証拠、実runtimeが残る。#216の設定画面と標準起動はこの残条件を満たしてから接続する。
+実装全体を完了したとは扱わず、必須の横断runtime試験と最終main PRも残す。
+
+### これまでの実装と検証
+
+以下は実施時点の記録であり、現在の状態は上の要約と各対応表で確認する。
+
 Codex 対応は、調査(#156)、PoC(#157〜#164)、集約(PR #165〜#187)、本実装(fixture で契約を検証して feature へ集約)まで進み、実 runtime 確認と main 採用が残っている。
 2026-10-08 に開発者が決めた案 A により、fixture で検証した変更は feature に集約済みで、実 runtime の未確認は feature から main への採用条件として残る。
 
@@ -25,7 +38,7 @@ PR #309 は 2026-10-09 に feature へマージ済みで、merge SHA は `3c4fee
 main の PR #305（別のリポジトリで作った PR の登録）は、作業ブランチ `codex/sync-main-305-20261009` で `origin/main` の `8a0314c` を通常 merge している。
 競合解消と関連テストは完了し、Claude のクロスレビューは 1 往復で収束した。[PR #318](https://github.com/ktysne/agent-cockpit/pull/318) は feature へマージ済みで、merge SHA は `394daa9` である。
 
-作業開始時の GitHub 照合では、Codex 対応 Issue の状態は対応表と一致し、open PR は 0 件だった（2026-10-09）。現在の作業 PR は以下の対応順序表で追跡する。
+2026-10-09の開始時点ではopen PRは0件だった。2026-10-11の照合ではopen Issueは36件で、完了した5件をclosedにして31件になった。#378〜#380のマージ後、現在のopen PRは#364と文書整理の#381である。
 
 同期 PR の head を起点に、#209 段階 2 の 1b（質問 codec）の独立した検証モジュールと fixture を実装した。
 関連テスト39件と全体テスト1,997件は成功した。[PR #319](https://github.com/ktysne/agent-cockpit/pull/319) は Claude のクロスレビューで blocker・要修正がなく、1往復で収束した。
@@ -152,14 +165,14 @@ skipはWindowsの実symlink作成権限に依存する1件で、注入fixtureの
 
 ## 全体の流れ
 
-| 段階 | 内容 | 対象 | 状態(2026-10-09 確認) |
+| 段階 | 内容 | 対象 | 状態(2026-10-11 確認) |
 |---|---|---|---|
 | 0 調査 | 対応の可否、機能差、方式の決定 | #156 | 調査は完了。本実装の親 Issue として開いたままにし、main 採用のときに閉じる |
 | 1 PoC | 8 件の実現性確認 | #157〜#164 | 完了(closed)。記録はコミット 8c701b1 の固定参照(「資料の一覧」) |
 | 2 集約 | PoC の stack、規約、共有契約、計画書を feature へ | PR #165〜#187 | 完了 |
-| 3 本実装 | G1〜G7 の共通核、両 adapter、fixture での適合試験 | #166、#167、#170、#171、#174、#175、#177、#179、#180 | feature に集約済み。Issue は実 runtime 確認が済むまで閉じない。#179 と #180-B は未着手 |
+| 3 本実装 | G1〜G7 の共通核、両 adapter、fixture での適合試験 | #166、#167、#170、#171、#174、#175、#177、#179、#180 | 先行部分はfeatureに集約済み。未実装と実runtimeの残条件をIssueごとに維持する。#179と#180-Bは未着手 |
 | 4 監査対応 | #184 と #223 の監査で見つかった退行と計画の問題 | #207〜#218、#223 | #208、#219〜#222 は完了(closed)。残りは「Issue の対応表」 |
-| 5 実 runtime 確認 | provider ごとの必須確認(「実 runtime 確認の計画」) | #175、#211、#216、#217、#209、#210、#212 | 未着手 |
+| 5 実 runtime 確認 | provider ごとの必須確認(「実 runtime 確認の計画」) | #175、#211、#216、#217、#209、#210、#212 | 必須の採用ゲートは未完了。#314の限定した実観測は段階3の観測記録であり、横断runtime適合の成功には数えない |
 | 6 main 採用 | 最終 PR と採用ゲートの照合 | #218 | 未着手。PoC の削除と `npm test` の対象指定は済み |
 
 ## Issue の対応表
@@ -168,7 +181,7 @@ Codex 対応の Issue はマイルストーン「Codex対応」で分類し、Gi
 main 側の不具合(#292、#308 など)にはマイルストーンを付けない。
 「主な PR」はコードの在りかを探す入口で、状態の正本は GitHub である。
 
-| Issue | 内容 | 段階 | 主な PR | 残っていること(2026-10-09 確認) |
+| Issue | 内容 | 段階 | 主な PR | 残っていること(2026-10-11 確認) |
 |---|---|---|---|---|
 | #156 | 調査の親 Issue | 0 | | main 採用時に閉じる |
 | #166 | MCP の書込先を provider と native thread ID で照合する | 3 | #188(A)、#202 | #166-B(delegated MCP 登録の接続)。#207 と担当を分ける |
@@ -181,28 +194,49 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #179 | 混在実行の PR 登録と review 帰属 | 3 | | 未着手。#166、#167、#170、#171、#175、#177、#180 の境界が接続した後 |
 | #180 | 共通 dispatcher と vendor 別 runner | 3 | #194、#195(先行部分) | #180-B(dispatcher、両 vendor runner、cancel、結果返却) |
 | #207 | feature の本番起動で Claude の MCP 書込みが拒否される | 4 | #234、#238 | 既定 composition の接続、実 runtime 試験(Claude 側の担当) |
-| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3)、#324(PR4)、#325(質問本文回収)、#326(通常指示本文回収)、#327(PR通知/result本文回収)、#328(grant解放)、#329(質問局所停止)、#330(明示自動回収) | grant解放はレビュー収束。段階3の限定した質問局所停止は#329でレビュー収束。自動実行は#330でレビュー収束。段階4の拒否包含分析は#331でレビュー収束。世代集約が後続 |
-| #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236、#374(部分) | 登録保存後失効の補償取消はレビュー収束。再照合後のcheckpoint更新、同じstartの再送、実runtime復旧が残る |
+| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307、#319〜#338、#340〜#349、#351〜#354、#356、#357、#359 | 段階2の移行と段階3の本文回収をfeatureへ集約済み。段階4のcodec、容量検査、inspectionとfixture専有の限定保存、native readの部分対応も集約済み。製品側の世代所有、受付とwriterの接続、実runtimeは残る |
+| #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236、#374(部分) | 登録保存後失効の補償取消はPR #374でfeature集約済み。再照合後のcheckpoint更新、同じstartの再送、実runtime復旧が残る |
 | #211 | owned runner が native 要求の件数上限で落ちる | 4 | #227、#269、#273、#274 | 実 runtime での上限境界、明示停止、遅延 resolved の確認 |
-| #212 | イベント投影が欠落を検出すると固まる | 4 | #375(部分) | 注入registryの終了実行の不在保護解除はレビュー収束。collectorの復帰証拠と指示projectionの接続条件、実runtimeが残る |
-| #213 | 合成するセッション行が親へ寄らない | 4 | #230(mock 案) | #376で状態表示を部分対応。親配置とresume統合は残る。#167-B、#171-B、#177-B と連動 |
+| #212 | イベント投影が欠落を検出すると固まる | 4 | #375(部分) | 注入registryの終了実行の不在保護解除はPR #375でfeature集約済み。collectorの復帰証拠と指示projectionの接続条件、実runtimeが残る |
+| #213 | 合成するセッション行が親へ寄らない | 4 | #230(mock 案)、#376 | #376で状態表示をfeature集約済み。親配置とresume統合は残る。#167-B、#171-B、#177-B と連動 |
 | #214 | managed app-server の要求期限と異常終了時の残留 | 4 | #232(部分) | 異常終了時に app-server が残る件 |
-| #215 | owned runner の起動が毎回ログインなどを前提にする | 4 | #377（部分対応）、#378、#379 | #377はfeature集約済み。通信環境の限定伝播#378と認証URL origin限定#379はReady。次の論理login直列化は関連fixture確認済みで全体試験とClaudeレビュー前。認証再利用、隔離HOMEのACL/cleanup、機能の実効性と実runtimeは残る |
+| #215 | owned runner の起動が毎回ログインなどを前提にする | 4 | #377、#378、#379、#380 | #377はfeature集約済み。限定通信環境#378、認証URL origin限定#379、論理login直列化#380もfeatureへ集約済み。認証再利用、隔離HOMEのACL/cleanup、機能の実効性と実runtimeは残る |
 | #216 | 共通質問の自動適用が申告に依存する | 4 | #258、#279、#284(段階 1)、#286(段階 2)、#290、#293 | 段階 3(設定画面と標準起動への接続)。#209 の回収条件が前提 |
 | #217 | 通常指示の適用証拠を 60 秒しか待たない | 4 | #257 | 実 Codex で 60 秒超の遅延適用の測定 |
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
-| #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | #368 | MCP専用policyとfetch開始境界による結果不明時の再送抑止はレビュー収束。実runtimeは未確認 |
-| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | #369、#370、#371 | 計測、session索引、保持契約と反例fixtureはClaudeレビュー収束、Ready。診断getterのcopy化は開発者の確認待ち。GCの全入口拒否境界と件数上限は未解決 |
-| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはレビュー収束。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
+| #311 | MCPの結果不明時の書込み自動再送 | 4 | #368 | closed。MCP専用policy、fetch開始境界、結果不明の固定通知と回帰試験をfeatureへ集約済み。実runtimeの永続化とidempotencyは本Issueの完了条件外で、[Issue本文](https://github.com/ktysne/agent-cockpit/issues/311)と完了範囲を照合した。実runtimeは段階5と#218の採用ゲートで確認し、横断試験の成功とは扱わない |
+| #312 | provider別の表示墓標の増加と全件走査 | 4 | #369、#370、#371 | 計測、session索引、保持契約と反例fixtureはfeature集約済み。診断getterのcopy化は仮採用のまま取り込み済みで、開発者の確認待ちを維持する。GCの全入口拒否境界と件数上限は未解決 |
+| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはfeature集約済み。停止全体の#364は競合解消とAstra相談を終え、指定Claude第8往復でレビュー収束した設計PR。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
 | #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | PR #373で観測器と実測を追加。通常解放は進行、再接続後旧handle拒否と90秒B未到着を確認。進行方法は未解決 | #174の後続(handoffとreconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
 
 main 側の不具合として #316(idle で補った後の古い推定の再表示)と #317(マニュアルの回答画像が等倍)も 2026-10-09 に起票した。マイルストーンは付けていない。
 
+### クローズした単独不具合 (2026-10-11)
+
+| Issue | 対応PR | featureのmerge commit | 完了した範囲 |
+|---|---|---|---|
+| [#339](https://github.com/ktysne/agent-cockpit/issues/339) | #341 | `6daad962` | raw JSONのintrinsicコピーとgetter非呼出し |
+| [#355](https://github.com/ktysne/agent-cockpit/issues/355) | #358 | `4e9e7532` | native readのcurrent write故障と取消、旧世代の隔離 |
+| [#361](https://github.com/ktysne/agent-cockpit/issues/361) | #363 | `7c8a19fc` | falsyな最初のshutdown失敗理由と再close |
+| [#372](https://github.com/ktysne/agent-cockpit/issues/372) | #373 | `6bbb2227` | owned runnerとClaude観測器のWindows HOME pair |
+| [#311](https://github.com/ktysne/agent-cockpit/issues/311) | #368 | `efee01b0` | MCPの送信後結果不明の自動再送抑止と固定通知 |
+
+各Issueの本文、実装と回帰試験、PRの検証記録、集約先への取り込みを照合した。
+これらの単独Issueには実provider runtimeの合格を完了条件とする記載は無く、親Issueのruntime条件とmain採用は引き続き未完了である。
+#292、#308、#316、#317は対応する修正が未完了でopenを維持する。#312は索引だけでGCと上限を完了せず、#314は限定観測だけで再接続後の継続を完了しない。
+
+## マージ後の状態照合
+
+PRのマージ後は、GitHubのbase、レビュー済みhead、merge commitを確認し、集約先の祖先として取り込まれていることを照合する。
+続けて関連Issueの本文と完了条件、検証証跡、未確認のruntime条件を確認する。全条件を満たすIssueはclosedにし、部分対応はopenのまま残条件を更新する。
+この資料の現在地、Issue対応表、対応順序と判断待ちを更新し、実装計画や適合試験の記述にも食い違いがあれば同じ状態整理で修正する。
+過去の検証headと結果は履歴として保持する。未マージの文書は集約先に反映済みと書かず、状態整理PRの取り込みまで作業PR側の最新状態として示す。
+
 ## 決定済みの判断
 
-実装の判断は計画書の「決定済みの判断」が正本で、ここには作業の進め方の判断だけを置く。
+実装の判断は計画書の「決定済みの判断」が正本で、ここには作業の進め方の判断と規約の照合記録を置く。
 
 | 項目 | 決定 | 理由 |
 |---|---|---|
@@ -210,6 +244,8 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 進みの正本(2026-10-09) | この資料と GitHub(マイルストーン「Codex対応」、PR)を正本にし、メモリーには書かない | 開発者の決定。資料が複数あると次のセッションがどれを信じるか決められないため |
 | PoC の扱い(2026-10-09) | `poc/` 全体、`docs/poc-codex-*.md`、runtime probe を feature から削除し、コミット 8c701b1 の固定参照を残す | 開発者の決定。差分の約 3.5 万行が PoC で、最終差分の確認を妨げていたため |
 | 用済みの資料(2026-10-09) | 実装済みの計画と引き継ぎは削除し、固定参照だけを残す。資料は削除せずに残す場合も `docs/archive/` のような置き場は作らない | 開発者の決定。履歴に残るので参照には困らず、生きている資料だけが見えるようにするため |
+| マージ後の状態整合(2026-10-11) | マージを検知したら関連Issueの完了条件を照合し、対応済みのIssueと進捗表を同じ状態整理で更新する。文書変更は未マージの後続作業PRまたは状態整理PRへ積み、照合済みの日付を示す | 開発者の指示。既にマージされたPR自体は変更できないため、更新を後続へ記録する。次の作業を古い表で始めない |
+| スタックのbase(2026-10-11照合) | 後続も最新featureから作成し、先行のレビュー済みheadを通常mergeしてbaseはfeatureにそろえる | 既存の[AGENTS.md](../../AGENTS.md#codex機能のブランチ運用)と、この資料の対応順序に従う。実装計画に残った旧head-base記述を訂正する |
 | 案 A(2026-10-08) | fixture で契約を検証した変更を feature に集約し、実 runtime 未確認を main への採用条件として残す | 開発者の決定。レビュー済みコードの確認起点をそろえるため。fixture の合格を実 runtime の合格と読み替えない |
 
 ## 対応順序、ブランチ、PR
@@ -221,7 +257,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 親のマージ後は、レビュー済みheadがfeatureの祖先であることを確認して後続へ通常mergeで同期する。
 マージは開発者が行い、PR 番号、head、base は GitHub で確かめた値だけを書く。
 
-| 順 | 対象 | 作業 | PR と base | 状態(2026-10-09 確認) |
+| 順 | 対象 | 作業 | PR と base | 状態(2026-10-11 確認) |
 |---:|---|---|---|---|
 | 1 | 整理 | PoC の削除、資料の集約、Issue の分類 | [#309](https://github.com/ktysne/agent-cockpit/pull/309)、base: feature | マージ済み（2026-10-09、merge SHA `3c4fee8`） |
 | 2 | main 同期 | PR #305 を feature へ取り込む | [#318](https://github.com/ktysne/agent-cockpit/pull/318)、base: feature | マージ済み（2026-10-09、merge SHA `394daa9`）。関連347件・監査後107件成功、Claude レビュー1往復で収束 |
@@ -231,13 +267,13 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324) | featureへマージ済み。全体2,256件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面は未接続、実runtimeは未検証 |
-| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)、[#328](https://github.com/ktysne/agent-cockpit/pull/328)（base: feature）、[#329](https://github.com/ktysne/agent-cockpit/pull/329)（base: #328）、[#330](https://github.com/ktysne/agent-cockpit/pull/330)（base: #329） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327でfeatureへ集約済み（merge `ea908c2`）で、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。明示grant解放は#328で実装し、Claude R1の必須指摘を修正、R3でblockerと要修正0件に収束した。全体2,442件成功・1件skip（head `dfd536b`）、最終assert補強の関連4件成功（head `7a473c7`）。質問journal局所停止は#329でClaude R3に収束し、全体2,485件成功と1件skip、最終補強のnative16件とpersistence20件成功を確認した。既定offの自動実行は#330でレビュー収束。全体2,525件成功と1件skip（source `a787e89`）、最終補強の単体19件成功（`4f69c03`）。段階4の拒否包含分析は[#331](https://github.com/ktysne/agent-cockpit/pull/331)（base: #330）でレビュー収束。全体2,528件成功・1件skip（head `bab5d51`）。拒否索引候補から既存grave形へのpure復元実験は[#332](https://github.com/ktysne/agent-cockpit/pull/332)（base: #331）でClaude R2に収束。全体2,544件成功・1件skip（source `3937095`）、R1試験補強の関連12件成功（`2e05f46`）。単体recordの相関検査とbyte上界は[#333](https://github.com/ktysne/agent-cockpit/pull/333)（base: #332）でClaude R2に収束。全体2,562件成功と1件skip（source `b9b15fb`）、R1補強のbyte試験7件成功（`9506be4`）。単体Q/CP capsule codecと選択ペアは[#334](https://github.com/ktysne/agent-cockpit/pull/334)（base: #333）でClaude R3に収束。修正後の全体2,596件成功、1件skip（source `060f516`）。試験補強`f2b84fb`は関連15件成功。通常recordとcapsuleの全体検査は[#335](https://github.com/ktysne/agent-cockpit/pull/335)（base: #334）でClaude R3に収束。全体2,619件成功と1件skip（source `22bb7de`）、Claude R1の試験補強で関連21件とadmission 18件が成功（`f1befd4`）。R2とR3はblockerと要修正0件。R2任意補強の関連21件も成功（`8be5320`）。外側Q3/CP4 codecと結合検証は[#336](https://github.com/ktysne/agent-cockpit/pull/336)（base: #335）でClaude R1のblockerと要修正0件。全体2,667件成功、1件skip（source `0412f2a`）。旧raw移行計画は[#337](https://github.com/ktysne/agent-cockpit/pull/337)（base: #336）でClaude R2に収束。全体2,685件成功・1件skip（source `81f97a1`）、試験補強25件成功（`1faeb04`）。永続化にはcodec、容量上界、保存とcold、件数枠の条件を別々に満たす |
+| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | #325〜#338、#340〜#349、#351〜#354、#356、#357、#359（feature集約済み） | 本文回収と明示自動実行、世代集約のcodec/inspection、fixture専有の限定保存を実装済み。検証headと件数は後述の各節を参照。製品への接続、世代所有と実runtimeは残る |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |
 | 12 | #216 の実 runtime | trusted 設定、導線、二重登録の確認 | 未作成 | 未着手 |
 | 13 | #175 の実 runtime | 実 Codex の質問待ちと許可待ち、Claude の native 検出 | 未作成 | 未着手 |
 | 14 | #217 の実 runtime | 60 秒超の遅延適用の測定 | 未作成 | 未着手 |
-| 15 | 残る本実装 | #210、#212、#214、#215、#180-B、#179、#177-B/C、#213、#167-B | 未作成 | 未着手。順序は計画書「依存関係と実装単位」に従う。#209、#210、#212、#216 は本番サービスを有効にする前に終える |
+| 15 | 残る本実装 | #210、#212、#214、#215、#180-B、#179、#177-B/C、#213、#167-B | #374〜#380は集約済み。他の残機能は未作成 | #210、#212、#213、#215は部分対応済み。未完了条件はIssue対応表に従う。#209、#210、#212、#216の製品接続条件を満たす前に本番サービスを有効にしない |
 | 16 | #218 | G2、G4、横断適合の照合と最終 main PR | 未作成、base: main | 未着手 |
 
 順 11〜14 は順 3〜10 と並行してよい。
@@ -388,6 +424,7 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | 回収factoryの停止未確認後の所有 | process寿命中に保持するか、明示再確認APIを同時に作るか。推奨の終端保持を二段階終了で仮採用する。後着通知やtimeoutで解放せず、同process中は同pathを再取得できない。再確認と詳細診断は別作業 | #209の二段階終了。自走中の推奨判断 |
 | 表示記録の診断propertyのmutation互換 | projectionDisplaySettingsを内部Mapとして直接変更できる挙動を維持するか、copyを返して索引との整合を守るか。既知callerは読取りだけのため、推奨のcopy化をPR #370で仮採用した。開発者の確認待ち | #312の[session索引](../design/projection-display-index.md)。自走中の推奨判断 |
 | writer lockの残留回復 | 自動stale takeoverを作るか、即時拒否と全participant停止後の手動回復に限定するか。推奨は後者で、設計上仮採用する。現行トレイの強制再起動はmarkerを残すため、標準接続前にgraceful停止と最終解放確認を実装する。残留時は起動拒否とし、PID/TTLによる奪取やトレイの自動削除は行わない。製品接続は未実装 | #313の[排他設計](../design/writer-ownership-exclusion.md)。自走中の推奨判断 |
+| 停止の権限と通知 | 推奨は既存uiSecretの認証HTTP受付とinstance/request別結果file、確定拒否の明示再attemptで、設計上仮採用する。専用権限やlocal IPCも選択肢。Windows ACLの配布準備方式、手動再attemptの公開操作、対応OS/filesystemと既存同期constructorの互換範囲、未確認所有の保持媒体、crash後の再構成とW09復旧確認の認証方式は未決で、製品接続前に確定する | #313の[停止とensureの設計](../design/server-stop-ensure.md)。自走中の推奨判断 |
 | 作業中の Claude への追加指示 | Codex の steer に当たる Claude の working steer は unsupported である。仕様差として受け入れるか、経路を設計するか。推奨は仕様差として受け入れ、Claude には待機中の次の入力だけを届ける。#175 の[コメント](https://github.com/ktysne/agent-cockpit/issues/175#issuecomment-6029239396)が残条件として挙げている | [Owned native instruction dispatch](../design/owned-native-instruction-dispatch.md)「固定する認可」 |
 | 再起動前の共通質問への回答の再開 | #283 は A 案(旧質問を隔離し、回答も再送もしない)で閉じた。旧質問へ回答を再開する B 案を採るか。推奨は採らない。採るなら provider ごとに未解決の証拠を取得できるかの調査から始める | [旧復旧計画(固定参照)](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md) |
 | #156 を閉じる時期 | main 採用時か、本実装の Issue が全部閉じた時か。推奨は main 採用時 | |
@@ -720,7 +757,7 @@ source/backend/workspaceは変更せず、test/helperの補強後は関連検証
 当時のfeature `10eec5c`は各レビュー済みheadとmerge commitを祖先として保持する。
 開発者が今回の作業に限って許可したマージにより、#352→#353→#354→#356→#357→#358→#359→#360→#362→#363→#365→#366→#367→#368→#369→#370→#371→#373→#374→#375→#376の21件をfeatureへ通常mergeした。
 #376のmerge commitは`df0875755292bafc50bcd59cce9bf5f16f18585b`で、この実際の集約headを#377へ通常mergeで取り込んだ。
-#377の取り込みで対象22件の集約を完了する。#364はDraftかつレビュー未収束のため除外し、後続PRの親にしない。
+#377はmerge SHA `6c5854b`で取り込み済みで、対象22件の集約を完了した。#364はDraftかつレビュー未収束のため除外し、後続PRの親にしない。
 以降のReady記載は各PRのレビュー完了時点を示す履歴であり、現在のマージ状態はこの節を参照する。
 #348と#349のbaseはfeatureへ統一し、headの内容は変更していない。
 
@@ -879,7 +916,8 @@ private primitive、標準writer接続、factory接続と横断試験は後続�
 Claude R1はblocker0件、要修正3件で、トレイ再起動の接続条件、lease/sidecar/Mapの解放順と一般path接続前のfilesystem/alias検証を明記して再レビューする。
 一般保存先と標準再起動への接続は限定primitiveの完了に含めず、W11の停止/再起動とW12のcaller同期失敗を後続の完了条件にする。
 Claude R2で見つかったensureの反復起動と接続/有効化の曖昧さを、standalone接続前にW08と停止/ensureの先行fixture試験を行い、接続PR自身でW11の製品統合条件を満たす順序へ修正する。
-短命状態fileや内部optionの方式は未採用で、実writer接続より先に拒否応答と再起動の手段を固定して試験する。
+製品の状態fileと内部optionは未実装で、[停止とensureの設計](../design/server-stop-ensure.md)に結果fileの仮推奨と接続条件を記録した。
+実writer接続より先に拒否応答と再起動の手段を固定して試験する。
 R3はblocker0件、要修正1件で、設計一ファイルの手順5/6へfactoryと全参加writerのW11再確認を追記した。
 3往復後の局所修正ルールに従い、主セッションが文書整合を確認して収束とする。製品fixtureと実runtimeは未実行のままである。
 PR #360はレビュー修正後にマージ可能とし、順序は#351→#352→#353→#354→#356→#357→#358→#359→#360である。
@@ -912,6 +950,21 @@ serverとnative終了wrapperが失敗理由のtruthinessを判定するため、
 [PR #363](https://github.com/ktysne/agent-cockpit/pull/363)の実装head `2ec748b`で全体検証は2,969件成功、失敗0件、Windowsの実symlink試験2件skipだった。
 指定Claude R1はblockerと要修正が0件で収束した。提案は範囲と既存契約を確認し、実装変更を加えなかった。
 PRは#362の後にマージし、#361の完了はfeatureへの取り込み後に照合する。
+
+### 停止とensureの設計
+
+`codex/stop-ensure-design-313-20261011`を最新feature `c731abe`から作り、PR #363の最終head `6d8e03d`を通常mergeした。
+起点は`e5f8434`で、[停止とensureの設計](../design/server-stop-ensure.md)へ認証HTTP受付、instance/request別結果fileと共有起動管理protocolの条件を記録する。
+結果file、明示再attemptとuiSecret系の停止権限は自走中の仮推奨で、Windows ACLと管理権限の方式は未確定である。
+TTL付きstart.lockとattempt別recordだけでは旧管理者のcurrent上書きを防げず、HTTP終了後の解放保留も全ensureへstoppingとして共有する必要がある。
+次は製品callerを作らず、単一private controllerとbounded record codec/storeをfixtureで検証する。
+異process管理排他、ACL、全producer drain、tray/ensure接続と実markerのW11はその後の完了条件である。
+指定Claude R1の要修正7件を受け、requestIdの生成と検証、メモリ内状態、共通停止operation、instance導入と並行起動の分類を補正した。
+R2の要修正2件を受け、本文要件の適合表への反映と並行起動の権限/current/launch数を明確化し、分類fixtureと製品試験を分けた。
+R3でも本文と適合表の漏れ、敗者の未確認所有が残るscopeの新規起動判断の2件が残り、2文書にまたがるため3往復上限で中断した。PR #364はDraftでマージ不可である。
+推奨は管理者が不整合を検出し、未確認所有が残るscopeの新規launchを禁止してW09の手動回復へ進め、適合表も補正して追加レビューすること。再開の判断を待っていた。2026-10-11に再開し、現在の状況は後述の「停止設計PR #364の再開」に記録する。
+初回codecには残存指摘の影響がないため、レビュー済み#363を親に純粋codecだけを別PRで先行し、#364の未収束headを取り込まない。
+本PRは文書のみでテストを実行せず、親#363からsrc/test不変を確認する。親の全体2,969件成功、失敗0件、実symlink2件skipは親実装の結果として保持し、新設計の成功証拠としない。
 
 ## 起票していない候補
 
@@ -960,6 +1013,7 @@ Claude の owned wait の共通質問サービスへの接続は #174 の[コメ
 | [共通質問と回答配信](../design/common-questions.md)、[共通質問の自動適用設定](../design/common-question-settings-module.md)、[Claude owned native wait](../design/owned-native-claude-wait.md)、[ネイティブ runner の actor 寿命と固定 wait profile](../design/owned-native-wait-profile.md) | #174、#216、#211 の質問と待ち |
 | [Native 登録履歴の受動復旧](../design/native-recovery-checkpoint.md)、[Claude の delegated handoff と proof 再照合の実測](../design/native-handoff-live-reconciliation.md) | #177-B の復旧 |
 | [質問と配信記録の容量回収計画](../design/codex-capacity-reclamation.md)、[共通質問の回収 schema](../design/common-question-reclamation-schema.md)、[配信記録の回収 schema](../design/delivery-reclamation-schema.md)、[質問の永久失効と移行アンカー](../design/question-reclamation-anchor.md) | #209 の回収 |
+| [保存writerのprocess間排他](../design/writer-ownership-exclusion.md)、[サーバー停止とensure](../design/server-stop-ensure.md) | #313の取得、終了確認、起動拒否と製品接続条件 |
 | [停止結果codec](../design/stop-ensure-record-codec.md)、[限定result store](../design/stop-ensure-result-store.md)、[限定shutdown coordinator](../design/stop-ensure-shutdown-coordinator.md) | #313の製品管理protocolから独立した内部moduleとfixture |
 | [Claude の writer の発行](../design/claude-local-issuer.md) | #207 の Claude 側 |
 | [docs/handover/2026-10-02.md](2026-10-02.md) | cockpit 本体(main 側)の計画書。Codex 対応の進みは書かない |
@@ -990,10 +1044,10 @@ Claude の owned wait の共通質問サービスへの接続は #174 の[コメ
 agent-cockpit の Codex 対応を続けてください。
 docs/handover/codex-support.md を読み、「全体の流れ」「Issue の対応表」「対応順序、ブランチ、PR」の表を GitHub(マイルストーン「Codex対応」の Issue と open PR)と git で照合し、食い違いがあれば表を直してください。
 main に feature へ未同期の変更があれば、先に同期 PR を feature へ積んでください。
-その後、「対応順序、ブランチ、PR」の最初の「未着手」の行に着手してください。
+その後、「最新の状態」に記した次の作業へ進み、依存条件をIssue対応表と実装計画で確認してください。前提を満たさない未着手項目を表の順だけで開始しないでください。
 作業 PR は最新の codex/feature-codex-support を起点に feature を base にし、PR をマージしないでください。
 fixture の合格を実 runtime の合格と読み替えず、未実施を成功に数えないでください。
-PR のマージや Issue のクローズをしたら、この資料の表を同じ PR で更新してください。
+PRのマージを検知したら、実headとmerge commitの取り込み、関連Issueの全完了条件、各表の状態を照合してください。完了条件を満たすIssueはclosedにし、残条件があるものはopenを維持して理由を記録してください。照合と表の更新を同じ状態整理として実施し、変更を後続の作業PRまたは状態整理PRへ積んでください。次の作業は更新した表を前提に進めてください。
 ```
 
 指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
@@ -1002,7 +1056,7 @@ PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブラン
 ### 停止結果codecの独立実装
 
 停止全体のPR #364は3往復でも本文/適合表と未確認所有scopeの起動判断の2件が残り、Draftでマージ不可である。
-推奨はscope新規launch禁止、管理者による検出とW09手動回復を定義し、適合表をそろえて追加レビューすることで、再開の判断を待つ。
+推奨はscope新規launch禁止、管理者による検出とW09手動回復を定義し、適合表をそろえて追加レビューすることで、再開の判断を待っていた。2026-10-11に再開し、現在の状況は後述の「停止設計PR #364の再開」に記録する。
 初回の純粋codecには残存指摘の影響がないため、レビュー済み#363最終headを通常mergeした別branchで先行する。
 未収束の#364は取り込まない。
 [codec設計](../design/stop-ensure-record-codec.md)とC01〜C07の独立期待条件を実装前に記録した。
@@ -1306,3 +1360,32 @@ rootは取消とgrantの競合、正常解放位置、異常時の両event待機
 追加fixture後の関連2ファイルとtest-isolation=noneはそれぞれ244件中243件成功、失敗0件、Windows実symlink権限によるskip1件だった。sourceは全体試験headから不変で、追加testと文書は指定Claude R3でblockerと要修正0件に収束した。認証再利用は専用credential owner、Windows ACL、更新とrun HOMEの分離が前提で、account/readの追加だけでは完了しない。
 
 PR #380はReadyで、取り込み順は#378→#379→#380である。次はマージ済みPRに対応するIssueの完了条件と文書の状態を照合し、クローズ可能な単独不具合を整理する。
+
+## PR #378〜#380の取り込みと状態照合 (2026-10-11)
+
+開発者のマージ後、#378のmerge `9a58a6c`、#379のmerge `2a6c63a`、#380のmerge `856c683`を照合した。
+各レビュー済みheadとmerge commitは最新feature `856c683`の祖先である。状態整理ブランチへ通常mergeで同期した。
+#215はこの3件の部分対応だけでは完了しないためopenを維持し、認証再利用、ACLとcleanup、機能の実効性と実runtimeを残す。
+#381は文書2ファイルだけを変更し、指定Claude R2でblockerと要修正0件に収束した。次は#215のcredential所有とrun HOME分離の設計へ進む。
+
+## Draft PR #364の競合解消
+
+最新feature `10eec5c`を通常mergeで取り込み、元headを祖先として保持した。
+手修正は引き継ぎ文書だけで、既存のレビュー未収束とDraftを維持する。
+競合解消はレビュー収束を意味せず、Readyスタックの親には使わない。
+
+## 停止設計PR #364の再開 (2026-10-11)
+
+開発者が残2件のAstra相談と追加レビューを指定したため、3往復で中断した設計を再開した。
+最初に最新feature `856c683`を通常mergeし、競合解消head `b417993`をpushした。source、test、tools、mockとmanualは最新featureと同一である。
+状態整理PR #381のレビュー済みhead `a10881b`も通常mergeして、Issue状態と計画書を同期した。#381が未マージの間の取り込み順は#381→#364である。
+Astraの助言に従い、healthy再利用と新規launch認可を分け、敗者の未確認所有を勝者停止後も保持する。管理者交代や設定世代変更でも禁止を迂回せず、W09の全停止確認と認証された復旧確認を製品接続条件に残す。
+409の両理由とHTTP再送0、cleanupからのmerge開始0、marker不在での起動拒否、healthy勝者と未知所有の共存をST表へ同時に補正した。ST15の注入観測と分類、手順との対応、process生成から終了までの外部観測も明記した。
+指定Claudeの第4往復で元の要修正2件は解消した。ST15が全起動拒否でも通る新たな要修正1件についてAstraへ再相談し、正常起動、停止完了後、W09復旧後と確定拒否の明示再attempt後の認可ちょうど1回、および同じ操作の再評価で追加0回を適合表へ追加した。
+非受理停止要求の再起動中止と手動回復も本文とST08へ同期し、第5往復では正常系の補強を確認し、要修正として管理権限不足、fresh照合失敗、別starting進行中と観測不明の否定側不足が残った。各条件を独立に欠く認可0回の入力と、同じ世代・操作を再評価する識別子の契約を追加し、第6往復でこれらは解消し、残った独立入力の列挙、新操作の採番条件とST06への保持・再構成の検証委譲をAstraへ再相談した。本文とST06/ST08/ST15を同期し、第7往復で識別子と保持・再構成の整合を確認した。残った自instance候補の照合不一致と無関係port応答の境界を明記し、第8往復で確認する。新規のST製品試験、ACL、管理protocol、全writer接続と実runtimeは未実行で、既存C/R/Q試験をその成功へ読み替えない。
+
+## 停止設計PR #364のレビュー収束 (2026-10-11)
+
+指定Claude第8往復はblocker0、要修正0で、レビュー済みheadは`a4bc6f0`である。元の2件と追加レビューで見つかった分類表、識別子と委譲先の不足を修正し、取り込み順を#381→#364としてReadyへ進める。
+任意提案は阻害条件の重複や用語の補足で、既存の独立入力、必要観測不明の拒否と全正常条件の要求で扱う。実装時のfixtureで具体的な入力を再確認する。
+最終の文書状態記録以外はレビュー済みheadから変更しない。製品管理protocol、ACL、全writer接続とST実runtimeは未実行で、#313はopenを維持する。次は#215のcredential所有とrun HOME分離の設計に着手できる。
