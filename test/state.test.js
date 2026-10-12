@@ -4,6 +4,25 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { DashboardState, claudeModelName } = require('../src/server/state');
+
+test('Claude のモデル ID を表示名にし、読み取り結果が無いときは前の値を保つ', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'model-session', hook_event_name: 'SessionStart', model: 'claude-sonnet-5-5' });
+  assert.equal(state.snapshot().sessions[0].modelName, 'Sonnet 5.5');
+  state.recordSessionModel('model-session', 'claude-opus-5-5');
+  state.recordSessionModel('model-session', null);
+  state.addEvent({ session_id: 'model-session', hook_event_name: 'Stop' });
+  assert.equal(state.snapshot().sessions[0].modelName, 'Opus 5.5');
+});
+
+test('Claude のモデルの記録は Codex のモデルの札に影響しない', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'codex-model', provider: 'codex', hook_event_name: 'SessionStart', model: 'gpt-6' });
+  state.recordSessionModel('codex-model', 'claude-opus-5-5');
+  const session = state.snapshot().sessions[0];
+  assert.equal(session.codex.model, 'gpt-6');
+  assert.equal(session.modelName, undefined);
+});
 const { productFromCwd } = require('../src/server/identity');
 const { readSessionName, listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('../src/server/session-files');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');

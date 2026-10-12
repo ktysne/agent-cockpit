@@ -305,6 +305,9 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     input_fields: Object.keys(input).slice(0, 64),
   };
   const isCodex = options.provider === 'codex';
+  if (!isCodex && eventName === 'SessionStart' && typeof input.model === 'string') {
+    event.model = pickString(input.model).slice(0, 160);
+  }
   if (isCodex) {
     event.provider = 'codex';
     event.model = pickString(input.model).slice(0, 160);

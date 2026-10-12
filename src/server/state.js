@@ -1399,6 +1399,7 @@ class DashboardState {
     this.version = 0;
     this.generatedAt = new Date().toISOString();
     this.sessions = new Map();
+    this.claudeSessionModels = new Map();
     this.endedAt = new Map();
     this.endedByAbsence = new Map();
     this.fieldNames = new Set();
@@ -2527,6 +2528,13 @@ class DashboardState {
     return this.sessionFiles.get(sessionId) || null;
   }
 
+  recordSessionModel(sessionId, model) {
+    const provider = this.sessions.get(sessionId)?.provider || this.sessionFiles.get(sessionId)?.provider;
+    if (provider === 'codex' || !model || this.claudeSessionModels.get(sessionId) === model) return;
+    this.claudeSessionModels.set(sessionId, model);
+    this.touch();
+  }
+
   captureFieldNames(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) return;
     const eventName = typeof input.hook_event_name === 'string' ? input.hook_event_name : '';
@@ -2651,6 +2659,10 @@ class DashboardState {
     const withdrawnAsk = this.withdrawFinishedDesktopAsks(event);
     const entries = this.entries.get(event.session_id) || [];
     const eventSequence = this.sequence++;
+    if (event.provider !== 'codex' && !event.agent_id && event.hook_event_name === 'SessionStart' &&
+      event.model && !this.claudeSessionModels.has(event.session_id)) {
+      this.recordSessionModel(event.session_id, event.model);
+    }
     entries.push({ event, sequence: eventSequence });
     this.entries.set(event.session_id, entries);
     const nextSessions = deriveSessions(entries, this.askDecisionStateFor(event.session_id), eventSequence);
@@ -3093,6 +3105,8 @@ class DashboardState {
       const current = {
         ...visible,
         provider: base.provider || 'claude',
+        ...(base.provider !== 'codex' && this.claudeSessionModels.has(sessionId)
+          ? { modelName: claudeModelName(this.claudeSessionModels.get(sessionId)) } : {}),
         ...(base.codex ? { codex: { ...base.codex, resumes: base.codex.resumes + (session ? this.codexResumesBeforeEnd.get(sessionId) || 0 : 0) } } : {}),
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,

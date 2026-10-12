@@ -7,7 +7,7 @@ const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool,
 const { applyReviewSkip } = require('./review-skip');
 
 function createHookRoutes(ctx) {
-  const { state, answerDelivery, claudeHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications } = ctx;
+  const { state, answerDelivery, claudeHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
 
   async function resolveWriterSessionId(routeId, body) {
     if (Object.hasOwn(body, 'codexSessionId')) {
@@ -158,6 +158,7 @@ function createHookRoutes(ctx) {
     const event = sanitizeEvent(body, eventMetadata);
     // 終了通知はメインの記録に書かれるので、サブエージェントのイベントのたびには読まない。
     if (event && !event.agent_id) scheduleTaskNotifications(event.session_id);
+    if (event) scheduleSessionModel(event);
     if (event && state.deletedSessions.has(event.session_id)
       && event.hookAt <= Date.parse(state.deletedSessions.get(event.session_id))) {
       jsonResponse(response, 202, { accepted: true });

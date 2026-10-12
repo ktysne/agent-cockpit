@@ -3,7 +3,29 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { MAX_TRANSCRIPT_BYTES, estimateTranscript, readTaskNotifications } = require('../src/server/transcript');
+const { MAX_TRANSCRIPT_BYTES, estimateTranscript, readTaskNotifications, readSessionModel } = require('../src/server/transcript');
+
+test('モデルは最後のメインの assistant 行から読み、sidechain と synthetic を飛ばす', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const records = [
+    { type: 'assistant', message: { model: 'claude-sonnet-5-5' } },
+    { type: 'assistant', message: { model: 'claude-opus-5-5' } },
+    { type: 'user', message: { model: 'user-model' } },
+    { type: 'assistant', isSidechain: true, message: { model: 'sidechain-model' } },
+    { type: 'assistant', message: { model: '<synthetic>' } },
+  ];
+  await fs.writeFile(fixture.filePath, records.map(record => JSON.stringify(record)).join('\n'));
+  assert.equal(await readSessionModel(fixture.claudeHome, fixture.cwd, fixture.sessionId), 'claude-opus-5-5');
+});
+
+test('モデルを持つ応答が末尾に無いか記録を読めないときは null を返す', async (t) => {
+  const fixture = await transcriptFixture(t);
+  assert.equal(await readSessionModel(fixture.claudeHome, fixture.cwd, fixture.sessionId), null);
+  await fs.writeFile(fixture.filePath, JSON.stringify({ type: 'assistant', message: { model: 'old-model' } }) + '\n' + 'x'.repeat(MAX_TRANSCRIPT_BYTES));
+  assert.equal(await readSessionModel(fixture.claudeHome, fixture.cwd, fixture.sessionId), null);
+  await fs.writeFile(fixture.filePath, '{invalid}\n' + JSON.stringify({ type: 'assistant', message: { model: '<synthetic>' } }));
+  assert.equal(await readSessionModel(fixture.claudeHome, fixture.cwd, fixture.sessionId), null);
+});
 const { temporaryDirectory } = require('./support/temp');
 
 const notification = (id, status) => `<task-notification>\n<task-id>${id}</task-id>\n<status>${status}</status>\n</task-notification>`;

@@ -147,4 +147,23 @@ async function readTaskNotifications(claudeHome, cwd, sessionId, fileSystem = fs
   return notifications;
 }
 
-module.exports = { MAX_TRANSCRIPT_BYTES, estimateTranscript, transcriptPathFor, readTaskNotifications };
+async function readSessionModel(claudeHome, cwd, sessionId, fileSystem = fs) {
+  const filePath = transcriptPathFor(claudeHome, cwd, sessionId);
+  if (!filePath) return null;
+  try {
+    const tail = await readTail(fileSystem, filePath);
+    if (!tail) return null;
+    const lines = tail.text.split(/\r?\n/);
+    if (tail.startedMidFile) lines.shift();
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      let record;
+      try { record = JSON.parse(lines[index]); } catch { continue; }
+      const model = record?.message?.model;
+      if (record?.type === 'assistant' && record.isSidechain !== true &&
+        typeof model === 'string' && model && model !== '<synthetic>') return model;
+    }
+  } catch {}
+  return null;
+}
+
+module.exports = { MAX_TRANSCRIPT_BYTES, estimateTranscript, transcriptPathFor, readTaskNotifications, readSessionModel };

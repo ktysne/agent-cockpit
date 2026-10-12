@@ -8,7 +8,7 @@ const { RoutingState } = require('./routing');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers');
-const { readTaskNotifications } = require('./transcript');
+const { readTaskNotifications, readSessionModel } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { isShortSessionId } = require('./session-ids');
 const { listLiveSessionFiles, findLiveSessionIdByPid, processIsAlive } = require('./session-files');
@@ -278,6 +278,7 @@ function createRequestHandler(options) {
     openExternalUrl,
     webPath,
     scheduleTaskNotifications: (sessionId) => options.scheduleTaskNotifications?.(sessionId),
+    scheduleSessionModel: (event) => options.scheduleSessionModel?.(event),
   };
   const { handleHealth, handleState, handleContext, handleDevFields, handleIndex } = createReadRoutes(ctx);
   const { handleHookAnswers, handleEvents, handlePlan, handleSessionPullRequests } = createHookRoutes(ctx);
@@ -439,6 +440,35 @@ async function startServer(options = {}) {
   const notificationTimers = new Map();
   const notificationReads = new Map();
   const notificationReader = options.readTaskNotifications || readTaskNotifications;
+  const modelTimers = new Map();
+  const modelReads = new Map();
+  const observedModelSessions = new Map();
+  const modelReader = options.readSessionModel || readSessionModel;
+  function scheduleSessionModel(event) {
+    const sessionId = event.session_id;
+    const known = state.sessions.has(sessionId) || Boolean(state.sessionFileFor(sessionId));
+    if (closing || !known || state.providerForSession(sessionId) === 'codex' || event.agent_id) return;
+    const cwd = state.sessionFileFor(sessionId)?.cwd;
+    const firstSeen = !observedModelSessions.has(sessionId) || observedModelSessions.get(sessionId) !== cwd;
+    observedModelSessions.set(sessionId, cwd);
+    if (!firstSeen && !['Stop', 'SessionStart'].includes(event.hook_event_name)) return;
+    if (modelTimers.has(sessionId)) return;
+    const timer = setTimeout(async () => {
+      await modelReads.get(sessionId);
+      modelTimers.delete(sessionId);
+      if (closing) return;
+      const reading = (async () => {
+        try {
+          const model = await modelReader(claudeHome, state.sessionFileFor(sessionId)?.cwd, sessionId);
+          if (!closing) state.recordSessionModel(sessionId, model);
+        } catch {}
+      })().finally(() => modelReads.delete(sessionId));
+      modelReads.set(sessionId, reading);
+      await reading;
+    }, options.sessionModelDelayMs ?? 500);
+    timer.unref();
+    modelTimers.set(sessionId, timer);
+  }
   function needsTaskNotifications(sessionId) {
     const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
     return session?.provider !== 'codex' && session?.status === '待機中(サブエージェント稼働中)'
@@ -490,6 +520,7 @@ async function startServer(options = {}) {
     manualDir: options.manualDir,
     dev,
     scheduleTaskNotifications,
+    scheduleSessionModel,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
   });
@@ -522,6 +553,7 @@ async function startServer(options = {}) {
       .map((file) => ({ ...file, product: productFromCwd(file.cwd) })), now, { codexOnly: files === null });
     // Claude の一覧を読めないときは生死を保留し、保存の期限切れの片付けだけを進める。
     if (!files) state.pruneExpiredStoreRecords(now);
+    for (const session of state.snapshot().sessions) scheduleSessionModel(session);
   }
   await refreshSessionFiles().catch(() => {});
   for (const session of state.snapshot().sessions) scheduleTaskNotifications(session.session_id);
@@ -549,6 +581,9 @@ async function startServer(options = {}) {
       clearInterval(notificationTimer);
       for (const timer of notificationTimers.values()) clearTimeout(timer);
       notificationTimers.clear();
+      for (const timer of modelTimers.values()) clearTimeout(timer);
+      modelTimers.clear();
+      await Promise.all(modelReads.values());
       await Promise.all(notificationReads.values());
       answerDelivery.close();
       pullRequestMergeManager.close?.();

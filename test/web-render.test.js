@@ -4332,6 +4332,21 @@ test('非対話の実行中の行は状態名と時刻と API の札を出し、
   const interactive = context.mainRow({ ...session, nonInteractive: undefined, sessionFileUpdatedAt: null }, product);
   assert.deepEqual(interactive.children.map((child) => child.className), ['who', 'session-extra']);
   assert.equal(interactive.children[0].children.at(-1).textContent, '状態不明 (時刻不明)');
+  const interactiveNamed = context.mainRow({ ...session, nonInteractive: undefined, modelName: 'Opus 5.5' }, product);
+  const detail = interactiveNamed.children.find(child => child.className === 'detail');
+  assert.equal(detail.children[0].children[0].textContent, 'Claude Opus 5.5');
+});
+
+test('対話の Claude のモデルの札は名前があるときだけ出す', () => {
+  const node = (textContent = '') => ({ textContent, children: [], append(...children) { this.children.push(...children); } });
+  const context = pageContext(pageHtml, { element: (tag, className, text) => node(text) });
+  vm.runInContext(functionSource(pageHtml, 'appendSessionModelLine'), context);
+  for (const modelName of ['Opus 5.5', undefined]) {
+    const target = node();
+    context.appendSessionModelLine(target, { provider: 'claude', modelName });
+    if (modelName) assert.equal(target.children[0].children[0].textContent, 'Claude Opus 5.5');
+    else assert.equal(target.children.length, 0);
+  }
 });
 
 test('モックの非対話の行は稼働中の札で出し、状態推定と一覧からの除外を出さない', () => {
@@ -4359,6 +4374,12 @@ test('モックの非対話の行は稼働中の札で出し、状態推定と�
   const unknown = context.mainRow({}, { id: 'unknown', status: 'unknown', tasks: [], main: {} }, false);
   assert.match(unknown, /<strong>状態不明 \(時刻不明\)<\/strong>/);
   assert.match(unknown, /状態を推定/);
+  assert.doesNotMatch(unknown, /class="models"/);
+  const named = context.mainRow({}, { id: 'named', status: 'wait', modelName: 'Opus 5.5', tasks: [], main: {} }, false);
+  assert.match(named, /<span class="model claude">Claude Opus 5.5<\/span>/);
+  const namedNonInteractive = context.mainRow({}, { id: 'named-batch', status: 'unknown', nonInteractive: true,
+    modelName: 'Sonnet 5.5', tasks: [], main: {} }, false);
+  assert.match(namedNonInteractive, /<span class="model claude">Claude Sonnet 5.5<\/span>/);
 });
 
 test('非対話で状態が不明の行は更新時刻が古くても更新の無い帯へ隠さず、対話の不明な行は従来どおり隠す', () => {
