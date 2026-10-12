@@ -362,7 +362,26 @@ Claude の登録との違いと、timeout の値の理由は次のとおりで�
 [mcp_servers.agent-cockpit]
 command = "node"
 args = ["D:/path/to/agent-cockpit/src/mcp/server.js"]
+
+[mcp_servers.agent-cockpit.tools.cockpit_set_tasks]
+approval_mode = "approve"
+
+[mcp_servers.agent-cockpit.tools.cockpit_add_decision]
+approval_mode = "approve"
+
+[mcp_servers.agent-cockpit.tools.cockpit_update_decision]
+approval_mode = "approve"
+
+[mcp_servers.agent-cockpit.tools.cockpit_add_pr]
+approval_mode = "approve"
+
+[mcp_servers.agent-cockpit.tools.cockpit_skip_review]
+approval_mode = "approve"
 ```
+
+各ツールの `approval_mode = "approve"` は、呼び出しのたびに許可を求めないための設定です。
+許可を求める設定のままだと、離席中にタスクや判断事項の記録が許可待ちで止まります。
+どのツールも、ダッシュボードにタスク、判断事項、PR を記録するだけで、ファイルやコマンドには触れません。
 
 ### 3. フックを信頼する
 
