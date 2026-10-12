@@ -1236,8 +1236,9 @@ function routeTag(agent) {
   return tag;
 }
 
-// 非対話の Claude にモデル名が無いときは、API として札に出す。
+// Claude のモデル名が不明なときは、非対話の実行だけ API の札を出す。
 function appendSessionModelLine(target, session) {
+  if (session.provider !== 'codex' && !session.modelName && !session.nonInteractive) return;
   const models = element('div', 'models');
   if (session.provider === 'codex') {
     models.append(element('span', 'model gpt', `Codex ${session.codex?.model || ''}`));
@@ -2587,7 +2588,7 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
   const detail = element('div', 'detail');
   if (doingTask) detail.append(element('div', 'activity-title', doingTask.title));
   if (mainTool) appendToolLine(detail, mainTool);
-  if (session.nonInteractive || session.provider === 'codex') appendSessionModelLine(detail, session);
+  if (session.nonInteractive || session.provider === 'codex' || session.modelName) appendSessionModelLine(detail, session);
   row.append(who);
   if (!isUnknown) {
     // 非対話の行は hook の時刻が無いことがあるので、セッションファイルの更新時刻で代える。

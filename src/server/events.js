@@ -153,6 +153,7 @@ function sanitizeEvent(input, metadata = {}) {
   };
 
   if (eventName === 'SessionStart') event.source = shortString(input.source, 100) || '';
+  if (event.provider !== 'codex' && eventName === 'SessionStart') event.model = shortString(input.model, 160) || '';
 
   const agentId = shortString(input.agent_id, 256);
   const agentType = shortString(input.agent_type, 200);

@@ -550,7 +550,7 @@ const DATA = {
       ],
       extraSessions: [
         {
-          id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'busy', branch: 'feat/tempo-map-test',
+          id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'busy', modelName: 'Opus 5.5', branch: 'feat/tempo-map-test',
           main: { tool: 'Bash: npm test -- tempo-map', since: '1 分前' },
           perms: [{ id: 'rs-p1', who: 'メイン', tool: 'Bash', detail: 'npm test -- tempo-map', waitMin: 1 }],
           subagents: [{ type: 'test-writer', text: 'テンポ変換の境界値を確認', since: '2 分前', state: 'busy', sinceMin: 2,
@@ -1332,8 +1332,8 @@ function mainRow(p, session, withTag) {
   const stateClass = nonInteractiveUnknown ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
   const resumes = session.codex?.resumes ? `<span class="route-tag" title="同じ会話を再開しても 1 行にまとめて表示する">再開 ${session.codex.resumes} 回</span>` : '';
-  const model = nonInteractive ? '<div class="models"><span class="model claude">Claude (API)</span></div>'
-    : session.codex ? `<div class="models"><span class="model gpt">Codex ${esc(session.codex.model)}</span>${resumes}</div>` : '';
+  const model = session.codex ? `<div class="models"><span class="model gpt">Codex ${esc(session.codex.model)}</span>${resumes}</div>`
+    : session.modelName || nonInteractive ? `<div class="models"><span class="model claude">${session.modelName ? `Claude ${esc(session.modelName)}` : 'Claude (API)'}</span></div>` : '';
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}${model}`;
   return `<div class="now-row main-row">
       <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<strong>${status}</strong></div>

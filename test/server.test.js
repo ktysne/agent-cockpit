@@ -15,6 +15,67 @@ const {
 const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
+test('Claude の SessionStart と Stop の後にモデルを読み、読めないときは前の札を保つ', async (t) => {
+  const state = new DashboardState();
+  const reads = [];
+  let model = 'claude-opus-5-5';
+  const runtime = await runningServer(t, { state, sessionModelDelayMs: 1,
+    readSessionModel: async (home, cwd, id) => { reads.push({ cwd, id }); return model && { model, at: Date.now() }; },
+  });
+  state.syncSessionFiles([{ session_id: 'main-model', cwd: runtime.homeDir }]);
+  const send = async hook_event_name => request(runtime.info.port, {
+    method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({ session_id: 'main-model', hook_event_name, model: 'claude-sonnet-5-5' }),
+  });
+  await send('SessionStart');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(state.snapshot().sessions[0].modelName, 'Opus 5.5');
+  model = 'claude-sonnet-5-5';
+  await send('Stop');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(state.snapshot().sessions[0].modelName, 'Sonnet 5.5');
+  model = null;
+  await send('Stop');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(state.snapshot().sessions[0].modelName, 'Sonnet 5.5');
+  assert.deepEqual(reads, Array(3).fill({ cwd: runtime.homeDir, id: 'main-model' }));
+});
+
+test('サーバー起動時に見える Claude のモデルを読み、Codex は読まない', async (t) => {
+  const state = new DashboardState();
+  for (const provider of ['claude', 'codex']) state.addEvent({ session_id: provider, provider, hook_event_name: 'SessionStart' });
+  const reads = [];
+  await runningServer(t, { state, sessionModelDelayMs: 1,
+    readSessionModel: async (home, cwd, id) => { reads.push(id); return { model: 'claude-opus-5-5', at: Date.now() }; },
+  });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.deepEqual(reads, ['claude']);
+  assert.equal(state.snapshot().sessions.find(session => session.session_id === 'claude').modelName, 'Opus 5.5');
+});
+
+test('モデルの読み取り中の Stop は同じセッションの読み取りを重ねずに再読する', async (t) => {
+  const state = new DashboardState();
+  let release;
+  let started;
+  const firstStarted = new Promise(resolve => { started = resolve; });
+  let reads = 0;
+  let active = 0;
+  let maxActive = 0;
+  const runtime = await runningServer(t, { state, sessionModelDelayMs: 1, readSessionModel: async () => {
+    reads += 1; active += 1; maxActive = Math.max(maxActive, active);
+    if (reads === 1) { started(); await new Promise(resolve => { release = resolve; }); }
+    active -= 1; return { model: 'claude-opus-5-5', at: Date.now() };
+  } });
+  const send = () => request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({ session_id: 'serial-model', hook_event_name: 'Stop' }) });
+  await send(); await firstStarted;
+  await send(); await send();
+  release();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(reads, 2);
+  assert.equal(maxActive, 1);
+});
+
 test('待機中で稼働中の Claude サブエージェントがあるセッションだけ、メインのイベントの後に記録を読む', async (t) => {
   const state = new DashboardState();
   const reads = [];

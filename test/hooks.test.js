@@ -15,6 +15,15 @@ const {
 } = require('../src/hooks/event');
 const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
+
+test('Claude の SessionStart の文字列のモデルだけを初期値として送る', () => {
+  for (const model of ['claude-opus-5-5', undefined, 42]) {
+    const event = makeHookEvent({ session_id: 'claude-model', hook_event_name: 'SessionStart', model });
+    assert.equal(sanitizeEvent(event).model, typeof model === 'string' ? model : '');
+  }
+  const event = makeHookEvent({ session_id: 'claude-model', hook_event_name: 'Stop', model: 'ignored' });
+  assert.equal(event.model, undefined);
+});
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
 async function temporaryHome(testContext) {
