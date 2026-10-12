@@ -167,6 +167,22 @@ function sanitizeEvent(input, metadata = {}) {
       event.tool_name = shortString(input.tool_name, 100) || '';
       if (eventName !== 'PermissionRequest') event.tool_use_id = shortString(input.tool_use_id, 256) || '';
       if (['PreToolUse', 'PermissionRequest'].includes(eventName)) event.summary = shortString(input.summary, 80) || event.tool_name;
+      if (eventName === 'PreToolUse') {
+        if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;
+        if (input.refreshPullRequestsCommand === true) event.refreshPullRequestsCommand = true;
+      }
+      if (['PostToolUse', 'PostToolUseFailure'].includes(eventName)) {
+        if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;
+        if (input.refreshPullRequests === true) event.refreshPullRequests = true;
+      }
+      if (eventName === 'PostToolUse') {
+        if (event.tool_name === 'Bash' && typeof input.commandCwd === 'string' && input.commandCwd.length <= 4096 && path.isAbsolute(input.commandCwd)) {
+          event.commandCwd = input.commandCwd;
+        }
+        const pullRequest = parsePullRequestUrl(input.pullRequest?.url);
+        if (pullRequest && input.pullRequest.owner === pullRequest.owner && input.pullRequest.repo === pullRequest.repo &&
+          input.pullRequest.number === pullRequest.number) event.pullRequest = pullRequest;
+      }
       if (eventName === 'PreToolUse' && isQuestionTool('codex', event.tool_name) && !agentId) {
         event.questions = sanitizeCodexQuestions(event.tool_name, input.questions);
       }

@@ -1512,7 +1512,9 @@ class PullRequestTracker {
         mergeMethods: [...group.mergeMethods],
         mergeableCount: mergeablePullRequestCount(trees),
         trees,
-        merged: structuredClone(group.merged),
+        merged: group.merged.map((pullRequest) => ({
+          ...structuredClone(pullRequest), providers: this.state.pullRequestProviders(group.owner, group.repo, pullRequest.number),
+        })),
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
         reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(group.owner, group.repo, this.now()),
         reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
@@ -1563,6 +1565,7 @@ function attachMergeState(pullRequest, registrations, owner, repo, state) {
     canMerge: mergeIntent ? false : pullRequest.canMerge,
     mergeSessionId: registration?.session_id || pullRequest.mergeSessionId || null,
     mergeRecordKey: registration ? state.pullRequestRegistrationKey(registration) : pullRequest.mergeRecordKey || null,
+    providers: ['claude', 'codex'].filter((provider) => conflictRegistrations.some((record) => record.provider === provider)),
     conflictRequestKey: conflictRegistrations.length ? state.pullRequestRegistrationKey(conflictRegistrations[0]) : null,
     conflictRequestTargets: conflictRegistrations.map((record) => ({
       sessionId: record.session_id,

@@ -324,8 +324,23 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     event.tool_use_id = pickString(input.tool_use_id);
     if (eventName === 'PreToolUse') {
       event.summary = inputSummary(event.tool_name, input.tool_input);
+      if (event.tool_name === 'Bash') {
+        const command = pickString(input.tool_input?.command);
+        if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
+        if (shouldRefreshPullRequests(command)) event.refreshPullRequestsCommand = true;
+      }
       if (isQuestionTool('codex', event.tool_name) && !input.agent_id) {
         event.questions = sanitizeCodexQuestions(event.tool_name, input.tool_input?.questions);
+      }
+    } else if (event.tool_name === 'Bash') {
+      const command = pickString(input.tool_input?.command);
+      if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
+      if (shouldRefreshPullRequests(command)) event.refreshPullRequests = true;
+      const pullRequest = eventName === 'PostToolUse' ? firstPullRequestUrl(input.tool_response) : null;
+      if (pullRequest) {
+        event.pullRequest = pullRequest;
+        const commandCwd = pullRequestCommandCwd(command, input.cwd);
+        if (commandCwd) event.commandCwd = commandCwd;
       }
     }
   } else if (eventName === 'PreToolUse') {
