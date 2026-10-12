@@ -2,11 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { runAnswerHook } = require('../src/hooks/answer');
 const { runAwayHook } = require('../src/hooks/away');
-const { jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
+const { runHook } = require('../src/hooks/event');
+const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
 
 const QUESTIONS = [{ title: '保存の形式は', options: ['JSON', 'CSV'] }];
 
-async function fixture(t, { answerWaitMs = 1000 } = {}) {
+async function fixture(t, { answerWaitMs = 1000, toolName = 'request_user_input_async' } = {}) {
   let now = Date.now();
   let fetchCount = 0;
   let away = true;
@@ -31,9 +32,12 @@ async function fixture(t, { answerWaitMs = 1000 } = {}) {
   const askForAnswer = async () => runAwayHook({
     session_id: 'thread',
     hook_event_name: 'PreToolUse',
-    tool_name: 'request_user_input_async',
+    tool_name: toolName,
     tool_use_id: 'ask-1',
-    tool_input: { questions: QUESTIONS },
+    tool_input: { questions: toolName === 'request_user_input_async' ? QUESTIONS : [{
+      id: 'format', header: '形式', question: '保存の形式は',
+      options: [{ label: 'JSON (Recommended)', description: '構造を保つ' }, { label: 'CSV', description: '表で読む' }],
+    }] },
   }, {
     homeDir: c.homeDir,
     provider: 'codex',
@@ -61,6 +65,11 @@ async function fixture(t, { answerWaitMs = 1000 } = {}) {
     askForAnswer,
     answer,
     run,
+    event: (fields) => runHook({ session_id: 'thread', ...fields }, {
+      homeDir: c.homeDir, provider: 'codex', now, fetchImpl: fetchToServer(), environment: {},
+    }),
+    snapshotDecision: async () => jsonBody(await request(c.info.port, { path: '/api/state' }))
+      .sessions.find((session) => session.session_id === 'thread').decisions[0],
     decision: () => c.runtime.state.decisionsFor('thread')[0],
     now: () => now,
     advance: (milliseconds) => { now += milliseconds; },
@@ -98,6 +107,67 @@ test('期限後の回答は次の UserPromptSubmit の additionalContext に入�
   assert.match(result.output.hookSpecificOutput.additionalContext, /「保存の形式は」は「CSV」/);
   assert.ok(c.decision().answer.deliveredAt);
   assert.equal(c.decision().answer.promptDeliveries, 1);
+});
+
+for (const toolName of ['request_user_input_async', 'request_user_input']) {
+  for (const eventFirst of [true, false]) {
+    test(`${toolName} の期限後の回答は入力の${eventFirst ? 'イベント' : '回答'}フックが先でも届き、元の画面で回答済みにならない`, async (t) => {
+      const c = await fixture(t, { toolName });
+      await createLateAnswer(c);
+      c.returnFromAway();
+      c.advance(5);
+      const input = { hook_event_name: 'UserPromptSubmit' };
+      if (eventFirst) await c.event(input);
+      const result = await c.run(input);
+      if (!eventFirst) await c.event(input);
+
+      assert.match(result.output.hookSpecificOutput.additionalContext, /「保存の形式は」は「CSV」/);
+      assert.equal(result.output.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+      await c.event({ hook_event_name: 'Stop' });
+      const decision = await c.snapshotDecision();
+      assert.equal(decision.state, 'provisional');
+      assert.equal(decision.resolution, null);
+      assert.ok(decision.answer.deliveredAt);
+      assert.equal(decision.answer.promptDeliveries, 1);
+    });
+  }
+
+  test(`${toolName} の離席中の仮適用は回答がなくても次の入力で閉じない`, async (t) => {
+    const c = await fixture(t, { toolName });
+    await c.askForAnswer();
+    c.returnFromAway();
+    c.advance(5);
+    await c.event({ hook_event_name: 'UserPromptSubmit' });
+    assert.equal((await c.run({ hook_event_name: 'UserPromptSubmit' })).output, null);
+
+    const decision = await c.snapshotDecision();
+    assert.equal(decision.state, 'provisional');
+    assert.equal(decision.resolution, null);
+    assert.ok(decision.provisionalAt);
+  });
+}
+
+test('期限後の回答を反映して解決済みにした判断事項はイベントの再派生後も回答内容を保つ', async (t) => {
+  const c = await fixture(t);
+  await createLateAnswer(c);
+  c.returnFromAway();
+  c.advance(5);
+  await c.event({ hook_event_name: 'UserPromptSubmit' });
+  await c.run({ hook_event_name: 'UserPromptSubmit' });
+  const response = await request(c.info.port, {
+    method: 'POST', path: '/api/sessions/thread/plan', headers: hookHeaders(c.info.secret),
+    body: JSON.stringify({ kind: 'update_decision', id: c.decision().id,
+      state: 'resolved', chosen: ['CSV'], note: 'CSVを使う' }),
+  });
+  assert.equal(response.status, 200);
+  c.advance(5);
+  await c.event({ hook_event_name: 'UserPromptSubmit' });
+  await c.event({ hook_event_name: 'Stop' });
+
+  const decision = await c.snapshotDecision();
+  assert.equal(decision.state, 'resolved');
+  assert.deepEqual(decision.resolution, { chosen: ['CSV'], note: 'CSVを使う' });
+  assert.ok(decision.answer.reflectedAt);
 });
 
 test('在席中、未配信の回答がある Stop は一度だけ block する', async (t) => {

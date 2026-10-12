@@ -593,13 +593,13 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>}} SessionCodex */
 
-/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>}} SessionDecisions */
+/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>}} SessionDecisions */
 
 /** @typedef {{permissionWaits: PermissionWait[]}} SessionPermissions */
 
 /** @typedef {SessionIdentity & SessionTools & SessionAgents & SessionCodex & SessionDecisions & SessionPermissions} DerivedSession */
 
-/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[]}} AskDecisionState */
+/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[], awayHandledIds?: string[]}} AskDecisionState */
 
 /** @returns {DerivedSession} */
 function newSession(event, askDecisionState = {}) {
@@ -618,6 +618,7 @@ function newSession(event, askDecisionState = {}) {
     permissionWaits: [],
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
+    awayHandledIds: new Set(askDecisionState.awayHandledIds || []),
     codexQuestionTools: Object.create(null),
     startedAskToolUseIds: new Set(),
     stopped: false,
@@ -763,6 +764,7 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   return {
     decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
     bindings: askDecisionState.bindings || {},
+    awayHandledIds: askDecisionState.awayHandledIds || [],
   };
 }
 
@@ -1224,6 +1226,8 @@ function applySessionLifecycle(session, event) {
     // すぐ戻る質問は次の入力を元の画面での回答とみなす。待つ質問は結果が来ないまま入力が届いたら、Claude の中断と同じく取り下げにする。
     // ツールの種類は保存しないので、再起動の前の質問はすぐ戻る質問として扱う。
     for (const decision of session.decisions) {
+      // 離席中にフックで扱った質問は元の画面に出ないため、次の入力で閉じない。
+      if (session.awayHandledIds.has(decision.id)) continue;
       if (decision.source !== 'ask' || decision.state !== 'waiting' || event.hookAt <= Date.parse(decision.updatedAt)) continue;
       const tool = session.codexQuestionTools[decision.id] || 'request_user_input_async';
       const answered = tool === 'request_user_input_async';
@@ -2428,6 +2432,10 @@ class DashboardState {
         .filter((decision) => decision.source === 'ask').map(cloneDecision),
       bindings: Object.fromEntries(this.askDecisionBindings.get(sessionId) || []),
       finishedOutsideEventsIds: [...(this.finishedOutsideEventsAskDecisionIds.get(sessionId) || [])],
+      awayHandledIds: [...(this.decisionLifecycles.get(sessionId) || [])]
+        .filter(([, lifecycle]) => lifecycle.awaitingAnswerUntil || lifecycle.provisionalAt ||
+          lifecycle.state === 'provisional' || lifecycle.answer?.sentAt)
+        .map(([id]) => id),
     };
   }
 

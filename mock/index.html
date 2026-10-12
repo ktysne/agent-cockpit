@@ -31,6 +31,8 @@
   --on-danger: #ffffff;
   --origin-claude: #d9480f;
   --origin-codex: #4c3fe0;
+  --origin-codex-soft: #ecebfd;
+  --origin-codex-text: #4c3fe0;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -40,7 +42,7 @@
     --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
     --ok: #8cc391; --ok-soft: #233526;
-    --origin-claude: #f08c4f; --origin-codex: #9d97ff;
+    --origin-claude: #f08c4f; --origin-codex: #9d97ff; --origin-codex-soft: #2a2747; --origin-codex-text: #b9b5ff;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
   }
 }
@@ -50,7 +52,7 @@
   --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
   --ok: #8cc391; --ok-soft: #233526;
-  --origin-claude: #f08c4f; --origin-codex: #9d97ff;
+  --origin-claude: #f08c4f; --origin-codex: #9d97ff; --origin-codex-soft: #2a2747; --origin-codex-text: #b9b5ff;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
 }
 * { box-sizing: border-box; }
@@ -134,6 +136,7 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .meta { color: var(--text-2); font-size: 12px; }
 .session-group { border-left: 2px solid var(--border); padding: 8px 0 0 12px; margin-top: 8px; }
 .session-group.single { border-left: 0; padding: 0; margin-top: 0; }
+.origin-codex { --accent: var(--origin-codex); --accent-soft: var(--origin-codex-soft); --accent-text: var(--origin-codex-text); }
 .session-group:not(.single).origin-claude { border-left-color: var(--origin-claude); }
 .session-group:not(.single).origin-codex { border-left-color: var(--origin-codex); }
 .session-group.single.origin-claude .session-context { border-left: 3px solid var(--origin-claude); }
@@ -1511,7 +1514,7 @@ function decisionCard(p, session, d, withTag) {
     !active && !viaDialog ? sentLine : '',
   ].filter(Boolean).join('');
   const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${viaDialog ? '' : `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>`}` : state === 'provisional' ? `<span class="wait">仮適用から ${durationLabel(Date.now() - d.waitMin * 60_000)}</span>` : '';
-  return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}" data-session-id="${esc(session.id)}">
+  return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''} ${session.provider === 'codex' ? 'origin-codex' : ''}" data-id="${d.id}" data-session-id="${esc(session.id)}">
     <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
     <div class="ctx">${esc(d.ctx)}</div>
     <ul class="options">${d.options.map((o, i) => {
