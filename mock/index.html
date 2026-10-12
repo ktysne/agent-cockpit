@@ -30,7 +30,7 @@
   --on-ok: #000000;
   --on-danger: #ffffff;
   --origin-claude: #d9480f;
-  --origin-codex: #2b8a3e;
+  --origin-codex: #4c3fe0;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -40,7 +40,7 @@
     --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
     --ok: #8cc391; --ok-soft: #233526;
-    --origin-claude: #f08c4f; --origin-codex: #8cc391;
+    --origin-claude: #f08c4f; --origin-codex: #9d97ff;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
   }
 }
@@ -50,7 +50,7 @@
   --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
   --ok: #8cc391; --ok-soft: #233526;
-  --origin-claude: #f08c4f; --origin-codex: #8cc391;
+  --origin-claude: #f08c4f; --origin-codex: #9d97ff;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
 }
 * { box-sizing: border-box; }
@@ -1234,15 +1234,15 @@ function renderSummary() {
   idle.hidden = idleHiddenCount === 0 && !recordDeletionConfirmations.has('idle');
 }
 
-// Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
+// Claude のモデルが分からないサブエージェントでも、Codex の札だけは出す。
 function modelLine(s, lead = '') {
   if (s.codexModel) return `<div class="models">${lead}<span class="model gpt">Codex ${esc(s.codexModel)}</span></div>`;
   if (!s.model && !s.gpt && !lead) return '';
   const claude = s.model ? `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>` : '';
   const arrow = s.model ? '<span class="arrow">→</span>' : '';
   let gpt = '';
-  if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
-  else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
+  if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">Codex 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
+  else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">Codex ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
   return `<div class="models">${lead}${claude}${gpt}</div>`;
 }
 

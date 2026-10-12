@@ -10,7 +10,7 @@
   --bg: #f4f5f7; --surface: #ffffff; --surface-2: #f8f9fb; --border: #dfe2e8;
   --text: #1d2129; --text-2: #5b6372; --ok: #2b8a3e; --ok-soft: #e3f6e8; --warn-soft: #fff1df;
   --origin-claude: #d9480f; --origin-claude-soft: #fff1e6;
-  --origin-codex: #2b8a3e; --origin-codex-soft: #e9f7ec;
+  --origin-codex: #4c3fe0; --origin-codex-soft: #ecebfd;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -19,7 +19,7 @@
     --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
     --text: #faf9f5; --text-2: #b7b5a9; --ok: #8cc391; --ok-soft: #233526; --warn-soft: #3d3220;
     --origin-claude: #f08c4f; --origin-claude-soft: #3a2a20;
-    --origin-codex: #8cc391; --origin-codex-soft: #22322a;
+    --origin-codex: #9d97ff; --origin-codex-soft: #2a2747;
   }
 }
 :root[data-theme="dark"] {
@@ -27,7 +27,7 @@
   --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
   --text: #faf9f5; --text-2: #b7b5a9; --ok: #8cc391; --ok-soft: #233526; --warn-soft: #3d3220;
   --origin-claude: #f08c4f; --origin-claude-soft: #3a2a20;
-  --origin-codex: #8cc391; --origin-codex-soft: #22322a;
+  --origin-codex: #9d97ff; --origin-codex-soft: #2a2747;
 }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font: 14px/1.6 system-ui, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif; }
@@ -92,7 +92,7 @@ p.lead, p.note { color: var(--text-2); margin: 0 0 12px; }
 <body>
 <main>
   <h1>起点の色分けの案</h1>
-  <p class="lead">画面に出す情報が Claude 起点か Codex 起点かを色で見分ける案である。色は既存のモデルの札にそろえ、Claude を橙、Codex を緑にする。同じ PR を両方が登録したときは 2 色を並べる。</p>
+  <p class="lead">画面に出す情報が Claude 起点か Codex 起点かを色で見分ける案である。Claude は橙、Codex は Codex のアイコンに合わせた青紫にする。同じ PR を両方が登録したときは 2 色を並べる。</p>
   <div class="toolbar" role="group" aria-label="配色">
     <button type="button" data-theme-choice="">端末に合わせる</button>
     <button type="button" data-theme-choice="light">明るい</button>

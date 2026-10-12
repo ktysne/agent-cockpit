@@ -28,7 +28,7 @@
   --ok-text: #236b31;
   --ok-soft: #e3f6e8;
   --origin-claude: #d9480f;
-  --origin-codex: #2b8a3e;
+  --origin-codex: #4c3fe0;
   --on-accent: #ffffff;
   --accent-text: #3b5bdb;
   --on-ok: #000000;
@@ -42,7 +42,7 @@
     --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
     --ok: #8cc391; --ok-soft: #233526;
-    --origin-claude: #f08c4f; --origin-codex: #8cc391;
+    --origin-claude: #f08c4f; --origin-codex: #9d97ff;
     --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
   }
 }
@@ -52,7 +52,7 @@
   --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
   --ok: #8cc391; --ok-soft: #233526;
-  --origin-claude: #f08c4f; --origin-codex: #8cc391;
+  --origin-claude: #f08c4f; --origin-codex: #9d97ff;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
 }
 * { box-sizing: border-box; }
@@ -1272,7 +1272,7 @@ function appendModelLine(target, agent, provider = 'claude') {
   }
   if (gpt?.model || gpt?.unavailable) {
     if (claudeModel) models.append(element('span', 'arrow', '→'));
-    const gptLabel = gpt.unavailable ? 'GPT 不使用' : `GPT ${gpt.model}`;
+    const gptLabel = gpt.unavailable ? 'Codex 不使用' : `Codex ${gpt.model}`;
     const gptBadge = element('span', `model ${gpt.unavailable ? 'off' : 'gpt'}`, gptLabel);
     if (gpt.unavailable) gptBadge.append(element('i', '', gpt.unavailable));
     else if (gpt.effort) gptBadge.append(element('i', '', `effort ${gpt.effort}`));
