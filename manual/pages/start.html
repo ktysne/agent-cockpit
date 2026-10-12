@@ -43,13 +43,14 @@
 
   <h2 id="start-integrations">連携ツールの有無で変わる表示</h2>
   <p>Agent Cockpit は、単独で使えます。
-  次の 3 つのツールを入れていると、表示と操作が増えます。
+  次の 4 つのツールを入れていると、表示と操作が増えます。
   入れていなくても、エラーや警告は出ません。
   入れたり外したりした後は、画面を開き直さなくても、遅くとも 1 分ほどで表示が変わります。</p>
   <ul>
     <li><b>GitHub CLI(<code>gh</code>)</b>：セッションが作った PR を、スタックの形で、CI やレビューの状態と一緒に表示します。スタックの一番下の PR を、画面でマージできます。<code>gh</code> が使えないと、PR の状態を取得できず、登録した PR の欄に赤いエラーが出ます(<a href="pull-requests.html#pr-fetch-error">GitHub CLI が使えないとき</a>)</li>
     <li><b>claude-codex-bridge</b>：サブエージェントを、Codex と Claude のどちらで動かすかを選べます。<span class="ui">サブエージェント</span> の経路の段と、サブエージェントの行の経路の札、Codex のモデルの表示が出ます(<a href="routing.html">経路の設定</a>、<a href="work.html#work-agent-route">経路の札</a>)</li>
     <li><b>ai-cross-review</b>：PR のカードにクロスレビューの往復と結論が出て、レビュー収束後マージの予約と、レビュー不要の記録ができます。<span class="ui">クロスレビュー</span> の経路の段も出ます(<a href="pull-requests.html#pr-cross-review">クロスレビューの行</a>、<a href="routing.html">経路の設定</a>)</li>
+    <li><b>Codex</b>：Codex(CLI とデスクトップ)のセッションも、Claude のセッションと同じように一覧に出ます。判断事項への回答、離席中の推奨の適用、PR の登録も同じように動きます。Claude 起点の情報は橙、Codex 起点の情報は緑の色帯で見分けます(<a href="screen.html#screen-product-card">プロダクトのカード</a>)</li>
   </ul>
   <p>連携ツールそのものの導入は、それぞれのツールのドキュメントに従ってください。
   Agent Cockpit 側に必要な設定は、導入手順書に、ツールごとにまとめています。</p>
@@ -58,6 +59,7 @@
     <ul>
       <li>GitHub CLI：PR の取得のたびに <code>gh</code> を実行して、使えたかどうかが分かります。常駐サーバーを起動したプロセスの <code>PATH</code> から探します</li>
       <li>claude-codex-bridge：Claude のホーム(<code>CLAUDE_CONFIG_DIR</code>、無ければ <code>~/.claude</code>)か <code>~/.claude</code> の <code>tools/</code> に、<code>codex-agent.sh</code> があるかで判断します</li>
+      <li>Codex：Codex のフックが届いたセッションを Codex のセッションとして扱います。導入を調べる処理はありません</li>
       <li>ai-cross-review：画面が知っているセッションの作業ディレクトリのどれかで、作業ツリーのルートに <code>tools/cross-review.js</code> があるかで判断します。リポジトリごとに入れるツールなので、入れていないリポジトリの PR は、クロスレビューを使っていないとみなして、レビュー不要と表示します</li>
     </ul>
   </details>

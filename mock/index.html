@@ -29,6 +29,8 @@
   --accent-text: #3b5bdb;
   --on-ok: #000000;
   --on-danger: #ffffff;
+  --origin-claude: #d9480f;
+  --origin-codex: #2b8a3e;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -38,6 +40,7 @@
     --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
     --ok: #8cc391; --ok-soft: #233526;
+    --origin-claude: #f08c4f; --origin-codex: #8cc391;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
   }
 }
@@ -47,6 +50,7 @@
   --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
   --ok: #8cc391; --ok-soft: #233526;
+  --origin-claude: #f08c4f; --origin-codex: #8cc391;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
 }
 * { box-sizing: border-box; }
@@ -130,6 +134,10 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .meta { color: var(--text-2); font-size: 12px; }
 .session-group { border-left: 2px solid var(--border); padding: 8px 0 0 12px; margin-top: 8px; }
 .session-group.single { border-left: 0; padding: 0; margin-top: 0; }
+.session-group:not(.single).origin-claude { border-left-color: var(--origin-claude); }
+.session-group:not(.single).origin-codex { border-left-color: var(--origin-codex); }
+.session-group.single.origin-claude .session-context { border-left: 3px solid var(--origin-claude); }
+.session-group.single.origin-codex .session-context { border-left: 3px solid var(--origin-codex); }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
 .session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
 /* .session-tag の nowrap より強くするため、2 つのクラスで指定する */
@@ -252,6 +260,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
+.pr.origin-claude, .pr.origin-codex, .pr.origin-both { position: relative; padding-left: 10px; }
+.pr.origin-claude::before, .pr.origin-codex::before, .pr.origin-both::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.pr.origin-claude::before { background: var(--origin-claude); }
+.pr.origin-codex::before { background: var(--origin-codex); }
+.pr.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
 /* 文字は左の列の中で折り返し、操作は右の列に縦に積む。操作の幅で題が潰れないよう、行の中に操作を混ぜない。 */
 .pr-body { display: flex; gap: 12px; align-items: stretch; }
 .pr-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -303,6 +316,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .merge-go.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
 .merged-list { font-size: 12px; color: var(--text-2); margin-top: 6px; }
 .merged-list .badge { margin-right: 4px; }
+.merged-list .badge.origin-claude, .merged-list .badge.origin-codex, .merged-list .badge.origin-both { position: relative; padding-left: 10px; }
+.merged-list .badge.origin-claude::before, .merged-list .badge.origin-codex::before, .merged-list .badge.origin-both::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; }
+.merged-list .badge.origin-claude::before { background: var(--origin-claude); }
+.merged-list .badge.origin-codex::before { background: var(--origin-codex); }
+.merged-list .badge.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
 
 .routing { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; display: grid; gap: 8px; }
 .routing[hidden], .control-row:has(> .routing[hidden]) { display: none; }
@@ -346,9 +364,15 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .perm code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--surface-2); padding: 2px 6px; border-radius: 4px; }
 .news { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 10px 0 4px; font-size: 13px; }
 .news .nhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent-text); }
-.news ul { margin: 4px 0 0; padding-left: 20px; }
+.news ul { margin: 4px 0 0; padding: 0; list-style: none; }
+.news li { position: relative; margin-left: 10px; padding-left: 10px; }
+.news li.origin-claude::before, .news li.origin-codex::before, .news li.origin-both::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; }
+.news li.origin-claude::before { background: var(--origin-claude); }
+.news li.origin-codex::before { background: var(--origin-codex); }
+.news li.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
 .new-mark { font-size: 10px; font-weight: 700; color: var(--on-accent); background: var(--accent); border-radius: 4px; padding: 0 5px; }
 .pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
+.pr.origin-claude, .pr.origin-codex, .pr.origin-both { padding-left: 10px; }
 .conflict-btn { background: none; color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
 .conflict-btn:disabled { cursor: default; opacity: .55; }
 .merge-confirm.conflict { border-color: var(--danger); }
@@ -580,7 +604,7 @@ const DATA = {
       id: 'agent-cockpit', name: 'agent-cockpit', branch: 'plan/pr-stack-view', sessionTitle: 'PR スタック表示', status: 'wait',
       main: { tool: 'Bash: git push -u origin plan/pr-stack-view', since: '6 分前' },
       perms: [{ id: 'ac-p1', who: 'メイン', tool: 'Bash', detail: 'git push -u origin plan/pr-stack-view', waitMin: 6 }],
-      news: [],
+      news: [{ t: 'Codex が「Codex の状態表示」を完了した', provider: 'codex' }],
       subagents: [
         { type: 'Explore', text: 'フックの入力項目を調査', since: '完了', state: 'done',
           model: { vendor: 'claude', name: 'Haiku 4.5', effort: '—' }, route: 'default' },
@@ -598,9 +622,9 @@ const DATA = {
       decisions: [],
       repo: { name: 'ktysne/agent-cockpit', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '5 秒前' },
       prs: [
-        { number: 201, title: 'Codex セッションの受付', head: 'feat/codex-session', base: 'claude/feature-codex-support', sha: 'c01de01', ci: 'pass', review: 'none', conflict: false, draft: false,
+        { number: 201, title: 'Codex セッションの受付', head: 'feat/codex-session', base: 'claude/feature-codex-support', sha: 'c01de01', ci: 'pass', review: 'none', conflict: false, draft: false, providers: ['codex'],
           xr: { round: 1, reviewedSha: 'c01de01', dismissed: 0, triage: { round: 1, sha: 'c01de01', outcome: 'converged' } } },
-        { number: 202, title: 'Codex の状態表示', head: 'feat/codex-display', base: 'feat/codex-session', sha: 'c01de02', ci: 'pass', review: 'none', conflict: false, draft: false, xr: null },
+        { number: 202, title: 'Codex の状態表示', head: 'feat/codex-display', base: 'feat/codex-session', sha: 'c01de02', ci: 'pass', review: 'none', conflict: false, draft: false, providers: ['claude', 'codex'], xr: null },
       ],
       extraSessions: [
         {
@@ -621,7 +645,7 @@ const DATA = {
         },
         // 通常の ~/.codex で動く Codex のセッション。resume しても同じ thread の会話は 1 行にまとめ、再開の回数を札で示す。
         {
-          id: 'agent-cockpit-codex', title: 'Codex のセッション', status: 'wait', branch: 'plan/pr-stack-view',
+          id: 'agent-cockpit-codex', title: 'Codex のセッション', provider: 'codex', status: 'wait', branch: 'plan/pr-stack-view',
           main: { tool: '—', since: '2 分前' },
           codex: { model: 'gpt-6.1-sol', resumes: 2 },
           perms: [],
@@ -1437,11 +1461,23 @@ const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => 
 // 離席中の期間に起きた変化だけを常駐サーバーが返し、画面は最後に見た時刻と比べる想定。
 // 「離席中のみ」では、離席中でない間は「前回見てから」が無いものとして扱う。既読の時刻は進めない。
 const sinceSeenVisible = () => ui.sinceSeenMode !== 'never' && (ui.sinceSeenMode !== 'away' || ui.away);
+function providerOrigin(providers) {
+  const values = Array.isArray(providers) ? providers : typeof providers === 'string' ? [providers] : [];
+  const hasClaude = values.includes('claude');
+  const hasCodex = values.includes('codex');
+  return hasClaude && hasCodex ? 'both' : hasClaude ? 'claude' : hasCodex ? 'codex' : '';
+}
+
+function originAttributes(providers) {
+  const origin = providerOrigin(providers);
+  return origin ? ` class="origin-${origin}" data-origin="${origin}"` : '';
+}
+
 function newsBox(p, withTag) {
   if (!sinceSeenVisible() || !p.news.length || ui.seen.includes(p.id)) return '';
   return `<div class="news"><div class="nhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}前回見てから (${p.news.length} 件)
     <button type="button" class="link-btn" data-seen="${p.id}">既読にする</button></div>
-    <ul>${p.news.map(n => `<li>${esc(n.t)}</li>`).join('')}</ul></div>`;
+    <ul>${p.news.map(n => `<li${originAttributes(n.providers ?? n.provider ?? 'claude')}>${esc(n.t)}</li>`).join('')}</ul></div>`;
 }
 
 function decisionCard(p, session, d, withTag) {
@@ -1892,13 +1928,16 @@ function prItem(p, pr) {
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
+  const origin = providerOrigin(pr.providers ?? ['claude']);
+  const classes = ['pr', rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : '', origin ? `origin-${origin}` : '']
+    .filter(Boolean).join(' ');
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
     !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
       <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : '',
     conflictButton(p, pr),
   ].join('').trim();
-  return `<div class="pr ${rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : ''}">
+  return `<div class="${classes}"${origin ? ` data-origin="${origin}"` : ''}>
     <div class="pr-body"><div class="pr-text">
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
@@ -1949,11 +1988,15 @@ function prBlock(p, withTag) {
   const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
   const visibleMerged = ui.hideFinished ? mergedNewestFirst.filter(({ pr }) => pr.headMismatch === true) : mergedNewestFirst;
-  const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', visibleMerged.map(({ pr, m }) =>
-    `<span class="badge long ${pr.headMismatch === true ? 'warn' : 'mute'}">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`), true);
+  const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', visibleMerged.map(({ pr, m }) => {
+    const origin = providerOrigin(pr.providers ?? ['claude']);
+    return `<span class="badge long ${pr.headMismatch === true ? 'warn' : 'mute'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`;
+  }), true);
   const closed = visibleClosedPrs(p);
-  const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr =>
-    `<a class="badge mute" href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`));
+  const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr => {
+    const origin = providerOrigin(pr.providers ?? ['claude']);
+    return `<a class="badge mute${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''} href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`;
+  }));
   const empty = !roots.length
     ? p.repo.loading ? `<div class="empty">GitHub から取得しています</div>`
       : `<div class="empty">オープンの PR はありません</div>`
@@ -2081,15 +2124,16 @@ function unknownSessionControls(session) {
 function sessionBlock(p, session) {
   const multiple = p.sessions.length > 1;
   const groupTag = multiple ? 'section' : 'div';
+  const origin = session.provider === 'codex' ? 'codex' : 'claude';
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
     || (!ui.hideFinished && session.decisions.some(isEndedDecision))
     || !hasHiddenJudgmentItems(session);
-  return `<${groupTag} class="session-group ${multiple ? '' : 'single'}">
+  return `<${groupTag} class="session-group ${multiple ? '' : 'single'} origin-${origin}" data-origin="${origin}">
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}</div>` : ''}
     <div class="session-body">
-      ${multiple ? '' : `<div class="session-tag session-context">${esc(sessionDisplayName(session))}</div>`}
+      ${multiple ? '' : `<div class="session-tag session-context" data-origin="${origin}">${esc(sessionDisplayName(session))}</div>`}
       ${orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
         judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}

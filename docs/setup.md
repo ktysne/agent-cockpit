@@ -13,7 +13,7 @@
 
 ## パターンの選び方
 
-まず「パターン A: agent-cockpit だけ」を行います。そのうえで、導入済みの連携ツールに合わせて B〜D を足します。B〜D は互いに独立していて、いくつでも組み合わせられます。
+まず「パターン A: agent-cockpit だけ」を行います。そのうえで、導入済みの連携ツールに合わせて B〜E を足します。B〜E は互いに独立していて、いくつでも組み合わせられます。
 
 | パターン | 対象 | 導入済みかの確かめ方 |
 |---|---|---|
@@ -21,6 +21,7 @@
 | B | + GitHub CLI | `gh --version` が通る |
 | C | + claude-codex-bridge | Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)か `~/.claude` に `tools/codex-agent.sh` がある |
 | D | + ai-cross-review | 対象のリポジトリの worktree のルートに `tools/cross-review.js` がある(リポジトリごとに導入するツールです) |
+| E | + Codex(CLI、デスクトップ) | `codex --version` が通る |
 
 D の PR カードの表示は、B の PR の表示に加わるものです。D で PR のクロスレビュー状態を見たいときは、B も行ってください。
 
@@ -283,6 +284,98 @@ agent-cockpit 側で追加するフックや登録はありません。次の点
    ```
 
 3. パターン B も行っているときは、そのリポジトリの PR のカードに「クロスレビュー」の段が出ることを確かめます。レビューを回す前は「レビュー未実施」と出て、往復を回すと往復数と結論が出ます。ai-cross-review を入れていないリポジトリの PR は「レビュー不要」と出ます。
+
+## パターン E: + Codex
+
+Codex(CLI とデスクトップ)のセッションも、Claude のセッションと同じダッシュボードに出します。
+判断事項への回答、離席中の推奨の適用、PR の登録は、Claude と同じ仕様で動きます。
+画面では、Claude 起点の情報を橙、Codex 起点の情報を緑の色帯で見分けます。
+
+### 前提
+
+- パターン A を終えていること。常駐サーバー、保存先、ポートは Claude と共通です。
+- [Codex](https://github.com/openai/codex) を導入し、ログインしておきます。
+- `~/.codex` は Codex のホームを指します。`CODEX_HOME` を設定しているときは、そのディレクトリを使ってください。
+- `~/.codex` の `hooks.json` と `config.toml` も、開発者のすべての Codex のセッションに効きます。パターン A と同じく、差分を開発者に示して確認を得てから書き込み、既存の設定は消さずに統合します。
+
+### 1. フックを登録する
+
+次の内容を `~/.codex/hooks.json` に統合し、`D:/path/to/agent-cockpit` を置き換えます。
+どのフックも、最後の引数 `codex` で Codex のイベントであることを伝えます。この引数を省くと Claude のイベントとして扱われます。
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] },
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/away.js\" codex", "timeout": 5 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] },
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/away.js\" codex", "timeout": 5 }] },
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 5 }] }
+    ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] },
+      { "matcher": "request_user_input_async|request_user_input", "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/away.js\" codex", "timeout": 1830 }] }
+    ],
+    "PermissionRequest": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] },
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 2 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] },
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 3600 }] }
+    ],
+    "Interrupt": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] }
+    ],
+    "SubagentStart": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] }
+    ]
+  }
+}
+```
+
+Claude の登録との違いと、timeout の値の理由は次のとおりです。値を変えずに登録してください。
+
+- Codex のフックには `async` を付けません。非同期のフックは、短い実行で 1 件も届かないことがあるためです。
+- `SessionStart` の `event.js` は、Claude と同じく常駐サーバーが動いていなければ起動し、作業の進め方を `additionalContext` でセッションへ渡します。Codex にはスキルを置く必要はありません。
+- `PreToolUse` の `away.js` は、Codex の質問ツール(`request_user_input_async` と `request_user_input`)だけを対象に、離席中にダッシュボードの回答を待ちます。timeout は Claude と同じ 1830 秒です。
+- Codex には `PostToolBatch` が無いので、`PostToolUse` の `answer.js`(timeout 2 秒)で、作業中のセッションへ回答を差し込みます。
+- `Stop` の `answer.js` は、ターンの終わりに未配信の回答があれば続行させます。離席中は回答や通知を最大 59 分待ってから続行させます。そのあいだ Codex の画面は作業中の表示になり、`Esc` で中断できます。timeout はこの待ちに余裕を足した 3600 秒です。
+
+### 2. MCP サーバーを登録する
+
+次の内容を `~/.codex/config.toml` に足し、パスを置き換えます。Claude と同じ `src/mcp/server.js` を使います。
+
+```toml
+[mcp_servers.agent-cockpit]
+command = "node"
+args = ["D:/path/to/agent-cockpit/src/mcp/server.js"]
+```
+
+### 3. フックを信頼する
+
+Codex は、開発者が信頼するまで新しいフックを動かしません。
+Codex を起動して `/hooks` を開き、1 で足したフックを信頼してください。
+`hooks.json` を変えたときは、変えたフックを信頼し直します。
+
+### 確認
+
+1. 新しい Codex のセッションを開き、ダッシュボードを再読み込みします。そのセッションの行が、左端に緑の色帯を付けて出れば成功です。出ないときは、`/hooks` で信頼したかと、フックのパスと引数 `codex` を確かめます。
+2. Codex のセッションで「`cockpit_set_tasks` で確認用のタスクを 1 件登録して」と依頼します。そのセッションの欄にタスクが出れば、MCP サーバーとフックが同じセッションを指しています。
+3. 回答の経路を確かめるときは、画面上部の「離席中」をオンにしてから、Codex のセッションに「確認のために `request_user_input_async` で質問して」と依頼します。待つ形の `request_user_input` は Plan モードでだけ使えます。ダッシュボードに判断待ちとして出て、画面から回答するとセッションがその回答で進めば成功です。確かめ終わったら「離席中」をオフに戻します。
+4. パターン B も行っているときは、Codex のセッションで作った PR が、緑の色帯を付けて PR の欄に出ることを確かめます。
 
 ## うまくいかないとき
 

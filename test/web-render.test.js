@@ -1873,7 +1873,7 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
       append(...children) { this.children.push(...children); },
     }),
   });
-  vm.runInContext(`${visibleSinceSeen}\n${sinceSeenBox}`, boxContext);
+  vm.runInContext(`${visibleSinceSeen}\n${functionSource(harness.html, 'providerOrigin')}\n${sinceSeenBox}`, boxContext);
   assert.equal(boxContext.sinceSeenBox(product, false), null);
   boxContext.header.dataset.away = 'true';
   const box = boxContext.sinceSeenBox(product, false);
@@ -3213,7 +3213,7 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     durationAgoLabel: () => '1 分前',
     appendPullRequestMergeResults() {},
   });
-  vm.runInContext(`${element}\n${shortShaElement}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${shortShaElement}\n${functionSource(pageHtml, 'providerOrigin')}\n${appendBlock}`, context);
 
   for (const state of ['merged', 'closed']) {
     const root = new FakeElement('div');
@@ -3510,7 +3510,7 @@ test('終わったものを隠すとマージ済みとクローズ済みの PR �
     durationAgoLabel: () => '1 分前',
     appendPullRequestMergeResults() {},
   });
-  vm.runInContext(`${element}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${functionSource(pageHtml, 'providerOrigin')}\n${appendBlock}`, context);
   const target = new FakeElement('div');
   context.appendPullRequestBlock(target, {
     owner: 'acme', repo: 'widget', fetchedAt: new Date().toISOString(), openCount: 0, registeredCount: 2,
@@ -3554,7 +3554,7 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
     MERGED_VISIBLE_COUNT: 5,
     appendPullRequestMergeResults() {},
   });
-  vm.runInContext(`${element}\n${shortShaElement}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${shortShaElement}\n${functionSource(html, 'providerOrigin')}\n${appendBlock}`, context);
   const root = new FakeElement('div');
   const reservedSha = 'a'.repeat(40);
   const mergedSha = 'b'.repeat(40);
@@ -3631,7 +3631,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
       focusedToggle = descendants(root).find((node) => node.dataset?.olderPrLine === 'merged:acme/widget');
     },
   });
-  vm.runInContext(`${element}\n${expandToggle}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${expandToggle}\n${functionSource(html, 'providerOrigin')}\n${appendBlock}`, context);
 
   const group = {
     owner: 'Acme', repo: 'Widget', trees: [], merged: [], registeredCount: 1,
@@ -3737,7 +3737,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
       focusedClosedToggle = descendants(root).find((node) => node.dataset?.olderPrLine === 'closed:acme/widget');
     },
   });
-  vm.runInContext(`${element}\n${expandToggle}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${expandToggle}\n${functionSource(html, 'providerOrigin')}\n${appendBlock}`, context);
 
   const renderGroup = () => {
     root = new FakeElement('div');
@@ -4439,4 +4439,99 @@ test('読み込み直すボタンは書きかけの回答が無ければ読み�
   assert.equal(withDraft.reloads, 0);
   assert.equal(withDraft.hidden, false);
   assert.match(withDraft.html, /data-reload-now>回答を消して読み込み直す</);
+});
+
+test('セッション、PR、「前回見てから」の項目に起点クラスと data-origin を付ける', () => {
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.childNodes = this.children;
+      this.dataset = {};
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  class FakeText { constructor(text) { this.textContent = text; } }
+  const document = {
+    createElement: (tagName) => new FakeElement(tagName),
+    createTextNode: (text) => new FakeText(text),
+  };
+  const helpers = functionSource(pageHtml, 'element');
+  assert.ok(helpers);
+
+  const sessionContext = pageContext(pageHtml, {
+    document,
+    displayPreferences: { hideFinished: true },
+    sessionDisplayName: (session) => session.title,
+    sharedBranch: () => '',
+    shownPermissions: () => [],
+    shownActiveDecisions: () => [],
+    hasHiddenJudgmentItems: () => true,
+    isEndedDecision: () => false,
+    appendTasks() {},
+    mainRow: () => new FakeElement('div'),
+    appendAgents() {},
+    orderedSectionKeys: (keys) => keys,
+  });
+  vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'sessionBlock')}`, sessionContext);
+  const claudeSession = sessionContext.sessionBlock({}, { title: 'Claude', decisions: [] }, true);
+  const codexSession = sessionContext.sessionBlock({}, { title: 'Codex', provider: 'codex', decisions: [] }, false);
+  assert.match(claudeSession.className, /origin-claude/);
+  assert.equal(claudeSession.dataset.origin, 'claude');
+  assert.match(codexSession.className, /origin-codex/);
+  assert.equal(codexSession.dataset.origin, 'codex');
+  assert.equal(codexSession.children[0].children[0].dataset.origin, 'codex');
+
+  const component = sourceBetween(pageHtml, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
+  assert.ok(component);
+  const prContext = pageContext(pageHtml, {
+    document,
+    queuedPullRequestMerge: () => null,
+    pullRequestMergeInFlight: new Set(),
+    pullRequestMergeConfirmations: new Map(),
+    pullRequestMergeMessages: new Map(),
+    pullRequestMergeConditionWaits: () => [],
+    appendPullRequestBadges() {},
+  });
+  vm.runInContext(`${helpers}\n${component}`, prContext);
+  const renderPr = (providers) => {
+    const root = new FakeElement('div');
+    prContext.appendPullRequestTree(root, {}, { number: 1, title: 'PR', canMerge: false, providers, children: [] });
+    return root.children[0];
+  };
+  for (const [providers, origin] of [
+    [['codex'], 'codex'],
+    [['claude', 'codex'], 'both'],
+  ]) {
+    const row = renderPr(providers);
+    assert.match(row.className, new RegExp(`origin-${origin}`));
+    assert.equal(row.dataset.origin, origin);
+  }
+  const unmarkedPr = renderPr([]);
+  assert.doesNotMatch(unmarkedPr.className, /origin-/);
+  assert.equal(unmarkedPr.dataset.origin, undefined);
+
+  const product = { key: 'origin-test', name: 'Origin test' };
+  const seenContext = pageContext(pageHtml, {
+    document,
+    lastState: {},
+    visibleSinceSeen: () => [{ product, items: [
+      { text: 'Claude', provider: 'claude' },
+      { text: 'Codex', provider: 'codex' },
+      { text: 'Both', providers: ['claude', 'codex'] },
+      { text: 'Unknown' },
+    ] }],
+  });
+  vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'providerOrigin')}\n${functionSource(pageHtml, 'sinceSeenBox')}`, seenContext);
+  const listItems = seenContext.sinceSeenBox(product, false).children[1].children;
+  for (const [item, origin] of listItems.slice(0, 3).map((item, index) => [item, ['claude', 'codex', 'both'][index]])) {
+    assert.match(item.className, new RegExp(`origin-${origin}`));
+    assert.equal(item.dataset.origin, origin);
+  }
+  assert.equal(listItems[3].className, '');
+  assert.equal(listItems[3].dataset.origin, undefined);
 });
