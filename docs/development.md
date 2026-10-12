@@ -13,7 +13,7 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | [docs/design/server.md](design/server.md) | 常駐サーバー、フック、画面の設計 |
 | [docs/design/manual.md](design/manual.md) | 利用者向けマニュアルの構成、デモ状態、画面の撮影、配信、検査の設計 |
 | [docs/architecture.html](architecture.html) / [docs/architecture-detail.html](architecture-detail.html) | 構成要素と通信経路の図。回答の届け方、PR の登録からマージまでの流れ |
-| [docs/poc-results.md](poc-results.md) | PoC で確かめたことと、分かった制約。再現の一式は `poc/` にある |
+| [docs/poc-results.md](poc-results.md) | PoC で確かめたことと、分かった制約。再現の一式は固定参照 8c701b1 の [`poc/`](https://github.com/ktysne/agent-cockpit/tree/8c701b1e8a5718eccff69f84775f21171b6663d0/poc) にある |
 | [docs/cross-review.md](cross-review.md) / [.cross-review.md](../.cross-review.md) | AI クロスレビューの手順と、このリポジトリのレビュー観点 |
 | [docs/testing.md](testing.md) | テストを書く、直す、消す基準。何を対象にし、何を書かないか |
 | [docs/japanese-guard.md](japanese-guard.md) | 開発者に見える文を日本語に保つフック(クラウドセッション向け) |
