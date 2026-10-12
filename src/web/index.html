@@ -1272,7 +1272,7 @@ function appendModelLine(target, agent, provider = 'claude') {
   }
   if (gpt?.model || gpt?.unavailable) {
     if (claudeModel) models.append(element('span', 'arrow', '→'));
-    const gptLabel = gpt.unavailable ? 'GPT 不使用' : `GPT ${gpt.model}`;
+    const gptLabel = gpt.unavailable ? 'Codex 不使用' : `Codex ${gpt.model}`;
     const gptBadge = element('span', `model ${gpt.unavailable ? 'off' : 'gpt'}`, gptLabel);
     if (gpt.unavailable) gptBadge.append(element('i', '', gpt.unavailable));
     else if (gpt.effort) gptBadge.append(element('i', '', `effort ${gpt.effort}`));

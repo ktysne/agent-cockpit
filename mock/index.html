@@ -1234,15 +1234,15 @@ function renderSummary() {
   idle.hidden = idleHiddenCount === 0 && !recordDeletionConfirmations.has('idle');
 }
 
-// Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
+// Claude のモデルが分からないサブエージェントでも、Codex の札だけは出す。
 function modelLine(s, lead = '') {
   if (s.codexModel) return `<div class="models">${lead}<span class="model gpt">Codex ${esc(s.codexModel)}</span></div>`;
   if (!s.model && !s.gpt && !lead) return '';
   const claude = s.model ? `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>` : '';
   const arrow = s.model ? '<span class="arrow">→</span>' : '';
   let gpt = '';
-  if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
-  else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
+  if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">Codex 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
+  else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">Codex ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
   return `<div class="models">${lead}${claude}${gpt}</div>`;
 }
 
