@@ -2426,16 +2426,28 @@ class DashboardState {
     this.onSessionReopened?.(sessionId);
   }
 
+  // 解決すると lifecycle の仮適用の印は消えるので、上書きと計画に残る provisionalAt も見る。
+  awayHandledDecisionIds(sessionId) {
+    const ids = new Set();
+    for (const [id, lifecycle] of this.decisionLifecycles.get(sessionId) || []) {
+      if (lifecycle.awaitingAnswerUntil || lifecycle.provisionalAt || lifecycle.state === 'provisional' || lifecycle.answer?.sentAt) ids.add(id);
+    }
+    for (const [id, override] of this.decisionOverrides.get(sessionId) || []) {
+      if (override.provisionalAt) ids.add(id);
+    }
+    for (const decision of this.plans.get(sessionId)?.decisions || []) {
+      if (decision.source === 'ask' && decision.provisionalAt) ids.add(decision.id);
+    }
+    return [...ids];
+  }
+
   askDecisionStateFor(sessionId) {
     return {
       decisions: (this.plans.get(sessionId)?.decisions || [])
         .filter((decision) => decision.source === 'ask').map(cloneDecision),
       bindings: Object.fromEntries(this.askDecisionBindings.get(sessionId) || []),
       finishedOutsideEventsIds: [...(this.finishedOutsideEventsAskDecisionIds.get(sessionId) || [])],
-      awayHandledIds: [...(this.decisionLifecycles.get(sessionId) || [])]
-        .filter(([, lifecycle]) => lifecycle.awaitingAnswerUntil || lifecycle.provisionalAt ||
-          lifecycle.state === 'provisional' || lifecycle.answer?.sentAt)
-        .map(([id]) => id),
+      awayHandledIds: this.awayHandledDecisionIds(sessionId),
     };
   }
 

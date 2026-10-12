@@ -147,6 +147,26 @@ for (const toolName of ['request_user_input_async', 'request_user_input']) {
   });
 }
 
+test('回答なしの仮適用を解決済みにした判断事項は次の入力の後も解決内容を保つ', async (t) => {
+  const c = await fixture(t);
+  await c.askForAnswer();
+  c.returnFromAway();
+  c.advance(5);
+  const response = await request(c.info.port, {
+    method: 'POST', path: '/api/sessions/thread/plan', headers: hookHeaders(c.info.secret),
+    body: JSON.stringify({ kind: 'update_decision', id: c.decision().id,
+      state: 'resolved', chosen: ['JSON'], note: '推奨を反映' }),
+  });
+  assert.equal(response.status, 200);
+  c.advance(5);
+  await c.event({ hook_event_name: 'UserPromptSubmit' });
+  await c.event({ hook_event_name: 'Stop' });
+
+  const decision = await c.snapshotDecision();
+  assert.equal(decision.state, 'resolved');
+  assert.deepEqual(decision.resolution, { chosen: ['JSON'], note: '推奨を反映' });
+});
+
 test('期限後の回答を反映して解決済みにした判断事項はイベントの再派生後も回答内容を保つ', async (t) => {
   const c = await fixture(t);
   await createLateAnswer(c);
