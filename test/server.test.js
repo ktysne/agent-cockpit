@@ -20,7 +20,7 @@ test('Claude の SessionStart と Stop の後にモデルを読み、読めな�
   const reads = [];
   let model = 'claude-opus-5-5';
   const runtime = await runningServer(t, { state, sessionModelDelayMs: 1,
-    readSessionModel: async (home, cwd, id) => { reads.push({ cwd, id }); return model; },
+    readSessionModel: async (home, cwd, id) => { reads.push({ cwd, id }); return model && { model, at: Date.now() }; },
   });
   state.syncSessionFiles([{ session_id: 'main-model', cwd: runtime.homeDir }]);
   const send = async hook_event_name => request(runtime.info.port, {
@@ -46,7 +46,7 @@ test('サーバー起動時に見える Claude のモデルを読み、Codex は
   for (const provider of ['claude', 'codex']) state.addEvent({ session_id: provider, provider, hook_event_name: 'SessionStart' });
   const reads = [];
   await runningServer(t, { state, sessionModelDelayMs: 1,
-    readSessionModel: async (home, cwd, id) => { reads.push(id); return 'claude-opus-5-5'; },
+    readSessionModel: async (home, cwd, id) => { reads.push(id); return { model: 'claude-opus-5-5', at: Date.now() }; },
   });
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.deepEqual(reads, ['claude']);
@@ -64,7 +64,7 @@ test('モデルの読み取り中の Stop は同じセッションの読み取�
   const runtime = await runningServer(t, { state, sessionModelDelayMs: 1, readSessionModel: async () => {
     reads += 1; active += 1; maxActive = Math.max(maxActive, active);
     if (reads === 1) { started(); await new Promise(resolve => { release = resolve; }); }
-    active -= 1; return 'claude-opus-5-5';
+    active -= 1; return { model: 'claude-opus-5-5', at: Date.now() };
   } });
   const send = () => request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
     body: JSON.stringify({ session_id: 'serial-model', hook_event_name: 'Stop' }) });

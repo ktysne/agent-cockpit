@@ -2528,11 +2528,15 @@ class DashboardState {
     return this.sessionFiles.get(sessionId) || null;
   }
 
-  recordSessionModel(sessionId, model) {
+  // 再開の SessionStart の後に読んだ記録の末尾は再開前の応答のことがあるので、時刻の新しいほうを残す。
+  recordSessionModel(sessionId, observation) {
     const provider = this.sessions.get(sessionId)?.provider || this.sessionFiles.get(sessionId)?.provider;
-    if (provider === 'codex' || !model || this.claudeSessionModels.get(sessionId) === model) return;
-    this.claudeSessionModels.set(sessionId, model);
-    this.touch();
+    if (provider === 'codex' || !observation?.model) return;
+    const at = Number.isFinite(observation.at) ? observation.at : null;
+    const current = this.claudeSessionModels.get(sessionId);
+    if (current && (at === null || (current.at !== null && at < current.at))) return;
+    this.claudeSessionModels.set(sessionId, { model: observation.model, at });
+    if (current?.model !== observation.model) this.touch();
   }
 
   captureFieldNames(input) {
@@ -2660,8 +2664,8 @@ class DashboardState {
     const entries = this.entries.get(event.session_id) || [];
     const eventSequence = this.sequence++;
     if (event.provider !== 'codex' && !event.agent_id && event.hook_event_name === 'SessionStart' &&
-      event.model && !this.claudeSessionModels.has(event.session_id)) {
-      this.recordSessionModel(event.session_id, event.model);
+      event.model) {
+      this.recordSessionModel(event.session_id, { model: event.model, at: event.hookAt });
     }
     entries.push({ event, sequence: eventSequence });
     this.entries.set(event.session_id, entries);
@@ -3106,7 +3110,7 @@ class DashboardState {
         ...visible,
         provider: base.provider || 'claude',
         ...(base.provider !== 'codex' && this.claudeSessionModels.has(sessionId)
-          ? { modelName: claudeModelName(this.claudeSessionModels.get(sessionId)) } : {}),
+          ? { modelName: claudeModelName(this.claudeSessionModels.get(sessionId).model) } : {}),
         ...(base.codex ? { codex: { ...base.codex, resumes: base.codex.resumes + (session ? this.codexResumesBeforeEnd.get(sessionId) || 0 : 0) } } : {}),
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,

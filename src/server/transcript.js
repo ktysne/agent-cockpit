@@ -160,7 +160,10 @@ async function readSessionModel(claudeHome, cwd, sessionId, fileSystem = fs) {
       try { record = JSON.parse(lines[index]); } catch { continue; }
       const model = record?.message?.model;
       if (record?.type === 'assistant' && record.isSidechain !== true &&
-        typeof model === 'string' && model && model !== '<synthetic>') return model;
+        typeof model === 'string' && model && model !== '<synthetic>') {
+        const at = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN;
+        return { model, at: Number.isFinite(at) ? at : null };
+      }
     }
   } catch {}
   return null;
