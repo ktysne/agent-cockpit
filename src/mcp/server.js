@@ -15,7 +15,7 @@ const { COMPLETE_COMMIT_SHA_PATTERN, isCompleteCommitSha, parsePullRequestUrl, v
 const { isHookSessionId } = require('../server/session-ids');
 
 const SERVER_NAME = 'agent-cockpit';
-const SERVER_VERSION = '0.0.0';
+const { version: SERVER_VERSION } = require('../../package.json');
 const PROTOCOL_VERSION = '2025-06-18';
 const MCP_TIMEOUT_MS = 5000;
 const MCP_GITHUB_TIMEOUT_MS = 60000;
