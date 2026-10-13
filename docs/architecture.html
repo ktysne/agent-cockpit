@@ -176,8 +176,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text x="460" y="276">・回答と知らせを配信待ちに置く</text>
       <text x="460" y="298">・PR の状態取得・マージ・予約</text>
       <text x="460" y="320">・経路と表示の設定を保存</text>
-      <text x="460" y="342">・マニュアルを配信（/manual/）</text>
-      <text x="460" y="364">・URL を既定のブラウザーで開く</text>
+      <text x="460" y="342">・URL を既定のブラウザーで開く</text>
       <text class="sub" x="460" y="398">書き込みは起動ごとの秘密値と</text>
       <text class="sub" x="460" y="416">Origin を照合する</text>
 
@@ -271,7 +270,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
     <div class="card"><h3>常駐サーバー</h3><p>すべての情報が集まる中心。127.0.0.1 にだけ待ち受け、外部パッケージを使わず Node.js で動く。セッションが 1 つも無く、30 分要求も無いと終了し、次のフックが起動し直す。</p></div>
     <div class="card"><h3>ダッシュボード</h3><p>常駐サーバーが配信する画面。状態の表示と、回答やマージ確認の入力を担う。</p></div>
     <div class="card"><h3>タスクトレイ</h3><p>Windows 用の常駐アイコン。サーバーの起動と再起動、ダッシュボードを開く操作、離席中の切り替え、待ち件数の通知を担う。</p></div>
-    <div class="card"><h3>マニュアル</h3><p><code>manual/</code> で組み立てた利用者向けの説明。常駐サーバーが <code>/manual/</code> で配り、設定画面の入口から既定のブラウザーで開く。</p></div>
+    <div class="card"><h3>マニュアル</h3><p><code>manual/</code> で組み立てた利用者向けの説明。紹介ページと一緒に https://ktysne.info/agent-cockpit/manual/ へ配信し、設定画面の入口から既定のブラウザーで開く。</p></div>
   </div>
 
   <p class="note">フック、MCP サーバー、トレイの起動処理は、共通の接続処理（<code>src/client</code>）で常駐サーバーを探し、動いていなければ起動する。許可待ち（パーミッションのダイアログ）は表示するだけで、ダッシュボードから許可を出す経路は無い。連携（任意）の道具が無くても本体は動く。</p>

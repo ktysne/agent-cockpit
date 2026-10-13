@@ -1,5 +1,4 @@
 const PENDING_SEARCH_TERM_KEY = 'manualPendingSearchTerm';
-const THEME_STORAGE_KEY = 'agent-cockpit.theme';
 
 function normalizeSearchText(value) {
   return String(value).replace(/[！-～]/g, character => String.fromCharCode(character.charCodeAt(0) - 0xfee0))
@@ -19,10 +18,6 @@ function resolveManualHelpAnchor(helpAnchors, hash, baseURI, currentHref) {
   if (!target || typeof target.output !== 'string' || typeof target.fragment !== 'string') return null;
   const destination = new URL(`${target.output}#${target.fragment}`, baseURI);
   return destination.href === currentHref ? null : destination.href;
-}
-
-function resolveManualTheme(value) {
-  return value === 'light' || value === 'dark' || value === 'system' ? value : 'system';
 }
 
 function normalizeSearchTerm(value) {
@@ -342,28 +337,18 @@ function setupManualZoom() {
   }
 }
 
-function setupManualTheme() {
-  let savedTheme = null;
-  try {
-    savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-  } catch {}
-  document.documentElement.dataset.theme = resolveManualTheme(savedTheme);
-}
-
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     findManualSearchTarget,
     normalizeSearchText,
     resolveManualHelpAnchor,
     resolveManualSearchHref,
-    resolveManualTheme,
     resolveManualZoom,
     searchManualIndex,
   };
 }
 
 if (typeof window !== 'undefined' && typeof location !== 'undefined') {
-  setupManualTheme();
   const destination = resolveManualHelpAnchor(window.manualHelpAnchors, location.hash, document.baseURI, location.href);
   if (destination) location.replace(destination);
   else setupSearchReveal();
