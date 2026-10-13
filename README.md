@@ -35,7 +35,7 @@ AI には、次のように依頼してください。
 
 > agent-cockpit を導入して。手順は https://raw.githubusercontent.com/ktysne/agent-cockpit/main/docs/setup.md にある。
 
-手順書は、agent-cockpit だけを導入する手順と、連携ツールごとに agent-cockpit 側で必要な設定の手順に分かれています。
+手順書は、agent-cockpit だけを導入する手順と、連携ツールごとに agent-cockpit 側で必要な設定の手順に分かれています。Claude Code を使わず、Codex だけで使う手順もあります。
 連携ツールそのものの導入は、それぞれのドキュメントに従ってください。手順書は、導入済みの連携ツールに合わせて agent-cockpit 側の設定を案内します。
 `~/.claude/settings.json` や `~/.codex/hooks.json` など、リポジトリの外のファイルを変えるときは、AI が変更内容を示して確認を求めます。
 導入済みの agent-cockpit を更新するときは、手順書の「更新するとき」に従います。

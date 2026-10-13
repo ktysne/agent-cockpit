@@ -463,12 +463,13 @@ async function listen(server, port) {
   });
 }
 
+// フォルダーが無いのは Claude Code を使わない環境なので止めてよいが、読めないときはセッションがあり得るので止めない。
 async function hasSessionJsonFiles(claudeHome) {
   try {
     const entries = await fs.readdir(path.join(claudeHome, 'sessions'), { withFileTypes: true });
     return entries.some((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === '.json');
-  } catch {
-    return true;
+  } catch (error) {
+    return error.code !== 'ENOENT';
   }
 }
 
@@ -784,6 +785,7 @@ module.exports = {
   escapeHtmlAttribute,
   atomicWriteServerInfo,
   removeServerInfoIfOwned,
+  hasSessionJsonFiles,
   createRequestHandler,
   startServer,
   parseArguments,

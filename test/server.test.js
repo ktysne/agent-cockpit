@@ -11,6 +11,7 @@ const {
   startServer,
   MAX_BODY_BYTES,
   escapeHtmlAttribute,
+  hasSessionJsonFiles,
 } = require('../src/server/server');
 const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
@@ -2063,4 +2064,19 @@ test('/api/state は版と時刻を、離席期間の整理を待つ前に中身
   const pruneAt = handler.indexOf('away.prune?.(');
   assert.ok(versionAt > 0 && pruneAt > versionAt);
   assert.doesNotMatch(handler, /await away\.prune/);
+});
+
+test('Claude のセッションのフォルダーが無いときは、セッションのファイルが無いと判定して自動終了を妨げない', async (t) => {
+  const { claudeHome } = createTemporaryHome(t);
+  assert.equal(await hasSessionJsonFiles(claudeHome), false);
+  await fs.mkdir(path.join(claudeHome, 'sessions'), { recursive: true });
+  await fs.writeFile(path.join(claudeHome, 'sessions', '1.json'), '{}');
+  assert.equal(await hasSessionJsonFiles(claudeHome), true);
+});
+
+test('Claude のセッションのフォルダーを読めないときは、セッションがあるものとして自動終了しない', async (t) => {
+  const { claudeHome } = createTemporaryHome(t);
+  await fs.mkdir(claudeHome, { recursive: true });
+  await fs.writeFile(path.join(claudeHome, 'sessions'), 'not a directory');
+  assert.equal(await hasSessionJsonFiles(claudeHome), true);
 });
