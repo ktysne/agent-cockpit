@@ -2272,14 +2272,15 @@ class DashboardState {
       model: session.codex.model,
       resumes: session.codex.resumes + (this.codexResumesBeforeEnd.get(event.session_id) || 0),
       updatedAt: previous?.updatedAt || isoTime(event.hookAt),
-      ...(previous?.lockSeen ? { lockSeen: true } : {}),
+      // 別のプロセスでの再開(codex exec resume など)はロックを作らないことがあるので、印は同じプロセスの間だけ引き継ぐ。
+      ...(previous?.lockSeen && previous.pid === pid ? { lockSeen: true } : {}),
     };
     // updatedAt は再起動の後の行の無操作の判定にも使う。イベントのたびに保存しないよう、1 分以上進んだときだけ進める。
     const activityAdvanced = event.hookAt - Date.parse(record.updatedAt) >= CODEX_RECOVERY_ACTIVITY_STEP_MS;
     if (activityAdvanced) record.updatedAt = isoTime(event.hookAt);
     this.codexRecovery.set(event.session_id, record);
     this.sessionFileLastSeenAt.set(event.session_id, event.hookAt);
-    const changed = !previous || activityAdvanced || ['pid', 'cwd', 'model', 'resumes'].some((key) => previous[key] !== record[key]);
+    const changed = !previous || activityAdvanced || ['pid', 'cwd', 'model', 'resumes', 'lockSeen'].some((key) => previous[key] !== record[key]);
     if (!changed) return;
     const oldest = [...this.codexRecovery].sort(([, left], [, right]) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt));
     for (const [id] of oldest.slice(0, Math.max(0, oldest.length - MAX_CODEX_RECOVERY_SESSIONS))) {

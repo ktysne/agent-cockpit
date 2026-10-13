@@ -15,7 +15,7 @@ async function cockpit(t, { claudeFilesReadable = true } = {}) {
   let now = Date.now();
   let runtime;
   const start = async () => {
-    runtime = await startServer({ ...temporary, codexHome, port: 0, isAlive: pid => alive && pid === 1234 });
+    runtime = await startServer({ ...temporary, codexHome, port: 0, isAlive: pid => alive && (pid === 1234 || pid === 5678) });
   };
   t.after(async () => { await runtime?.close(); await temporary.cleanup(); });
   await start();
@@ -231,6 +231,20 @@ test('ロック消失で終了した Codex を再開すると、SessionStart が
   assert.equal((await c.rows())[0].session_id, 'thread');
   assert.equal(c.runtime.state.sessionHasEnded('thread'), false);
   assert.equal((await c.store()).codexRecovery.thread.pid, 1234);
+});
+
+test('ロックを見た会話を別のプロセスで再開すると、ロックが無くてもプロセスの生死だけで扱う', async (t) => {
+  const c = await cockpit(t);
+  await c.lock();
+  await c.event('SessionStart', { codexPid: 1234 });
+  const now = Date.now();
+  await c.runtime.refreshSessionFiles(now);
+  await c.unlock();
+  await c.event('SessionStart', { codexPid: 5678, hookAt: now + 1 });
+  assert.equal((await c.store()).codexRecovery.thread.lockSeen, undefined);
+  await c.runtime.refreshSessionFiles(now + 180_000);
+  assert.equal((await c.rows())[0].session_id, 'thread');
+  assert.equal(c.runtime.state.sessionHasEnded('thread'), false);
 });
 
 test('ロック一覧は隠しファイル、別の拡張子、ディレクトリを会話のロックに含めない', async (t) => {
