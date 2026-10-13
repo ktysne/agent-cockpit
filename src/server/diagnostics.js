@@ -9,6 +9,9 @@ const RUN_PATTERN = /^\d{8}T\d{6}(?:\d{3})?Z-\d+$/;
 const FILE_PATTERN = /^(\d{8}T\d{6}(?:\d{3})?Z-\d+)\.(\d+)\.jsonl$/;
 const LEVELS = ['silent', 'error', 'warn', 'info', 'debug'];
 const TAGS = ['server', 'hook', 'mcp', 'web', 'gh', 'merge', 'codex'];
+const DIAGNOSTIC_REPEAT_WINDOW_MS = 10 * 60_000;
+const DIAGNOSTIC_REPEAT_FLUSH_INTERVAL_MS = 60_000;
+const MAX_DIAGNOSTIC_REPEAT_KEYS = 256;
 const ALLOWED_DATA = Object.freeze({
   ...Object.fromEntries(Object.entries(CLIENT_EVENTS).map(([msg, spec]) => [msg, Object.keys(spec.fields)])),
   'server.start': ['pid', 'port', 'version', 'commit'],
@@ -28,6 +31,7 @@ const ALLOWED_DATA = Object.freeze({
   'review.state': ['repository', 'number', 'session', 'file', 'head', 'failure', 'round', 'outcome', 'triageHead'],
   'diagnostics.rotate': ['segment'],
   'diagnostics.pruned': ['count'],
+  'diagnostics.repeated': ['msg', 'count', 'since', 'data'],
 });
 
 function runStartedAt(run) {
@@ -38,7 +42,8 @@ function runStartedAt(run) {
 /** 起動ごとの診断ログを直列に追記し、読み出しと保持上限と削除を管理する。 */
 class Diagnostics {
   constructor({ homeDir, userHome = os.homedir(), getLevel = () => 'info', startedAt = new Date(), pid = process.pid,
-    maxLines = 2000, maxRuns = 10, maxSegments = 30 }) {
+    maxLines = 2000, maxRuns = 10, maxSegments = 30, repeatWindowMs = DIAGNOSTIC_REPEAT_WINDOW_MS,
+    repeatFlushIntervalMs = DIAGNOSTIC_REPEAT_FLUSH_INTERVAL_MS, maxRepeatKeys = MAX_DIAGNOSTIC_REPEAT_KEYS }) {
     this.directory = path.join(homeDir, 'diagnostics');
     this.userHome = userHome;
     this.getLevel = getLevel;
@@ -50,6 +55,13 @@ class Diagnostics {
     this.segment = 0;
     this.lines = 0;
     this.queue = Promise.resolve();
+    this.repeatWindowMs = repeatWindowMs;
+    this.maxRepeatKeys = Math.max(1, maxRepeatKeys);
+    this.repeated = new Map();
+    this.repeatTimer = setInterval(() => {
+      this.enqueue(() => this.flushExpiredRepeats(Date.now())).catch(() => {});
+    }, repeatFlushIntervalMs);
+    this.repeatTimer.unref();
   }
 
   sanitize(msg, data) {
@@ -68,6 +80,16 @@ class Diagnostics {
       if (typeof value === 'number' && Number.isFinite(value) || typeof value === 'boolean') return value;
       return undefined;
     };
+    // 件数の行は元の内容を入れ子で持ち、元の識別子の許可一覧で絞り直す。
+    if (msg === 'diagnostics.repeated') {
+      if (!Object.hasOwn(ALLOWED_DATA, data.msg) || data.msg === msg) return clean;
+      clean.msg = data.msg;
+      if (Number.isInteger(data.count) && data.count > 0) clean.count = data.count;
+      if (typeof data.since === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(data.since)) clean.since = data.since;
+      const inner = data.data && typeof data.data === 'object' ? this.sanitize(data.msg, data.data) : {};
+      if (Object.keys(inner).length) clean.data = inner;
+      return clean;
+    }
     for (const key of ALLOWED_DATA[msg] || []) {
       if (['secret', 'origin'].includes(key) && !['match', 'mismatch', 'missing'].includes(data[key])) continue;
       if (key === 'error' && (!data[key] || typeof data[key] !== 'object')) continue;
@@ -89,7 +111,49 @@ class Diagnostics {
         || !['mark', 'error', 'warn', 'info', 'debug'].includes(level)
         || (level !== 'mark' && level !== 'error' && LEVELS.indexOf(level) > LEVELS.indexOf(configured))) return this.queue;
     const entry = { ts: Date.now(), level, tag, msg, data: this.sanitize(msg, data) };
-    return this.enqueue(() => this.append(entry)).catch(() => {});
+    if (level === 'mark') return this.enqueue(() => this.append(entry)).catch(() => {});
+    const key = JSON.stringify([level, tag, msg, entry.data]);
+    return this.enqueue(async () => {
+      const existing = this.repeated.get(key);
+      if (existing && entry.ts < existing.expiresAt) {
+        existing.count += 1;
+        return;
+      }
+      if (existing) {
+        await this.appendRepeated(existing);
+        this.repeated.delete(key);
+      }
+      if (this.repeated.size >= this.maxRepeatKeys) {
+        const oldestKey = this.repeated.keys().next().value;
+        const oldest = this.repeated.get(oldestKey);
+        await this.appendRepeated(oldest);
+        this.repeated.delete(oldestKey);
+      }
+      await this.append(entry);
+      this.repeated.set(key, { level, tag, msg, data: entry.data, expiresAt: entry.ts + this.repeatWindowMs, count: 0 });
+    }).catch(() => {});
+  }
+
+  async appendRepeated(repeated) {
+    if (!repeated.count) return;
+    await this.append({ ts: Date.now(), level: repeated.level, tag: repeated.tag, msg: 'diagnostics.repeated',
+      data: this.sanitize('diagnostics.repeated', { msg: repeated.msg, count: repeated.count,
+        since: new Date(repeated.expiresAt - this.repeatWindowMs).toISOString(), data: repeated.data }) });
+  }
+
+  async flushExpiredRepeats(now) {
+    for (const [key, repeated] of this.repeated) {
+      if (now < repeated.expiresAt) continue;
+      await this.appendRepeated(repeated);
+      this.repeated.delete(key);
+    }
+  }
+
+  async flushRepeated() {
+    for (const [key, repeated] of this.repeated) {
+      await this.appendRepeated(repeated);
+      this.repeated.delete(key);
+    }
   }
 
   async files() {
@@ -173,11 +237,15 @@ class Diagnostics {
       for (const file of await this.files()) {
         if (all === true || file.run === run) await fs.unlink(path.join(this.directory, file.name));
       }
-      if (all === true || run === this.run) { this.segment += 1; this.lines = 0; }
+      // 消した記録の件数を後から書き戻さず、削除後の最初の 1 件を書くため、まとめている件数も捨てる。
+      if (all === true || run === this.run) { this.segment += 1; this.lines = 0; this.repeated.clear(); }
     });
   }
 
-  flush() { return this.queue; }
+  flush() {
+    clearInterval(this.repeatTimer);
+    return this.enqueue(() => this.flushRepeated()).catch(() => {});
+  }
 }
 
 module.exports = { Diagnostics, RUN_PATTERN };
