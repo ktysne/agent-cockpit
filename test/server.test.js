@@ -1724,7 +1724,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'sinceSeen', 'judgment', 'prs', 'now'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, mergeableCondition: 'cross-review',
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info',
   });
 });
 

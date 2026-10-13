@@ -164,7 +164,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
   assert.deepEqual(session.decisions[0].answer, answer);
   assert.equal(session.decisions[0].awaitingAnswerUntil, undefined);
   assert.equal(session.hidden, true);
-  assert.deepEqual(snapshot.display, display);
+  assert.deepEqual(snapshot.display, { diagnosticsLevel: 'info', ...display });
   assert.deepEqual(restored.crossReviewSkip('example', 'project', 47), reviewSkip);
   const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
   assert.deepEqual(saved.crossReviewSkips, [reviewSkip]);

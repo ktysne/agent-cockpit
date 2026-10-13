@@ -9,7 +9,7 @@ function createSettingsRoutes(ctx) {
     jsonResponse(response, 200, away.snapshot());
   }
 
-  async function handleAway({ response, body }) {
+  async function handleAway({ request, response, body }) {
     if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.enabled !== 'boolean') {
       jsonResponse(response, 400, { error: 'Invalid request' });
       return;
@@ -18,12 +18,13 @@ function createSettingsRoutes(ctx) {
       const snapshot = await away.setEnabled(body.enabled);
       if (!snapshot.enabled) answerDelivery.signalAll();
       jsonResponse(response, 200, snapshot);
-    } catch {
+    } catch (error) {
+      request?.setDiagnosticError?.(error);
       jsonResponse(response, 500, { error: 'Internal Server Error' });
     }
   }
 
-  async function handleRouting({ response, body }) {
+  async function handleRouting({ request, response, body }) {
     if (!isValidRouteUpdate(body)) {
       jsonResponse(response, 400, { error: 'Invalid request' });
       return;
@@ -32,12 +33,13 @@ function createSettingsRoutes(ctx) {
       const snapshot = await routing.set(body.key, body.value);
       state.touch?.();
       jsonResponse(response, 200, snapshot);
-    } catch {
+    } catch (error) {
+      request?.setDiagnosticError?.(error);
       jsonResponse(response, 500, { error: 'Internal Server Error' });
     }
   }
 
-  async function handleOpenUrl({ response, info, body }) {
+  async function handleOpenUrl({ request, response, info, body }) {
     const externalUrl = body && typeof body === 'object' && !Array.isArray(body)
       ? normalizeExternalUrl(body.url, info.port)
       : null;
@@ -49,7 +51,8 @@ function createSettingsRoutes(ctx) {
       await openExternalUrl(externalUrl);
       response.writeHead(204, SECURITY_HEADERS);
       response.end();
-    } catch {
+    } catch (error) {
+      request?.setDiagnosticError?.(error);
       jsonResponse(response, 500, { error: 'Internal Server Error' });
     }
   }

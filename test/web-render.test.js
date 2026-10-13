@@ -1846,6 +1846,7 @@ test('終わったもののチェックは表示設定として保存し、失�
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
     mergeableConditionInputs,
+    diagnosticsLevelSelect: { value: 'info', closest: () => ({ open: false }) },
     longWaitMinutesError,
     awayAnswerWaitMinutesError,
     idleHideMinutesError,

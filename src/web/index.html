@@ -414,6 +414,48 @@ h3.sub .count { font-weight: normal; }
   .task-head { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
+.settings-resource-links { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.diagnostics-dialog, .diagnostics-policy-dialog { width: min(900px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: min(88dvh, 900px); overflow-y: auto; overscroll-behavior: contain; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+.diagnostics-dialog::backdrop, .diagnostics-policy-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.diagnostics-policy-dialog { width: min(720px, calc(100vw - 32px)); }
+.diagnostics-dialog h2, .diagnostics-policy-dialog h2 { margin: 0; font-size: 18px; }
+.diagnostics-toolbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 10px; margin-top: 16px; }
+.diagnostics-toolbar label { display: grid; gap: 5px; min-width: 0; color: var(--text-2); font-size: 12px; }
+.diagnostics-toolbar select, .diagnostics-toolbar button, .diagnostics-dialog button, .diagnostics-policy-dialog button { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.diagnostics-toolbar select { width: 100%; min-width: 0; padding: 4px 8px; }
+.diagnostics-toolbar button, .diagnostics-dialog button, .diagnostics-policy-dialog button { padding: 4px 12px; cursor: pointer; }
+.diagnostics-list { min-height: 150px; max-height: min(42dvh, 460px); overflow: auto; margin: 12px 0 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.diagnostics-actions .diagnostics-danger-button { border-color: var(--danger); color: var(--danger); }
+.diagnostics-policy-link { margin-top: 14px; padding: 0 !important; border: 0 !important; color: var(--accent-text) !important; text-decoration: underline; text-underline-offset: 3px; }
+.diagnostics-delete-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--danger); border-radius: var(--radius); background: var(--danger-soft); }
+.diagnostics-delete-confirm[hidden] { display: none; }
+.diagnostics-delete-confirm span { flex: 1 1 100%; }
+.diagnostics-delete-confirm #diagnostics-delete-confirm { border-color: var(--danger); color: var(--danger); }
+.diagnostics-status { min-height: 1.5em; margin: 8px 0 0; color: var(--text-2); font-size: 12px; }
+.diagnostics-policy-dialog section { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.diagnostics-policy-dialog h3 { margin: 0 0 8px; font-size: 14px; }
+.diagnostics-policy-dialog p { margin: 8px 0 0; }
+.diagnostics-policy-dialog ul { margin: 8px 0 0; padding-left: 20px; }
+.diagnostics-policy-callout { padding: 12px; border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-soft); color: var(--warn-text); }
+.diagnostics-policy-table-wrap { overflow-x: auto; }
+.diagnostics-policy-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.diagnostics-policy-table th, .diagnostics-policy-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.diagnostics-policy-table th { white-space: nowrap; }
+.diagnostics-policy-close { display: flex; justify-content: flex-end; margin-top: 16px; }
+@media (max-width: 640px) {
+  .diagnostics-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .diagnostics-toolbar button { min-height: 40px; }
+  .diagnostics-list { max-height: 38dvh; }
+  .diagnostics-actions button { flex: 1 1 210px; }
+}
+@media (max-width: 480px) {
+  .diagnostics-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .diagnostics-dialog, .diagnostics-policy-dialog { width: calc(100vw - 20px); max-width: calc(100vw - 20px); max-height: 92dvh; padding: 14px; }
+  .diagnostics-list { min-height: 120px; max-height: 34dvh; }
+  .diagnostics-policy-table { min-width: 560px; }
+}
+.diagnostics-dialog :focus-visible, .diagnostics-policy-dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -484,7 +526,7 @@ h3.sub .count { font-weight: normal; }
     </div>
   </section>
   <div class="settings-save-error" id="settings-save-error" role="alert" hidden></div>
-  <div class="settings-actions"><a class="link-btn settings-manual-link" href="/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><button id="settings-close" type="button" autofocus>閉じる</button></div>
+  <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
 <main>
   <div class="mode-row">
@@ -502,6 +544,79 @@ h3.sub .count { font-weight: normal; }
   <div class="excluded-note" id="finished-note" hidden></div>
   <div class="excluded-note" id="idle-note" role="status" aria-live="polite" hidden></div>
 </main>
+<dialog class="diagnostics-dialog" id="diagnostics-dialog" aria-labelledby="diagnostics-title">
+  <h2 id="diagnostics-title">診断ログ</h2>
+  <div class="diagnostics-toolbar">
+    <label for="diagnostics-level">レベル
+      <select id="diagnostics-level">
+        <option value="silent">記録しない</option>
+        <option value="error">エラーのみ</option>
+        <option value="warn">警告まで</option>
+        <option value="info">情報まで(既定)</option>
+        <option value="debug">詳細</option>
+      </select>
+    </label>
+    <label for="diagnostics-run">起動
+      <select id="diagnostics-run"><option value="current">現在の起動</option></select>
+    </label>
+    <label for="diagnostics-source">出どころ
+      <select id="diagnostics-source"><option value="">すべて</option></select>
+    </label>
+    <button id="diagnostics-refresh" type="button">更新</button>
+  </div>
+  <pre class="diagnostics-list" id="diagnostics-list" role="log" aria-live="polite" aria-label="診断ログの一覧">(記録はまだありません)</pre>
+  <div class="diagnostics-actions">
+    <button id="diagnostics-copy" type="button">コピー</button>
+    <button id="diagnostics-export-run" type="button">選んだ起動を書き出す</button>
+    <button id="diagnostics-export-all" type="button">すべての起動を書き出す</button>
+  </div>
+  <div class="diagnostics-actions" id="diagnostics-delete-actions">
+    <button class="diagnostics-danger-button" id="diagnostics-delete-run" type="button">選んだ起動を削除</button>
+    <button class="diagnostics-danger-button" id="diagnostics-delete-all" type="button">すべて削除</button>
+  </div>
+  <div class="diagnostics-delete-confirm" id="diagnostics-delete-confirmation" role="group" aria-live="polite" hidden>
+    <span id="diagnostics-delete-message"></span>
+    <button id="diagnostics-delete-confirm" type="button">削除する</button>
+    <button id="diagnostics-delete-cancel" type="button">やめる</button>
+  </div>
+  <p class="diagnostics-status" id="diagnostics-status" role="status" aria-live="polite"></p>
+  <button class="diagnostics-policy-link" id="diagnostics-policy-open" type="button">ポリシーを確認</button>
+  <div class="settings-actions"><span></span><button id="diagnostics-close" type="button" autofocus>閉じる</button></div>
+</dialog>
+<dialog class="diagnostics-policy-dialog" id="diagnostics-policy-dialog" aria-labelledby="diagnostics-policy-title">
+  <h2 id="diagnostics-policy-title">診断ログのポリシー</h2>
+  <p class="diagnostics-policy-callout"><strong>あなたの操作なしに記録が外に出ることはありません。外に出るのは「コピー」か「書き出す」を押したときだけです。</strong></p>
+  <section aria-labelledby="diagnostics-policy-storage-title">
+    <h3 id="diagnostics-policy-storage-title">保存先と保持期間</h3>
+    <p>記録はこの端末の <code>~/.agent-cockpit/diagnostics/</code> に保存します。直近 10 回の起動を残し、区分ファイルは全体で 30 件まで、1 区分は 2000 行までです。上限を超えたときは古い記録から削除します。</p>
+  </section>
+  <section aria-labelledby="diagnostics-policy-level-title">
+    <h3 id="diagnostics-policy-level-title">レベルごとに残る記録</h3>
+    <div class="diagnostics-policy-table-wrap"><table class="diagnostics-policy-table"><thead><tr><th scope="col">レベル</th><th scope="col">記録する内容</th><th scope="col">例</th></tr></thead><tbody>
+      <tr><th scope="row">記録しない</th><td>記録を残しません。</td><td>なし</td></tr>
+      <tr><th scope="row">エラーのみ</th><td>処理に失敗した記録。</td><td><code>request.failed</code>、<code>gh.failed</code></td></tr>
+      <tr><th scope="row">警告まで</th><td>失敗に加え、問題があっても処理を続けた記録。</td><td><code>hook.rejected</code>、<code>merge.blocked</code></td></tr>
+      <tr><th scope="row">情報まで(既定)</th><td>起動や終了、採らなかったイベント、件数のまとめ。</td><td><code>server.start</code>、<code>session.closed</code></td></tr>
+      <tr><th scope="row">詳細</th><td>受け付けたイベントを 1 件ずつ記録。</td><td>イベントの受付結果</td></tr>
+    </tbody></table></div>
+    <p>起動や停止などの節目は、記録する設定ならどのレベルでも残します。</p>
+  </section>
+  <section aria-labelledby="diagnostics-policy-excluded-title">
+    <h3 id="diagnostics-policy-excluded-title">記録しない情報</h3>
+    <ul>
+      <li>会話、プロンプト、計画、質問と回答、ツールの入力と出力</li>
+      <li>認証に使う値や要求のヘッダー</li>
+      <li><code>gh</code> やプロセス照会のエラー文、標準エラー</li>
+      <li>セッション記録ファイルの中身</li>
+      <li>作業場所のパスと、ホームディレクトリに含まれるユーザー名</li>
+    </ul>
+  </section>
+  <section aria-labelledby="diagnostics-policy-included-title">
+    <h3 id="diagnostics-policy-included-title">記録する情報</h3>
+    <p>記録の種類と時刻、出どころ、フックのイベント名、provider、ツール名、セッション ID の先頭 8 文字、プロダクト名、PR 番号、件数、長さ、所要時間、成否、失敗の分類、HTTP の状態、照合結果を残します。常駐サーバーの pid、ポート、版、ソースの commit も記録します。文字列は 200 文字までです。</p>
+  </section>
+  <div class="diagnostics-policy-close"><button id="diagnostics-policy-close" type="button" autofocus>閉じる</button></div>
+</dialog>
 <script>
 'use strict';
 
@@ -532,6 +647,7 @@ for (const { input, min, max } of DISPLAY_MINUTE_SETTINGS) {
   input.max = String(max);
 }
 const hideFinishedInput = document.getElementById('settings-hide-finished');
+const diagnosticsLevelSelect = document.getElementById('diagnostics-level');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
 const sectionOrderList = document.getElementById('settings-section-order');
 const settingsButton = document.getElementById('settings-button');
@@ -708,6 +824,7 @@ function normalizeDisplayPreferences(value) {
       [key, normalizeDisplayMinutes(value?.[key], min, max, fallback)]
     ))),
     hideFinished: value?.hideFinished !== false,
+    diagnosticsLevel: ['silent', 'error', 'warn', 'info', 'debug'].includes(value?.diagnosticsLevel) ? value.diagnosticsLevel : 'info',
     mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value?.mergeableCondition) ? value.mergeableCondition : 'cross-review',
   };
 }
@@ -732,6 +849,11 @@ function renderDisplaySettings() {
   if (document.activeElement !== hideFinishedInput) hideFinishedInput.checked = displayPreferences.hideFinished;
   if (!mergeableConditionInputs.includes(document.activeElement)) {
     for (const input of mergeableConditionInputs) input.checked = input.value === displayPreferences.mergeableCondition;
+  }
+  if (document.activeElement !== diagnosticsLevelSelect && diagnosticsLevelSelect.value !== displayPreferences.diagnosticsLevel) {
+    diagnosticsLevelSelect.value = displayPreferences.diagnosticsLevel;
+    // 初回の描画は診断ログの部品の宣言より前に走るので、ダイアログは要素から辿る。
+    if (diagnosticsLevelSelect.closest('dialog').open) renderDiagnosticEntries();
   }
 }
 
@@ -1029,6 +1151,267 @@ function showWriteError(message) {
   clearTimeout(writeErrorTimer);
   writeErrorTimer = setTimeout(updateConnectionNote, 10_000);
   updateConnectionNote();
+}
+
+const DIAGNOSTIC_LEVEL_ORDER = ['error', 'warn', 'info', 'debug'];
+const DIAGNOSTIC_SOURCE_ORDER = ['server', 'hook', 'mcp', 'web', 'gh', 'merge', 'codex'];
+let diagnosticVersion = '';
+let diagnosticsRefreshSequence = 0;
+let diagnosticRuns = [];
+let diagnosticDeleteScope = null;
+let diagnosticDeleteRunId = null;
+const diagnosticsDialog = document.getElementById('diagnostics-dialog');
+const diagnosticsPolicyDialog = document.getElementById('diagnostics-policy-dialog');
+const diagnosticsRunSelect = document.getElementById('diagnostics-run');
+const diagnosticsSourceSelect = document.getElementById('diagnostics-source');
+const diagnosticsList = document.getElementById('diagnostics-list');
+const diagnosticsStatus = document.getElementById('diagnostics-status');
+const diagnosticsDeleteActions = document.getElementById('diagnostics-delete-actions');
+const diagnosticsDeleteConfirmation = document.getElementById('diagnostics-delete-confirmation');
+
+displayPreferences.diagnosticsLevel = ['silent', 'error', 'warn', 'info', 'debug'].includes(displayPreferences.diagnosticsLevel) ? displayPreferences.diagnosticsLevel : 'info';
+
+function diagnosticLocalTime(value, seconds = false) {
+  const date = new Date(value);
+  const pad = number => String(number).padStart(2, '0');
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}${seconds ? `:${pad(date.getSeconds())}` : ''}`;
+}
+
+function selectedDiagnosticRun() {
+  return diagnosticRuns.find(run => run.id === diagnosticsRunSelect.value) || diagnosticRuns.find(run => run.current) || null;
+}
+
+function replaceSelectOptions(select, values, selectedValue) {
+  select.replaceChildren(...values.map(({ value, label }) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    return option;
+  }));
+  select.value = values.some(option => option.value === selectedValue) ? selectedValue : (values[0]?.value || '');
+}
+
+function refreshDiagnosticOptions() {
+  const previousRun = diagnosticsRunSelect.value;
+  const runs = [...diagnosticRuns].sort((a, b) => Number(b.current) - Number(a.current) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  replaceSelectOptions(diagnosticsRunSelect, runs.map(run => ({
+    value: run.id,
+    label: run.current ? `現在の起動 (${diagnosticLocalTime(run.startedAt)})` : diagnosticLocalTime(run.startedAt),
+  })), previousRun || runs.find(run => run.current)?.id);
+  const previousSource = diagnosticsSourceSelect.value;
+  const knownSources = new Set(diagnosticRuns.flatMap(run => run.entries.map(entry => entry.tag)));
+  const sources = DIAGNOSTIC_SOURCE_ORDER.filter(source => knownSources.has(source));
+  replaceSelectOptions(diagnosticsSourceSelect, [
+    { value: '', label: 'すべて' },
+    ...sources.map(source => ({ value: source, label: source })),
+  ], previousSource);
+}
+
+function filteredDiagnosticEntries(run = selectedDiagnosticRun()) {
+  if (!run || diagnosticsLevelSelect.value === 'silent') return [];
+  const levelLimit = DIAGNOSTIC_LEVEL_ORDER.indexOf(diagnosticsLevelSelect.value);
+  return run.entries.filter(entry => {
+    const levelVisible = entry.level === 'mark' || entry.level === 'error'
+      || DIAGNOSTIC_LEVEL_ORDER.indexOf(entry.level) <= levelLimit;
+    return levelVisible && (!diagnosticsSourceSelect.value || entry.tag === diagnosticsSourceSelect.value);
+  }).sort((a, b) => a.ts - b.ts);
+}
+
+function formatDiagnosticEntry(entry) {
+  const data = entry.data && Object.keys(entry.data).length ? ` ${JSON.stringify(entry.data)}` : '';
+  return `${diagnosticLocalTime(entry.ts, true)} [${entry.level}] [${entry.tag}] ${entry.msg}${data}`;
+}
+
+function renderDiagnosticEntries() {
+  diagnosticsList.textContent = filteredDiagnosticEntries().map(formatDiagnosticEntry).join('\n') || '(記録はまだありません)';
+}
+
+async function refreshDiagnostics() {
+  const sequence = ++diagnosticsRefreshSequence;
+  let loaded = false;
+  diagnosticsStatus.textContent = '記録を読み込んでいます。';
+  diagnosticsList.setAttribute('aria-busy', 'true');
+  try {
+    const response = await fetch('/api/diagnostics', { cache: 'no-store' });
+    if (!response.ok) throw new Error('Cannot read diagnostics');
+    const data = await response.json();
+    const runs = await Promise.all(data.runs.map(async run => ({ ...run, entries: await loadDiagnosticRun(run.id) })));
+    if (sequence !== diagnosticsRefreshSequence) return;
+    diagnosticRuns = runs;
+    diagnosticVersion = data.version;
+    refreshDiagnosticOptions();
+    diagnosticsStatus.textContent = '';
+    loaded = true;
+  } catch {
+    if (sequence !== diagnosticsRefreshSequence) return;
+    diagnosticsStatus.textContent = '診断ログを読み込めませんでした。「更新」でやり直してください。';
+  } finally {
+    if (sequence === diagnosticsRefreshSequence) diagnosticsList.setAttribute('aria-busy', 'false');
+  }
+  diagnosticsLevelSelect.value = displayPreferences.diagnosticsLevel;
+  renderDiagnosticEntries();
+  return loaded;
+}
+
+function openDiagnostics() {
+  diagnosticsLevelSelect.value = displayPreferences.diagnosticsLevel;
+  diagnosticsStatus.textContent = '';
+  diagnosticDeleteScope = null;
+  diagnosticDeleteRunId = null;
+  diagnosticsRunSelect.disabled = false;
+  diagnosticsDeleteActions.hidden = false;
+  diagnosticsDeleteConfirmation.hidden = true;
+  refreshDiagnostics();
+  if (!diagnosticsDialog.open) diagnosticsDialog.showModal();
+}
+
+document.getElementById('diagnostics-open').addEventListener('click', event => {
+  event.preventDefault();
+  openDiagnostics();
+});
+document.getElementById('diagnostics-close').addEventListener('click', () => diagnosticsDialog.close());
+document.getElementById('diagnostics-policy-open').addEventListener('click', () => {
+  if (!diagnosticsPolicyDialog.open) diagnosticsPolicyDialog.showModal();
+});
+document.getElementById('diagnostics-policy-close').addEventListener('click', () => diagnosticsPolicyDialog.close());
+diagnosticsLevelSelect.addEventListener('change', async () => {
+  const saved = await saveDisplayPreferences({ diagnosticsLevel: diagnosticsLevelSelect.value }, { key: 'diagnosticsLevel', input: diagnosticsLevelSelect });
+  diagnosticsStatus.textContent = saved ? 'レベルを保存しました。' : 'レベルを保存できませんでした。';
+  renderDiagnosticEntries();
+});
+diagnosticsRunSelect.addEventListener('change', renderDiagnosticEntries);
+diagnosticsSourceSelect.addEventListener('change', renderDiagnosticEntries);
+document.getElementById('diagnostics-refresh').addEventListener('click', refreshDiagnostics);
+
+for (const dialog of [diagnosticsDialog, diagnosticsPolicyDialog]) {
+  dialog.addEventListener('click', event => {
+    const box = dialog.getBoundingClientRect();
+    const outside = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+    if (event.target === dialog && outside) dialog.close();
+  });
+}
+
+async function copyDiagnosticText(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  const fallback = document.createElement('textarea');
+  fallback.value = text;
+  fallback.setAttribute('aria-hidden', 'true');
+  fallback.style.position = 'fixed';
+  fallback.style.opacity = '0';
+  // モーダルの表示中はダイアログの外が inert になり、外の要素を選択できないため。
+  diagnosticsDialog.append(fallback);
+  fallback.select();
+  const copied = document.execCommand?.('copy') || false;
+  fallback.remove();
+  return copied;
+}
+
+function diagnosticExportText(runs) {
+  const runLabel = runs.length === 1 ? runs[0].id : 'all';
+  const lines = [
+    '# agent-cockpit 診断ログ',
+    `# version=${diagnosticVersion} level=${displayPreferences.diagnosticsLevel} run=${runLabel} exported=${diagnosticLocalTime(Date.now(), true)}`,
+    '',
+  ];
+  for (const run of runs) {
+    lines.push(`## 起動 ${run.id} (${diagnosticLocalTime(run.startedAt)})`);
+    const entries = [...run.entries].sort((a, b) => a.ts - b.ts);
+    lines.push(entries.map(formatDiagnosticEntry).join('\n') || '(記録はまだありません)', '');
+  }
+  return lines.join('\n');
+}
+
+function downloadDiagnosticText(runs, suffix) {
+  const blob = new Blob([diagnosticExportText(runs)], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `agent-cockpit-diagnostics-${suffix}.txt`;
+  diagnosticsDialog.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+document.getElementById('diagnostics-copy').addEventListener('click', async () => {
+  const copied = await copyDiagnosticText(filteredDiagnosticEntries().map(formatDiagnosticEntry).join('\n'));
+  document.getElementById('diagnostics-copy').focus();
+  diagnosticsStatus.textContent = copied ? '表示中の記録をコピーしました。' : 'コピーできませんでした。';
+});
+document.getElementById('diagnostics-export-run').addEventListener('click', () => {
+  const run = selectedDiagnosticRun();
+  if (!run) return;
+  downloadDiagnosticText([run], run.id);
+  diagnosticsStatus.textContent = '選んだ起動を書き出しました。';
+});
+document.getElementById('diagnostics-export-all').addEventListener('click', () => {
+  const runs = [...diagnosticRuns].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  downloadDiagnosticText(runs, 'all');
+  diagnosticsStatus.textContent = 'すべての起動を書き出しました。';
+});
+
+function beginDiagnosticDeletion(scope) {
+  diagnosticDeleteScope = scope;
+  const selected = selectedDiagnosticRun();
+  diagnosticDeleteRunId = scope === 'run' ? selected?.id : null;
+  const targetCount = scope === 'all'
+    ? diagnosticRuns.reduce((total, run) => total + run.entries.length, 0)
+    : (selected?.entries.length || 0);
+  const targetName = scope === 'all' ? 'すべての起動の' : '選んだ起動の';
+  document.getElementById('diagnostics-delete-message').textContent = `${targetName} ${targetCount} 件の記録を削除します。元に戻せません`;
+  diagnosticsRunSelect.disabled = true;
+  diagnosticsDeleteActions.hidden = true;
+  diagnosticsDeleteConfirmation.hidden = false;
+  document.getElementById('diagnostics-delete-confirm').focus();
+}
+
+document.getElementById('diagnostics-delete-run').addEventListener('click', () => beginDiagnosticDeletion('run'));
+document.getElementById('diagnostics-delete-all').addEventListener('click', () => beginDiagnosticDeletion('all'));
+document.getElementById('diagnostics-delete-cancel').addEventListener('click', () => {
+  diagnosticDeleteScope = null;
+  diagnosticDeleteRunId = null;
+  diagnosticsRunSelect.disabled = false;
+  diagnosticsDeleteConfirmation.hidden = true;
+  diagnosticsDeleteActions.hidden = false;
+  document.getElementById('diagnostics-delete-run').focus();
+});
+document.getElementById('diagnostics-delete-confirm').addEventListener('click', async () => {
+  const confirmButton = document.getElementById('diagnostics-delete-confirm');
+  // 応答を待つ間に「やめる」で対象が消えても、送った範囲を手元から外すため、先に取っておく。
+  const scope = diagnosticDeleteScope;
+  const runId = diagnosticDeleteRunId;
+  confirmButton.disabled = true;
+  try {
+    const response = await postUiAction('/api/diagnostics/delete', scope === 'all' ? { all: true } : { run: runId });
+    if (!response.ok) throw new Error('Cannot delete diagnostics');
+  } catch {
+    diagnosticsStatus.textContent = '記録を削除できませんでした。もう一度「削除する」を押してください。';
+    return;
+  } finally { confirmButton.disabled = false; }
+  // 再取得に失敗しても、削除した記録をコピーや書き出しの対象に残さないため、先に手元から外す。
+  diagnosticRuns = scope === 'all' ? [] : diagnosticRuns.filter(run => run.id !== runId);
+  refreshDiagnosticOptions();
+  diagnosticDeleteScope = null;
+  diagnosticDeleteRunId = null;
+  diagnosticsRunSelect.disabled = false;
+  diagnosticsDeleteConfirmation.hidden = true;
+  diagnosticsDeleteActions.hidden = false;
+  diagnosticsStatus.textContent = await refreshDiagnostics()
+    ? '記録を削除しました。'
+    : '記録を削除しましたが、一覧を読み込めませんでした。「更新」でやり直してください。';
+  document.getElementById('diagnostics-delete-run').focus();
+});
+
+
+async function loadDiagnosticRun(run) {
+  const response = await fetch('/api/diagnostics?run=' + encodeURIComponent(run), { cache: 'no-store' });
+  if (!response.ok) throw new Error('Cannot read diagnostics');
+  return (await response.json()).entries;
 }
 
 async function postUiAction(url, body) {

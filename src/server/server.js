@@ -23,6 +23,8 @@ const { createHookRoutes } = require('./routes/hooks');
 const { createPullRequestRoutes } = require('./routes/pull-requests');
 const { createUiSessionRoutes } = require('./routes/ui-sessions');
 const { createSettingsRoutes } = require('./routes/settings');
+const { Diagnostics } = require('./diagnostics');
+const { version } = require('../../package.json');
 
 const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
 const MAX_BODY_BYTES = 64 * 1024;
@@ -296,6 +298,31 @@ function createRequestHandler(options) {
   // method と path の両方が一致した最初の行を使う。
   // 本文は body が 'json' の行だけが読む。estimate は本文を使わないので 'none' にする。
   const routes = [
+    { method: 'GET', path: '/api/diagnostics', auth: 'none', body: 'none', handler: async ({ response, request }) => {
+      const run = new URL(request.url, 'http://localhost').searchParams.get('run');
+      try {
+        jsonResponse(response, 200, run === null
+          ? { runs: await options.diagnostics.listRuns(), version }
+          : { entries: await options.diagnostics.readRun(run), version });
+      } catch (error) {
+        request.setDiagnosticError?.(error);
+        jsonResponse(response, error.statusCode || 500, { error: 'Cannot read diagnostics' });
+      }
+    } },
+    { method: 'POST', path: '/api/diagnostics/delete', auth: 'ui', body: 'json', handler: async ({ request, response, body }) => {
+      if (!body || typeof body !== 'object' || Array.isArray(body)
+          || !(Object.keys(body).length === 1 && (typeof body.run === 'string' || body.all === true))) {
+        jsonResponse(response, 400, { error: 'Invalid deletion' });
+        return;
+      }
+      try {
+        await options.diagnostics.deleteRuns(body);
+        jsonResponse(response, 200, { ok: true });
+      } catch (error) {
+        request.setDiagnosticError?.(error);
+        jsonResponse(response, error.statusCode || 500, { error: 'Cannot delete diagnostics' });
+      }
+    } },
     { method: 'GET', path: '/health', auth: 'none', body: 'none', handler: handleHealth },
     { method: 'GET', path: '/api/state', auth: 'none', body: 'none', handler: handleState },
     { method: 'GET', path: '/api/away', auth: 'none', body: 'none', handler: handleAwayState },
@@ -328,6 +355,26 @@ function createRequestHandler(options) {
   // 外部の Host の要求でアイドル終了を延ばさず、照合の前に ID や本文の妥当性を応答して漏らさないため。
   return async (request, response) => {
     const info = getServerInfo();
+    let requestError;
+    let diagnosticAuth = 'none';
+    let diagnosticPath = 'unknown';
+    let diagnosticRecorded = false;
+    const recordFailure = (status) => {
+      if (status < 400 || diagnosticRecorded) return;
+      diagnosticRecorded = true;
+      const auth = WRITE_AUTH[diagnosticAuth];
+      const supplied = request.headers['x-cockpit-secret'];
+      options.diagnostics?.record('error', 'server', 'request.failed', {
+        method: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].includes(request.method) ? request.method : 'other',
+        path: diagnosticPath, status, error: requestError,
+        secret: supplied === undefined ? 'missing' : info && (auth ? supplied === auth.secret(info)
+          : supplied === info.secret || supplied === info.uiSecret) ? 'match' : 'mismatch',
+        origin: request.headers.origin === undefined ? 'missing' : info && (auth
+          ? auth.origin(request, info.port) : validRequiredUiOrigin(request, info.port)) ? 'match' : 'mismatch',
+      });
+    };
+    response.once('finish', () => recordFailure(response.statusCode));
+    request.setDiagnosticError = error => { requestError = error; if (response.headersSent) recordFailure(500); };
     if (!info || !requestHostIsLocal(request, info.port)) {
       textResponse(response, 400, 'Invalid Host');
       return;
@@ -335,9 +382,16 @@ function createRequestHandler(options) {
     markRequest();
 
     const requestUrl = new URL(request.url, `http://127.0.0.1:${info.port}`);
+    if (requestUrl.pathname === '/manual' || requestUrl.pathname.startsWith('/manual/')) diagnosticPath = '/manual/:path';
     if (await serveManualRequest(request, response, manualDir)) return;
 
     const matched = findRoute(routes, request.method, requestUrl.pathname);
+    const diagnosticRoute = matched || findRoute(routes, 'GET', requestUrl.pathname) || findRoute(routes, 'POST', requestUrl.pathname);
+    if (diagnosticRoute) {
+      diagnosticAuth = diagnosticRoute.route.auth;
+      diagnosticPath = typeof diagnosticRoute.route.path === 'string' ? diagnosticRoute.route.path
+        : requestUrl.pathname.replace(/^\/api\/(sessions|decisions)\/[^/]+/, '/api/$1/:id');
+    }
     if (matched) {
       const { route, params } = matched;
       const failure = authFailure(route.auth, request, info);
@@ -354,11 +408,13 @@ function createRequestHandler(options) {
         try {
           body = JSON.parse(await readJsonBody(request));
         } catch (error) {
+          requestError = error;
           jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
           return;
         }
       }
-      await route.handler({ request, response, info, params, body });
+      try { await route.handler({ request, response, info, params, body }); }
+      catch (error) { requestError = error; throw error; }
       return;
     }
 
@@ -419,12 +475,13 @@ async function startServer(options = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('port must be between 0 and 65535');
   const dev = Boolean(options.dev);
   await fs.mkdir(homeDir, { recursive: true });
-  if (options.truncateLog !== false) await fs.writeFile(path.join(homeDir, 'server.log'), '', { mode: 0o600 });
 
   const storageWriter = new AtomicJsonWriter(homeDir, {
     onFailure: (fileName) => logLine(homeDir, `${fileName} write failed`),
   });
   const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter });
+  const diagnostics = new Diagnostics({ ...options.diagnosticsOptions, homeDir, userHome: options.userHome,
+    getLevel: () => state.getDisplayPreferences?.()?.diagnosticsLevel || 'info' });
   state.attachWriter?.(storageWriter);
   const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
   away.attachWriter?.(storageWriter);
@@ -514,12 +571,14 @@ async function startServer(options = {}) {
   }
   const server = options.server || http.createServer((request, response) => {
     Promise.resolve(handler(request, response)).catch((error) => {
+      request.setDiagnosticError?.(error);
       logLine(homeDir, 'request failed');
       if (!response.headersSent) jsonResponse(response, 500, { error: 'Internal Server Error' });
       else response.destroy();
     });
   });
   const handler = createRequestHandler({
+    diagnostics,
     homeDir,
     claudeHome,
     state,
@@ -554,12 +613,21 @@ async function startServer(options = {}) {
       startedAt: new Date().toISOString(),
     };
     await atomicWriteServerInfo(homeDir, info);
+    try {
+      const logPath = path.join(homeDir, 'server.log');
+      if ((await fs.stat(logPath)).size > (options.maxServerLogBytes ?? 1024 * 1024)) {
+        await fs.rename(logPath, `${logPath}.1`);
+      }
+    } catch {}
   } catch (error) {
     if (server.listening) await new Promise((resolve) => server.close(resolve));
     throw error;
   }
 
   logLine(homeDir, `started on 127.0.0.1:${info.port}`);
+  await diagnostics.record('mark', 'server', 'server.start', {
+    pid: info.pid, port: info.port, version, commit: await readSourceCommit(),
+  });
   pullRequestTracker.start();
   pullRequestMergeManager.start?.();
   async function refreshSessionFiles(now = Date.now()) {
@@ -613,11 +681,33 @@ async function startServer(options = {}) {
       await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
       await removeServerInfoIfOwned(homeDir, info);
       logLine(homeDir, 'stopped');
+      await diagnostics.record('mark', 'server', 'server.stop', { pid: info.pid });
+      await diagnostics.flush();
     })();
     return closing;
   }
 
-  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, info, homeDir, close, refreshSessionFiles };
+  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, diagnostics, info, homeDir, close, refreshSessionFiles };
+}
+
+async function readSourceCommit() {
+  try {
+    const root = path.join(__dirname, '../..');
+    let gitDir = path.join(root, '.git');
+    if ((await fs.stat(gitDir)).isFile()) gitDir = path.resolve(root, (await fs.readFile(gitDir, 'utf8')).trim().replace(/^gitdir: /, ''));
+    const head = (await fs.readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim();
+    if (/^[a-f0-9]{40,64}$/.test(head)) return head;
+    const ref = head.replace(/^ref: /, '');
+    let commonDir = gitDir;
+    try { commonDir = path.resolve(gitDir, (await fs.readFile(path.join(gitDir, 'commondir'), 'utf8')).trim()); } catch {}
+    try {
+      const commit = (await fs.readFile(path.join(commonDir, ref), 'utf8')).trim();
+      if (/^[a-f0-9]{40,64}$/.test(commit)) return commit;
+    } catch {}
+    const packed = await fs.readFile(path.join(commonDir, 'packed-refs'), 'utf8');
+    const commit = packed.split('\n').find(line => line.endsWith(` ${ref}`))?.split(' ')[0];
+    return /^[a-f0-9]{40,64}$/.test(commit) ? commit : undefined;
+  } catch { return undefined; }
 }
 
 function parseArguments(argv) {
