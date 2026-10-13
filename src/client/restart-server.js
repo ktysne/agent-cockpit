@@ -12,12 +12,13 @@ async function restartServer(options = {}) {
   const kill = options.kill || process.kill;
   const now = options.now || Date.now;
   const wait = options.sleep || sleep;
+  // 強制終了になるので、直前の書き込みが 500ms のまとめ書き(state.js)で保存されるまで待つ。
+  // 照合から停止までの間を空けないよう、待つのは照合の前にする。
+  await wait(STORE_SETTLE_MS);
   const info = await readInfo(homeDir);
   let stoppedPid = null;
   if (info && Number.isInteger(info.pid) && info.pid > 0 &&
       await healthy(info, { fetchImpl: options.fetchImpl, now, deadline: now() + 1000 })) {
-    // 強制終了になるので、直前の書き込みが 500ms のまとめ書き(state.js)で保存されるまで待つ。
-    await wait(STORE_SETTLE_MS);
     try {
       kill(info.pid);
       stoppedPid = info.pid;
