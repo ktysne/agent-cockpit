@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Cockpit | 並行するエージェントを 1 画面で</title>
+  <meta name="description" content="Agent Cockpit は、並行して動く Claude Code と Codex のセッションの状態、タスク、判断待ち、PR を、1 画面にまとめて表示するローカルのダッシュボードです。">
+  <link rel="icon" type="image/png" href="assets/app-icon-256.png">
+  <!--
+    配色はダッシュボードのダークの配色トークン(src/web/index.html の :root[data-theme="dark"])にそろえる。
+    導入の手順は README と docs/setup.md が正本で、このページには依頼文と、そこへの導線だけを置く。
+  -->
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #1a1a18; --panel: #252523; --panel2: #2f2f2c; --line: #3c3c37;
+      --text: #faf9f5; --muted: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
+      --claude: #f08c4f; --codex: #9d97ff; --ok: #8cc391; --warn: #e3b341;
+      --header-bg: rgba(26,26,24,.9);
+      --font-ui: "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+      --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 72px; scrollbar-color: var(--line) var(--bg); }
+    @media (max-width: 400px) { html { scroll-padding-top: 100px; } }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-ui); font-size: 15px; line-height: 1.8; -webkit-text-size-adjust: 100%; }
+    h1, h2, h3, p, ul, ol, figure { margin: 0; }
+    img { display: block; max-width: 100%; height: auto; }
+    a { color: var(--accent-text); text-decoration: none; }
+    a:hover { text-decoration: underline; text-underline-offset: 3px; }
+    :is(a, button):focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; border-radius: 4px; }
+    ::selection { background: var(--accent-soft); color: var(--text); }
+    .icon { border-radius: 22%; }
+
+    header { position: sticky; top: 0; z-index: 50; background: var(--header-bg); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+    .bar { max-width: 1120px; margin: 0 auto; padding: 0 20px; height: 56px; display: flex; align-items: center; gap: 18px; }
+    .brand { display: flex; align-items: center; gap: 9px; font-size: 17px; font-weight: 700; color: var(--text); white-space: nowrap; }
+    .brand:hover { text-decoration: none; }
+    .brand img { width: 28px; height: 28px; }
+    nav { margin-inline-start: auto; display: flex; gap: 4px; }
+    nav a { color: var(--muted); font-size: 13.5px; padding: 8px 12px; border-radius: 6px; display: inline-flex; align-items: center; white-space: nowrap; }
+    nav a:hover { color: var(--text); background: rgba(255,255,255,.05); text-decoration: none; }
+    @media (max-width: 560px) { nav a { padding-inline: 8px; } nav a.hide-sm { display: none; } }
+    @media (max-width: 400px) { .bar { flex-wrap: wrap; height: auto; padding-block: 8px 2px; row-gap: 0; } nav { margin-inline-start: -8px; flex-basis: 100%; } }
+
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+    section { padding-block: clamp(56px, 8vw, 96px); }
+    section + section { border-top: 1px solid var(--line); }
+    h2 { font-size: clamp(22px, 2.6vw, 28px); font-weight: 700; line-height: 1.4; margin-block-end: 10px; text-wrap: balance; }
+    .lead { color: var(--muted); max-width: 60ch; margin-block-end: 36px; text-wrap: pretty; }
+
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-block-size: 46px; padding: 0 22px; border-radius: 9px; font: inherit; font-weight: 700; font-size: 15px; white-space: nowrap; border: 1px solid var(--line); background: var(--panel2); color: var(--text); cursor: pointer; transition: background-color .15s, border-color .15s; }
+    .btn:hover { background: #383834; text-decoration: none; }
+    .btn.primary { border-color: var(--accent); background: var(--accent); color: #1f1e1d; }
+    .btn.primary:hover { background: #e3896b; }
+
+    .hero { --hero-icon-gap: 24px; padding-block: var(--hero-icon-gap) clamp(48px, 7vw, 88px); }
+    .hero-top { display: grid; gap: 28px; }
+    @media (min-width: 900px) { .hero-top { grid-template-columns: minmax(0, 1fr) 340px; gap: 56px; align-items: center; } }
+    .hero-copy { max-width: 680px; }
+    .hero-icon { width: 88px; height: 88px; margin-block-end: var(--hero-icon-gap); }
+    .hero h1 { font-size: clamp(30px, 4.2vw, 44px); font-weight: 800; line-height: 1.3; text-wrap: balance; margin-block-end: 18px; }
+    .hero h1 em { font-style: normal; color: var(--accent-text); }
+    .hero .sub { color: var(--muted); font-size: 16px; max-width: 64ch; text-wrap: pretty; margin-block-end: 28px; }
+    .hero .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .hero .note { color: var(--muted); font-size: 12.5px; margin-block-start: 14px; }
+
+    .mark { width: 10px; height: 10px; border-radius: 3px; background: var(--accent); flex-shrink: 0; }
+    .mark.claude { background: var(--claude); border-radius: 50%; }
+    .mark.codex { background: var(--codex); border-radius: 50%; }
+    .mark.ok { background: var(--ok); }
+    .mark.warn { background: var(--warn); }
+    .featcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; }
+    .featcard h2 { font-size: 12px; font-weight: 600; letter-spacing: .08em; color: var(--muted); margin-block-end: 10px; }
+    .featcard ul { list-style: none; padding: 0; display: grid; }
+    .featcard li { display: flex; align-items: center; gap: 12px; padding-block: 10px; font-size: 14.5px; }
+    .featcard li:not(:last-child) { border-block-end: 1px solid var(--line); }
+    .featcard a { color: var(--text); }
+
+    /* 実機の画面(幅 820px の PNG)。縦に長いので、広い画面では 2 枚を横に並べる */
+    .shots { display: grid; gap: 32px; }
+    @media (min-width: 900px) { .shots { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; align-items: start; } }
+    .shot figcaption { margin-block-end: 14px; }
+    .shot figcaption b { display: block; font-size: 16px; margin-block-end: 4px; }
+    .shot figcaption span { display: block; color: var(--muted); font-size: 14px; text-wrap: pretty; }
+    .shot a { display: block; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+
+    .cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 22px 22px 20px; display: flex; flex-direction: column; gap: 8px; }
+    .card h3 { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+    .card p { color: var(--muted); font-size: 14px; text-wrap: pretty; }
+
+    .install { display: grid; gap: 20px; }
+    @media (min-width: 900px) { .install { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 32px; } }
+    .ask { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 28px; display: flex; flex-direction: column; gap: 18px; align-self: start; }
+    .ask h3 { font-size: 15px; font-weight: 700; }
+    .prompt { margin: 0; padding: 16px 18px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); font-family: var(--font-mono); font-size: 13.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+    .ask .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .ask .status { color: var(--ok); font-size: 13px; }
+    .req h3 { font-size: 15px; font-weight: 700; margin-block-end: 8px; }
+    .req ul { padding-inline-start: 1.2em; color: var(--muted); font-size: 14px; }
+    .req ul + h3 { margin-block-start: 22px; }
+    .req li { margin-block: 2px; }
+
+    footer { border-top: 1px solid var(--line); padding-block: 28px; color: var(--muted); font-size: 12.5px; }
+    footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; }
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <a class="brand" href="#top"><img class="icon" src="assets/app-icon-256.png" alt="" width="28" height="28">Agent Cockpit</a>
+    <nav aria-label="サイト内">
+      <a class="hide-sm" href="#screens">画面</a>
+      <a class="hide-sm" href="#features">機能</a>
+      <a href="#install">導入</a>
+      <a href="https://github.com/ktysne/agent-cockpit">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-top">
+        <div class="hero-copy">
+          <img class="icon hero-icon" src="assets/app-icon-256.png" alt="" width="88" height="88" fetchpriority="high">
+          <h1>並行するエージェントを、<br><em>1 画面</em>で見渡す。</h1>
+          <p class="sub">Agent Cockpit は、並行して動く Claude Code と Codex のセッションを 1 つのダッシュボードにまとめます。どのセッションが何をしていて、どこで自分の判断を待っているかを、切り替えずに確かめられます。</p>
+          <div class="actions">
+            <a class="btn primary" href="#install">AI に導入を頼む</a>
+            <a class="btn" href="https://github.com/ktysne/agent-cockpit">GitHub で見る</a>
+          </div>
+          <p class="note">手元の PC で動く常駐サーバーです。導入は Claude Code などの AI に任せます。</p>
+        </div>
+        <aside class="featcard" aria-labelledby="feat-title">
+          <h2 id="feat-title">主な機能</h2>
+          <ul>
+            <li><span class="mark claude"></span><a href="#feat-sessions">Claude Code と Codex を一覧</a></li>
+            <li><span class="mark"></span><a href="#feat-tasks">タスクと完了条件</a></li>
+            <li><span class="mark warn"></span><a href="#feat-decisions">判断待ちに画面から回答</a></li>
+            <li><span class="mark ok"></span><a href="#feat-prs">積み上げた PR を順にマージ</a></li>
+            <li><span class="mark codex"></span><a href="#feat-routing">サブエージェントの経路を切り替え</a></li>
+          </ul>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <section id="screens">
+    <div class="wrap">
+      <h2>画面</h2>
+      <p class="lead">判断待ち、PR、タスク、今やっていることを、すべてのセッションから集めて種類ごとに並べます。画像を押すと原寸で開きます。</p>
+      <div class="shots">
+        <figure class="shot">
+          <figcaption><b>判断待ちと PR のスタック</b><span>Claude Code が選択肢を添えて判断を待ち、隣で Codex が作業しています。積み上げた PR は、下の段がクロスレビュー中で、上の段はレビューを終えて下の段のマージを待っています。</span></figcaption>
+          <a href="img/review/review.png"><img src="img/review/review.png" alt="Agent Cockpit の種類別の画面。あなたの判断が必要なことに、選択肢を 3 つ添えた Claude Code の判断事項がある。プルリクエストの欄には 2 段のスタックがあり、1 段目の #57 はクロスレビューの 2 往復目の結論待ち、2 段目の #58 はレビュー済みで #57 のマージ待ち。今やっていることには、待機中の Claude Opus 5.5 のメインと、作業中の Codex gpt-6.1-sol のメインが並ぶ。" width="820" height="1812" loading="lazy"></a>
+        </figure>
+        <figure class="shot">
+          <figcaption><b>タスクとサブエージェント</b><span>Claude Code と Codex のセッションが、それぞれタスクと完了条件を持って作業しています。Claude Code は、Claude で動く担当と Codex に任せた担当のサブエージェントを並行して使っています。</span></figcaption>
+          <a href="img/work/work.png"><img src="img/work/work.png" alt="Agent Cockpit の種類別の画面。タスクと完了条件の欄に、Claude Code と Codex のセッションのタスクが完了条件つきで並ぶ。今やっていることには、作業中の Claude Opus 5.5 と Codex gpt-6.1-sol のメインと、Claude Sonnet 5.5 で動く担当と Codex gpt-6-luna に委譲した担当のサブエージェントが稼働中として並ぶ。" width="820" height="1543" loading="lazy"></a>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>待たせている場所が、すぐ分かる</h2>
+      <p class="lead">セッションのフックと MCP ツールから状態を集めます。手で記録を付ける必要はありません。</p>
+      <div class="cards">
+        <div class="card" id="feat-sessions">
+          <h3><span class="mark claude"></span>Claude Code と Codex を一覧</h3>
+          <p>作業中のツール、稼働中のサブエージェント、待機中かどうかを、Claude Code と Codex のセッションごとに表示します。</p>
+        </div>
+        <div class="card" id="feat-tasks">
+          <h3><span class="mark"></span>タスクと完了条件</h3>
+          <p>メインセッションが登録した計画を、完了条件の達成状況と一緒に表示します。</p>
+        </div>
+        <div class="card" id="feat-decisions">
+          <h3><span class="mark warn"></span>判断待ちに画面から回答</h3>
+          <p>質問や、推奨で仮に進めた判断を一覧にします。画面から回答すると、フックがセッションへ届けます。席を外している間は、締切を過ぎたら推奨で進めます。</p>
+        </div>
+        <div class="card" id="feat-prs">
+          <h3><span class="mark ok"></span>積み上げた PR を順にマージ</h3>
+          <p>セッションが作った PR を、CI とクロスレビューの状態と一緒にスタックの形で表示します。一番下の PR を画面で確認してマージできます。</p>
+        </div>
+        <div class="card" id="feat-routing">
+          <h3><span class="mark codex"></span>サブエージェントの経路を切り替え</h3>
+          <p>サブエージェントとクロスレビューを Codex と Claude のどちらで動かすかを、画面で切り替えます。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2>導入</h2>
+      <p class="lead">導入は AI に任せます。手順書は GitHub にあり、AI が読みながら進めます。設定ファイルを変える前には、AI が変更の内容を示して確認を求めます。</p>
+      <div class="install">
+        <div class="ask">
+          <h3>Claude Code などの AI に、次のように頼んでください</h3>
+          <pre class="prompt" id="install-prompt">agent-cockpit を導入して。手順は https://raw.githubusercontent.com/ktysne/agent-cockpit/main/docs/setup.md にある。</pre>
+          <div class="actions">
+            <button class="btn primary" type="button" id="copy-prompt">依頼文をコピー</button>
+            <a class="btn" href="https://github.com/ktysne/agent-cockpit#導入">README の導入を読む</a>
+            <span class="status" id="copy-status" role="status"></span>
+          </div>
+        </div>
+        <div class="req">
+          <h3>必要なもの</h3>
+          <ul>
+            <li>Node.js 22 以上(外部パッケージは使いません)</li>
+            <li>Claude Code。Codex(CLI、デスクトップ)は任意です。</li>
+          </ul>
+          <h3>あわせて使えるツール</h3>
+          <ul>
+            <li>GitHub CLI、claude-codex-bridge、ai-cross-review を導入済みなら、PR の表示や経路の切り替えが加わります。詳しくは <a href="https://github.com/ktysne/agent-cockpit#連携できるツール">README の「連携できるツール」</a>にあります。</li>
+          </ul>
+          <h3>導入できたかの確認</h3>
+          <ul>
+            <li>確かめる点は、<a href="https://github.com/ktysne/agent-cockpit#導入できたかの確認">README の「導入できたかの確認」</a>にあります。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Agent Cockpit</span>
+    <a href="https://github.com/ktysne/agent-cockpit">GitHub</a>
+    <a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入の手順書</a>
+  </div>
+</footer>
+
+<script>
+  // クリップボードを使えないとき(http や権限の拒否)は、依頼文を選択して手でコピーできるようにする。
+  document.getElementById('copy-prompt').addEventListener('click', async () => {
+    const prompt = document.getElementById('install-prompt');
+    const status = document.getElementById('copy-status');
+    try {
+      await navigator.clipboard.writeText(prompt.textContent);
+      status.textContent = 'コピーしました';
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(prompt);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      status.textContent = '選択しました。Ctrl+C でコピーしてください';
+    }
+  });
+</script>
+</body>
+</html>

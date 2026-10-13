@@ -98,9 +98,10 @@ async function startDemoServer(options = {}) {
     temporaryRoot = await fs.mkdtemp(path.join(options.temporaryParent || os.tmpdir(), 'agent-cockpit-manual-'));
     const homeDir = path.join(temporaryRoot, 'cockpit');
     const claudeHome = path.join(temporaryRoot, 'claude');
+    const codexHome = path.join(temporaryRoot, 'codex');
     const userHome = path.join(temporaryRoot, 'user');
     const workRoot = path.join(temporaryRoot, 'work');
-    await Promise.all([homeDir, claudeHome, userHome, workRoot].map((directory) => fs.mkdir(directory, { recursive: true })));
+    await Promise.all([homeDir, claudeHome, codexHome, userHome, workRoot].map((directory) => fs.mkdir(directory, { recursive: true })));
 
     const gitConfig = path.join(temporaryRoot, 'gitconfig');
     await fs.writeFile(gitConfig, '');
@@ -123,9 +124,18 @@ async function startDemoServer(options = {}) {
       const cwd = directories.get(`${session.product}/${session.worktree || ''}`);
       if (!cwd) throw new Error(`セッション ${session.key} の作業ディレクトリがシナリオにありません`);
       sessions.set(session.key, { ...session, cwd });
-      await writeJson(path.join(claudeHome, 'sessions', `${session.id}.json`), {
-        sessionId: session.id, pid: process.pid, cwd, name: session.title,
-      });
+      if (session.provider === 'codex') {
+        // Codex のセッションは、ロックがある間を生存とみなし、題を session_index.jsonl のスレッド名から読む。
+        await fs.mkdir(path.join(codexHome, 'thread-writer-locks'), { recursive: true });
+        await fs.writeFile(path.join(codexHome, 'thread-writer-locks', `${session.id}.lock`), '');
+        await fs.appendFile(path.join(codexHome, 'session_index.jsonl'), `${JSON.stringify({
+          id: session.id, thread_name: session.title, updated_at: new Date(baseTime).toISOString(),
+        })}\n`);
+      } else {
+        await writeJson(path.join(claudeHome, 'sessions', `${session.id}.json`), {
+          sessionId: session.id, pid: process.pid, cwd, name: session.title,
+        });
+      }
     }
     for (const agent of scenario.claudeAgents || []) {
       await fs.mkdir(path.join(claudeHome, 'agents'), { recursive: true });
@@ -143,12 +153,19 @@ async function startDemoServer(options = {}) {
     runtime = await startServer({
       homeDir,
       claudeHome,
+      codexHome,
       userHome,
       port: options.port ?? 0,
       pullRequestOptions: { execFileImpl: gh.execFileImpl },
       codexAgentScriptExists: async () => integrations.codexAgent,
       crossReviewToolExists: async () => integrations.crossReview,
       openExternalUrl: async () => {},
+      // Claude のメインのモデルは transcript から読む。デモには transcript が無いので、シナリオのセッションの model を返す。
+      readSessionModel: async (_claudeHome, _cwd, sessionId) => {
+        const model = scenario.sessions.find((session) => session.id === sessionId)?.model;
+        return model ? { model, at: null } : null;
+      },
+      sessionModelDelayMs: 0,
       // デモには回答を待つフックが無く生存確認が届かないので、預かった質問を生存確認の途絶で解除しない。
       answerDeliveryOptions: { maxAskPollGapMs: DEMO_ASK_POLL_GAP_MS },
     });
@@ -179,15 +196,21 @@ async function startDemoServer(options = {}) {
       /** フックが送る形の入力を、そのセッションの cwd と ID を足して /api/events へ送る。 */
       async hook(key, input) {
         const session = sessionFor(key);
-        const event = makeHookEvent({ cwd: session.cwd, ...input, session_id: session.id }, clock.now());
+        const isCodex = session.provider === 'codex';
+        const event = isCodex
+          ? makeHookEvent({ cwd: session.cwd, model: session.model, ...input, session_id: session.id }, clock.now(), { provider: 'codex', environment: {} })
+          : makeHookEvent({ cwd: session.cwd, ...input, session_id: session.id }, clock.now());
         if (!event) throw new Error(`フックの入力が不正です: ${JSON.stringify(input)}`);
+        // 本物のフックは Codex の親のプロセス ID を探して載せる。デモは撮影のプロセスを生きた Codex に見立てる。
+        if (isCodex && event.hook_event_name === 'SessionStart') event.codexPid = process.pid;
         if (event.hook_event_name === 'SubagentStart' && input.route) event.route = input.route;
         ensureOk(await post('/api/events', event), `${key} の ${input.hook_event_name}`);
       },
       /** MCP サーバーが送る形(tasks、add_decision、update_decision)を /api/sessions/<id>/plan へ送る。 */
       async plan(key, body) {
         const session = sessionFor(key);
-        return ensureOk(await post(`/api/sessions/${session.id}/plan`, body), `${key} の ${body.kind}`);
+        const identity = session.provider === 'codex' ? { codexSessionId: session.id } : {};
+        return ensureOk(await post(`/api/sessions/${session.id}/plan`, { ...identity, ...body }), `${key} の ${body.kind}`);
       },
       /**
        * MCP サーバーが送る形(add_pr、skip_review)を /api/sessions/<id>/prs へ送る。
@@ -195,9 +218,11 @@ async function startDemoServer(options = {}) {
        */
       async prs(key, body) {
         const session = sessionFor(key);
+        const identity = session.provider === 'codex'
+          ? { codexSessionId: session.id }
+          : { ppid: HOOK_PID_FOR_UNMAPPED_SESSION, claudeCodeSessionId: session.id };
         return ensureOk(await post(`/api/sessions/${session.id}/prs`, {
-          ppid: HOOK_PID_FOR_UNMAPPED_SESSION,
-          claudeCodeSessionId: session.id,
+          ...identity,
           ...(body.kind === 'add_pr' ? { cwd: session.cwd } : {}),
           ...body,
         }), `${key} の ${body.kind}`);
@@ -225,7 +250,11 @@ async function startDemoServer(options = {}) {
     };
 
     await scenario.play(demo);
+    // モデルの読み取りは実時間のタイマーで後から走るので、流し込みの後に終わるのを待つ。
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
     clock.set(baseTime);
+    // Codex のスレッド名は定期の走査で読むので、撮影の前に 1 回走査して題に反映する。
+    await runtime.refreshSessionFiles(clock.now());
     await demo.refreshPullRequests();
     await runtime.state.waitForPersistence();
 

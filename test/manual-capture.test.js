@@ -37,15 +37,19 @@ function validDefinition(overrides = {}) {
 test('撮影の定義は既定値を補い、リポジトリの定義がすべて検査を通る', () => {
   const definition = validateShotDefinition(validDefinition());
   assert.deepEqual(definition.window, { width: 850, height: 900 });
+  assert.equal(definition.scale, 2);
+  assert.equal(validateShotDefinition(validDefinition({ scale: 1 })).scale, 1);
   assert.equal(definition.theme, 'dark');
   assert.deepEqual(definition.integrations, {});
 
-  const manualRoot = path.join(ROOT, 'manual');
-  const names = listDefinitionNames(manualRoot);
-  assert.ok(names.includes('overview'));
-  for (const name of names) {
-    const raw = JSON.parse(fs.readFileSync(path.join(manualRoot, 'shots', `${name}.json`), 'utf8'));
-    assert.doesNotThrow(() => validateShotDefinition(raw, { label: name }), name);
+  for (const [root, expected] of [['manual', 'overview'], ['site', 'review']]) {
+    const manualRoot = path.join(ROOT, root);
+    const names = listDefinitionNames(manualRoot);
+    assert.ok(names.includes(expected));
+    for (const name of names) {
+      const raw = JSON.parse(fs.readFileSync(path.join(manualRoot, 'shots', `${name}.json`), 'utf8'));
+      assert.doesNotThrow(() => validateShotDefinition(raw, { label: name }), `${root}/${name}`);
+    }
   }
 });
 
@@ -56,6 +60,7 @@ test('不正な撮影の定義は撮影を始める前に拒否する', () => {
   rejected(validDefinition({ scenario: 'missing' }), /scenario/);
   rejected(validDefinition({ extra: 1 }), /未知の項目/);
   rejected(validDefinition({ theme: 'blue' }), /theme/);
+  rejected(validDefinition({ scale: 3 }), /scale/);
   rejected(validDefinition({ window: { width: 50 } }), /window\.width/);
   rejected(validDefinition({ window: { depth: 1 } }), /window は/);
   rejected(validDefinition({ integrations: { codexAgent: 'yes' } }), /integrations/);

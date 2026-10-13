@@ -202,10 +202,12 @@ rec-studio の `build.js` と `guide-map.js` を写し、置き場とナビの�
 |---|---|
 | `homeDir` | 一時ディレクトリの下の保存先 |
 | `claudeHome` | 一時ディレクトリの下の偽の Claude のホーム。`sessions/*.json` にデモのセッションを置き、`pid` には撮影のプロセスの pid を書く。生きているセッションとして読ませるためである |
+| `codexHome` | 一時ディレクトリの下の偽の Codex のホーム。シナリオで `provider: 'codex'` としたセッションごとに、`thread-writer-locks/<ID>.lock` と、題をスレッド名に持つ `session_index.jsonl` の行を置く。撮影の機械の `~/.codex` を読まないためである |
 | `port` | 0。空いているポートで待ち受ける |
 | `pullRequestOptions.execFileImpl` | 偽の `gh`(「偽の gh」)。マージの処理も `PullRequestTracker` を通して `gh` を呼ぶので、この 1 つで足りる |
 | `codexAgentScriptExists`、`crossReviewToolExists` | 連携の有無。撮る画面ごとに切り替える |
 | `openExternalUrl` | 何もしない関数。撮影中に外部のブラウザを開かないためである |
+| `readSessionModel`、`sessionModelDelayMs` | シナリオのセッションの `model` を返す関数と 0。Claude のメインのモデルは transcript から読むが、デモには transcript が無いためである |
 
 ### 時計の固定
 
@@ -241,6 +243,11 @@ rec-studio の `build.js` と `guide-map.js` を写し、置き場とナビの�
 `states` は、終了未確認の行、GPT が使えなかった行、経路の設定を変えた後の行、状態不明のセッションを含む。
 `no-gh` は、GitHub CLI を実行できない環境で、登録した PR の枠にエラーが出る状態を含む。偽の gh は、定義の `unavailable` に起動の失敗の code を書くと、どの呼び出しもその失敗で返す。
 離席中の質問の登録や回答の配信は、回答のフックが使う `/api/hooks/answers` へ送って作る。
+`site-review` と `site-work` は配布ページの画像のシナリオで、内容は [site.md](site.md) にある。
+
+Codex のセッションは、シナリオのセッションに `provider: 'codex'` と `model` を書いて作る。
+フックの入力は provider `codex` として組み立て、`SessionStart` には撮影のプロセスの pid を Codex 本体の pid として載せる。計画と PR の書き込みは、Codex の MCP と同じく `codexSessionId` で送る。
+スレッド名は常駐サーバーの定期の走査で読むので、流し込みの後に 1 回走査させてから撮る。
 
 ### 偽の gh
 
@@ -287,6 +294,7 @@ PR の取得とマージは `gh` を子プロセスで呼ぶ。
 
 - `scenario`:`tools/manual/demo/` のシナリオの名前。
 - `window`:ウィンドウの論理の大きさ。`width` の既定は 850 である。高さは、`target` も `viewport` も指定しない `screenshot` では内容の高さに合わせて伸ばす。
+- `scale`:画像の倍率で、1 か 2。既定は 2 である。配布ページの画像は、論理の幅をそのまま画像の幅にするため 1 で撮る。
 - `theme`:`dark` か `light`。ダッシュボードの配色の設定として `localStorage` に書く。
 - `integrations`:連携の有無。デモの常駐サーバーへ渡す。
 - `storage`:撮る前に `localStorage` に書く値。配色や「前回見てから」のようにブラウザーごとに保存する設定と、サーバーに表示設定がまだ無く旧 `localStorage` から初期移行する状態の撮影に使う。通常の表示設定は常駐サーバーに保存する。
@@ -302,6 +310,7 @@ PR の取得とマージは `gh` を子プロセスで呼ぶ。
 
 `npm run manual:capture -- [定義名...]` で撮る。
 定義名を省くと、すべての定義を撮る。
+`--root <ディレクトリ>` を付けると、撮影の定義を `<ディレクトリ>/shots/` から読み、画像を `<ディレクトリ>/img/` に書く。配布ページの画像は `npm run site:capture` で `site/` を指定して撮る([site.md](site.md))。
 撮影のスクリプト(`tools/manual/capture.js`)は、定義ごとに次の順で進める。
 
 1. 一時ディレクトリを作り、デモの常駐サーバーを起動してシナリオを流し込む。

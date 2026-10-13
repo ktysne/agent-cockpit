@@ -8,8 +8,10 @@ const { startDemoServer } = require('./demo-server');
 const { scenarioNames } = require('./demo');
 const { isRecord } = require('./value-utils');
 
-const MANUAL_ROOT = path.join(__dirname, '..', '..', 'manual');
+const REPOSITORY_ROOT = path.join(__dirname, '..', '..');
+const MANUAL_ROOT = path.join(REPOSITORY_ROOT, 'manual');
 const DEVICE_SCALE = 2;
+const SCALES = new Set([1, 2]);
 const DEFAULT_WIDTH = 850;
 const DEFAULT_HEIGHT = 900;
 const DEFAULT_WAIT_MS = 10_000;
@@ -33,7 +35,7 @@ const nonEmptyString = (value) => typeof value === 'string' && value.trim().leng
 function validateShotDefinition(definition, { label = '撮影の定義', scenarios = scenarioNames() } = {}) {
   const fail = (message) => { throw new Error(`${label}: ${message}`); };
   if (!isRecord(definition)) fail('JSON のオブジェクトではありません');
-  const known = new Set(['title', 'scenario', 'window', 'theme', 'integrations', 'storage', 'steps']);
+  const known = new Set(['title', 'scenario', 'window', 'scale', 'theme', 'integrations', 'storage', 'steps']);
   for (const key of Object.keys(definition)) if (!known.has(key)) fail(`未知の項目です: ${key}`);
   if (!nonEmptyString(definition.title)) fail('title が空です');
   if (!scenarios.includes(definition.scenario)) fail(`scenario がありません: ${definition.scenario}`);
@@ -45,6 +47,9 @@ function validateShotDefinition(definition, { label = '撮影の定義', scenari
   for (const [name, value] of [['width', width], ['height', height]]) {
     if (!Number.isInteger(value) || value < 200 || value > 4000) fail(`window.${name} は 200〜4000 の整数で指定してください`);
   }
+
+  const scale = definition.scale ?? DEVICE_SCALE;
+  if (!SCALES.has(scale)) fail('scale は 1 か 2 にしてください');
 
   const theme = definition.theme ?? 'dark';
   if (!THEMES.has(theme)) fail('theme は dark か light にしてください');
@@ -94,6 +99,7 @@ function validateShotDefinition(definition, { label = '撮影の定義', scenari
     title: definition.title,
     scenario: definition.scenario,
     window: { width, height },
+    scale,
     theme,
     integrations,
     storage,
@@ -232,10 +238,10 @@ async function runStep(page, step, context) {
   }
 }
 
-async function fitViewportToContent(page, width, minimumHeight) {
+async function fitViewportToContent(page, width, minimumHeight, scale) {
   let height = minimumHeight;
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: DEVICE_SCALE, mobile: false });
+    await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: scale, mobile: false });
     await page.evaluate(frames);
     const content = await page.evaluate('Math.ceil(Math.max(document.documentElement.scrollHeight, document.body.scrollHeight))');
     const next = Math.max(minimumHeight, content);
@@ -250,9 +256,9 @@ async function takeScreenshot(page, step, context) {
   await page.evaluate(`(() => { window.scrollTo(0, 0); if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); return true; })()`);
   // viewport は利用者が最初に目にするウィンドウの範囲だけを撮る。全体図が縦に伸びすぎないためである。
   const height = step.viewport
-    ? await page.send('Emulation.setDeviceMetricsOverride', { width: definition.window.width, height: definition.window.height, deviceScaleFactor: DEVICE_SCALE, mobile: false })
+    ? await page.send('Emulation.setDeviceMetricsOverride', { width: definition.window.width, height: definition.window.height, deviceScaleFactor: definition.scale, mobile: false })
       .then(() => page.evaluate(frames)).then(() => definition.window.height)
-    : await fitViewportToContent(page, definition.window.width, definition.window.height);
+    : await fitViewportToContent(page, definition.window.width, definition.window.height, definition.scale);
   const rectOf = (selector) => page.evaluate(`(() => {
     const rect = ${selectorLookup(selector)}.getBoundingClientRect();
     return { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height };
@@ -269,12 +275,12 @@ async function takeScreenshot(page, step, context) {
   };
   const clip = step.target ? clipFromRect(await unionRectOf([step.target].flat())) : { x: 0, y: 0, width: definition.window.width, height };
   const parts = [];
-  for (const [key, selector] of Object.entries(step.parts || {})) parts.push(partBounds(key, await unionRectOf([selector].flat()), clip));
+  for (const [key, selector] of Object.entries(step.parts || {})) parts.push(partBounds(key, await unionRectOf([selector].flat()), clip, definition.scale));
   const { data } = await page.send('Page.captureScreenshot', { format: 'png', clip: { ...clip, scale: 1 }, captureBeyondViewport: false });
   const png = Buffer.from(data, 'base64');
   const image = pngSize(png);
-  if (image.width !== clip.width * DEVICE_SCALE || image.height !== clip.height * DEVICE_SCALE) {
-    throw new Error(`撮った画像の大きさが想定と違います: ${image.width}x${image.height}(想定 ${clip.width * DEVICE_SCALE}x${clip.height * DEVICE_SCALE})`);
+  if (image.width !== clip.width * definition.scale || image.height !== clip.height * definition.scale) {
+    throw new Error(`撮った画像の大きさが想定と違います: ${image.width}x${image.height}(想定 ${clip.width * definition.scale}x${clip.height * definition.scale})`);
   }
   const base = path.join(outputDirectory, step.name);
   const pngChanged = await writeIfChanged(`${base}.png`, png);
@@ -296,7 +302,7 @@ async function captureDefinition(browser, definitionName, definition, { manualRo
 
     await page.send('Page.enable');
     await page.send('Emulation.setDeviceMetricsOverride', {
-      width: definition.window.width, height: definition.window.height, deviceScaleFactor: DEVICE_SCALE, mobile: false,
+      width: definition.window.width, height: definition.window.height, deviceScaleFactor: definition.scale, mobile: false,
     });
     await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     await page.send('Emulation.setTimezoneOverride', { timezoneId: 'Asia/Tokyo' });
@@ -340,14 +346,15 @@ function listDefinitionNames(manualRoot) {
 
 function loadDefinition(manualRoot, definitionName) {
   const filePath = path.join(manualRoot, 'shots', `${definitionName}.json`);
-  if (!fs.existsSync(filePath)) throw new Error(`撮影の定義がありません: manual/shots/${definitionName}.json`);
+  const label = path.relative(REPOSITORY_ROOT, filePath).replaceAll('\\', '/');
+  if (!fs.existsSync(filePath)) throw new Error(`撮影の定義がありません: ${label}`);
   let raw;
   try {
     raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (error) {
-    throw new Error(`manual/shots/${definitionName}.json を JSON として読めません: ${error.message}`);
+    throw new Error(`${label} を JSON として読めません: ${error.message}`);
   }
-  return validateShotDefinition(raw, { label: `manual/shots/${definitionName}.json` });
+  return validateShotDefinition(raw, { label });
 }
 
 async function capture(names, { manualRoot = MANUAL_ROOT, log = console.log } = {}) {
@@ -366,8 +373,29 @@ async function capture(names, { manualRoot = MANUAL_ROOT, log = console.log } = 
   }
 }
 
+// --root <ディレクトリ> で、撮影の定義(<ディレクトリ>/shots)と画像の置き場(<ディレクトリ>/img)を切り替える。配布ページの画像は site を指定して撮る。
+function parseCaptureArguments(argv) {
+  const names = [];
+  let manualRoot = MANUAL_ROOT;
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === '--root') {
+      const value = argv[++index];
+      if (!value) throw new Error('--root にはディレクトリを指定してください');
+      manualRoot = path.resolve(REPOSITORY_ROOT, value);
+    } else if (argv[index].startsWith('-')) {
+      throw new Error(`不明な引数です: ${argv[index]}`);
+    } else {
+      names.push(argv[index]);
+    }
+  }
+  return { names, manualRoot };
+}
+
 if (require.main === module) {
-  capture(process.argv.slice(2)).catch((error) => {
+  Promise.resolve().then(() => {
+    const { names, manualRoot } = parseCaptureArguments(process.argv.slice(2));
+    return capture(names, { manualRoot });
+  }).catch((error) => {
     console.error(error.message);
     process.exitCode = 1;
   });

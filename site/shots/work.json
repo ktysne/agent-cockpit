@@ -1,0 +1,28 @@
+{
+  "title": "配布ページ: タスクとサブエージェント",
+  "scenario": "site-work",
+  "window": {
+    "width": 820,
+    "height": 900
+  },
+  "scale": 1,
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "click",
+      "selector": "[data-action=\"mode\"][data-mode=\"kind\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "[data-action=\"mode\"][data-mode=\"kind\"][aria-pressed=\"true\"]"
+    },
+    {
+      "do": "screenshot",
+      "name": "work"
+    }
+  ]
+}
