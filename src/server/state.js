@@ -2293,7 +2293,7 @@ class DashboardState {
   liveCodexSessionFiles(isAlive, locks = null) {
     const files = [];
     for (const [sessionId, record] of this.codexRecovery) {
-      if (!isAlive(record.pid) || (locks !== null && record.lockSeen && !locks.has(sessionId))) {
+      if (!isAlive(record.pid)) {
         this.codexRecovery.delete(sessionId);
         this.requestStoreWrite();
         continue;
@@ -2302,6 +2302,8 @@ class DashboardState {
         record.lockSeen = true;
         this.requestStoreWrite();
       }
+      // 閉じた会話も記録は残す。プロセス ID は SessionStart でしか届かないので、消すと再開した行を生存の一覧へ戻せないため。
+      if (locks !== null && record.lockSeen && !locks.has(sessionId)) continue;
       files.push({
         session_id: sessionId, provider: 'codex', pid: record.pid, cwd: record.cwd,
         updatedAt: record.updatedAt, codex: { model: record.model, resumes: record.resumes },

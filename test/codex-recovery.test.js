@@ -153,7 +153,7 @@ for (const claudeFilesReadable of [true, false]) {
   });
 }
 
-test('ロックを見た Codex はイベントの後も印を保ち、ロック消失で一覧と保存から外れて60秒後に終了する', async (t) => {
+test('ロックを見た Codex はイベントの後も印を保ち、ロック消失で一覧から外れて60秒後に終了し、記録は残る', async (t) => {
   const c = await cockpit(t);
   await c.lock();
   await c.event('SessionStart', { codexPid: 1234 });
@@ -164,7 +164,7 @@ test('ロックを見た Codex はイベントの後も印を保ち、ロック�
   await c.unlock();
   await c.runtime.refreshSessionFiles(now + 10_000);
   assert.equal(c.runtime.state.sessionFiles.has('thread'), false);
-  assert.deepEqual((await c.store()).codexRecovery, {});
+  assert.equal((await c.store()).codexRecovery.thread.lockSeen, true);
   assert.equal((await c.rows())[0].session_id, 'thread');
   await c.runtime.refreshSessionFiles(now + 60_000);
   assert.deepEqual(await c.rows(), []);
@@ -201,7 +201,7 @@ for (const unreadable of ['missing', 'file']) {
   });
 }
 
-test('保存したロックの印は再起動後も残り、ロック消失後の再起動では行を戻さない', async (t) => {
+test('保存したロックの印は再起動後も残り、ロック消失後の再起動では行を戻さない(記録は残す)', async (t) => {
   const c = await cockpit(t);
   await c.lock();
   await c.event('SessionStart', { codexPid: 1234 });
@@ -212,10 +212,10 @@ test('保存したロックの印は再起動後も残り、ロック消失後�
   await c.unlock();
   await c.restart();
   assert.deepEqual(await c.rows(), []);
-  assert.deepEqual((await c.store()).codexRecovery, {});
+  assert.equal((await c.store()).codexRecovery.thread.lockSeen, true);
 });
 
-test('ロック消失で終了した Codex は同じ会話のイベントで行と復旧記録が戻る', async (t) => {
+test('ロック消失で終了した Codex を再開すると、SessionStart が無くても行が戻り、終了扱いに戻らない', async (t) => {
   const c = await cockpit(t);
   await c.lock();
   await c.event('SessionStart', { codexPid: 1234 });
@@ -224,12 +224,13 @@ test('ロック消失で終了した Codex は同じ会話のイベントで行�
   await c.unlock();
   await c.runtime.refreshSessionFiles(now + 60_000);
   assert.deepEqual(await c.rows(), []);
-  await c.event('SessionStart', { codexPid: 1234, hookAt: now + 60_001 });
+  await c.lock();
+  await c.event('UserPromptSubmit', { hookAt: now + 60_001 });
   await c.runtime.refreshSessionFiles(now + 60_002);
+  await c.runtime.refreshSessionFiles(now + 180_000);
   assert.equal((await c.rows())[0].session_id, 'thread');
   assert.equal(c.runtime.state.sessionHasEnded('thread'), false);
   assert.equal((await c.store()).codexRecovery.thread.pid, 1234);
-  assert.equal((await c.store()).codexRecovery.thread.lockSeen, undefined);
 });
 
 test('ロック一覧は隠しファイル、別の拡張子、ディレクトリを会話のロックに含めない', async (t) => {
