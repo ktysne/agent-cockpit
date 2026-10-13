@@ -30,11 +30,14 @@ async function findCodexParentPid() {
   const deadline = Date.now() + CODEX_PARENT_TIMEOUT_MS;
   let pid = process.ppid;
   if (process.platform === 'win32') {
-    const script = `$ancestorPid = ${pid}; for ($depth = 0; $depth -lt 4 -and $ancestorPid -gt 0; $depth++) { ` +
-      '$ancestor = Get-CimInstance Win32_Process -Filter "ProcessId = $ancestorPid"; ' +
+    // Get-CimInstance は 1 回の呼び出しに 1 秒以上かかり、段ごとに呼ぶと上限を超えるため、全プロセスを 1 回で取って手元でたどる。
+    const script = '$processes = @{}; Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name | ' +
+      'ForEach-Object { $processes[[int]$_.ProcessId] = $_ }; ' +
+      `$ancestorPid = ${pid}; for ($depth = 0; $depth -lt 4 -and $ancestorPid -gt 0; $depth++) { ` +
+      '$ancestor = $processes[[int]$ancestorPid]; ' +
       'if (!$ancestor) { break }; if ($ancestor.Name -match "^(?i:codex(?:\\.exe)?)$") { ' +
       '$ancestor.ProcessId; break }; $ancestorPid = $ancestor.ParentProcessId }';
-    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       timeout: CODEX_PARENT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4096,
     });
     const found = Number(stdout.trim());
