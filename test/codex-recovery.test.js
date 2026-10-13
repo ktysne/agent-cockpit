@@ -62,7 +62,7 @@ test('Codex の SessionStart は見つかった親の PID だけを送る', asyn
     ['timeout', () => new Promise(() => {})],
   ]) {
     await runHook({ session_id: id, hook_event_name: 'SessionStart', cwd: c.homeDir },
-      { provider: 'codex', homeDir: c.homeDir, findCodexParentPid });
+      { provider: 'codex', homeDir: c.homeDir, findCodexParentPid, codexParentTimeoutMs: 50 });
   }
   assert.deepEqual(Object.keys((await c.store()).codexRecovery), ['found']);
 });
