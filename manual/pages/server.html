@@ -6,7 +6,7 @@
   <h2 id="server-life">起動と寿命</h2>
   <p>常駐サーバーは、次のどれかのときに起動します。</p>
   <ul>
-    <li>Claude Code のセッションを開始したとき。フックが、動いていなければ起動します</li>
+    <li>Claude Code または Codex のセッションを開始したとき。フックが、動いていなければ起動します</li>
     <li>セッションのフックが情報を送るとき。動いていなければ起動します</li>
     <li>タスクトレイでダッシュボードを開くとき(<a href="tray.html#tray-start">タスクトレイを起動する</a>)</li>
     <li>リポジトリのルートで <code>npm start</code> を実行したとき</li>
@@ -35,7 +35,7 @@
   <p>常駐サーバーが保存するものは、保存先のフォルダーに置きます。
   既定の保存先は、ユーザーのホームフォルダーの <code>.agent-cockpit</code> です(Windows では <code>C:\Users\&lt;ユーザー名&gt;\.agent-cockpit</code>)。</p>
   <ul>
-    <li><code>store.json</code>：タスク、判断事項と回答の記録、PR の登録、表示の設定、外したセッションなど、再起動しても残したい記録の本体です</li>
+    <li><code>store.json</code>：タスク、判断事項と回答の記録、PR の登録、表示の設定、外したセッションなど、再起動しても残したい記録の本体です。Codex のセッションを戻すためのプロセス番号、作業場所、モデル名、再開の回数、最後の記録時刻、会話のロックを見た記録も含みます</li>
     <li><code>away.json</code>：離席中の切り替えと、離席中の期間の記録です</li>
     <li><code>routing.json</code>：経路の設定です(<a href="routing.html">経路の設定</a>)</li>
     <li><code>route-agents/</code>：サブエージェントを起動したときの経路の記録です。24 時間使われていないものは消えます</li>
@@ -43,11 +43,14 @@
     <li><code>browser/</code>：タスクトレイから開くダッシュボードの Edge のプロファイルです</li>
     <li><code>agent-cockpit.ico</code>：ショートカットのアイコンです</li>
     <li><code>server.json</code>：動いている常駐サーバーのプロセス番号、ポート、起動した時刻と、書き込みを照合する秘密値です。フックとタスクトレイが、接続先を知るために読みます。秘密値が入っているので、他人に渡さないでください</li>
-    <li><code>server.log</code>：常駐サーバーのログです。起動のたびに空にして書き直します。起動と停止、保存に失敗したファイルの名前、処理に失敗したことだけを書きます。回答の本文や、PR の情報は書きません</li>
+    <li><code>server.log</code>：常駐サーバーのログです。追記して残します。起動時に 1 MiB を超えていて常駐サーバーが動いていなければ、<code>server.log.1</code> に移してから、新しいログを書き始めます。起動と停止、保存に失敗したファイルの名前、処理に失敗したことだけを書きます。回答の本文や、PR の情報は書きません</li>
+    <li><code>server.log.1</code>：起動時に移した直前のログです</li>
+    <li><code>diagnostics/</code>：起動ごとの診断ログを <code>.jsonl</code> で保存します。直近 10 回の起動、全体で 30 区分、1 区分 2000 行までです(<a href="settings.html#settings-diagnostics">診断ログ</a>)</li>
+    <li><code>diagnostics/hooks-pending.jsonl</code>：サーバーに届かなかったフックの記録を、一時的に 256 KiB まで保存します。取り込んだ後に削除します</li>
     <li><code>start.lock</code>：起動の順番を守るための一時ファイルです。起動が終わると消えます</li>
   </ul>
   <p>ファイルは、一時ファイルに書いてから置き換える形で書くので、書き込みの途中で止まっても、壊れたファイルは残りません。
-  PC に Claude Code のセッション情報として元からある <code>~/.claude/sessions/*.json</code> は、読むだけで、書きません。</p>
+  PC に Claude Code のセッション情報として元からある <code>~/.claude/sessions/*.json</code> と、Codex のホーム(<code>CODEX_HOME</code>、無ければ <code>~/.codex</code>)の <code>thread-writer-locks/*.lock</code> と <code>session_index.jsonl</code> は、読むだけで、書きません。</p>
   <details class="more">
     <summary>保存の詳細</summary>
     <ul>
@@ -69,6 +72,7 @@
     <li>「前回見てから」の既読の時刻と離席中の期間、離席中の切り替え</li>
     <li>表示の設定(表示モード、カードの並びと畳み、隠した種類、設定画面の項目)と、外したセッション</li>
     <li>経路の設定</li>
+    <li>Codex のセッションの復旧の記録。プロセスが生きていて、確認済みの会話のロックが消えていなければ、状態不明の行として戻します。モデル名と再開の回数も戻ります。プロセス番号を記録できなかったセッションは、次の出来事が届くまで行が出ません</li>
   </ul>
   <p>消えるものは、次のとおりです。</p>
   <ul>
@@ -96,6 +100,7 @@
     <summary>ポートの扱いの詳細</summary>
     <ul>
       <li>ポートの環境変数を読むのは、常駐サーバーを起動するフックとタスクトレイです。起動した後は、フックもタスクトレイも、<code>server.json</code> のポートに接続します</li>
+      <li>Codex のホーム(<code>CODEX_HOME</code>、無ければ <code>~/.codex</code>)は、会話が開いているかを確かめるロックファイルと、スレッド名の一覧を読むために使います</li>
       <li>Claude のホーム(<code>CLAUDE_CONFIG_DIR</code>、無ければ <code>~/.claude</code>)は、セッションのファイルとサブエージェントの定義を読むために使います</li>
     </ul>
   </details>

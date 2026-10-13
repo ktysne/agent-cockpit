@@ -10,6 +10,11 @@
   },
   "title": "レビュー収束後マージの予約",
   "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "click",

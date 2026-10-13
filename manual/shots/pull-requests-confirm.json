@@ -10,6 +10,11 @@
   },
   "title": "マージの確認欄",
   "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "click",

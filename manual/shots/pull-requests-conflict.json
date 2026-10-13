@@ -10,6 +10,11 @@
   },
   "title": "衝突の解消の依頼",
   "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "click",

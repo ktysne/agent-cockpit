@@ -2,13 +2,13 @@
   "name": "sent",
   "target": ".decision-list > .decision-card:nth-child(2)",
   "width": 1576,
-  "height": 874,
+  "height": 780,
   "parts": [
     {
       "key": "sent.state",
       "bounds": {
         "x": 352,
-        "y": 23,
+        "y": 24,
         "width": 238,
         "height": 44
       },
@@ -18,7 +18,7 @@
       "key": "sent.time",
       "bounds": {
         "x": 606,
-        "y": 26,
+        "y": 27,
         "width": 172,
         "height": 38
       },
@@ -28,7 +28,7 @@
       "key": "sent.status",
       "bounds": {
         "x": 262,
-        "y": 761,
+        "y": 665,
         "width": 463,
         "height": 38
       },

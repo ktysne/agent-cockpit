@@ -117,6 +117,7 @@
       <details class="toc mobile-page-toc">
         <summary>このページの内容</summary>
         <ol>        <li><a href="#work-tasks">タスクと完了条件</a></li>
+        <li class="level-3"><a href="#work-session-end">セッションが終わる条件</a></li>
         <li class="level-3"><a href="#work-task-close">タスクを画面で完了にする</a></li>
         <li><a href="#work-main">メインの作業行</a></li>
         <li class="level-3"><a href="#work-unknown">状態不明のセッション</a></li>
@@ -131,11 +132,14 @@
   このページでは、それぞれの見方と、画面から行える操作を説明します。
   更新が無いまま時間が経ったセッションを、一覧から隠す条件も説明します。</p>
 
+  <p>このページの図はプロダクト別です。
+  既定の種類別では、行がセッションをまたいで並び、プロダクト名と、同じプロダクトに複数セッションがあるときのセッション名の札が付き、終了済みの開閉は「<span class="ui">終了済みを表示</span> (N 件)」／「<span class="ui">終了済み</span>を畳む」になります(<a href="screen.html#screen-kind-now">種類別の今やっていること</a>)。</p>
+
   <h2 id="work-tasks">タスクと完了条件</h2>
   <p>メインセッションは、作業を始めるときにタスクと完了条件を登録します。
   状態や完了条件が変わるたびに、メインセッションが一覧全体を登録し直します。
   ダッシュボードは、登録された内容をそのまま表示します。</p>
-  <figure class="guide-map" id="work-tasks-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/386"><div class="gm-clip"><img src="img/work-tasks/list.png" width="762" height="193" alt="タスクと完了条件。見出しの下に、作業中のタスクが 1 件あり、完了条件の一覧が続く。その下に、未着手のタスクと完了したタスクを開くボタンが並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#work-tasks-map-1" style="left:50%;top:0.518%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#work-tasks-map-2" style="left:4.528%;top:25.648%" aria-label="2. 状態の札">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#work-tasks-map-3" style="left:19.39%;top:25.389%" aria-label="3. 題">3</a><a class="gm-badge gm-place-top" data-gm="4" href="#work-tasks-map-4" style="left:93.963%;top:17.358%" aria-label="4. 完了条件の数">4</a><a class="gm-badge gm-place-top" data-gm="5" href="#work-tasks-map-5" style="left:93.963%;top:28.497%" aria-label="5. 完了にする">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#work-tasks-map-6" style="left:50%;top:47.15%" aria-label="6. 完了条件の一覧">6</a><a class="gm-badge gm-place-bottom" data-gm="7" href="#work-tasks-map-7" style="left:10.531%;top:99.741%" aria-label="7. 未着手のタスクの開閉">7</a><a class="gm-badge gm-place-bottom" data-gm="8" href="#work-tasks-map-8" style="left:31.332%;top:99.741%" aria-label="8. 完了したタスクの開閉">8</a></div></div></div><ol class="gm-list"><li id="work-tasks-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：<span class="ui">タスクと完了条件</span> の欄です。続けて、タスクの一覧を最後に登録してからの時間が、<span class="ui">最終更新</span> として出ます。</div></li><li id="work-tasks-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>状態の札</b>：<span class="ui">未着手</span>、<span class="ui">作業中</span>、<span class="ui">完了</span> のどれかです。</div></li><li id="work-tasks-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>題</b>：タスクの題です。</div></li><li id="work-tasks-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>完了条件の数</b>：満たした条件の数と、条件の総数です。<span class="ui">完了条件</span> に続けて「1/3」のように出ます。</div></li><li id="work-tasks-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b><span class="ui">完了にする</span></b>：未完了のタスクを、画面から完了にします(<a href="#work-task-close">タスクを画面で完了にする</a>)。</div></li><li id="work-tasks-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b>完了条件の一覧</b>：満たした条件は、先頭に ✓ が付き、緑で出ます。</div></li><li id="work-tasks-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b>未着手のタスクの開閉</b>：畳んでいる未着手のタスクを開きます。ボタンには、畳んでいる件数が出ます。開くと文言が変わり、もう一度押すと畳みます。</div></li><li id="work-tasks-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b>完了したタスクの開閉</b>：畳んでいる完了したタスクを開きます。ボタンには、畳んでいる件数が出ます。開くと文言が変わり、もう一度押すと畳みます。</div></li></ol></figure>
+  <figure class="guide-map" id="work-tasks-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/384"><div class="gm-clip"><img src="img/work-tasks/list.png" width="762" height="192" alt="タスクと完了条件。見出しの下に、作業中のタスクが 1 件あり、完了条件の一覧が続く。その下に、未着手のタスクと完了したタスクを開くボタンが並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#work-tasks-map-1" style="left:50%;top:0.26%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#work-tasks-map-2" style="left:4.528%;top:25.521%" aria-label="2. 状態の札">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#work-tasks-map-3" style="left:19.39%;top:25.26%" aria-label="3. 題">3</a><a class="gm-badge gm-place-top" data-gm="4" href="#work-tasks-map-4" style="left:93.963%;top:17.188%" aria-label="4. 完了条件の数">4</a><a class="gm-badge gm-place-top" data-gm="5" href="#work-tasks-map-5" style="left:93.963%;top:28.385%" aria-label="5. 完了にする">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#work-tasks-map-6" style="left:50%;top:47.135%" aria-label="6. 完了条件の一覧">6</a><a class="gm-badge gm-place-bottom" data-gm="7" href="#work-tasks-map-7" style="left:10.531%;top:100%" aria-label="7. 未着手のタスクの開閉">7</a><a class="gm-badge gm-place-bottom" data-gm="8" href="#work-tasks-map-8" style="left:31.332%;top:100%" aria-label="8. 完了したタスクの開閉">8</a></div></div></div><ol class="gm-list"><li id="work-tasks-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：<span class="ui">タスクと完了条件</span> の欄です。続けて、タスクの一覧を最後に登録してからの時間が、<span class="ui">最終更新</span> として出ます。</div></li><li id="work-tasks-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>状態の札</b>：<span class="ui">未着手</span>、<span class="ui">作業中</span>、<span class="ui">完了</span> のどれかです。</div></li><li id="work-tasks-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>題</b>：タスクの題です。</div></li><li id="work-tasks-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>完了条件の数</b>：満たした条件の数と、条件の総数です。<span class="ui">完了条件</span> に続けて「1/3」のように出ます。</div></li><li id="work-tasks-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b><span class="ui">完了にする</span></b>：未完了のタスクを、画面から完了にします(<a href="#work-task-close">タスクを画面で完了にする</a>)。</div></li><li id="work-tasks-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b>完了条件の一覧</b>：満たした条件は、先頭に ✓ が付き、緑で出ます。</div></li><li id="work-tasks-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b>未着手のタスクの開閉</b>：畳んでいる未着手のタスクを開きます。ボタンには、畳んでいる件数が出ます。開くと文言が変わり、もう一度押すと畳みます。</div></li><li id="work-tasks-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b>完了したタスクの開閉</b>：畳んでいる完了したタスクを開きます。ボタンには、畳んでいる件数が出ます。開くと文言が変わり、もう一度押すと畳みます。</div></li></ol></figure>
   <details class="more">
     <summary>タスクの行の折り返しの詳細</summary>
     <p>タスクの題の行は左右に分かれます。題は左側で折り返し、完了条件の数と <span class="ui">完了にする</span> は右側に縦に並びます。完了条件の一覧は、その下に行の幅いっぱいで並びます。
@@ -157,11 +161,17 @@
     <p>隠している終わったセッションの件数は、一覧の最下部の注記に出ます(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   </details>
 
+  <h3 id="work-session-end">セッションが終わる条件</h3>
+  <p>Claude Code は、セッションのファイルが消えてから 60 秒後に終了扱いになります。
+  Codex は、会話の終了が伝わったときに終了扱いになります。
+  それが届かない場合も、記録したプロセスの終了か、一度確認した会話のロックファイルの消失から 60 秒後に終了扱いになります。
+  プロセス番号を記録できず、終了も伝わらない行は、更新の無いセッションとして隠します(<a href="#work-idle">更新の無いセッションを隠す</a>)。</p>
+
   <h3 id="work-task-close">タスクを画面で完了にする</h3>
   <p><span class="ui">完了にする</span> を押すと、そのタスクを完了にします。
   押した直後は完了にせず、5 秒の間は取り消せます。
   この間、ボタンは <span class="ui">取り消す</span> に変わり、<span class="ui">5 秒後に完了にします。</span> と出ます。</p>
-  <figure class="guide-map" id="work-task-close-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/336"><div class="gm-clip"><img src="img/work-tasks/closing.png" width="762" height="168" alt="完了にするを押した直後のタスクの行。題の右側に、完了条件の数、取り消すのボタン、5 秒後に完了にしますの文が縦に並び、その下に完了条件の一覧が続く" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#work-task-close-map-1" style="left:93.963%;top:16.667%" aria-label="1. 取り消す">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#work-task-close-map-2" style="left:93.93%;top:36.905%" aria-label="2. 案内の文">2</a></div></div></div><ol class="gm-list"><li id="work-task-close-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">取り消す</span></b>：完了にする操作をやめます。</div></li><li id="work-task-close-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>案内の文</b>：<span class="ui">5 秒後に完了にします。</span> と出て、5 秒たつと完了にします。</div></li></ol></figure>
+  <figure class="guide-map" id="work-task-close-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/336"><div class="gm-clip"><img src="img/work-tasks/closing.png" width="762" height="168" alt="完了にするを押した直後のタスクの行。題の右側に、完了条件の数、取り消すのボタン、5 秒後に完了にしますの文が縦に並び、その下に完了条件の一覧が続く" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#work-task-close-map-1" style="left:93.963%;top:16.369%" aria-label="1. 取り消す">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#work-task-close-map-2" style="left:93.93%;top:36.607%" aria-label="2. 案内の文">2</a></div></div></div><ol class="gm-list"><li id="work-task-close-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">取り消す</span></b>：完了にする操作をやめます。</div></li><li id="work-task-close-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>案内の文</b>：<span class="ui">5 秒後に完了にします。</span> と出て、5 秒たつと完了にします。</div></li></ol></figure>
   <p>画面で完了にしたタスクは、右の列の完了条件の数の下に <span class="ui">画面で完了にした</span> が出ます。
   タスクの完了は、「前回見てから」にも、タスクが完了した変化として載ります(<a href="away.html#away-since-seen">前回見てから</a>)。</p>
   <details class="more">
@@ -178,11 +188,16 @@
   <p><span class="ui">今やっていること</span> の欄の最初の行が、メインセッションの作業行です。
   1 行目に名前と状態を左から並べ、経過時間を右端に出します。
   作業中のタスクの題と実行中のツールは、ある場合にそれぞれ全幅の行で続きます。</p>
-  <figure class="guide-map" id="work-main-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/225"><div class="gm-clip"><img src="img/work-rows/rows.png" width="788" height="371" alt="今やっていることの欄。メインの作業行の1行目にメイン、待機中の表示、右端に経過時間がある。その下に作業中のタスクの題と、実行中のツールの札とコマンドが全幅で続く" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:0%"></div><a class="gm-badge gm-place-top" data-gm="1" href="#work-main-map-1" style="left:50%;top:0.444%" aria-label="1. 欄の見出し">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#work-main-map-2" style="left:10.089%;top:29.778%" aria-label="2. 状態">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#work-main-map-3" style="left:50%;top:51.556%" aria-label="3. 作業中のタスクの題">3</a><a class="gm-badge gm-place-right" data-gm="4" href="#work-main-map-4" style="left:98.731%;top:83.111%" aria-label="4. 実行中のツール">4</a><a class="gm-badge gm-place-top" data-gm="5" href="#work-main-map-5" style="left:96.574%;top:29.778%" aria-label="5. 経過時間">5</a></div></div></div><ol class="gm-list"><li id="work-main-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>欄の見出し</b>：<span class="ui">今やっていること</span> です。この下に、メインの行とサブエージェントの行が並びます。</div></li><li id="work-main-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>状態</b>：<span class="ui">作業中</span>、<span class="ui">待機中</span>、<span class="ui">状態不明</span> のどれかです。</div></li><li id="work-main-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>作業中のタスクの題</b>：状態が <span class="ui">作業中</span> のタスクの題です。作業中のタスクが無いときは出ません。</div></li><li id="work-main-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>実行中のツール</b>：ツールの名前の札と、実行しているコマンドやファイルのパスです。ツールが終わると消えます。</div></li><li id="work-main-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>経過時間</b>：実行中のツールがあればその開始から、無ければセッションの最後のイベントからの時間です。</div></li></ol></figure>
+  <figure class="guide-map" id="work-main-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/225"><div class="gm-clip"><img src="img/work-rows/rows.png" width="788" height="371" alt="今やっていることの欄。メインの作業行の1行目にメイン、待機中の表示、右端に経過時間がある。その下に作業中のタスクの題と、実行中のツールの札とコマンドが全幅で続く" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:0%"></div><a class="gm-badge gm-place-top" data-gm="1" href="#work-main-map-1" style="left:50%;top:0.444%" aria-label="1. 欄の見出し">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#work-main-map-2" style="left:10.089%;top:29.778%" aria-label="2. 状態">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#work-main-map-3" style="left:50%;top:51.556%" aria-label="3. 作業中のタスクの題">3</a><a class="gm-badge gm-place-right" data-gm="4" href="#work-main-map-4" style="left:98.731%;top:83.111%" aria-label="4. 実行中のツール">4</a><a class="gm-badge gm-place-top" data-gm="5" href="#work-main-map-5" style="left:96.574%;top:29.778%" aria-label="5. 経過時間">5</a></div></div></div><ol class="gm-list"><li id="work-main-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>欄の見出し</b>：<span class="ui">今やっていること</span> です。この下に、メインの行とサブエージェントの行が並びます。</div></li><li id="work-main-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>状態</b>：<span class="ui">作業中</span>、<span class="ui">待機中</span>、<span class="ui">状態不明</span>、<span class="ui">非対話の実行中</span> のどれかです。</div></li><li id="work-main-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>作業中のタスクの題</b>：状態が <span class="ui">作業中</span> のタスクの題です。作業中のタスクが無いときは出ません。</div></li><li id="work-main-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>実行中のツール</b>：ツールの名前の札と、実行しているコマンドやファイルのパスです。ツールが終わると消えます。</div></li><li id="work-main-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>経過時間</b>：実行中のツールがあればその開始から、無ければセッションの最後のイベントからの時間です。</div></li></ol></figure>
+  <p>メインの行にもモデルの札が付きます。
+  Claude は <span class="ui">Claude</span> にモデル名が続き、モデル不明の非対話の実行は <span class="ui">Claude (API)</span> と出ます。
+  Codex は <span class="ui">Codex</span> にモデル名が続き、同じ会話を再開したときは「再開 N 回」の札も付きます。
+  Claude の対話セッションでモデルが分からないときは、札を出しません。</p>
   <p>状態は次の意味です。</p>
   <ul>
     <li><span class="ui">作業中</span>：セッションがターンの途中です。</li>
     <li><span class="ui">待機中</span>：ターンが終わり、次の入力を待っています。ツールの実行許可を待っているときも、<span class="ui">待機中</span> と出ます。許可待ちは、判断が必要なことの欄に別のカードで出ます(<a href="permission.html">許可待ち</a>)。</li>
+    <li><span class="ui">非対話の実行中</span>：非対話の実行で、ターンの状態が分からない行です。<span class="ui">状態を推定</span> と <span class="ui">一覧から外す</span> は出ず、更新が無くても隠れません。</li>
     <li><span class="ui">状態不明</span>：セッションは見つかっているものの、ターンの状態を確定するイベントが届いていません(<a href="#work-unknown">状態不明のセッション</a>)。</li>
   </ul>
   <p>実行中のツールが複数あるときは、いちばん新しく始まったものを出します。
@@ -204,17 +219,21 @@
   ターンの状態を確定するイベントは、プロンプトの送信、メインのツールの開始と終了、ターンの終了、起動・再開・クリアによるセッションの開始です。
   常駐サーバーを起動する前から動いていたセッションや、再起動の後でまだこれらのイベントが届いていないセッションがこうなります。</p>
   <figure class="guide-map" id="work-unknown-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/148"><div class="gm-clip"><img src="img/work-states/unknown.png" width="762" height="74" alt="状態不明のセッションの作業行。1行目にメインと状態不明が並び、その下に状態を推定と一覧から外すのボタンが全幅で並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#work-unknown-map-1" style="left:15.486%;top:8.784%" aria-label="1. 状態">1</a><a class="gm-badge gm-place-bottom" data-gm="2" href="#work-unknown-map-2" style="left:6.496%;top:91.216%" aria-label="2. 状態を推定">2</a><a class="gm-badge gm-place-bottom" data-gm="3" href="#work-unknown-map-3" style="left:18.373%;top:91.216%" aria-label="3. 一覧から外す">3</a></div></div></div><ol class="gm-list"><li id="work-unknown-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>状態</b>：<span class="ui">状態不明</span> と、<span class="ui">時刻不明</span> が出ます。イベントが 1 件も届いていないので、経過時間は出ません。</div></li><li id="work-unknown-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">状態を推定</span></b>：セッションの会話の記録の末尾を読み、入力待ちかどうかを推測します。</div></li><li id="work-unknown-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b><span class="ui">一覧から外す</span></b>：このセッションを一覧から外します。外したセッションは、一覧の最下部で戻せます(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</div></li></ol></figure>
+  <p>推定できた結果を出した後は、状態の表示は <span class="ui">状態不明</span> だけになり、その後ろの経過時間は出ません。</p>
   <p>Notification やサブエージェントのイベントなど、ターンの状態を確定しないイベントだけが届いた行は、<span class="ui">状態不明</span> の後ろに最後のイベントからの経過時間を出します(例: <span class="ui">状態不明</span> (5 分前))。
-  セッションのファイルが入力待ち(idle)を示すときは、イベントの有無にかかわらず <span class="ui">待機中</span> と出します。稼働中のサブエージェントがあれば、<span class="ui">待機中</span>(サブエージェント稼働中)と出します。</p>
+  セッションのファイルが入力待ち(idle)を示すときは、イベントの有無にかかわらず <span class="ui">待機中</span> と出します。
+  稼働中のサブエージェントがあっても、状態の表示は <span class="ui">待機中</span> です。</p>
   <details class="more">
     <summary>状態を推定の詳細</summary>
-    <p>推定は、会話の記録の末尾(最大 256KB)の最後のやり取りから判断します。
+    <p>推定は、Claude Code の会話の記録の末尾(最大 256KB)の最後のやり取りから判断します。
     結果は <span class="ui">最後の記録</span> の時刻と最後のツールの名前、<span class="ui">入力待ちらしい</span> の判定として出ます。</p>
     <ul>
       <li><span class="ui">はい</span>：最後がモデルの応答の終わりか、利用者による中断です。</li>
       <li><span class="ui">いいえ (許可待ちかツールの実行中)</span>：最後がツールの呼び出しです。</li>
       <li><span class="ui">いいえ (応答の生成中)</span>：最後が利用者の入力か、ツールの結果です。</li>
     </ul>
+    <p>Codex の状態不明の行にも <span class="ui">状態を推定</span> は出ますが、Codex の会話は読みません。
+    Claude Code の会話記録だけを探すため、Codex の状態を推定する用途には使えません。</p>
     <p>記録を読めないときは、<span class="ui">推定できませんでした</span> と出ます。</p>
   </details>
 
@@ -223,6 +242,9 @@
   1 行目に状態、名前、終了操作を左から並べ、経過時間を右端に出します。
   依頼の内容かツール、その下に使っているモデルと経路が全幅で続きます。</p>
   <figure class="guide-map" id="work-agents-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/472"><div class="gm-clip"><img src="img/work-rows/rows.png" width="788" height="371" alt="サブエージェントの行。1行目に状態の札、名前、経過時間があり、その下に依頼の内容、経路の札、Claude と Codex のモデルの札が全幅で続く。その下に終了した行と終了済みを隠すボタンが続く" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-17.132%"></div><a class="gm-badge gm-place-center" data-gm="1" href="#work-agents-map-1" style="left:12.7%;top:26.9%" aria-label="1. 状態の札と名前">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#work-agents-map-2" style="left:50%;top:20.551%" aria-label="2. 依頼の内容">2</a><a class="gm-badge gm-place-bottom" data-gm="3" href="#work-agents-map-3" style="left:5.298%;top:40.89%" aria-label="3. 経路の札">3</a><a class="gm-badge gm-place-bottom" data-gm="4" href="#work-agents-map-4" style="left:22.145%;top:41.314%" aria-label="4. モデルの札">4</a><a class="gm-badge gm-place-bottom" data-gm="5" href="#work-agents-map-5" style="left:96.193%;top:17.585%" aria-label="5. 経過時間">5</a><a class="gm-badge gm-place-bottom" data-gm="6" href="#work-agents-map-6" style="left:50%;top:83.686%" aria-label="6. 終了した行">6</a><a class="gm-badge gm-place-bottom" data-gm="7" href="#work-agents-map-7" style="left:8.376%;top:99.788%" aria-label="7. 終了済みを隠す">7</a></div></div></div><ol class="gm-list"><li id="work-agents-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>状態の札と名前</b>：状態の札は、<span class="ui">稼働中</span>、<span class="ui">終了</span>、<span class="ui">終了未確認</span> のどれかです(<a href="#work-agent-unconfirmed">終了未確認の行</a>)。名前は、サブエージェントの種類です。</div></li><li id="work-agents-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>依頼の内容</b>：メインセッションが渡した作業の説明です。説明が無いときは、最後に使ったツールが出ます。</div></li><li id="work-agents-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>経路の札</b>：起動の時点で効いていた、サブエージェントの経路の設定です(<a href="#work-agent-route">経路の札</a>)。</div></li><li id="work-agents-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>モデルの札</b>：Claude のモデルと effort です。サブエージェントが Codex を起動したときは、矢印に続けて Codex のモデルと effort が出ます。</div></li><li id="work-agents-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>経過時間</b>：サブエージェントを起動してからの時間です。</div></li><li id="work-agents-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b>終了した行</b>：終わったサブエージェントです。状態の札は <span class="ui">終了</span> で、経路の札は付きません。</div></li><li id="work-agents-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b><span class="ui">終了済みを隠す</span></b>：開いている終了済みの行を畳みます。畳んでいるときは <span class="ui">終了済みを表示</span> で、終了済みの件数が出ます。</div></li></ol></figure>
+  <p>Codex が自分で起動したサブエージェントも、この欄に出ます。
+  名前は子の種類で、種類の指定が無いときは <span class="ui">default</span> です。
+  モデルの札は <span class="ui">Codex</span> にモデル名が続く形だけで、effort と経路の札は付きません。</p>
   <p>稼働中のサブエージェントの数は、画面上部の <span class="ui">稼働中のサブエージェント</span> の札に出ます(<a href="screen.html#screen-summary">件数の札</a>)。</p>
   <p>終了した行は、設定の <span class="ui">終わったものを非表示にする</span> がオフのときだけ、<span class="ui">終了済みを表示</span> から開けます。
   オン(既定)のときは、終了した行を出しません。
@@ -232,12 +254,13 @@
     <summary>サブエージェントの行の詳細</summary>
     <p>Claude のモデルと effort は、サブエージェントの定義ファイルにある値です。
     サブエージェントを呼び出した Agent ツールの結果にモデルが含まれていれば、その値に置き換えます。</p>
+    <p>Claude のメインセッションが <code>codex-agent.sh</code> を直接動かした行では、モデルの札は <span class="ui">Codex</span> にモデル名と effort が続く形だけになります。</p>
     <p>Codex の札にマウスを載せると、Codex が使った設定の置き場所(<code>codex_home</code>)が出ます。
     Codex を起動するスクリプトの出力から読み取った値です。</p>
   </details>
 
   <h3 id="work-agent-route">経路の札</h3>
-  <p>経路の札は、claude-codex-bridge を入れているときの、稼働中のサブエージェントにだけ付きます。
+  <p>経路の札は、claude-codex-bridge を入れているときの、Claude のセッションの稼働中のサブエージェントにだけ付きます。
   <span class="ui">経路:</span> に続けて、<span class="ui">既定</span>、<span class="ui">Codex</span>、<span class="ui">Claude</span> のどれかが出ます。
   サブエージェントを起動した時点で効いていた、サブエージェントの経路の設定を示します。
   マウスを載せると、<span class="ui">起動時に効いていた経路の設定</span> と出ます。</p>
@@ -255,7 +278,7 @@
     <summary>終了未確認と終了にするの詳細</summary>
     <p>終了未確認になるのは、サブエージェントが終わったときに、背景の Codex の結果が届いていなかった場合と、Codex の実行を確かめる待ちが、終了を確認できないまま終わった場合です。</p>
     <p>メインセッションが背景で動かした Codex の行と、背景で起動した Claude のサブエージェントの行にも、動いている間は <span class="ui">終了にする</span> が付きます。</p>
-    <p>メインセッションがサブエージェントを止めた場合は、止めた時点か、メインセッションの会話記録に終了の知らせが書かれてから約 1 分以内に、自動で終了になります。
+    <p>Claude のメインセッションがサブエージェントを止めた場合は、止めた時点か、メインセッションの会話記録に終了の知らせが書かれてから約 1 分以内に、自動で終了になります。
     <span class="ui">終了にする</span> は、それでも稼働中のまま残った行を片付けるために使います。</p>
     <p>画面での終了は、常駐サーバーのメモリーにだけ置きます。
     常駐サーバーを再起動すると、元の表示に戻ります。
@@ -268,11 +291,12 @@
   <span class="ui">表示する</span> を押すと、開いているページの間だけ表示します(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   <p>次のどれにも当たらないセッションが、最後の更新から設定の時間を超えると隠れます。</p>
   <ul>
-    <li>状態が <span class="ui">作業中</span> である</li>
+    <li>状態が <span class="ui">作業中</span> または <span class="ui">非対話の実行中</span> である</li>
     <li>許可待ちがある</li>
     <li>止めて待っている判断事項か、仮に推奨案で進行中の判断事項がある</li>
     <li>稼働中か終了未確認のサブエージェントがある</li>
   </ul>
+  <p>外したセッションも、最後の更新と外した時刻の遅い方から判定します(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   <p>最後の更新は、セッションの最後のイベント、タスクの最後の登録、判断事項の最後の更新のうち、いちばん新しい時刻です。
   状態不明のセッションは、Claude Code のセッションの記録にある更新時刻で判定します。
   時間は、設定の <span class="ui">更新の無いセッションを隠すまで (分)</span> で決めます(<a href="settings.html#settings-idle">更新の無いセッションを隠すまで</a>)。
@@ -290,6 +314,7 @@
     <nav class="toc page-toc" aria-label="このページの内容">
       <h2>このページの内容</h2>
       <ol>        <li><a href="#work-tasks">タスクと完了条件</a></li>
+        <li class="level-3"><a href="#work-session-end">セッションが終わる条件</a></li>
         <li class="level-3"><a href="#work-task-close">タスクを画面で完了にする</a></li>
         <li><a href="#work-main">メインの作業行</a></li>
         <li class="level-3"><a href="#work-unknown">状態不明のセッション</a></li>

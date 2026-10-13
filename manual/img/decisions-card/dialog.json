@@ -2,13 +2,13 @@
   "name": "dialog",
   "target": ".decision-list > .decision-card:nth-child(2)",
   "width": 1524,
-  "height": 526,
+  "height": 528,
   "parts": [
     {
       "key": "card.new",
       "bounds": {
         "x": 32,
-        "y": 44,
+        "y": 45,
         "width": 76,
         "height": 44
       },
@@ -18,7 +18,7 @@
       "key": "card.title",
       "bounds": {
         "x": 124,
-        "y": 42,
+        "y": 43,
         "width": 467,
         "height": 45
       },
@@ -28,7 +28,7 @@
       "key": "card.state",
       "bounds": {
         "x": 607,
-        "y": 22,
+        "y": 23,
         "width": 201,
         "height": 87
       },
@@ -38,7 +38,7 @@
       "key": "card.time",
       "bounds": {
         "x": 824,
-        "y": 46,
+        "y": 47,
         "width": 196,
         "height": 38
       },
@@ -48,7 +48,7 @@
       "key": "card.context",
       "bounds": {
         "x": 32,
-        "y": 137,
+        "y": 139,
         "width": 1466,
         "height": 45
       },
@@ -58,7 +58,7 @@
       "key": "card.options",
       "bounds": {
         "x": 52,
-        "y": 226,
+        "y": 227,
         "width": 1426,
         "height": 223
       },
@@ -68,7 +68,7 @@
       "key": "card.recommended",
       "bounds": {
         "x": 52,
-        "y": 226,
+        "y": 227,
         "width": 1426,
         "height": 108
       },
@@ -78,7 +78,7 @@
       "key": "card.meta",
       "bounds": {
         "x": 32,
-        "y": 465,
+        "y": 466,
         "width": 1466,
         "height": 38
       },

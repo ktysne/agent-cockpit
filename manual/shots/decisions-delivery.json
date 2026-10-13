@@ -12,6 +12,7 @@
   "scenario": "decisions",
   "storage": {
     "agent-cockpit.display": {
+      "mode": "product",
       "hideFinished": false
     }
   },

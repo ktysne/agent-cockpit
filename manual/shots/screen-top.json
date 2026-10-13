@@ -10,6 +10,11 @@
     "codexAgent": true,
     "crossReview": true
   },
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "screenshot",
@@ -31,7 +36,8 @@
         "top.route-review": [
           "#routing .rgroup > .rrow:nth-child(2) .rlabel",
           "#routing .rgroup > .rrow:nth-child(2) .seg"
-        ]
+        ],
+        "top.refresh": "#refresh-button"
       }
     }
   ]

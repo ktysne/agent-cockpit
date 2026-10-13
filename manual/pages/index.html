@@ -1,9 +1,11 @@
 <section class="section">
   <h1>Agent Cockpit でできること</h1>
-  <p class="lead">Agent Cockpit は、Claude Code デスクトップアプリで動いているセッションの状態を 1 つの画面にまとめるダッシュボードです。このマニュアルでは、使い始め方、画面の見方、判断事項への回答、PR のマージ、離席中の使い方、設定と運用を説明します。</p>
+  <p class="lead">Agent Cockpit は、Claude Code と Codex(CLI・デスクトップ)で動いているセッションの状態を 1 つの画面にまとめるダッシュボードです。このマニュアルでは、使い始め方、画面の見方、判断事項への回答、PR のマージ、離席中の使い方、設定と運用を説明します。</p>
 
   <h2>できること</h2>
   <ul>
+    <li>Claude Code と Codex のセッションを同じ画面で見る</li>
+    <li>診断ログを確かめ、不具合の調査用に書き出す</li>
     <li>複数のセッションの今やっていること、タスク、サブエージェントを一覧する</li>
     <li>許可待ちと判断待ちを、待ち時間の長い順に確かめる</li>
     <li>判断事項にダッシュボードから回答する</li>
@@ -29,6 +31,8 @@
     <li>配色や、待ち時間や、一覧の並びを変えたい：<a href="settings.html">表示の設定</a></li>
     <li>タスクトレイの使い方や通知を知りたい：<a href="tray.html">タスクトレイ</a></li>
     <li>常駐サーバーを再起動したい、保存先を知りたい：<a href="server.html">常駐サーバーと保存されるもの</a></li>
+    <li>Codex のセッションをつなぎたい：<a href="start.html#start-hooks">セッションとのつながり</a></li>
+    <li>診断ログを確認したい：<a href="settings.html#settings-diagnostics">診断ログ</a></li>
     <li>うまく動かない：<a href="trouble.html">困ったとき</a></li>
   </ul>
 </section>
@@ -39,7 +43,7 @@
   各領域の名前と使い方は、<a href="screen.html">画面の見方</a>にあります。</p>
   <figure class="guide-map" id="index-screen-map" data-shot="overview/product" data-alt="ダッシュボードの全体。上から、ヘッダ、件数の札、経路の設定、表示モードの切り替えが並び、その下にプロダクトのカードがある">
     <ol class="guide-list">
-      <li data-part="overview.header" data-mark="frame" data-place="left"><b>ヘッダ</b>：<a href="screen.html#screen-header">アプリの名前、離席中、設定のボタン</a></li>
+      <li data-part="overview.header" data-mark="frame" data-place="left"><b>ヘッダ</b>：<a href="screen.html#screen-header">アプリの名前、離席中、画面を読み込み直す、設定のボタン</a></li>
       <li data-part="overview.summary" data-mark="frame" data-place="right"><b>件数の札</b>：<a href="screen.html#screen-summary">許可待ちや判断待ちの件数</a></li>
       <li data-part="overview.routing" data-mark="frame" data-place="right"><b>経路の設定</b>：<a href="screen.html#screen-routing">サブエージェントとクロスレビューの経路</a></li>
       <li data-part="overview.mode" data-mark="frame" data-place="right"><b>表示モードの切り替え</b>：<a href="screen.html#screen-modes">プロダクト別と種類別</a></li>

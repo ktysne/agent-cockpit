@@ -8,7 +8,7 @@
       "key": "stack.repo",
       "bounds": {
         "x": 26,
-        "y": 24,
+        "y": 25,
         "width": 322,
         "height": 45
       },
@@ -18,7 +18,7 @@
       "key": "stack.mergeable",
       "bounds": {
         "x": 364,
-        "y": 22,
+        "y": 23,
         "width": 252,
         "height": 50
       },
@@ -28,7 +28,7 @@
       "key": "stack.fetched",
       "bounds": {
         "x": 632,
-        "y": 28,
+        "y": 29,
         "width": 283,
         "height": 38
       },
@@ -38,7 +38,7 @@
       "key": "stack.base",
       "bounds": {
         "x": 26,
-        "y": 89,
+        "y": 90,
         "width": 189,
         "height": 40
       },
@@ -48,7 +48,7 @@
       "key": "stack.pos-bottom",
       "bounds": {
         "x": 26,
-        "y": 157,
+        "y": 158,
         "width": 60,
         "height": 39
       },
@@ -58,7 +58,7 @@
       "key": "stack.pos-middle",
       "bounds": {
         "x": 74,
-        "y": 370,
+        "y": 371,
         "width": 60,
         "height": 39
       },
@@ -68,7 +68,7 @@
       "key": "stack.pos-top",
       "bounds": {
         "x": 122,
-        "y": 630,
+        "y": 631,
         "width": 60,
         "height": 39
       },
@@ -78,7 +78,7 @@
       "key": "stack.mergeable-badge",
       "bounds": {
         "x": 1368,
-        "y": 158,
+        "y": 159,
         "width": 182,
         "height": 35
       },
@@ -88,7 +88,7 @@
       "key": "stack.merge-button",
       "bounds": {
         "x": 1368,
-        "y": 205,
+        "y": 206,
         "width": 182,
         "height": 64
       },
@@ -98,7 +98,7 @@
       "key": "stack.branch-middle",
       "bounds": {
         "x": 74,
-        "y": 425,
+        "y": 426,
         "width": 499,
         "height": 28
       },
@@ -118,7 +118,7 @@
       "key": "stack.level",
       "bounds": {
         "x": 46,
-        "y": 350,
+        "y": 351,
         "width": 1504,
         "height": 555
       },
@@ -128,7 +128,7 @@
       "key": "stack.single",
       "bounds": {
         "x": 26,
-        "y": 933,
+        "y": 934,
         "width": 1524,
         "height": 292
       },

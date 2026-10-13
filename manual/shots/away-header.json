@@ -10,6 +10,11 @@
   },
   "title": "離席中にしたヘッダ",
   "scenario": "decisions",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "screenshot",
