@@ -24,7 +24,8 @@ const {
 } = require('../server/pull-request-utils');
 
 const execFileAsync = promisify(execFile);
-const CODEX_PARENT_TIMEOUT_MS = 3000;
+// 会話の開始時は Codex 本体とほかのフックが同時に動き、照会に 3 秒を超えることがある。待つのは SessionStart だけで、超えるとプロセス ID を記録できない。
+const CODEX_PARENT_TIMEOUT_MS = 8000;
 
 async function findCodexParentPid() {
   const deadline = Date.now() + CODEX_PARENT_TIMEOUT_MS;
@@ -55,12 +56,12 @@ async function findCodexParentPid() {
   return null;
 }
 
-async function codexParentPid(findParent) {
+async function codexParentPid(findParent, timeoutMs = CODEX_PARENT_TIMEOUT_MS) {
   let timer;
   try {
     return await Promise.race([
       Promise.resolve().then(findParent),
-      new Promise((resolve) => { timer = setTimeout(() => resolve(null), CODEX_PARENT_TIMEOUT_MS); }),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
     ]);
   } catch {
     return null;
@@ -435,7 +436,7 @@ async function runHook(input, options = {}) {
   const event = makeHookEvent(input, options.now === undefined ? Date.now() : options.now, options);
   if (!event) return { exitCode: 0, additionalContext: null };
   if (event.provider === 'codex' && event.hook_event_name === 'SessionStart') {
-    const pid = await codexParentPid(options.findCodexParentPid || findCodexParentPid);
+    const pid = await codexParentPid(options.findCodexParentPid || findCodexParentPid, options.codexParentTimeoutMs);
     if (Number.isInteger(pid) && pid > 0) event.codexPid = pid;
   }
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
