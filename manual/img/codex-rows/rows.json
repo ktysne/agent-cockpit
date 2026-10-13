@@ -1,0 +1,41 @@
+{
+  "name": "rows",
+  "target": [
+    ".session-group.origin-codex .session-body > h3.sub:has(+ .now)",
+    ".session-group.origin-codex .session-body .agent-list"
+  ],
+  "width": 1524,
+  "height": 536,
+  "parts": [
+    {
+      "key": "rows.resumes",
+      "bounds": {
+        "x": 258,
+        "y": 220,
+        "width": 118,
+        "height": 40
+      },
+      "visible": true
+    },
+    {
+      "key": "rows.agent-name",
+      "bounds": {
+        "x": 162,
+        "y": 370,
+        "width": 98,
+        "height": 42
+      },
+      "visible": true
+    },
+    {
+      "key": "rows.agent-model",
+      "bounds": {
+        "x": 20,
+        "y": 476,
+        "width": 223,
+        "height": 46
+      },
+      "visible": true
+    }
+  ]
+}
