@@ -7,6 +7,9 @@ const ROOT = path.resolve(__dirname, '..');
 const SITE_DIR = path.join(ROOT, 'site');
 const MANUAL_DIR = path.join(ROOT, 'manual');
 const FTP_PREFIX = 'AGENT_COCKPIT_FTP_';
+const UPLOAD_ATTEMPTS_PER_ITEM = 4;
+const UPLOAD_RECONNECT_DELAY_MS = 3000;
+const FTP_CONNECTION_LOST_CODES = new Set(['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNABORTED', 'ECONNREFUSED']);
 
 function compareNames(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -188,9 +191,24 @@ async function uploadRemoteItem(client, item) {
   await replaceRemoteFile(client, temporaryName, item.remoteName, entries.has(item.remoteName));
 }
 
+function isFtpConnectionLost(client, error) {
+  return client.closed === true || FTP_CONNECTION_LOST_CODES.has(error?.code);
+}
+
+// 置き換えの途中で切れると公開名が退避名のまま残るので、送り直す前に公開名へ戻す。
+async function restorePreviousName(client, item) {
+  const entries = await listCurrentDirectory(client);
+  const previousName = item.remoteName + '.previous';
+  if (entries.has(item.remoteName) || !entries.has(previousName)) return;
+  await client.rename(previousName, item.remoteName);
+  console.warn('警告: ' + item.label + ' を退避名 ' + previousName + ' から公開名へ戻しました');
+}
+
 async function uploadSite(items, config, dependencies = {}) {
   const remoteRoot = remoteRootOf(config);
-  const client = dependencies.client ?? new (dependencies.Client ?? require('basic-ftp').Client)(30_000);
+  const createClient = dependencies.createClient
+    ?? (dependencies.client ? () => dependencies.client : () => new (dependencies.Client ?? require('basic-ftp').Client)(30_000));
+  const pauseBeforeReconnect = dependencies.pauseBeforeReconnect ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const accessOptions = {
     host: config.host,
     port: config.port,
@@ -200,6 +218,13 @@ async function uploadSite(items, config, dependencies = {}) {
   };
   if (config.secureOptions) accessOptions.secureOptions = config.secureOptions;
 
+  let client = createClient();
+  const enterItemDirectory = async item => {
+    await client.cd('/');
+    await client.ensureDir(remoteRoot);
+    if (item.remoteSubDir) await client.ensureDir(item.remoteSubDir);
+  };
+
   try {
     await client.access(accessOptions);
     await client.cd('/');
@@ -207,13 +232,32 @@ async function uploadSite(items, config, dependencies = {}) {
     for (const item of items) {
       item.remoteName = path.basename(item.localPath);
       item.localSize = fs.statSync(item.localPath).size;
-      try {
-        if (item.remoteSubDir) await client.ensureDir(item.remoteSubDir);
-        await uploadRemoteItem(client, item);
-      } finally {
-        if (item.remoteSubDir) {
-          await client.cd('/');
-          await client.ensureDir(remoteRoot);
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          if (attempt > 1) {
+            await pauseBeforeReconnect(UPLOAD_RECONNECT_DELAY_MS);
+            client.close();
+            client = createClient();
+            await client.access(accessOptions);
+            await enterItemDirectory(item);
+            await restorePreviousName(client, item);
+          } else if (item.remoteSubDir) {
+            await client.ensureDir(item.remoteSubDir);
+          }
+          await uploadRemoteItem(client, item);
+          if (item.remoteSubDir || attempt > 1) {
+            await client.cd('/');
+            await client.ensureDir(remoteRoot);
+          }
+          break;
+        } catch (error) {
+          // サーバーは多くのファイルを送る途中で接続を切ることがある。切れたらつなぎ直し、そのファイルから送り直す。
+          if (!isFtpConnectionLost(client, error)) throw error;
+          if (attempt >= UPLOAD_ATTEMPTS_PER_ITEM) {
+            throw new Error(item.label + ' の送信中に FTP の接続が ' + attempt + ' 回切れたので止めます。'
+              + 'もう一度実行すると、最初から送り直します (' + error.message + ')');
+          }
+          console.warn('警告: ' + item.label + ' の送信中に FTP の接続が切れたので、つなぎ直して送り直します (' + error.message + ')');
         }
       }
       console.log('  送信しました: ' + item.label);
@@ -313,6 +357,7 @@ module.exports = {
   checkReferences,
   cmdUpload,
   formatSize,
+  isFtpConnectionLost,
   listCurrentDirectory,
   loadConfig,
   main,
