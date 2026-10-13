@@ -2,13 +2,13 @@
   "name": "pending",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1990,
+  "height": 1988,
   "parts": [
     {
       "key": "confirm.heading",
       "bounds": {
         "x": 52,
-        "y": 448,
+        "y": 447,
         "width": 1472,
         "height": 42
       },
@@ -18,7 +18,7 @@
       "key": "confirm.warning",
       "bounds": {
         "x": 52,
-        "y": 506,
+        "y": 505,
         "width": 1472,
         "height": 38
       },
@@ -58,7 +58,7 @@
       "key": "confirm.effect-head",
       "bounds": {
         "x": 301,
-        "y": 781,
+        "y": 780,
         "width": 92,
         "height": 28
       },
@@ -68,7 +68,7 @@
       "key": "confirm.go",
       "bounds": {
         "x": 52,
-        "y": 831,
+        "y": 830,
         "width": 227,
         "height": 80
       },
@@ -78,7 +78,7 @@
       "key": "confirm.cancel",
       "bounds": {
         "x": 295,
-        "y": 831,
+        "y": 830,
         "width": 140,
         "height": 80
       },

@@ -2,7 +2,7 @@
   "name": "awaiting",
   "target": ".decision-list > .decision-card:nth-child(1)",
   "width": 1576,
-  "height": 924,
+  "height": 772,
   "parts": [
     {
       "key": "awaiting.state",
@@ -45,20 +45,10 @@
       "visible": true
     },
     {
-      "key": "awaiting.ok",
-      "bounds": {
-        "x": 32,
-        "y": 479,
-        "width": 256,
-        "height": 81
-      },
-      "visible": true
-    },
-    {
       "key": "awaiting.send",
       "bounds": {
         "x": 52,
-        "y": 788,
+        "y": 637,
         "width": 190,
         "height": 80
       },

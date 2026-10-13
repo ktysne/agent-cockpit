@@ -2,7 +2,7 @@
   "name": "delivered",
   "target": ".decision-list > .decision-card:nth-child(3)",
   "width": 1576,
-  "height": 874,
+  "height": 778,
   "parts": [
     {
       "key": "delivered.state",
@@ -18,7 +18,7 @@
       "key": "delivered.status",
       "bounds": {
         "x": 262,
-        "y": 761,
+        "y": 664,
         "width": 584,
         "height": 38
       },

@@ -10,6 +10,11 @@
   },
   "title": "判断事項の回答欄",
   "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "screenshot",

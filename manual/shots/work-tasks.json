@@ -10,6 +10,11 @@
   },
   "title": "タスクと完了条件",
   "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "screenshot",

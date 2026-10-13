@@ -2,13 +2,13 @@
   "name": "timeout",
   "target": ".decision-list > .decision-card:nth-child(5)",
   "width": 1576,
-  "height": 860,
+  "height": 710,
   "parts": [
     {
       "key": "timeout.state",
       "bounds": {
         "x": 189,
-        "y": 23,
+        "y": 24,
         "width": 238,
         "height": 44
       },
@@ -18,7 +18,7 @@
       "key": "timeout.time",
       "bounds": {
         "x": 443,
-        "y": 26,
+        "y": 27,
         "width": 246,
         "height": 38
       },
@@ -30,7 +30,7 @@
         "x": 32,
         "y": 417,
         "width": 1518,
-        "height": 421
+        "height": 270
       },
       "visible": true
     }

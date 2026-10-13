@@ -8,7 +8,7 @@
       "key": "closing.cancel",
       "bounds": {
         "x": 1384,
-        "y": 56,
+        "y": 55,
         "width": 96,
         "height": 64
       },
@@ -18,7 +18,7 @@
       "key": "closing.note",
       "bounds": {
         "x": 1363,
-        "y": 124,
+        "y": 123,
         "width": 137,
         "height": 77
       },

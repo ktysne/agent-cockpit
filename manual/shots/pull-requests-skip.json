@@ -10,6 +10,11 @@
   },
   "title": "レビュー不要の記録",
   "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "click",

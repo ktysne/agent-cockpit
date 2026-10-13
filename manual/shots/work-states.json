@@ -10,6 +10,11 @@
   },
   "title": "サブエージェントの特別な状態と状態不明",
   "scenario": "states",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "screenshot",

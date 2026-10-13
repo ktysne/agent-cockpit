@@ -8,7 +8,7 @@
       "key": "cancelled.notice",
       "bounds": {
         "x": 26,
-        "y": 84,
+        "y": 83,
         "width": 1524,
         "height": 62
       },
@@ -18,7 +18,7 @@
       "key": "cancelled.merge-button",
       "bounds": {
         "x": 1368,
-        "y": 294,
+        "y": 293,
         "width": 182,
         "height": 64
       },
@@ -28,7 +28,7 @@
       "key": "cancelled.toggle",
       "bounds": {
         "x": 1368,
-        "y": 384,
+        "y": 383,
         "width": 36,
         "height": 36
       },

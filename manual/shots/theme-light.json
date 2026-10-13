@@ -10,6 +10,11 @@
     "codexAgent": true,
     "crossReview": true
   },
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "screenshot",

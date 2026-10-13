@@ -8,7 +8,7 @@
       "key": "squash.methods",
       "bounds": {
         "x": 52,
-        "y": 448,
+        "y": 446,
         "width": 1472,
         "height": 72
       },
@@ -18,7 +18,7 @@
       "key": "squash.effect-head",
       "bounds": {
         "x": 301,
-        "y": 630,
+        "y": 628,
         "width": 92,
         "height": 28
       },
@@ -28,7 +28,7 @@
       "key": "squash.effect-restack",
       "bounds": {
         "x": 92,
-        "y": 664,
+        "y": 663,
         "width": 1432,
         "height": 38
       },
@@ -38,7 +38,7 @@
       "key": "squash.go",
       "bounds": {
         "x": 52,
-        "y": 757,
+        "y": 756,
         "width": 223,
         "height": 80
       },

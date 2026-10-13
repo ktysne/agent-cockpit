@@ -13,7 +13,7 @@
       "key": "bottom.filter",
       "bounds": {
         "x": 0,
-        "y": 2,
+        "y": 1,
         "width": 1636,
         "height": 92
       },
@@ -23,7 +23,7 @@
       "key": "bottom.excluded",
       "bounds": {
         "x": 0,
-        "y": 118,
+        "y": 117,
         "width": 1636,
         "height": 92
       },
@@ -33,7 +33,7 @@
       "key": "bottom.finished",
       "bounds": {
         "x": 0,
-        "y": 234,
+        "y": 233,
         "width": 1636,
         "height": 92
       },
@@ -43,7 +43,7 @@
       "key": "bottom.idle",
       "bounds": {
         "x": 0,
-        "y": 350,
+        "y": 349,
         "width": 1636,
         "height": 92
       },

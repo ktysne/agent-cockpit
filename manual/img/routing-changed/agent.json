@@ -2,7 +2,7 @@
   "name": "agent",
   "target": ".agent-list > .agent-row:nth-child(1)",
   "width": 1524,
-  "height": 176,
+  "height": 178,
   "parts": [
     {
       "key": "changed.tag",

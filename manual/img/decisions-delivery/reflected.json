@@ -2,14 +2,14 @@
   "name": "reflected",
   "target": ".decision-list > .decision-card:nth-child(4)",
   "width": 1576,
-  "height": 962,
+  "height": 866,
   "parts": [
     {
       "key": "reflected.status",
       "bounds": {
         "x": 262,
-        "y": 762,
-        "width": 677,
+        "y": 665,
+        "width": 694,
         "height": 38
       },
       "visible": true
@@ -18,7 +18,7 @@
       "key": "reflected.summary",
       "bounds": {
         "x": 32,
-        "y": 870,
+        "y": 772,
         "width": 1518,
         "height": 70
       },
