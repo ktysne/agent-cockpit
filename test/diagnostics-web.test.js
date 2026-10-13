@@ -21,6 +21,7 @@ function diagnosticPage() {
   });
   const node = id => { if (!nodes.has(id)) nodes.set(id, makeNode()); return nodes.get(id); };
   const context = vm.createContext({ document: { getElementById: node, createElement: makeNode, execCommand: () => true },
+    diagnosticsLevelSelect: node('diagnostics-level'),
     navigator: {}, Blob, URL, setTimeout: callback => callback(),
     displayPreferences: { diagnosticsLevel: 'info' },
     saveDisplayPreferences: async changes => { requests.push({ route: '/api/display', body: changes }); Object.assign(context.displayPreferences, changes); return true; },
@@ -108,4 +109,14 @@ test('診断ログとポリシーはそれぞれ開閉の操作でモーダル�
   node('diagnostics-close').listeners.click();
   assert.equal(node('diagnostics-policy-dialog').open, false);
   assert.equal(node('diagnostics-dialog').open, false);
+});
+
+test('削除の後に一覧を読み込めなくても、削除した記録を表示に残さず、読み込めなかったことを伝える', async () => {
+  const { context, node } = diagnosticPage();
+  await context.refreshDiagnostics();
+  context.fetch = async () => { throw new Error('offline'); };
+  context.beginDiagnosticDeletion('run');
+  await node('diagnostics-delete-confirm').listeners.click();
+  assert.equal(context.filteredDiagnosticEntries().length, 0);
+  assert.match(node('diagnostics-status').textContent, /削除しましたが、一覧を読み込めませんでした/);
 });

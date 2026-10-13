@@ -647,6 +647,7 @@ for (const { input, min, max } of DISPLAY_MINUTE_SETTINGS) {
   input.max = String(max);
 }
 const hideFinishedInput = document.getElementById('settings-hide-finished');
+const diagnosticsLevelSelect = document.getElementById('diagnostics-level');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
 const sectionOrderList = document.getElementById('settings-section-order');
 const settingsButton = document.getElementById('settings-button');
@@ -848,6 +849,11 @@ function renderDisplaySettings() {
   if (document.activeElement !== hideFinishedInput) hideFinishedInput.checked = displayPreferences.hideFinished;
   if (!mergeableConditionInputs.includes(document.activeElement)) {
     for (const input of mergeableConditionInputs) input.checked = input.value === displayPreferences.mergeableCondition;
+  }
+  if (document.activeElement !== diagnosticsLevelSelect && diagnosticsLevelSelect.value !== displayPreferences.diagnosticsLevel) {
+    diagnosticsLevelSelect.value = displayPreferences.diagnosticsLevel;
+    // 初回の描画は診断ログの部品の宣言より前に走るので、ダイアログは要素から辿る。
+    if (diagnosticsLevelSelect.closest('dialog').open) renderDiagnosticEntries();
   }
 }
 
@@ -1156,7 +1162,6 @@ let diagnosticDeleteScope = null;
 let diagnosticDeleteRunId = null;
 const diagnosticsDialog = document.getElementById('diagnostics-dialog');
 const diagnosticsPolicyDialog = document.getElementById('diagnostics-policy-dialog');
-const diagnosticsLevelSelect = document.getElementById('diagnostics-level');
 const diagnosticsRunSelect = document.getElementById('diagnostics-run');
 const diagnosticsSourceSelect = document.getElementById('diagnostics-source');
 const diagnosticsList = document.getElementById('diagnostics-list');
@@ -1223,6 +1228,7 @@ function renderDiagnosticEntries() {
 
 async function refreshDiagnostics() {
   const sequence = ++diagnosticsRefreshSequence;
+  let loaded = false;
   diagnosticsStatus.textContent = '記録を読み込んでいます。';
   diagnosticsList.setAttribute('aria-busy', 'true');
   try {
@@ -1235,6 +1241,7 @@ async function refreshDiagnostics() {
     diagnosticVersion = data.version;
     refreshDiagnosticOptions();
     diagnosticsStatus.textContent = '';
+    loaded = true;
   } catch {
     if (sequence !== diagnosticsRefreshSequence) return;
     diagnosticsStatus.textContent = '診断ログを読み込めませんでした。「更新」でやり直してください。';
@@ -1243,6 +1250,7 @@ async function refreshDiagnostics() {
   }
   diagnosticsLevelSelect.value = displayPreferences.diagnosticsLevel;
   renderDiagnosticEntries();
+  return loaded;
 }
 
 function openDiagnostics() {
@@ -1382,13 +1390,17 @@ document.getElementById('diagnostics-delete-confirm').addEventListener('click', 
     diagnosticsStatus.textContent = '記録を削除できませんでした。もう一度「削除する」を押してください。';
     return;
   } finally { confirmButton.disabled = false; }
+  // 再取得に失敗しても、削除した記録をコピーや書き出しの対象に残さないため、先に手元から外す。
+  diagnosticRuns = diagnosticDeleteScope === 'all' ? [] : diagnosticRuns.filter(run => run.id !== diagnosticDeleteRunId);
+  refreshDiagnosticOptions();
   diagnosticDeleteScope = null;
   diagnosticDeleteRunId = null;
   diagnosticsRunSelect.disabled = false;
   diagnosticsDeleteConfirmation.hidden = true;
   diagnosticsDeleteActions.hidden = false;
-  await refreshDiagnostics();
-  diagnosticsStatus.textContent = '記録を削除しました。';
+  diagnosticsStatus.textContent = await refreshDiagnostics()
+    ? '記録を削除しました。'
+    : '記録を削除しましたが、一覧を読み込めませんでした。「更新」でやり直してください。';
   document.getElementById('diagnostics-delete-run').focus();
 });
 

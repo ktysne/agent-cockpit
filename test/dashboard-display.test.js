@@ -1136,6 +1136,7 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     DEFAULT_IDLE_HIDE_MINUTES: 10,
     hideFinishedInput,
     mergeableConditionInputs,
+    diagnosticsLevelSelect: { value: 'info', closest: () => ({ open: false }) },
     displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: false, mergeableCondition: 'ci' },
   });
   vm.runInContext(`${settings}\n${render}`, context);
@@ -1175,6 +1176,7 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
       { key: 'idleHideMinutes', input: idleHideMinutesInput, error: null, min: 5, max: 1440, default: 10 },
     ],
     mergeableConditionInputs,
+    diagnosticsLevelSelect: { value: 'info', closest: () => ({ open: false }) },
     lastState: null,
     enqueueDisplayPatch: async () => false,
     renderSectionOrder() {},
