@@ -2272,8 +2272,9 @@ class DashboardState {
       model: session.codex.model,
       resumes: session.codex.resumes + (this.codexResumesBeforeEnd.get(event.session_id) || 0),
       updatedAt: previous?.updatedAt || isoTime(event.hookAt),
-      // 別のプロセスでの再開(codex exec resume など)はロックを作らないことがあるので、印は同じプロセスの間だけ引き継ぐ。
-      ...(previous?.lockSeen && previous.pid === pid ? { lockSeen: true } : {}),
+      // 再開(codex exec resume など)はロックを作らないことがあり、プロセス ID の照会も失敗しうるので、本体の SessionStart では印を外す。
+      // ロックを作る画面なら、次の走査で印が付き直る。
+      ...(previous?.lockSeen && !(event.hook_event_name === 'SessionStart' && !event.agent_id) ? { lockSeen: true } : {}),
     };
     // updatedAt は再起動の後の行の無操作の判定にも使う。イベントのたびに保存しないよう、1 分以上進んだときだけ進める。
     const activityAdvanced = event.hookAt - Date.parse(record.updatedAt) >= CODEX_RECOVERY_ACTIVITY_STEP_MS;

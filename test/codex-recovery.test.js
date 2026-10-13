@@ -233,19 +233,21 @@ test('ロック消失で終了した Codex を再開すると、SessionStart が
   assert.equal((await c.store()).codexRecovery.thread.pid, 1234);
 });
 
-test('ロックを見た会話を別のプロセスで再開すると、ロックが無くてもプロセスの生死だけで扱う', async (t) => {
-  const c = await cockpit(t);
-  await c.lock();
-  await c.event('SessionStart', { codexPid: 1234 });
-  const now = Date.now();
-  await c.runtime.refreshSessionFiles(now);
-  await c.unlock();
-  await c.event('SessionStart', { codexPid: 5678, hookAt: now + 1 });
-  assert.equal((await c.store()).codexRecovery.thread.lockSeen, undefined);
-  await c.runtime.refreshSessionFiles(now + 180_000);
-  assert.equal((await c.rows())[0].session_id, 'thread');
-  assert.equal(c.runtime.state.sessionHasEnded('thread'), false);
-});
+for (const [label, resumed] of [['別のプロセス', { codexPid: 5678 }], ['プロセス ID の届かない', {}]]) {
+  test(`ロックを見た会話を${label}再開で始めると、ロックが無くてもプロセスの生死だけで扱う`, async (t) => {
+    const c = await cockpit(t);
+    await c.lock();
+    await c.event('SessionStart', { codexPid: 1234 });
+    const now = Date.now();
+    await c.runtime.refreshSessionFiles(now);
+    await c.unlock();
+    await c.event('SessionStart', { ...resumed, hookAt: now + 1 });
+    assert.equal((await c.store()).codexRecovery.thread.lockSeen, undefined);
+    await c.runtime.refreshSessionFiles(now + 180_000);
+    assert.equal((await c.rows())[0].session_id, 'thread');
+    assert.equal(c.runtime.state.sessionHasEnded('thread'), false);
+  });
+}
 
 test('ロック一覧は隠しファイル、別の拡張子、ディレクトリを会話のロックに含めない', async (t) => {
   const c = await cockpit(t);
