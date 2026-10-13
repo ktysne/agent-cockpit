@@ -216,7 +216,7 @@
     <li><code>AGENT_COCKPIT_PORT</code>：常駐サーバーのポートです。手で起動するときは、<code>--port</code> でも指定できます</li>
   </ul>
   <p>フック、MCP サーバー、タスクトレイ、常駐サーバーは、同じ保存先を読む必要があります。
-  Claude Code を起動する環境(ユーザーの環境変数など)に設定して、どれにも同じ値が見えるようにしてください。
+  Claude Code と Codex を起動する環境(ユーザーの環境変数など)に設定して、どれにも同じ値が見えるようにしてください。
   ポートを変えたときは、ダッシュボードの URL も変わります(<code>http://127.0.0.1:&lt;ポート&gt;/</code>)。</p>
   <p>指定したポートがほかのプログラムに使われていると、常駐サーバーは起動できません。
   理由は、保存先の <code>server.log</code> に書かれます(<a href="trouble.html#trouble-connect">画面がつながらない</a>)。</p>
@@ -224,7 +224,7 @@
     <summary>ポートの扱いの詳細</summary>
     <ul>
       <li>ポートの環境変数を読むのは、常駐サーバーを起動するフックとタスクトレイです。起動した後は、フックもタスクトレイも、<code>server.json</code> のポートに接続します</li>
-      <li>Codex のホーム(<code>CODEX_HOME</code>、無ければ <code>~/.codex</code>)は、会話が開いているかを確かめるロックファイルと、スレッド名の一覧を読むために使います</li>
+      <li>Codex のホーム(<code>CODEX_HOME</code>、無ければ <code>~/.codex</code>)は、会話が開いているかを確かめるロックファイルと、スレッド名の一覧を読むために使います。常駐サーバーは自分を起動したプロセスの <code>CODEX_HOME</code> を使うので、変えているときは Claude Code を起動する環境にも同じ値を設定します</li>
       <li>Claude のホーム(<code>CLAUDE_CONFIG_DIR</code>、無ければ <code>~/.claude</code>)は、セッションのファイルとサブエージェントの定義を読むために使います</li>
     </ul>
   </details>
