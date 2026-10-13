@@ -30,6 +30,56 @@ async function readSessionName(sessionId, claudeHome, fileSystem = fs) {
   return null;
 }
 
+// session_index.jsonl は公開仕様ではないため、読めない場合は名前なしで続ける。
+async function readCodexSessionNames(codexHome, cache = {}, fileSystem = fs) {
+  const filePath = path.join(codexHome, 'session_index.jsonl');
+  let fileStat;
+  try {
+    fileStat = await fileSystem.stat(filePath);
+    if (!fileStat.isFile()) return null;
+  } catch {
+    return null;
+  }
+
+  if (cache.mtimeMs === fileStat.mtimeMs && cache.size === fileStat.size && cache.names instanceof Map) {
+    return cache.names;
+  }
+
+  let content;
+  try {
+    content = await fileSystem.readFile(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+
+  const names = new Map();
+  const updatedAtById = new Map();
+  for (const line of content.split(/\r?\n/)) {
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!value || typeof value !== 'object' || typeof value.id !== 'string' ||
+      typeof value.thread_name !== 'string' || value.thread_name.length === 0) continue;
+
+    const parsedUpdatedAt = typeof value.updated_at === 'string' ? Date.parse(value.updated_at) : NaN;
+    const updatedAt = Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : null;
+    if (names.has(value.id)) {
+      const previousUpdatedAt = updatedAtById.get(value.id);
+      if (previousUpdatedAt !== null && (updatedAt === null || updatedAt < previousUpdatedAt)) continue;
+    }
+    names.set(value.id, value.thread_name.slice(0, 200));
+    updatedAtById.set(value.id, updatedAt);
+  }
+
+  cache.mtimeMs = fileStat.mtimeMs;
+  cache.size = fileStat.size;
+  cache.names = names;
+  return names;
+}
+
 function processIsAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -134,6 +184,7 @@ async function codexAgentDefinition(agentName, claudeHome) {
 module.exports = {
   processIsAlive,
   readSessionName,
+  readCodexSessionNames,
   listLiveSessionFiles,
   findLiveSessionIdByPid,
   readAgentDefinition,
