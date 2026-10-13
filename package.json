@@ -10,6 +10,8 @@
     "manual:build": "node tools/manual/build.js",
     "manual:capture": "node tools/manual/capture.js",
     "site:capture": "node tools/manual/capture.js --root site",
+    "site:deploy": "node --use-system-ca tools/site-deploy.js upload",
+    "site:deploy:dry": "node --use-system-ca tools/site-deploy.js upload --dry-run",
     "manual:demo": "node tools/manual/demo-server.js",
     "lint:manual": "node tools/manual/lint.js",
     "review:codex": "node tools/cross-review.js codex",
@@ -17,5 +19,8 @@
     "review:claude": "node tools/cross-review.js claude",
     "sync:cross-review": "node tools/cross-review.sync.js",
     "sync:cross-review:check": "node tools/cross-review.sync.js --check"
+  },
+  "devDependencies": {
+    "basic-ftp": "^6.2.3"
   }
 }

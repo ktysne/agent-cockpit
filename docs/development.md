@@ -94,6 +94,9 @@ Invoke-RestMethod http://127.0.0.1:48377/api/state | ConvertTo-Json -Depth 8
 撮影とデモは、一時ディレクトリの保存先と偽の `gh` を使います。普段の `~/.agent-cockpit/`、`~/.claude/`、ポート `47821` の常駐サーバーには触れません。
 ブラウザは環境変数 `MANUAL_BROWSER` で指定でき、無ければ Edge と Chrome の既定の場所を探します。
 
+配布ページの画像の撮影と配信は、[docs/design/site.md](design/site.md) を参照してください。
+配信だけは、`npm install` で開発用の依存を入れる必要があります。
+
 ## アプリアイコン
 
 元画像は `assets/agent-cockpit_icon.png` にあります。64×64 の画面用画像は次のコマンドで作り直せます。ショートカット用の ICO は、インストール時に元画像から生成されます。
