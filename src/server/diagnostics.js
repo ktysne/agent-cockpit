@@ -31,7 +31,7 @@ const ALLOWED_DATA = Object.freeze({
   'review.state': ['repository', 'number', 'session', 'file', 'head', 'failure', 'round', 'outcome', 'triageHead'],
   'diagnostics.rotate': ['segment'],
   'diagnostics.pruned': ['count'],
-  'diagnostics.repeated': ['msg', 'count'],
+  'diagnostics.repeated': ['msg', 'count', 'since', 'data'],
 });
 
 function runStartedAt(run) {
@@ -80,8 +80,17 @@ class Diagnostics {
       if (typeof value === 'number' && Number.isFinite(value) || typeof value === 'boolean') return value;
       return undefined;
     };
+    // 件数の行は元の内容を入れ子で持ち、元の識別子の許可一覧で絞り直す。
+    if (msg === 'diagnostics.repeated') {
+      if (!Object.hasOwn(ALLOWED_DATA, data.msg) || data.msg === msg) return clean;
+      clean.msg = data.msg;
+      if (Number.isInteger(data.count) && data.count > 0) clean.count = data.count;
+      if (typeof data.since === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(data.since)) clean.since = data.since;
+      const inner = data.data && typeof data.data === 'object' ? this.sanitize(data.msg, data.data) : {};
+      if (Object.keys(inner).length) clean.data = inner;
+      return clean;
+    }
     for (const key of ALLOWED_DATA[msg] || []) {
-      if (msg === 'diagnostics.repeated' && key === 'msg' && !Object.hasOwn(ALLOWED_DATA, data[key])) continue;
       if (['secret', 'origin'].includes(key) && !['match', 'mismatch', 'missing'].includes(data[key])) continue;
       if (key === 'error' && (!data[key] || typeof data[key] !== 'object')) continue;
       const value = sanitizeValue(data[key], key === 'error');
@@ -128,7 +137,8 @@ class Diagnostics {
   async appendRepeated(repeated) {
     if (!repeated.count) return;
     await this.append({ ts: Date.now(), level: repeated.level, tag: repeated.tag, msg: 'diagnostics.repeated',
-      data: { msg: repeated.msg, count: repeated.count } });
+      data: this.sanitize('diagnostics.repeated', { msg: repeated.msg, count: repeated.count,
+        since: new Date(repeated.expiresAt - this.repeatWindowMs).toISOString(), data: repeated.data }) });
   }
 
   async flushExpiredRepeats(now) {
@@ -227,7 +237,8 @@ class Diagnostics {
       for (const file of await this.files()) {
         if (all === true || file.run === run) await fs.unlink(path.join(this.directory, file.name));
       }
-      if (all === true || run === this.run) { this.segment += 1; this.lines = 0; }
+      // 消した記録の件数を後から書き戻さず、削除後の最初の 1 件を書くため、まとめている件数も捨てる。
+      if (all === true || run === this.run) { this.segment += 1; this.lines = 0; this.repeated.clear(); }
     });
   }
 

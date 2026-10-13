@@ -100,8 +100,8 @@ test('フックの HTTP 受付は添付の件数を制限し、hook 以外の記
   assert.deepEqual(entries.filter(entry => entry.msg === 'hook.server').map(entry => entry.data), [
     { started: false },
   ]);
-  assert.deepEqual(entries.filter(entry => entry.msg === 'diagnostics.repeated').map(entry => entry.data), [
-    { msg: 'hook.server', count: MAX_DIAGNOSTICS_PER_EVENT - 3 },
+  assert.deepEqual(entries.filter(entry => entry.msg === 'diagnostics.repeated').map(entry => repeatedData(entry.data)), [
+    { msg: 'hook.server', count: MAX_DIAGNOSTICS_PER_EVENT - 3, data: { started: false } },
   ]);
   assert.equal(allEntries.some(entry => entry.msg === 'mcp.write'), false);
 });
@@ -183,6 +183,10 @@ test('MCP の診断送信が失敗しても書き込みは完了し、診断を�
 
 const uiPost = (info, route, body, headers = uiHeaders(info, `http://127.0.0.1:${info.port}`)) => request(info.port,
   { method: 'POST', path: route, headers, body: JSON.stringify(body) });
+const repeatedData = ({ since, ...data }) => {
+  assert.match(since, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  return data;
+};
 const read = async (runtime, run = runtime.diagnostics.run) => jsonBody(await request(runtime.info.port,
   { path: `/api/diagnostics?run=${encodeURIComponent(run)}` })).entries;
 
@@ -195,8 +199,8 @@ test('期間内の同じ記録は最初の 1 件と期間終了時の件数を�
   await delay(80);
   const entries = await read(runtime);
   const repeated = entries.find(entry => entry.msg === 'diagnostics.repeated');
-  assert.deepEqual({ level: repeated.level, tag: repeated.tag, data: repeated.data }, {
-    level: 'warn', tag: 'web', data: { msg: 'web.failed', count: 2 },
+  assert.deepEqual({ level: repeated.level, tag: repeated.tag, data: repeatedData(repeated.data) }, {
+    level: 'warn', tag: 'web', data: { msg: 'web.failed', count: 2, data: { path: '/api/health', status: 500 } },
   });
   await runtime.diagnostics.record('warn', 'web', 'web.failed', { path: '/api/health', status: 500 });
   const nextPeriod = await read(runtime);
@@ -227,9 +231,22 @@ test('flush は期限前の繰り返し件数を書き出す', async t => {
   await runtime.diagnostics.record('error', 'web', 'web.failed', { path: '/api/health', status: 500 });
   await runtime.diagnostics.flush();
   const repeated = (await read(runtime)).find(entry => entry.msg === 'diagnostics.repeated');
-  assert.deepEqual({ level: repeated.level, tag: repeated.tag, data: repeated.data }, {
-    level: 'error', tag: 'web', data: { msg: 'web.failed', count: 1 },
+  assert.deepEqual({ level: repeated.level, tag: repeated.tag, data: repeatedData(repeated.data) }, {
+    level: 'error', tag: 'web', data: { msg: 'web.failed', count: 1, data: { path: '/api/health', status: 500 } },
   });
+});
+
+test('現在の起動を削除すると、まとめていた件数を捨て、削除後の最初の 1 件を書く', async t => {
+  const { runtime } = await startTestServer(t, { diagnosticsOptions: { repeatWindowMs: 60_000 } });
+  for (let index = 0; index < 2; index += 1) {
+    await runtime.diagnostics.record('warn', 'web', 'web.failed', { path: '/api/health', status: 500 });
+  }
+  await runtime.diagnostics.deleteRuns({ run: runtime.diagnostics.run });
+  await runtime.diagnostics.record('warn', 'web', 'web.failed', { path: '/api/health', status: 500 });
+  await runtime.diagnostics.flush();
+  const entries = await read(runtime);
+  assert.equal(entries.filter(entry => entry.msg === 'web.failed').length, 1);
+  assert.equal(entries.filter(entry => entry.msg === 'diagnostics.repeated').length, 0);
 });
 
 test('種類の上限を超えると最も古い繰り返し件数を書き出す', async t => {
@@ -248,9 +265,9 @@ test('種類の上限を超えると最も古い繰り返し件数を書き出�
   }
   await runtime.diagnostics.flush();
   const repeated = (await read(runtime)).filter(entry => entry.msg === 'diagnostics.repeated');
-  assert.deepEqual(repeated.map(({ level, tag, data }) => [level, tag, data]), [
-    ['warn', 'web', { msg: 'web.failed', count: 1 }],
-    ['error', 'server', { msg: 'request.failed', count: 1 }],
+  assert.deepEqual(repeated.map(({ level, tag, data }) => [level, tag, repeatedData(data)]), [
+    ['warn', 'web', { msg: 'web.failed', count: 1, data: { path: '/api/health', status: 500 } }],
+    ['error', 'server', { msg: 'request.failed', count: 1, data: { method: 'GET', path: '/api/health', status: 500 } }],
   ]);
 });
 
