@@ -1,3 +1,4 @@
+const EVENT_DELAY_THRESHOLD_MS = 5000;
 const { jsonResponse } = require('../http-helpers');
 const { validSessionId, validText, validPlanInput, decisionSummaries } = require('../request-validation');
 const { sanitizeEvent, isQuestionTool } = require('../events');
@@ -129,6 +130,7 @@ function createHookRoutes(ctx) {
   }
 
   async function handleEvents({ response, body }) {
+    const receivedAt = Date.now();
     state.captureFieldNames(body);
     const product = productFromCwd(body.cwd);
     const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
@@ -151,12 +153,23 @@ function createHookRoutes(ctx) {
       }
     }
 
-    const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
+    let rejected = false;
+    const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata,
+      diagnostics: ctx.diagnostics, onRejected: () => { rejected = true; } };
     if (!state.addEvent(body, eventMetadata)) {
       jsonResponse(response, 202, { accepted: true });
       return;
     }
     const event = sanitizeEvent(body, eventMetadata);
+    if (event && !rejected) {
+      const data = { event: event.hook_event_name, provider: event.provider, tool: event.tool_name,
+        session: event.session_id.slice(0, 8), product: product?.name, delayMs: receivedAt - event.hookAt };
+      ctx.diagnostics?.record('debug', 'server', 'event.accepted', data);
+      if (ctx.eventCounts) ctx.eventCounts[event.hook_event_name] = (ctx.eventCounts[event.hook_event_name] || 0) + 1;
+      if (data.delayMs > EVENT_DELAY_THRESHOLD_MS) ctx.diagnostics?.record('info', 'server', 'event.delayed', data);
+      if (['SessionStart', 'SessionEnd'].includes(event.hook_event_name)) ctx.diagnostics?.record('info', 'server', 'event.lifecycle', data);
+    }
+
     // 終了通知はメインの記録に書かれるので、サブエージェントのイベントのたびには読まない。
     if (event && !event.agent_id) scheduleTaskNotifications(event.session_id);
     if (event) scheduleSessionModel(event);

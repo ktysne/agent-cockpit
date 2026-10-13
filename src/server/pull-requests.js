@@ -691,11 +691,15 @@ function sameGitHubRepository(left, right) {
 
 async function readCrossReviewState(registration, pullRequest, options = {}) {
   const { fileSystem, execFileImpl, remoteRepositoryCache } = crossReviewReadOptions(options);
+  const report = (file, head = 'missing', failure = 'none', state = {}) => options.observeReview?.(registration, { file, head, failure, ...state });
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
   // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
   const tool = await detectCrossReviewTool(registration.cwd, fileSystem);
-  if (tool.status !== 'present' && tool.status !== 'absent') return { unavailable: true };
+  if (tool.status !== 'present' && tool.status !== 'absent') {
+    report('unknown', 'missing', 'tool-read');
+    return { unavailable: true };
+  }
   const { root } = tool;
   const pullRequestRepository = parsePullRequestUrl(pullRequest?.url);
   if (pullRequestRepository) {
@@ -703,22 +707,30 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
     // 道具の有無は別のリポジトリの判定にならないので、レビュー不要と判定する前に照合する。
     const remotes = await gitHubRemoteRepositoriesOf(root, execFileImpl, remoteRepositoryCache);
     if (remotes.length && !remotes.some((remote) => sameGitHubRepository(remote, pullRequestRepository))) {
+      report('unknown', 'missing', 'repository-mismatch');
       return { unavailable: true, reason: 'repository-mismatch' };
     }
   }
-  if (tool.status === 'absent') return { notRequired: true, source: 'tool-absent' };
+  if (tool.status === 'absent') {
+    report('unknown', 'missing', 'tool-absent');
+    return { notRequired: true, source: 'tool-absent' };
+  }
   let contents;
   try {
     contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
   } catch (error) {
+    report(error.code === 'ENOENT' ? 'missing' : 'unknown', 'missing', error.code === 'ENOENT' ? 'none' : 'read');
     return error.code === 'ENOENT' ? null : { unavailable: true };
   }
   try {
     const parsed = JSON.parse(contents);
-    if (!branch) return null;
+    if (!branch) { report('present'); return null; }
     const branchState = parsed?.branches?.[branch];
-    if (!branchState) return null;
-    if (!Number.isSafeInteger(branchState.round) || branchState.round < 0 || !Array.isArray(branchState.dismissed)) return { unavailable: true };
+    if (!branchState) { report('present'); return null; }
+    if (!Number.isSafeInteger(branchState.round) || branchState.round < 0 || !Array.isArray(branchState.dismissed)) {
+      report('present', 'missing', 'invalid');
+      return { unavailable: true };
+    }
     const lastReviewedSha = branchState.lastReviewedSha;
     const lastTriage = branchState.lastTriage;
     const triageSha = lastTriage?.sha;
@@ -728,6 +740,10 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
       && ['fixing', 'converged', 'halted'].includes(triageOutcome)
       ? { round: lastTriage.round, sha: triageSha.toLowerCase(), outcome: triageOutcome }
       : null;
+    report('present', isCompleteCommitSha(lastReviewedSha)
+      ? (lastReviewedSha.toLowerCase() === pullRequest.headRefOid?.toLowerCase() ? 'match' : 'mismatch') : 'missing', 'none',
+      { round: branchState.round, outcome: triage?.outcome || 'missing', triageHead: triage
+        ? (triage.sha === pullRequest.headRefOid?.toLowerCase() ? 'match' : 'mismatch') : 'missing' });
     return {
       number: registration.number,
       branch,
@@ -740,6 +756,7 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
       triage,
     };
   } catch {
+    report('present', 'missing', 'parse');
     return { unavailable: true };
   }
 }
@@ -994,6 +1011,9 @@ function productGroupsFor(owner, repo, registrations) {
 class PullRequestTracker {
   constructor(options = {}) {
     this.state = options.state;
+    this.diagnostics = options.diagnostics;
+    this.diagnosticFailures = new Map();
+    this.diagnosticReviews = new Map();
     this.execFileImpl = options.execFileImpl || execFile;
     this.ghPath = options.ghPath || 'gh';
     this.gitExecFileImpl = options.gitExecFileImpl || execFile;
@@ -1147,7 +1167,32 @@ class PullRequestTracker {
   }
 
   async execute(args) {
-    return runGh(args, { execFileImpl: this.execFileImpl, ghPath: this.ghPath });
+    const apiPath = args.find(arg => arg.startsWith('repos/'));
+    const operation = args[0] === 'pr' ? `pr.${args[1]}`
+      : apiPath?.includes('/compare/') ? 'api.compare'
+      : args.includes('DELETE') ? 'api.delete-branch'
+      : apiPath?.includes('/git/ref/') ? 'api.branch-head'
+      : apiPath?.includes('/pulls') ? 'api.pull-requests' : 'api.repository';
+    const repository = args.includes('-R') ? args[args.indexOf('-R') + 1] : args.find(arg => /^repos\/[^/]+\/[^/]+/.test(arg))?.split('/').slice(1, 3).join('/');
+    const number = args[0] === 'pr' && /^\d+$/.test(args[2]) ? Number(args[2]) : undefined;
+    const key = `${operation}:${repository || ''}:${number || ''}`;
+    try {
+      const output = await runGh(args, { execFileImpl: this.execFileImpl, ghPath: this.ghPath });
+      this.diagnosticFailures.delete(key);
+      return output;
+    } catch (error) {
+      const consecutive = (this.diagnosticFailures.get(key) || 0) + 1;
+      this.diagnosticFailures.set(key, consecutive);
+      const registration = repository && this.state.pullRequestRegistrations().find(record =>
+        repositoryKey(record.owner, record.repo) === repository.toLowerCase() && (!number || record.number === number));
+      this.diagnostics?.record('error', 'gh', 'gh.failed', { operation, repository, number,
+        session: registration?.session_id.slice(0, 8), consecutive,
+        failure: error.killed || error.code === 'ETIMEDOUT' ? 'timeout'
+          : error.code === 'ENOENT' ? 'missing-command' : ['EPERM', 'EACCES'].includes(error.code) ? 'permission'
+          : error.signal ? 'signal' : typeof error.code === 'number' ? 'exit' : 'execution',
+        code: error.code, signal: error.signal, exitCode: typeof error.code === 'number' ? error.code : undefined });
+      throw error;
+    }
   }
 
   async readPullRequestView(owner, repo, number) {
@@ -1459,6 +1504,14 @@ class PullRequestTracker {
       }
       const review = await this.readCrossReviewState(registration, pullRequest, {
         fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache,
+        observeReview: (record, result) => {
+          const key = `${repositoryKey(owner, repo)}:${record.number}:${record.cwd}`;
+          const signature = JSON.stringify(result);
+          if (this.diagnosticReviews.get(key) === signature) return;
+          this.diagnosticReviews.set(key, signature);
+          this.diagnostics?.record(result.failure === 'none' ? 'info' : 'warn', 'merge', 'review.state',
+            { repository: safeRepo(owner, repo), number: record.number, session: record.session_id?.slice(0, 8), ...result });
+        },
       });
       const current = crossReviewByNumber.get(registration.number);
       if (crossReviewByNumber.has(registration.number) && !shouldReplaceCrossReview(current, review, pullRequest.headRefOid)) continue;

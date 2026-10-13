@@ -1403,6 +1403,7 @@ class DashboardState {
     this.claudeSessionModels = new Map();
     this.endedAt = new Map();
     this.endedByAbsence = new Map();
+    this.lockMissingReported = new Set();
     this.fieldNames = new Set();
     this.notificationTypes = new Set();
     this.sessionFiles = new Map();
@@ -2320,6 +2321,9 @@ class DashboardState {
     const files = [];
     for (const [sessionId, record] of this.codexRecovery) {
       if (!isAlive(record.pid)) {
+        this.diagnostics?.record('info', 'codex', 'session.ended',
+          { session: sessionId.slice(0, 8), provider: 'codex', reason: 'process-dead' });
+        this.lockMissingReported.delete(sessionId);
         this.codexRecovery.delete(sessionId);
         this.requestStoreWrite();
         continue;
@@ -2329,7 +2333,16 @@ class DashboardState {
         this.requestStoreWrite();
       }
       // 閉じた会話も記録は残す。プロセス ID は SessionStart でしか届かないので、消すと再開した行を生存の一覧へ戻せないため。
-      if (locks !== null && record.lockSeen && !locks.has(sessionId)) continue;
+      if (locks !== null && record.lockSeen && !locks.has(sessionId)) {
+        // 閉じた会話の記録は走査のたびにここを通るので、ロックが戻るまでは 1 回だけ記録する。
+        if (!this.lockMissingReported.has(sessionId)) {
+          this.lockMissingReported.add(sessionId);
+          this.diagnostics?.record('info', 'codex', 'session.ended',
+            { session: sessionId.slice(0, 8), provider: 'codex', reason: 'lock-missing' });
+        }
+        continue;
+      }
+      this.lockMissingReported.delete(sessionId);
       files.push({
         session_id: sessionId, provider: 'codex', pid: record.pid, cwd: record.cwd,
         updatedAt: record.updatedAt, codex: { model: record.model, resumes: record.resumes },
@@ -2443,6 +2456,8 @@ class DashboardState {
   }
 
   endSessionByAbsence(sessionId, endedAt) {
+    this.diagnostics?.record('info', 'server', 'session.ended',
+      { session: sessionId.slice(0, 8), provider: this.providerForSession(sessionId), reason: 'session-file-absent' });
     this.sessions.delete(sessionId);
     this.endedByAbsence.set(sessionId, endedAt);
     this.estimates.delete(sessionId);
@@ -2654,29 +2669,35 @@ class DashboardState {
 
   addEvent(input, metadata = {}) {
     const event = sanitizeEvent(input, metadata);
-    if (!event) return false;
+    const rejected = (reason, result) => {
+      metadata.onRejected?.(reason);
+      (metadata.diagnostics || this.diagnostics)?.record('info', 'server', 'event.rejected', { reason,
+        ...(event ? { event: event.hook_event_name, provider: event.provider, session: event.session_id.slice(0, 8) } : {}) });
+      return result;
+    };
+    if (!event) return rejected('invalid', false);
     const existingProvider = this.entries.get(event.session_id)?.[0]?.event.provider
       || this.sessions.get(event.session_id)?.provider || this.sessionFiles.get(event.session_id)?.provider
       || (this.codexRecovery.has(event.session_id) ? 'codex' : null);
-    if (existingProvider && existingProvider !== event.provider) return false;
+    if (existingProvider && existingProvider !== event.provider) return rejected('provider-mismatch', false);
     // 委譲した Codex の thread は行を作らない。分類は thread の最初のイベントで決め、そのイベントだけを保持する(docs/design/codex-delegation.md)。
     if (event.provider === 'codex') {
       const entries = this.entries.get(event.session_id) || [];
-      if (entries[0]?.event.delegatedFrom) return true;
+      if (entries[0]?.event.delegatedFrom) return rejected('delegated', true);
       if (!entries.length && this.hasRunningDelegation(event.claudeParentSessionId)) {
         event.delegatedFrom = event.claudeParentSessionId;
         this.entries.set(event.session_id, [{ event, sequence: this.sequence++ }]);
         return true;
       }
     }
-    if (!this.acceptSessionWrite(event.session_id, event.hookAt)) return true;
+    if (!this.acceptSessionWrite(event.session_id, event.hookAt)) return rejected('deleted', true);
 
     const endedAt = this.endedAt.get(event.session_id);
-    if (endedAt !== undefined && event.hook_event_name !== 'SessionStart') return true;
-    if (endedAt !== undefined && event.hookAt <= endedAt) return true;
+    if (endedAt !== undefined && event.hook_event_name !== 'SessionStart') return rejected('ended', true);
+    if (endedAt !== undefined && event.hookAt <= endedAt) return rejected('stale', true);
 
     const endedByAbsenceAt = this.endedByAbsence.get(event.session_id);
-    if (endedByAbsenceAt !== undefined && event.hookAt <= endedByAbsenceAt) return true;
+    if (endedByAbsenceAt !== undefined && event.hookAt <= endedByAbsenceAt) return rejected('absent-stale', true);
 
     const before = JSON.stringify([...this.sessions.values()]);
     const wasHidden = this.hiddenSessions.delete(event.session_id);
@@ -2723,6 +2744,8 @@ class DashboardState {
     }
 
     if (event.hook_event_name === 'SessionEnd') {
+      this.diagnostics?.record('info', event.provider === 'codex' ? 'codex' : 'server', 'session.ended',
+        { session: event.session_id.slice(0, 8), provider: event.provider, reason: 'SessionEnd' });
       this.endSession(event.session_id, event.hookAt);
     }
 

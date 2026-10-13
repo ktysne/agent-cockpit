@@ -2755,3 +2755,48 @@ test('同じマージ先の head 検索は重複せず既定ブランチとオ�
   assert.deepEqual(searches.map(args => args[args.indexOf('--head') + 1]), ['aggregate']);
   assert.equal(tracker.snapshot()[0].trees.find(pr => pr.number === 1).mergeTarget, 'aggregate');
 });
+
+test('クロスレビューのファイル有無と head の変化だけを記録し、状態本文を残さない', async t => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  const { tracker, github } = await trackerFixture(t, [31], root);
+  const { Diagnostics } = require('../src/server/diagnostics');
+  const diagnostics = new Diagnostics({ homeDir: root });
+  tracker.diagnostics = diagnostics;
+  tracker.gitExecFileImpl = (_file, _args, _options, callback) => callback(null, '');
+  github.openPullRequests = [ghPullRequest(31, 'feat/private-branch', 'main', 'a'.repeat(40))];
+  await tracker.refreshRepo('example', 'project');
+  await tracker.refreshRepo('example', 'project');
+  const stateFile = path.join(root, '.cross-review-state.json');
+  for (const head of ['a', 'b']) {
+    await fs.writeFile(stateFile, JSON.stringify({ branches: { 'feat/private-branch': {
+      round: 1, dismissed: ['private-review-text'], lastReviewedSha: head.repeat(40), prompt: 'private-prompt',
+    } } }));
+    await tracker.refreshRepo('example', 'project');
+    await tracker.refreshRepo('example', 'project');
+  }
+  const entries = (await diagnostics.readRun(diagnostics.run)).filter(entry => entry.msg === 'review.state');
+  assert.deepEqual(entries.map(entry => [entry.data.file, entry.data.head]), [['missing', 'missing'], ['present', 'match'], ['present', 'mismatch']]);
+  assert.doesNotMatch(JSON.stringify(entries), /private|dismissed|prompt|cross-review-state|lastReviewedSha/);
+});
+
+test('壊れたクロスレビュー状態は失敗分類だけを残し、同じ失敗を走査ごとには残さない', async t => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), '{private-invalid-json');
+  const { tracker, github } = await trackerFixture(t, [31], root);
+  const { Diagnostics } = require('../src/server/diagnostics');
+  const diagnostics = new Diagnostics({ homeDir: root });
+  tracker.diagnostics = diagnostics;
+  tracker.gitExecFileImpl = (_file, _args, _options, callback) => callback(null, '');
+  github.openPullRequests = [ghPullRequest(31, 'feat/review', 'main', 'a'.repeat(40))];
+  await tracker.refreshRepo('example', 'project');
+  await tracker.refreshRepo('example', 'project');
+  const entries = (await diagnostics.readRun(diagnostics.run)).filter(entry => entry.msg === 'review.state');
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].data.failure, 'parse');
+  assert.equal(entries[0].level, 'warn');
+  assert.doesNotMatch(JSON.stringify(entries), /private|invalid-json|message/);
+});
