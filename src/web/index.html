@@ -1382,16 +1382,19 @@ document.getElementById('diagnostics-delete-cancel').addEventListener('click', (
 });
 document.getElementById('diagnostics-delete-confirm').addEventListener('click', async () => {
   const confirmButton = document.getElementById('diagnostics-delete-confirm');
+  // 応答を待つ間に「やめる」で対象が消えても、送った範囲を手元から外すため、先に取っておく。
+  const scope = diagnosticDeleteScope;
+  const runId = diagnosticDeleteRunId;
   confirmButton.disabled = true;
   try {
-    const response = await postUiAction('/api/diagnostics/delete', diagnosticDeleteScope === 'all' ? { all: true } : { run: diagnosticDeleteRunId });
+    const response = await postUiAction('/api/diagnostics/delete', scope === 'all' ? { all: true } : { run: runId });
     if (!response.ok) throw new Error('Cannot delete diagnostics');
   } catch {
     diagnosticsStatus.textContent = '記録を削除できませんでした。もう一度「削除する」を押してください。';
     return;
   } finally { confirmButton.disabled = false; }
   // 再取得に失敗しても、削除した記録をコピーや書き出しの対象に残さないため、先に手元から外す。
-  diagnosticRuns = diagnosticDeleteScope === 'all' ? [] : diagnosticRuns.filter(run => run.id !== diagnosticDeleteRunId);
+  diagnosticRuns = scope === 'all' ? [] : diagnosticRuns.filter(run => run.id !== runId);
   refreshDiagnosticOptions();
   diagnosticDeleteScope = null;
   diagnosticDeleteRunId = null;

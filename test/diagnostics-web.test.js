@@ -120,3 +120,17 @@ test('削除の後に一覧を読み込めなくても、削除した記録を�
   assert.equal(context.filteredDiagnosticEntries().length, 0);
   assert.match(node('diagnostics-status').textContent, /削除しましたが、一覧を読み込めませんでした/);
 });
+
+test('削除の応答を待つ間に「やめる」を押しても、送った起動の記録を表示に残さない', async () => {
+  const { context, node } = diagnosticPage();
+  await context.refreshDiagnostics();
+  let respond;
+  context.postUiAction = () => new Promise(resolve => { respond = resolve; });
+  context.fetch = async () => { throw new Error('offline'); };
+  context.beginDiagnosticDeletion('run');
+  const deleting = node('diagnostics-delete-confirm').listeners.click();
+  node('diagnostics-delete-cancel').listeners.click();
+  respond({ ok: true });
+  await deleting;
+  assert.equal(context.filteredDiagnosticEntries().length, 0);
+});
