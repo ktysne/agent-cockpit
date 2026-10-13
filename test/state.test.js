@@ -77,15 +77,51 @@ test('未確定の行でも許可待ちは idle の補完より優先する', ()
   assert.equal(state.snapshot().sessions[0].status, '許可待ち');
 });
 
-test('イベント由来とファイルだけの不明な行は idle のときだけ待機中で補う', () => {
+test('イベント由来とファイルだけの不明な行は idle で待機中、busy で作業中に補い、それ以外は不明のままにする', () => {
+  const expected = { idle: '待機中', busy: '作業中' };
   for (const withEvent of [false, true]) {
     const state = new DashboardState();
     if (withEvent) state.addEvent({ session_id: 'unknown', hook_event_name: 'Notification', hookAt: 100 });
     for (const status of [undefined, 'busy', 'unknown', 'IDLE', 'idle']) {
       state.syncSessionFiles([{ session_id: 'unknown', ...(status ? { status } : {}) }]);
-      assert.equal(state.snapshot().sessions[0].status, status === 'idle' ? '待機中' : '不明');
+      assert.equal(state.snapshot().sessions[0].status, expected[status] ?? '不明', `status: ${status}`);
     }
   }
+});
+
+test('セッションファイルの busy は作業中にし、状態の時刻を経過時間の基準として載せる', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([{
+    session_id: 'restarted', status: 'busy', updatedAt: '2026-10-04T00:00:00.000Z', statusUpdatedAt: '2026-10-03T23:50:00.000Z',
+  }]);
+  const session = state.snapshot().sessions[0];
+  assert.equal(session.status, '作業中');
+  assert.equal(session.statusSince, '2026-10-03T23:50:00.000Z');
+});
+
+test('セッションファイルの idle で決めた状態の時刻は statusUpdatedAt が無ければ updatedAt を使う', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'idle', status: 'idle', updatedAt: '2026-10-04T00:00:00.000Z' }]);
+  assert.equal(state.snapshot().sessions[0].statusSince, '2026-10-04T00:00:00.000Z');
+});
+
+test('状態をセッションファイルで決めていない行には状態の時刻を載せない', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([
+    { session_id: 'no-status', updatedAt: '2026-10-04T00:00:00.000Z' },
+    { session_id: 'unexpected', status: 'running', updatedAt: '2026-10-04T00:00:00.000Z' },
+    { session_id: 'batch', kind: 'sdk-cli', status: 'busy', updatedAt: '2026-10-04T00:00:00.000Z' },
+    { session_id: 'codex', provider: 'codex', codex: { model: '', resumes: 0 }, updatedAt: '2026-10-04T00:00:00.000Z' },
+  ]);
+  const sessions = Object.fromEntries(state.snapshot().sessions.map((session) => [session.session_id, session]));
+  for (const id of ['no-status', 'unexpected', 'codex']) {
+    assert.equal(sessions[id].status, '不明', id);
+    assert.equal(Object.hasOwn(sessions[id], 'statusSince'), false, id);
+  }
+  // 非対話の busy は作業中にせず、「非対話の実行中」の表示を保つ。
+  assert.equal(sessions.batch.status, '不明');
+  assert.equal(sessions.batch.nonInteractive, true);
+  assert.equal(Object.hasOwn(sessions.batch, 'statusSince'), false);
 });
 
 test('idle の補完は稼働中のサブエージェントを含み画面で終了にしたものを除く', () => {
@@ -109,7 +145,7 @@ test('ファイルの status だけの変更で版が進み補完した行には
   for (const withEvent of [false, true]) {
     const state = new DashboardState();
     if (withEvent) state.addEvent({ session_id: 'unknown', hook_event_name: 'Notification', hookAt: 100 });
-    const file = { session_id: 'unknown', status: 'busy' };
+    const file = { session_id: 'unknown' };
     state.syncSessionFiles([file]);
     assert.ok(state.saveEstimate('unknown', null));
     const version = state.version;
@@ -120,6 +156,24 @@ test('ファイルの status だけの変更で版が進み補完した行には
     const unchangedVersion = state.version;
     state.syncSessionFiles([{ ...file, status: 'idle' }]);
     assert.equal(state.version, unchangedVersion);
+  }
+});
+
+test('推定を保存した後にファイルの状態が決まれば、あとで不明へ戻っても古い推定を出さない', () => {
+  for (const status of ['idle', 'busy']) {
+    const state = new DashboardState();
+    state.addEvent({ session_id: 'unknown', hook_event_name: 'Notification', hookAt: 100 });
+    state.syncSessionFiles([{ session_id: 'unknown' }]);
+    assert.ok(state.saveEstimate('unknown', { recordedAt: '2026-10-03T00:00:00.000Z', lastTool: 'Read', state: 'input' }));
+    assert.equal(state.snapshot().sessions[0].estimate.canEstimate, true);
+
+    state.syncSessionFiles([{ session_id: 'unknown', status }]);
+    assert.equal(state.snapshot().sessions[0].estimate, undefined, status);
+
+    state.syncSessionFiles([{ session_id: 'unknown' }]);
+    const session = state.snapshot().sessions[0];
+    assert.equal(session.status, '不明', status);
+    assert.equal(session.estimate, undefined, status);
   }
 });
 
@@ -183,6 +237,19 @@ test('kind が空文字列や空白だけのセッションファイルは非対
   const sessions = Object.fromEntries(state.snapshot().sessions.map((session) => [session.session_id, session]));
   assert.equal(Object.hasOwn(sessions.empty, 'nonInteractive'), false);
   assert.equal(Object.hasOwn(sessions.blank, 'nonInteractive'), false);
+});
+
+test('セッションファイルの statusUpdatedAt は時刻として読め、読めなければ持たない', async () => {
+  const values = [{ statusUpdatedAt: 1_700_000_000_000 }, { statusUpdatedAt: 'x' }, {}];
+  const fileSystem = {
+    readdir: async () => values.map((_, index) => ({ name: `${index}.json`, isFile: () => true })),
+    readFile: async (file) => {
+      const index = Number(path.basename(file, '.json'));
+      return JSON.stringify({ session_id: String(index), pid: 1, ...values[index] });
+    },
+  };
+  const files = await listLiveSessionFiles('unused', { fileSystem, isAlive: () => true });
+  assert.deepEqual(files.map((file) => file.statusUpdatedAt), ['2023-11-14T22:13:20.000Z', undefined, undefined]);
 });
 
 function backgroundClaudeState(sessionId = 'task-stop') {

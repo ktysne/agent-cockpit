@@ -115,6 +115,7 @@ async function listLiveSessionFiles(claudeHome, { fileSystem = fs, isAlive = pro
     }
     const sessionId = value && (value.sessionId || value.session_id || value.id);
     if (typeof sessionId !== 'string' || !Number.isInteger(value.pid) || !isAlive(value.pid)) continue;
+    const statusUpdatedAt = sessionFileUpdatedAt(value.statusUpdatedAt);
     sessions.push({
       session_id: sessionId,
       pid: value.pid,
@@ -123,6 +124,7 @@ async function listLiveSessionFiles(claudeHome, { fileSystem = fs, isAlive = pro
       ...(typeof value.status === 'string' ? { status: value.status.slice(0, 50) } : {}),
       ...(typeof value.kind === 'string' ? { kind: value.kind.slice(0, 50) } : {}),
       updatedAt: sessionFileUpdatedAt(value.updatedAt),
+      ...(statusUpdatedAt ? { statusUpdatedAt } : {}),
     });
   }
   return sessions;
