@@ -6,10 +6,60 @@
 
 - `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/`、Codex の `~/.codex/hooks.json`、`~/.codex/config.toml`、`~/.codex/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。
 - 既存の設定は消さずに統合します。同じイベントの配列がすでにあるときは、その配列へ要素を足します。
-- 連携ツール(GitHub CLI、claude-codex-bridge、ai-cross-review)そのものの導入手順は、この文書では扱いません。導入されていなければ、各ツールのドキュメントへ案内してください。この文書は、連携ツールが導入済みのときに agent-cockpit 側で必要な設定だけを書いています。
+- claude-codex-bridge と ai-cross-review は、最初に「始める前に: 連携ツールの確認」で導入済みかを確かめ、導入されていなければ開発者に導入するかを尋ねます。導入するときは、各ツールの手順書に従います。GitHub CLI と Codex は、導入されていなければ各ツールのドキュメントへ案内してください。この文書の各パターンは、連携ツールが導入済みのときに agent-cockpit 側で必要な設定だけを書いています。
 - 手順の中の `D:/path/to/agent-cockpit` は、このリポジトリを置いた絶対パスに置き換えます。worktree ではなく、残しておく本体のチェックアウトを指してください。worktree を消すと、フックの参照先が無くなります。
 - この文書の `~/.claude` は Claude のホームを指します。`CLAUDE_CONFIG_DIR` を設定しているときは、そのディレクトリの `settings.json` と `skills/` を使ってください。
 - 設定を変えた後は、新しく開いたセッションから効きます。実行中のセッションは、後から足したフックや MCP サーバーを読み込みません。
+
+## 始める前に: 連携ツールの確認
+
+パターン A に進む前に、[claude-codex-bridge](https://github.com/ktysne/claude-codex-bridge) と [ai-cross-review](https://github.com/ktysne/ai-cross-review) が導入済みかを確かめます。
+どちらも agent-cockpit と組み合わせて使う前提で作ったツールで、両方を入れると、経路の設定とクロスレビューを待ったマージを含めて、agent-cockpit の機能をすべて使えます。
+導入されていないツールがあれば、開発者に概要を説明し、導入するかを尋ねます。
+導入しないと答えたツールは、対応するパターン(C か D)を飛ばします。agent-cockpit は単独でも動き、連携ツールを後から入れても表示に反映されます。
+
+### 1. 導入済みかを確かめる
+
+- claude-codex-bridge:「パターンの選び方」の表の C の方法で確かめます。
+- ai-cross-review:リポジトリごとに入れるツールです。開発者に、agent-cockpit で見ながら作業するリポジトリを尋ね、それぞれの worktree のルートに `tools/cross-review.js` があるかを確かめます。このセッションの作業ディレクトリが git のリポジトリなら、それも候補に含めます。
+
+Codex だけで使うときは、claude-codex-bridge を確かめません。bridge は Claude Code のサブエージェントから Codex を呼ぶためのツールで、Claude Code が無い環境では使わないためです。
+
+### 2. 導入されていないツールを説明して、導入するかを尋ねる
+
+導入されていないツールについて、次の表の内容を開発者に説明します。
+要約してかまいませんが、何をするツールか、agent-cockpit と組み合わせるとできること、入れなくても agent-cockpit は使えることの 3 点は落とさないでください。
+尋ねるときは、選択肢を出せる道具(Claude Code の `AskUserQuestion`、Codex の `request_user_input`)があれば使います。
+
+| ツール | 何をするツールか | agent-cockpit と組み合わせるとできること | 要るもの |
+|---|---|---|---|
+| claude-codex-bridge | Claude Code のメインセッションが設計と監査を受け持ち、実装やレビューを Codex CLI のサブエージェントに任せるための定義一式。モデル、effort、使う Codex のアカウントを定義ファイルで固定する | サブエージェントを Codex と Claude のどちらで動かすかを、画面の「経路の設定」で切り替えられる。サブエージェントの行に、経路と Codex のモデルが出る | Claude Code、Codex CLI、Codex を使える OpenAI のアカウント |
+| ai-cross-review | Claude と Codex に、git の差分で交互にコードレビューさせる CLI。往復の回数と結論をブランチごとに記録し、PR コメントの本文を作る。リポジトリごとに入れる | PR のカードに、クロスレビューの往復と結論が出る。レビューの収束を待ってからマージする予約ができる。レビュアーを画面の「経路の設定」で選べる | Node.js 20 以上、レビュアーにする `codex` か `claude` の CLI |
+
+2 つを両方入れると、ai-cross-review が Codex でレビューするときも、bridge の定義のモデル、effort、アカウントで動きます。
+
+### 3. claude-codex-bridge の導入パターンを確かめる
+
+bridge を導入すると答えたら、Codex のアカウントの使い方でパターンを選んでもらいます。
+パターンの正本は、bridge の手順書の[「パターンの選び方」](https://github.com/ktysne/claude-codex-bridge/blob/main/docs/setup.md#パターンの選び方)です。要約は次のとおりです。
+
+| パターン | 使い方 | 向いている使い方 |
+|---|---|---|
+| 1 | 1 アカウントで、実装の委譲だけを Codex に任せる | レビューを Codex に頼まない |
+| 2 | 1 アカウントで、実装の委譲に加えて、レビューや調査も Codex に頼む | ai-cross-review も使い、Codex のアカウントは 1 つ |
+| 3 | 2 アカウントで、通常利用とレビューを `~/.codex` に、サブエージェントを `~/.codex-subagent` に分ける | ai-cross-review も使い、Codex のアカウントを 2 つ持っていて、役割で分けたい |
+
+ai-cross-review も導入するなら、2 か 3 を勧めます。パターン 1 には `codex-review` と `codex-subagent` の定義が無く、ai-cross-review が bridge を経由せずに `codex` を直接起動するためです。
+2 つのアカウントは役割を分けるためだけに使います。利用上限に達したら別のアカウントへ回す使い方は、OpenAI の利用規約に抵触する恐れがあるので勧めません。
+
+### 4. 導入すると答えたツールを入れる
+
+順番は「3 つのツールをまとめて導入するとき」に従います。
+
+- claude-codex-bridge:[bridge の手順書](https://raw.githubusercontent.com/ktysne/claude-codex-bridge/main/docs/setup.md)に従って、選んだパターンで導入します。`codex login` はブラウザーでアカウントを選ぶ操作なので、開発者に行ってもらいます。
+- ai-cross-review:導入先のリポジトリのファイル(`package.json` など)を変えるので、リポジトリごとに開発者の確認を得てから、[ai-cross-review の手順書](https://raw.githubusercontent.com/ktysne/ai-cross-review/main/docs/setup.md)に従って導入します。後で入れると答えたリポジトリには、そのリポジトリを開いたセッションで使う次の依頼文を伝えます。
+
+  > このリポジトリに ai-cross-review を導入して。手順は https://raw.githubusercontent.com/ktysne/ai-cross-review/main/docs/setup.md にある。
 
 ## パターンの選び方
 
