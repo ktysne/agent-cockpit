@@ -16,6 +16,7 @@
     p, li { max-width: 68ch; }
     a { color: var(--link); overflow-wrap: anywhere; }
     a:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; border-radius: 4px; }
+    pre { white-space: pre-wrap; padding: 1rem; background: var(--code-bg); border: 1px solid var(--line); border-radius: .6rem; font-size: .85rem; line-height: 1.6; overflow-wrap: anywhere; }
     code { background: var(--code-bg); border: 1px solid var(--line); border-radius: .35rem; padding: 0 .3rem; font-size: .9em; }
     .page-links { margin: 0 0 12px; }
     nav { margin-top: 2rem; display: flex; flex-wrap: wrap; gap: 1rem; }
@@ -28,7 +29,29 @@
   <p>Agent Cockpit 本体と、配布物に含むソフトウェアのライセンスを示します。</p>
 
   <h2>Agent Cockpit</h2>
-  <p>Agent Cockpit の著作権は作者 ktysne に帰属します。</p>
+  <p>Agent Cockpit は MIT License で公開しています。
+  ソースコード: <a href="https://github.com/ktysne/agent-cockpit">https://github.com/ktysne/agent-cockpit</a></p>
+  <pre>MIT License
+
+Copyright (c) 2026 ktysne
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre>
 
   <h2>第三者のソフトウェア</h2>
   <p>Agent Cockpit は外部のパッケージを使わず、第三者のソフトウェアを同梱していません。動かすときは、利用者が入れた Node.js を使います。</p>
