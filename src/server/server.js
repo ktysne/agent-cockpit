@@ -1,3 +1,4 @@
+const EVENT_SUMMARY_INTERVAL_MS = 10 * 60_000;
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
@@ -265,6 +266,8 @@ function createRequestHandler(options) {
   const manualDir = options.manualDir || DEFAULT_MANUAL_DIR;
 
   const ctx = {
+    diagnostics: options.diagnostics,
+    eventCounts: options.eventCounts,
     homeDir,
     claudeHome,
     userHome,
@@ -481,6 +484,7 @@ async function startServer(options = {}) {
   const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter });
   const diagnostics = new Diagnostics({ ...options.diagnosticsOptions, homeDir, userHome: options.userHome,
     getLevel: () => state.getDisplayPreferences?.()?.diagnosticsLevel || 'info' });
+  state.diagnostics = diagnostics;
   state.attachWriter?.(storageWriter);
   const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
   away.attachWriter?.(storageWriter);
@@ -496,10 +500,11 @@ async function startServer(options = {}) {
   });
   state.onSessionEndedByAbsence = (sessionId, endedAt) => answerDelivery.sessionEnded?.(sessionId, endedAt);
   state.onSessionReopened = (sessionId) => answerDelivery.sessionReopened?.(sessionId);
-  const pullRequestTracker = options.pullRequestTracker || new PullRequestTracker({ state, ...(options.pullRequestOptions || {}) });
+  const pullRequestTracker = options.pullRequestTracker || new PullRequestTracker({ state, diagnostics, ...(options.pullRequestOptions || {}) });
   const pullRequestMergeManager = options.pullRequestMergeManager || new PullRequestMergeManager({
     state,
     tracker: pullRequestTracker,
+    diagnostics,
     answerDelivery,
     ...(options.pullRequestMergeOptions || {}),
   });
@@ -576,7 +581,14 @@ async function startServer(options = {}) {
       else response.destroy();
     });
   });
+  const eventCounts = {};
+  const eventSummaryTimer = setInterval(() => {
+    diagnostics.record('info', 'server', 'event.summary', { ...eventCounts });
+    for (const event of Object.keys(eventCounts)) delete eventCounts[event];
+  }, options.eventSummaryIntervalMs ?? EVENT_SUMMARY_INTERVAL_MS);
+  eventSummaryTimer.unref();
   const handler = createRequestHandler({
+    eventCounts,
     diagnostics,
     homeDir,
     claudeHome,
@@ -660,6 +672,7 @@ async function startServer(options = {}) {
   async function close() {
     if (closing) return closing;
     closing = (async () => {
+      clearInterval(eventSummaryTimer);
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
       clearInterval(notificationTimer);

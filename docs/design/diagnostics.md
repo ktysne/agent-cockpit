@@ -96,6 +96,33 @@ agent-cockpit の不具合を調べるための記録を、利用者の端末の
 9. MCP の書き込みの試行と結果
 10. 画面の取得と保存の失敗(状態と経路名)
 
+## 常駐サーバー内の記録
+
+識別子ごとの鍵は `src/server/diagnostics.js` の `ALLOWED_DATA` を正本とする。
+常駐サーバー内からの記録は応答処理で待たず、診断ログを渡していない場合も本体の処理を続ける。
+
+| 識別子 | 出どころ | 記録すること |
+|---|---|---|
+| `event.accepted` | `server` | 採用したイベントの種類、provider、ツール名、セッション ID の先頭、プロダクト名、受付の遅れ。`debug` で残す |
+| `event.rejected` | `server` | 検査、provider の不一致、委譲済み、削除済み、終了済み、古い時刻による不採用。`info` で残す |
+| `event.delayed` / `event.lifecycle` | `server` | 5000 ms を超える遅れ、セッションの開始と終了。`info` で残す |
+| `event.summary` | `server` | イベント名ごとの採用件数を浅いオブジェクトにまとめ、10 分ごとに `info` で残す。集計後に件数をリセットする |
+| `gh.failed` | `gh` | 操作、リポジトリ、PR 番号、登録セッション ID の先頭、失敗分類、code、signal、終了コード、連続失敗回数。`error` で残す |
+| `merge.check` | `merge` | 予約と実行で満たさなかった条件の分類と、head の `match` / `mismatch` / `missing`。`info` で残す |
+| `merge.reserved` / `merge.cancelled` | `merge` | 保存した予約と取り消しのリポジトリ、PR 番号。`info` で残す |
+| `merge.result` | `merge` | gh の成功・失敗と、マージ済み・キュー待ち・未マージの分類。失敗は `warn`、それ以外は `info` で残す |
+| `session.ended` | `server` / `codex` | `SessionEnd`、Codex のプロセス終了とロック消失、セッション一覧からの消失による判定。`info` で残す。ロック消失は、ロックが戻るまで 1 回だけ残す |
+| `review.state` | `merge` | 状態ファイルの `present` / `missing` / `unknown`、レビュー済み head と収束判定の head の照合、回数、判断結果、失敗分類。失敗は `warn`、それ以外は `info` で残す |
+
+gh の連続失敗回数は操作・リポジトリ・PR 番号ごとに数え、同じ組み合わせの成功でリセットする。
+API 操作は設定取得、比較、head 取得、PR 取得、ブランチ削除の種類で区別する。
+失敗の分類にはエラー文と標準エラーを使わず、code、signal、タイムアウトの結果だけを使う。
+
+クロスレビューは、登録先と探索した各 worktree の読み取り結果が変わったときだけ記録する。
+ファイルの不在と、読めずに有無を確認できない状態を区別し、ファイルのパスと本文は残さない。
+マージ予約の条件待ちも、満たさない条件が変わったときだけ記録する。
+イベントの集計タイマーは `unref` し、常駐サーバーの `close` で止める。
+
 ## 参考元との違い
 
 | 参考元 | agent-cockpit | 理由 |

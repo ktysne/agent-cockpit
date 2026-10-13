@@ -170,3 +170,72 @@ test('起動時に上限を超えた server.log を server.log.1 に移す', asy
   t.after(() => next.close());
   assert.equal(await fs.readFile(`${logPath}.1`, 'utf8'), 'large log');
 });
+
+const eventPost = (runtime, body) => request(runtime.info.port, { method: 'POST', path: '/api/events',
+  headers: { 'x-cockpit-secret': runtime.info.secret }, body: JSON.stringify(body) });
+
+test('受け付けたイベントと遅れと開始終了は本文と入出力を残さない', async t => {
+  const { runtime } = await startTestServer(t);
+  await uiPost(runtime.info, '/api/display', { diagnosticsLevel: 'debug' });
+  const session_id = 'diagnostic-session-private';
+  for (const hook_event_name of ['SessionStart', 'PreToolUse', 'SessionEnd']) {
+    await eventPost(runtime, { session_id, hook_event_name, hookAt: Date.now() - 6000,
+      cwd: 'D:/private-directory/Product', tool_name: 'Bash', tool_input: { command: 'private-command' },
+      tool_response: 'private-output', prompt: 'private-prompt', token: 'private-token' });
+  }
+  const entries = (await read(runtime)).filter(entry => entry.msg.startsWith('event.') || entry.msg === 'session.ended');
+  assert.equal(entries.filter(entry => entry.msg === 'event.accepted').length, 3);
+  assert.equal(entries.filter(entry => entry.msg === 'event.delayed').length, 3);
+  assert.equal(entries.filter(entry => entry.msg === 'event.lifecycle').length, 2);
+  assert.equal(entries.find(entry => entry.msg === 'session.ended').data.reason, 'SessionEnd');
+  assert.equal(entries.find(entry => entry.msg === 'event.accepted').data.session, 'diagnost');
+  assert.doesNotMatch(JSON.stringify(entries), /private|tool_input|tool_response|prompt|token/);
+});
+
+test('不正なイベントと終了済みセッションへのイベントは不採用を info で残す', async t => {
+  const { runtime } = await startTestServer(t);
+  await eventPost(runtime, { session_id: 'reject-session', hook_event_name: 'private-invalid-event', prompt: 'private-prompt' });
+  await eventPost(runtime, { session_id: 'reject-session', hook_event_name: 'SessionEnd' });
+  await eventPost(runtime, { session_id: 'reject-session', hook_event_name: 'Stop' });
+  const entries = (await read(runtime)).filter(entry => entry.msg === 'event.rejected');
+  assert.deepEqual(entries.map(entry => entry.data.reason), ['invalid', 'ended']);
+  assert.ok(entries.every(entry => entry.level === 'info'));
+  assert.doesNotMatch(JSON.stringify(entries), /private/);
+});
+
+test('受付件数はイベント名ごとに集計し、close 後は集計しない', async t => {
+  const { runtime } = await startTestServer(t, { eventSummaryIntervalMs: 30 });
+  await eventPost(runtime, { session_id: 'summary-session', hook_event_name: 'SessionStart' });
+  await eventPost(runtime, { session_id: 'summary-session', hook_event_name: 'Stop' });
+  await new Promise(resolve => setTimeout(resolve, 70));
+  const entries = (await read(runtime)).filter(entry => entry.msg === 'event.summary');
+  assert.equal(entries.reduce((sum, entry) => sum + (entry.data.SessionStart || 0), 0), 1);
+  assert.equal(entries.reduce((sum, entry) => sum + (entry.data.Stop || 0), 0), 1);
+  await runtime.close();
+  const before = await runtime.diagnostics.readRun(runtime.diagnostics.run);
+  await new Promise(resolve => setTimeout(resolve, 70));
+  assert.deepEqual(await runtime.diagnostics.readRun(runtime.diagnostics.run), before);
+});
+
+test('Codex のプロセス終了とロック消失は分類だけを残し、ロック消失は走査を重ねても 1 回だけ残す', async t => {
+  let alive = true;
+  const codexHome = require('./support/temp').temporaryDirectory(t, 'diagnostic-codex-').directory;
+  const { runtime } = await startTestServer(t, { codexHome, isAlive: () => alive });
+  for (const session_id of ['codex-lock-private', 'codex-dead-private']) {
+    await eventPost(runtime, { session_id, provider: 'codex', hook_event_name: 'SessionStart',
+      codexPid: 12345, cwd: 'D:/private-directory/Product' });
+  }
+  const locks = path.join(codexHome, 'thread-writer-locks');
+  await fs.mkdir(locks);
+  for (const id of ['codex-lock-private', 'codex-dead-private']) await fs.writeFile(path.join(locks, `${id}.lock`), 'private-lock-content');
+  await runtime.refreshSessionFiles();
+  await fs.unlink(path.join(locks, 'codex-lock-private.lock'));
+  await runtime.refreshSessionFiles();
+  await runtime.refreshSessionFiles();
+  alive = false;
+  await runtime.refreshSessionFiles();
+  const entries = (await read(runtime)).filter(entry => entry.msg === 'session.ended');
+  assert.equal(entries.filter(entry => entry.data.reason === 'lock-missing').length, 1);
+  assert.ok(entries.some(entry => entry.data.reason === 'process-dead'));
+  assert.doesNotMatch(JSON.stringify(entries), /private|12345/);
+});

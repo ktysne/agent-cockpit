@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { Diagnostics } = require('../src/server/diagnostics');
 const { DashboardState } = require('../src/server/state');
 const { PullRequestMergeManager } = require('../src/server/pull-request-merge');
 const { PullRequestTracker } = require('../src/server/pull-requests');
@@ -34,6 +35,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
   let tracker;
   testContext.after(async () => {
     tracker?.close();
+    await diagnostics.flush();
     await state?.flushPersistence();
     await temporary.cleanup();
   });
@@ -78,7 +80,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
       }
       const stateIndex = args.indexOf('--state');
       if (args[stateIndex + 1] === 'open' && control.failOpenList) {
-        finish(Object.assign(new Error('list failed'), { code: 'EIO' }));
+        finish(Object.assign(new Error('private-command private-secret private-output'), { code: 17 }), '', 'private-stderr');
         return;
       }
       finish(null, JSON.stringify(args[stateIndex + 1] === 'open' ? github.openPullRequests : github.mergedPullRequests));
@@ -156,8 +158,9 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     finish(Object.assign(new Error(`unexpected gh arguments: ${args.join(' ')}`), { code: 'EIO' }));
   };
 
+  const diagnostics = new Diagnostics({ homeDir, getLevel: () => 'debug' });
   tracker = new PullRequestTracker({
-    state, now: () => NOW, execFileImpl,
+    state, diagnostics, now: () => NOW, execFileImpl,
     readCrossReviewStateAcrossWorktrees: async (registration, pullRequest) => control.crossReviewReader
       ? control.crossReviewReader(registration, pullRequest)
       : control.crossReviews.get(pullRequest.number) || null,
@@ -165,11 +168,11 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
   const answerDelivery = {
     notifySessions(sessionIds, message) { notices.push({ sessionIds, message }); },
   };
-  const manager = new PullRequestMergeManager({ state, tracker, answerDelivery, now: () => NOW });
+  const manager = new PullRequestMergeManager({ state, tracker, answerDelivery, diagnostics, now: () => NOW });
   tracker.onMerged = (event) => manager.handleDetectedMerge(event);
   tracker.onClosed = (event) => manager.handleDetectedClose(event);
   tracker.onRefreshed = (owner, repo) => manager.checkReservations(owner, repo);
-  return { homeDir, state, github, calls, notices, control, tracker, manager, answerDelivery };
+  return { homeDir, state, github, calls, notices, control, tracker, manager, answerDelivery, diagnostics };
 }
 
 function mergeInput(number = 1, changes = {}) {
@@ -1373,4 +1376,42 @@ test('マージ先の無い古い予約は既定ブランチ向けとして実�
   fixture.control.crossReviews.set(1, convergedReview(1));
   await fixture.tracker.refreshRepo('example', 'project');
   assert.ok(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'merge'));
+});
+
+test('gh の連続失敗は操作と回数を残し、コマンド行と標準エラーを残さない', async t => {
+  const fixture = await mergeFixture(t);
+  fixture.control.failOpenList = true;
+  for (let i = 0; i < 2; i++) await fixture.tracker.refreshRepo('example', 'project');
+  fixture.control.failOpenList = false;
+  await fixture.tracker.refreshRepo('example', 'project');
+  fixture.control.failOpenList = true;
+  await fixture.tracker.refreshRepo('example', 'project');
+  const entries = (await fixture.diagnostics.readRun(fixture.diagnostics.run)).filter(entry => entry.msg === 'gh.failed');
+  assert.deepEqual(entries.map(entry => entry.data.consecutive), [1, 2, 1]);
+  assert.ok(entries.every(entry => entry.data.operation === 'pr.list' && entry.data.repository === 'example/project'));
+  assert.ok(entries.every(entry => entry.data.exitCode === 17 && entry.data.failure === 'exit'));
+  assert.doesNotMatch(JSON.stringify(entries), /private|stderr|message|stack|--json/);
+});
+
+test('マージ予約と head の照合と未成立の条件は本文を残さない', async t => {
+  const fixture = await mergeFixture(t);
+  await fixture.manager.reserve(mergeInput(1));
+  await fixture.manager.merge(mergeInput(1, { headRefOid: sha(9) }));
+  const entries = await fixture.diagnostics.readRun(fixture.diagnostics.run);
+  assert.ok(entries.some(entry => entry.msg === 'merge.reserved'));
+  assert.ok(entries.some(entry => entry.msg === 'merge.check' && entry.data.head === 'mismatch'));
+  assert.ok(entries.some(entry => entry.msg === 'merge.check' && entry.data.condition === 'review-not-converged'));
+  assert.doesNotMatch(JSON.stringify(entries), /表示していた|Project|feature\/one|session-1/);
+});
+
+test('マージの gh 失敗と成功は結果分類と PR 番号を残す', async t => {
+  const fixture = await mergeFixture(t);
+  fixture.control.failMerge = true;
+  await fixture.manager.merge(mergeInput(1));
+  fixture.control.failMerge = false;
+  await fixture.manager.merge(mergeInput(1));
+  const entries = (await fixture.diagnostics.readRun(fixture.diagnostics.run)).filter(entry => entry.msg === 'merge.result');
+  assert.deepEqual(entries.map(entry => entry.data.result), ['gh-failed', 'gh-success', 'merged']);
+  assert.ok(entries.every(entry => entry.data.number === 1));
+  assert.doesNotMatch(JSON.stringify(entries), /merge failed|message|stderr|--match-head-commit/);
 });

@@ -62,14 +62,16 @@ function isGitHubNotFoundError(error) {
 }
 
 class PullRequestMergeManager {
-  constructor({ state, tracker, answerDelivery, now = Date.now } = {}) {
+  constructor({ state, tracker, answerDelivery, diagnostics, now = Date.now } = {}) {
     this.state = state;
+    this.diagnostics = diagnostics;
     this.tracker = tracker;
     this.answerDelivery = answerDelivery;
     this.now = now;
     this.inFlight = new Map();
     this.handledMerges = new Set();
     this.mergeOutcomes = new Map();
+    this.diagnosticReservationConditions = new Map();
   }
 
   async withPullRequestLock(owner, repo, number, operation) {
@@ -277,38 +279,46 @@ class PullRequestMergeManager {
   }
 
   async performMerge(registration, input, reserved = false) {
+    const reject = (status, error, condition) => {
+      this.diagnostics?.record('info', 'merge', 'merge.check', { operation: 'execute',
+        repository: safeRepo(registration.owner, registration.repo), number: registration.number, condition, status });
+      return actionResult(status, error);
+    };
     const reservation = this.state.pullRequestMergeReservation(registration.owner, registration.repo, registration.number);
     if (reserved && (!reservation || reservation.method !== input.method || reservation.deleteBranch !== input.deleteBranch)) {
-      return actionResult(409, 'マージ予約の状態が変わりました');
+      return reject(409, 'マージ予約の状態が変わりました', 'reservation-changed');
     }
     const candidate = await this.freshCandidate(registration);
-    if (candidate.error) return actionResult(409, candidate.error);
+    if (candidate.error) return reject(409, candidate.error, 'candidate-unavailable');
     let mergeInput = input;
     if (reserved) {
       const reservationStatus = this.reservationMergeInput(candidate, reservation);
       if (reservationStatus?.halted) return this.cancelHaltedReservation(reservation);
-      if (!reservationStatus) return actionResult(409, 'レビュー収束後マージの条件が変わりました。予約は保持しています');
+      if (!reservationStatus) return reject(409, 'レビュー収束後マージの条件が変わりました。予約は保持しています', 'review-not-ready');
       mergeInput = reservationStatus.input;
     }
     const pullRequest = candidate.pullRequest;
+    this.diagnostics?.record('info', 'merge', 'merge.check', { operation: 'execute',
+      repository: safeRepo(registration.owner, registration.repo), number: registration.number,
+      head: pullRequest.headRefOid.toLowerCase() === mergeInput.headRefOid.toLowerCase() ? 'match' : 'mismatch' });
     const repository = safeRepo(registration.owner, registration.repo);
     const synchronization = pullRequest.headRefName === candidate.repository.defaultBranch;
     const targetBranch = pullRequest.mergeTarget;
     const deleteBranch = !synchronization && mergeInput.deleteBranch && candidate.repository.autoDeleteBranch !== true;
     if (deleteBranch && pullRequest.isCrossRepository) {
-      return actionResult(400, 'fork からの PR の head ブランチは登録先リポジトリから削除できません');
+      return reject(400, 'fork からの PR の head ブランチは登録先リポジトリから削除できません', 'fork-delete');
     }
     const initialError = reserved ? null : mergeCandidateError(candidate, mergeInput, registration.number);
-    if (initialError) return actionResult(409, initialError);
+    if (initialError) return reject(409, initialError, 'candidate-blocked');
 
-    if (!validBranchName(targetBranch)) return actionResult(409, 'マージ先のブランチを確認できません');
+    if (!validBranchName(targetBranch)) return reject(409, 'マージ先のブランチを確認できません', 'target-invalid');
     const retargeted = [];
     const stackedPullRequests = this.stackedPullRequests(candidate, registration.number);
     const branchKept = pullRequest.isCrossRepository === true
       || (!deleteBranch && candidate.repository.autoDeleteBranch !== true);
     for (const child of synchronization || branchKept ? [] : pullRequest.children) {
       if (!Number.isSafeInteger(child.number) || child.number < 1 || !validBranchName(targetBranch)) {
-        return actionResult(409, `#${child.number} の base を安全に付け替えられません。マージはしていません`);
+        return reject(409, `#${child.number} の base を安全に付け替えられません。マージはしていません`, 'retarget-invalid');
       }
       try {
         await this.tracker.execute([
@@ -316,7 +326,7 @@ class PullRequestMergeManager {
         ]);
       } catch {
         const completed = completedRetargetStatus(retargeted);
-        return actionResult(502, `#${child.number} の base を ${targetBranch} に付け替えられませんでした。${completed}。マージはしていません`);
+        return reject(502, `#${child.number} の base を ${targetBranch} に付け替えられませんでした。${completed}。マージはしていません`, 'retarget-failed');
       }
       this.state.recordPullRequestRetarget({
         owner: registration.owner,
@@ -332,29 +342,31 @@ class PullRequestMergeManager {
     const latestCandidate = await this.freshCandidate(registration);
     if (latestCandidate.error) {
       const completed = retargetedBaseStatus(retargeted);
-      return actionResult(409, `${completed}${latestCandidate.error}。マージはしていません`);
+      return reject(409, `${completed}${latestCandidate.error}。マージはしていません`, 'latest-unavailable');
     }
     if (reserved) {
       const reservationStatus = this.reservationMergeInput(latestCandidate, reservation);
       if (reservationStatus?.halted) return this.cancelHaltedReservation(reservation);
       if (!reservationStatus) {
         const completed = retargetedBaseStatus(retargeted);
-        return actionResult(409, `${completed}レビュー収束後マージの条件が変わりました。予約は保持しています`);
+        return reject(409, `${completed}レビュー収束後マージの条件が変わりました。予約は保持しています`, 'latest-review-not-ready');
       }
       mergeInput = reservationStatus.input;
     }
     if (deleteBranch && latestCandidate.pullRequest.isCrossRepository) {
       const completed = retargetedBaseStatus(retargeted);
-      return actionResult(400, `${completed}fork からの PR の head ブランチは登録先リポジトリから削除できません`);
+      return reject(400, `${completed}fork からの PR の head ブランチは登録先リポジトリから削除できません`, 'latest-fork-delete');
     }
     if (latestCandidate.pullRequest.mergeTarget !== targetBranch ||
       latestCandidate.pullRequest.headRefName !== pullRequest.headRefName) {
-      return actionResult(409, `${retargetedBaseStatus(retargeted)}マージ先または head ブランチが変わりました。マージはしていません`);
+      return reject(409, `${retargetedBaseStatus(retargeted)}マージ先または head ブランチが変わりました。マージはしていません`, 'target-changed');
     }
+    this.diagnostics?.record('info', 'merge', 'merge.check', { operation: 'execute', repository, number: registration.number,
+      head: latestCandidate.pullRequest.headRefOid.toLowerCase() === mergeInput.headRefOid.toLowerCase() ? 'match' : 'mismatch' });
     const latestError = reserved ? null : mergeCandidateError(latestCandidate, mergeInput, registration.number);
     if (latestError) {
       const completed = retargetedBaseStatus(retargeted);
-      return actionResult(409, `${completed}${latestError}。マージはしていません`);
+      return reject(409, `${completed}${latestError}。マージはしていません`, 'latest-blocked');
     }
 
     const mergeIntent = {
@@ -373,14 +385,14 @@ class PullRequestMergeManager {
       createdAt: new Date(this.now()).toISOString(),
       stackedPullRequests: stackedPullRequests.map((item) => ({ number: item.number, baseRefName: item.baseRefName })),
     };
-    if (!this.state.setPullRequestMergeIntent(mergeIntent)) return actionResult(500, 'マージ操作を保存できませんでした');
+    if (!this.state.setPullRequestMergeIntent(mergeIntent)) return reject(500, 'マージ操作を保存できませんでした', 'intent-save');
     // キューに入ったまま落ちても方式と削除の選択を戻せるよう、gh を呼ぶ前にまとめ書きを待たずに保存し終える。
     try {
       await this.state.flushStoreWrite();
     } catch {
       this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
       await this.state.waitForPersistence?.().catch(() => {});
-      return actionResult(500, 'マージ操作を保存できませんでした');
+      return reject(500, 'マージ操作を保存できませんでした', 'intent-persist');
     }
 
     try {
@@ -388,19 +400,25 @@ class PullRequestMergeManager {
         'pr', 'merge', String(registration.number), '-R', repository,
         `--${mergeInput.method}`, '--match-head-commit', mergeInput.headRefOid,
       ]);
-    } catch {
+    } catch (error) {
+      this.diagnostics?.record('warn', 'merge', 'merge.result',
+        { repository, number: registration.number, result: typeof error.code === 'number' ? 'gh-exit' : 'gh-failed' });
       this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
       await this.state.waitForPersistence?.().catch(() => {});
       const completed = retargetedBaseStatus(retargeted);
-      return actionResult(502, `${completed}PR #${registration.number} をマージできませんでした。状態を確認してください`);
+      return reject(502, `${completed}PR #${registration.number} をマージできませんでした。状態を確認してください`, 'gh-failed');
     }
 
+    this.diagnostics?.record('info', 'merge', 'merge.result',
+      { repository, number: registration.number, result: 'gh-success' });
     let view;
     try {
       view = await this.tracker.readPullRequestView(registration.owner, registration.repo, registration.number);
     } catch {
-      return actionResult(502, `gh pr merge は成功しましたが、PR #${registration.number} の状態を確認できませんでした。後続の状態取得で確認します`);
+      return reject(502, `gh pr merge は成功しましたが、PR #${registration.number} の状態を確認できませんでした。後続の状態取得で確認します`, 'merge-unconfirmed');
     }
+    this.diagnostics?.record('info', 'merge', 'merge.result',
+      { repository, number: registration.number, result: view.state === 'MERGED' ? 'merged' : view.state === 'OPEN' ? 'queued' : 'not-merged' });
     if (view.state === 'OPEN') {
       // マージキューでは方式の指定が効かず、キューの所属も gh から取れないので、意図を持たずに外でのマージとして扱う。
       this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
@@ -423,7 +441,7 @@ class PullRequestMergeManager {
     if (view.state !== 'MERGED') {
       this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
       await this.state.waitForPersistence?.();
-      return actionResult(409, `PR #${registration.number} はマージされていません。GitHub の状態を確認してください`);
+      return reject(409, `PR #${registration.number} はマージされていません。GitHub の状態を確認してください`, 'not-merged');
     }
 
     this.state.setLastPullRequestMethod(registration.owner, registration.repo, mergeInput.method);
@@ -446,24 +464,32 @@ class PullRequestMergeManager {
   }
 
   async performReservation(registration, input) {
+    const reject = (status, error, condition) => {
+      this.diagnostics?.record('info', 'merge', 'merge.check', { operation: 'reserve',
+        repository: safeRepo(registration.owner, registration.repo), number: registration.number, condition, status });
+      return actionResult(status, error);
+    };
     const candidate = await this.freshCandidate(registration);
-    if (candidate.error) return actionResult(409, candidate.error);
+    if (candidate.error) return reject(409, candidate.error, 'candidate-unavailable');
     const pullRequest = candidate.pullRequest;
+    this.diagnostics?.record('info', 'merge', 'merge.check', { operation: 'reserve',
+      repository: safeRepo(registration.owner, registration.repo), number: registration.number,
+      head: pullRequest.headRefOid.toLowerCase() === input.headRefOid.toLowerCase() ? 'match' : 'mismatch' });
     const deleteBranch = pullRequest.headRefName !== candidate.repository.defaultBranch && input.deleteBranch && candidate.repository.autoDeleteBranch !== true;
     if (deleteBranch && pullRequest.isCrossRepository) {
-      return actionResult(400, 'fork からの PR の head ブランチは登録先リポジトリから削除できません');
+      return reject(400, 'fork からの PR の head ブランチは登録先リポジトリから削除できません', 'fork-delete');
     }
     if (pullRequest.headRefOid.toLowerCase() !== input.headRefOid.toLowerCase()) {
-      return actionResult(409, '表示していた head SHA と現在の head SHA が異なります。状態を確認してください');
+      return reject(409, '表示していた head SHA と現在の head SHA が異なります。状態を確認してください', 'head-mismatch');
     }
-    if (pullRequest.mergeMethodFixed && input.method !== pullRequest.mergeMethodFixed) return actionResult(409, 'マージ方式がマージコミットに固定のため、選んだ方式では実行しません');
-    if (!candidate.repository.mergeMethods.includes(input.method)) return actionResult(409, 'このリポジトリでは選んだマージ方式が許可されていません');
+    if (pullRequest.mergeMethodFixed && input.method !== pullRequest.mergeMethodFixed) return reject(409, 'マージ方式がマージコミットに固定のため、選んだ方式では実行しません', 'method-fixed');
+    if (!candidate.repository.mergeMethods.includes(input.method)) return reject(409, 'このリポジトリでは選んだマージ方式が許可されていません', 'method-unavailable');
     if (this.state.pullRequestMergeReservation(registration.owner, registration.repo, registration.number)) {
-      return actionResult(409, 'この PR にはすでにマージ予約があります');
+      return reject(409, 'この PR にはすでにマージ予約があります', 'already-reserved');
     }
 
     const targetBranch = this.reservationTarget(candidate);
-    if (!validBranchName(targetBranch)) return actionResult(409, '予約のマージ先を確認できません');
+    if (!validBranchName(targetBranch)) return reject(409, '予約のマージ先を確認できません', 'target-invalid');
     const reservation = {
       targetBranch,
       session_id: registration.session_id,
@@ -475,14 +501,16 @@ class PullRequestMergeManager {
       deleteBranch,
       createdAt: new Date(this.now()).toISOString(),
     };
-    if (!this.state.setPullRequestMergeReservation(reservation)) return actionResult(500, 'マージ予約を保存できませんでした');
+    if (!this.state.setPullRequestMergeReservation(reservation)) return reject(500, 'マージ予約を保存できませんでした', 'reservation-save');
     try {
       await this.state.flushStoreWrite();
     } catch {
       this.state.clearPullRequestMergeReservation(registration.owner, registration.repo, registration.number);
       await this.state.waitForPersistence?.().catch(() => {});
-      return actionResult(500, 'マージ予約を保存できませんでした');
+      return reject(500, 'マージ予約を保存できませんでした', 'reservation-persist');
     }
+    this.diagnostics?.record('info', 'merge', 'merge.reserved',
+      { repository: safeRepo(registration.owner, registration.repo), number: registration.number });
     this.state.setLastPullRequestMethod(registration.owner, registration.repo, input.method);
     await this.state.waitForPersistence?.();
     const immediateResult = await this.checkReservation(reservation);
@@ -499,6 +527,8 @@ class PullRequestMergeManager {
 
   async cancelSavedReservation(reservation, message) {
     if (!this.state.clearPullRequestMergeReservation(reservation.owner, reservation.repo, reservation.number)) return null;
+    this.diagnostics?.record('info', 'merge', 'merge.cancelled',
+      { repository: safeRepo(reservation.owner, reservation.repo), number: reservation.number });
     const registrations = this.state.pullRequestRegistrationsForRepo(reservation.owner, reservation.repo)
       .filter((record) => record.number === reservation.number);
     const sessionIds = unique([...registrations.map((record) => record.session_id), reservation.session_id]);
@@ -551,16 +581,33 @@ class PullRequestMergeManager {
 
   reservationMergeInput(candidate, reservation) {
     const pullRequest = candidate?.pullRequest;
-    if (!candidate?.repository?.listAvailable || !candidate.repository.configAvailable || !pullRequest) return null;
+    const waiting = (condition) => {
+      const key = pullRequestKey(reservation.owner, reservation.repo, reservation.number);
+      if (this.diagnosticReservationConditions.get(key) !== condition) {
+        this.diagnosticReservationConditions.set(key, condition);
+        this.diagnostics?.record('info', 'merge', 'merge.check', { operation: 'reservation',
+          repository: safeRepo(reservation.owner, reservation.repo), number: reservation.number, condition,
+          head: pullRequest && isCompleteCommitSha(pullRequest.crossReview?.triage?.sha)
+            ? (pullRequest.headRefOid.toLowerCase() === pullRequest.crossReview.triage.sha.toLowerCase() ? 'match' : 'mismatch') : 'missing' });
+      }
+      return null;
+    };
+    if (!candidate?.repository?.listAvailable || !candidate.repository.configAvailable || !pullRequest) return waiting('repository-unavailable');
     const review = pullRequest.crossReview;
     const triage = review?.triage;
-    if (triage?.outcome === 'halted') return { halted: true };
-    if (pullRequest.mergeTarget !== (reservation.targetBranch || candidate.repository.defaultBranch)) return null;
+    if (triage?.outcome === 'halted') {
+      waiting('review-halted');
+      return { halted: true };
+    }
+    if (pullRequest.mergeTarget !== (reservation.targetBranch || candidate.repository.defaultBranch)) return waiting('target-changed');
     if (review?.notRequired === true || triage?.outcome !== 'converged' || triage.round !== review?.round ||
       !crossReviewConvergedAtHead(pullRequest) || !isCompleteCommitSha(triage.sha) || pullRequest.ci !== 'pass' ||
-      !['approved', 'none'].includes(pullRequest.review)) return null;
+      !['approved', 'none'].includes(pullRequest.review)) return waiting(review?.notRequired === true ? 'review-required' : triage?.outcome !== 'converged' ? 'review-not-converged'
+        : triage.round !== review?.round ? 'review-round-mismatch' : !crossReviewConvergedAtHead(pullRequest) ? 'review-head-mismatch'
+        : !isCompleteCommitSha(triage.sha) ? 'review-head-missing' : pullRequest.ci !== 'pass' ? 'ci-not-pass' : 'review-unapproved');
     const input = { headRefOid: triage.sha, method: reservation.method, deleteBranch: reservation.deleteBranch };
-    if (mergeCandidateError(candidate, input, reservation.number)) return null;
+    if (mergeCandidateError(candidate, input, reservation.number)) return waiting('candidate-blocked');
+    waiting('ready');
     return { input };
   }
 
