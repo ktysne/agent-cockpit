@@ -58,7 +58,8 @@ namespace AgentCockpitTray {
       if (!IsWindowVisible(window)) return false;
       StringBuilder title = new StringBuilder(512);
       GetWindowText(window, title, title.Capacity);
-      if (!Regex.IsMatch(title.ToString(), "^(\\(\\d+\\) )?" + Regex.Escape(titleSuffix) + "$")) return false;
+      // 画面のタイトルは「(件数) Agent Cockpit v1.0.0」の形で、件数と版は無いこともある。
+      if (!Regex.IsMatch(title.ToString(), "^(\\(\\d+\\) )?" + Regex.Escape(titleSuffix) + "( v\\d+\\.\\d+\\.\\d+)?$")) return false;
       uint processId;
       GetWindowThreadProcessId(window, out processId);
       if (processId == 0) return false;

@@ -69,6 +69,10 @@ Claude Code のメインは Opus 5.5(`claude-opus-5-5`)、Codex のメインは 
 開発用の依存は配信する人だけが入れるので、利用者が `npm install` をしなくてよい方針は変わらない。
 配信には Node.js 22.15.0 以上が要る。npm のスクリプトが、OS の証明書を使う `--use-system-ca` を付けて起動するためである。
 
+リポジトリを公開するまでは配信しない。
+ページの導入の依頼文、GitHub と README へのリンクは、非公開のリポジトリでは開けないためである。
+初めての配信は、`v1.0.0` を公開する日の手順([development.md](../development.md) の「リリース」)の中で行う。
+
 ### 送る手順
 
 1. 初回だけ、`tools/deploy.config.example.json` を `tools/deploy.config.json` にコピーし、接続情報を書く。このファイルは認証情報を含むので、Git で管理しない。ファイルの代わりに、環境変数 `AGENT_COCKPIT_FTP_HOST`、`AGENT_COCKPIT_FTP_USER`、`AGENT_COCKPIT_FTP_PASSWORD`、`AGENT_COCKPIT_FTP_REMOTE_ROOT` でも設定できる。

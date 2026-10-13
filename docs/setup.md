@@ -151,6 +151,7 @@ cp skills/agent-cockpit/SKILL.md ~/.claude/skills/agent-cockpit/SKILL.md
 ```
 
 リポジトリを更新してスキルが変わったときは、コピーし直します。
+本体の更新から再起動までの手順は [更新手順](update.md) にあります。
 
 ### 5. タスクトレイを入れる(Windows、任意)
 

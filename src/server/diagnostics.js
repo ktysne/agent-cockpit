@@ -16,6 +16,8 @@ const ALLOWED_DATA = Object.freeze({
   ...Object.fromEntries(Object.entries(CLIENT_EVENTS).map(([msg, spec]) => [msg, Object.keys(spec.fields)])),
   'server.start': ['pid', 'port', 'version', 'commit'],
   'server.stop': ['pid'],
+  'update.checked': ['current', 'latest', 'available', 'checkedAt'],
+  'update.failed': ['failure'],
   'request.failed': ['method', 'path', 'status', 'error', 'secret', 'origin'],
   'event.accepted': ['event', 'provider', 'tool', 'session', 'product', 'delayMs'],
   'event.rejected': ['reason', 'event', 'provider', 'session'],

@@ -25,6 +25,7 @@ const { createPullRequestRoutes } = require('./routes/pull-requests');
 const { createUiSessionRoutes } = require('./routes/ui-sessions');
 const { createSettingsRoutes } = require('./routes/settings');
 const { Diagnostics } = require('./diagnostics');
+const { UpdateChecker } = require('./update-check');
 const { recordClientEntries, MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYTES } = require('../client/diagnostic-events');
 const { importPendingHooks } = require('../client/hooks-pending');
 const { version } = require('../../package.json');
@@ -268,6 +269,8 @@ function createRequestHandler(options) {
   const manualDir = options.manualDir || DEFAULT_MANUAL_DIR;
 
   const ctx = {
+    updateChecker: options.updateChecker,
+    appVersion: options.appVersion,
     diagnostics: options.diagnostics,
     eventCounts: options.eventCounts,
     homeDir,
@@ -501,6 +504,7 @@ async function startServer(options = {}) {
   const diagnostics = new Diagnostics({ ...options.diagnosticsOptions, homeDir, userHome: options.userHome,
     getLevel: () => state.getDisplayPreferences?.()?.diagnosticsLevel || 'info' });
   state.diagnostics = diagnostics;
+  const updateChecker = options.updateCheck ? new UpdateChecker({ diagnostics, ...options.updateCheck }) : null;
   state.attachWriter?.(storageWriter);
   const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
   away.attachWriter?.(storageWriter);
@@ -604,6 +608,8 @@ async function startServer(options = {}) {
   }, options.eventSummaryIntervalMs ?? EVENT_SUMMARY_INTERVAL_MS);
   eventSummaryTimer.unref();
   const handler = createRequestHandler({
+    updateChecker,
+    appVersion: options.appVersion === undefined ? version : options.appVersion,
     eventCounts,
     diagnostics,
     homeDir,
@@ -656,6 +662,7 @@ async function startServer(options = {}) {
     pid: info.pid, port: info.port, version, commit: await readSourceCommit(),
   });
   pullRequestTracker.start();
+  updateChecker?.start();
   pullRequestMergeManager.start?.();
   async function refreshSessionFiles(now = Date.now()) {
     await importPendingHooks(homeDir, diagnostics).catch(() => {});
@@ -706,6 +713,7 @@ async function startServer(options = {}) {
       answerDelivery.close();
       pullRequestMergeManager.close?.();
       pullRequestTracker.close();
+      await updateChecker?.close();
       if (server.listening) await new Promise((resolve) => server.close(resolve));
       await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
       await removeServerInfoIfOwned(homeDir, info);
@@ -716,7 +724,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, diagnostics, info, homeDir, close, refreshSessionFiles };
+  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, updateChecker, diagnostics, info, homeDir, close, refreshSessionFiles };
 }
 
 async function readSourceCommit() {
@@ -749,7 +757,7 @@ function parseArguments(argv) {
 }
 
 if (require.main === module) {
-  startServer(parseArguments(process.argv.slice(2)))
+  startServer({ ...parseArguments(process.argv.slice(2)), updateCheck: {} })
     .then((runtime) => {
       console.log(`Agent Cockpit listening at http://127.0.0.1:${runtime.info.port}/`);
       const stop = () => runtime.close().finally(() => { process.exitCode = 0; });
