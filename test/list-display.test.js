@@ -41,6 +41,78 @@ function descendants(node) {
   return [node, ...(node.children || []).flatMap(descendants)];
 }
 
+function productCardBodyOrder(source, sectionOrder) {
+  if (source === web) {
+    const context = pageContext(web, {
+      DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
+      displayPreferences: { pinned: [], collapsed: [], sectionOrder },
+      orderedSectionKeys: (keys) => sectionOrder.filter((key) => keys.includes(key)),
+      element: fakeElement,
+      sharedBranch: () => '',
+      countJudgments: () => ({ permission: 0, decisions: 0 }),
+      isAwaitingDecision: () => false,
+      pullRequestMergeableCount: () => 0,
+      productControls: () => fakeElement('div'),
+      productCloseButton: () => null,
+      pullRequestOpenCount: () => 1,
+      sinceSeenBox: () => fakeElement('div', 'news'),
+      isFilterShown: () => true,
+      sessionBlock: () => fakeElement('section', 'session-group'),
+      appendPullRequestBlock(target) { target.append(fakeElement('section', 'group-frame pr-repo-group')); },
+    });
+    vm.runInContext(`${functionSource(web, 'productCardSectionOrder')}\n${functionSource(web, 'productSection')}`, context);
+    const product = {
+      key: 'product', name: 'Product', branches: new Set(),
+      sessions: [{ decisions: [] }, { decisions: [] }], pullRequestGroups: [{}],
+    };
+    return context.productSection(product, 0, [product], 0).children[1].children.map((child) => {
+      if (child.className === 'news') return 'sinceSeen';
+      if (child.className.startsWith('session-group')) return 'sessions';
+      if (child.className === 'product-pr-divider') return 'divider';
+      if (child.className === 'sub' && child.textContent.includes('プルリクエスト')) return 'prs';
+      if (child.className.includes('pr-repo-group')) return 'pr';
+      return child.className;
+    });
+  }
+
+  const product = { id: 'product', name: 'Product', sessions: [{ id: 'one' }, { id: 'two' }] };
+  const context = pageContext(mock, {
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
+    ui: { pinned: [], collapsed: [], sectionOrder },
+    orderedSectionKeys: (keys) => sectionOrder.filter((key) => keys.includes(key)),
+    orderedProducts: () => [product],
+    pendingDecisions: () => [],
+    sessionsByActivity: () => product.sessions,
+    countJudgments: () => ({ permission: 0 }),
+    decisionCountTitle: () => '',
+    sharedBranch: () => '',
+    pullRequestMergeable: () => false,
+    openPrs: () => [{}],
+    orderControls: () => '',
+    productCloseButton: () => '',
+    isShown: () => true,
+    newsBox: () => '<aside class="news">news</aside>',
+    sessionBlock: () => '<section class="session-group">session</section>',
+    prBlock: () => '<section class="pr-repo-group">pr</section>',
+    esc: (value) => String(value ?? ''),
+  });
+  vm.runInContext(`${functionSource(mock, 'productCardSectionOrder')}\n${functionSource(mock, 'renderProductMode')}\nthis.renderProductMode = renderProductMode;`, context);
+  const html = context.renderProductMode();
+  const markers = /<aside class="news">|<section class="session-group">|<div class="product-pr-divider"><\/div>|<h3 class="sub">プルリクエスト|<section class="pr-repo-group">/g;
+  return [...html.matchAll(markers)].map(([marker]) => {
+    if (marker.startsWith('<aside')) return 'sinceSeen';
+    if (marker.startsWith('<section class="session-group"')) return 'sessions';
+    if (marker.startsWith('<div')) return 'divider';
+    if (marker.startsWith('<h3')) return 'prs';
+    return 'pr';
+  });
+}
+
+function assertProductCardBodyOrder(sectionOrder, expected) {
+  assert.deepEqual(productCardBodyOrder(web, sectionOrder), expected);
+  assert.deepEqual(productCardBodyOrder(mock, sectionOrder), expected);
+}
+
 test('状態不明の操作と推定結果は種類別・プロダクト別のメイン行内にまとまる', () => {
   const sourceFunctions = ['sessionOrigin', 'mainRow', 'unknownSessionControls', 'appendUnknownSessionControls']
     .map((name) => functionSource(web, name));
@@ -309,48 +381,11 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
   }
 });
 
-test('プロダクト別の PR 欄はセッション群の外に区切って置く', () => {
-  const productSection = functionSource(web, 'productSection');
-  const sessionBlock = functionSource(web, 'sessionBlock');
-  const judgmentCounts = functionSource(web, 'countJudgments');
-  assert.ok(productSection && sessionBlock && judgmentCounts);
-  const product = {
-    key: 'product', name: 'Product', branches: new Set(),
-    sessions: [{ session_id: 'one', permissionWaits: [], decisions: [] }, { session_id: 'two', permissionWaits: [], decisions: [] }],
-    pullRequestGroups: [{}],
-  };
-  const context = pageContext(web, {
-    displayPreferences: { pinned: [], collapsed: [] },
-    element: fakeElement,
-    sharedBranch: () => '',
-    productCloseButton: () => null,
-    productControls: () => fakeElement('div'),
-    pullRequestMergeableCount: () => 0,
-    pullRequestOpenCount: () => 1,
-    sinceSeenBox: () => null,
-    isAwaitingDecision: () => false,
-    isFilterShown: () => true,
-    sessionBlock: (_product, _session, multiple) => fakeElement('section', `session-group ${multiple ? '' : 'single'}`.trim()),
-    appendPullRequestBlock(target) { target.append(fakeElement('section', 'group-frame pr-repo-group')); },
-  });
-  vm.runInContext(`${judgmentCounts}\n${productSection}`, context);
-  const section = context.productSection(product, 0, [product], 0);
-  const body = section.children[1];
-  const sessionIndexes = body.children.map((child, index) => child.className.startsWith('session-group') ? index : -1).filter((index) => index >= 0);
-  const dividerIndex = body.children.findIndex((child) => child.className === 'product-pr-divider');
-  const repoIndex = body.children.findIndex((child) => child.className.includes('pr-repo-group'));
-  assert.equal(sessionIndexes.length, 2);
-  assert.ok(sessionIndexes[1] < dividerIndex && dividerIndex < repoIndex);
-  assert.equal(body.children[repoIndex].tagName, 'section');
-
-  const mockProductMode = functionSource(mock, 'renderProductMode');
-  const mockSessionBlock = functionSource(mock, 'sessionBlock');
-  assert.ok(mockProductMode && mockSessionBlock);
-  assert.match(mockSessionBlock, /const groupTag = multiple \? 'section' : 'div';/);
-  assert.match(mockSessionBlock, /return `<\$\{groupTag\} class="session-group/);
-  assert.ok(mockProductMode.indexOf('sessions.map(session => sessionBlock(p, session))')
-    < mockProductMode.indexOf('product-pr-divider'));
-  assert.match(sessionBlock, /element\(multipleSessions \? 'section' : 'div', `session-group \$\{multipleSessions \? '' : 'single'\}`/);
+test('プロダクト別の既定順は実装とモックで前回見てからが上、PR 欄が下に出る', () => {
+  assertProductCardBodyOrder(
+    ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
+    ['sinceSeen', 'sessions', 'sessions', 'divider', 'prs', 'pr'],
+  );
   assert.match(web, /\.session-group\.single \{ margin-top: 0; padding: 0; border-left: 0; \}/);
   assert.match(mock, /\.session-group\.single \{ border-left: 0; padding: 0; margin-top: 0; \}/);
   for (const page of [web, mock]) {
@@ -358,6 +393,27 @@ test('プロダクト別の PR 欄はセッション群の外に区切って置�
   }
   assert.match(web, /\.session-group:not\(\.single\) \.session-body \{ padding-left: 12px; \}/);
   assert.match(mock, /\.session-group:not\(\.single\) \.session-body \{ padding-left: 12px; \}/);
+});
+
+test('プロダクト別で PR を判断より前にすると PR と区切りをセッション群より上に置く', () => {
+  assertProductCardBodyOrder(
+    ['prs', 'judgment', 'tasks', 'now', 'sinceSeen'],
+    ['prs', 'pr', 'divider', 'sessions', 'sessions', 'sinceSeen'],
+  );
+});
+
+test('プロダクト別で前回見てからを今より後ろにするとセッション群の下に置く', () => {
+  assertProductCardBodyOrder(
+    ['judgment', 'tasks', 'now', 'sinceSeen', 'prs'],
+    ['sessions', 'sessions', 'sinceSeen', 'divider', 'prs', 'pr'],
+  );
+});
+
+test('前回見てからと PR がセッション群より上なら設定順に並ぶ', () => {
+  assertProductCardBodyOrder(
+    ['sinceSeen', 'prs', 'judgment', 'tasks', 'now'],
+    ['sinceSeen', 'prs', 'pr', 'divider', 'sessions', 'sessions'],
+  );
 });
 
 test('種類別のセッションごとのタスクは PR と同じ枠で、欄全体の切り替えは見出し行に置く', () => {

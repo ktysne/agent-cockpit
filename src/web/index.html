@@ -478,7 +478,7 @@ h3.sub .count { font-weight: normal; }
     </div>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
-      <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」はカードの上、「プルリクエスト」は下に出る。</p>
+      <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」と「プルリクエスト」は、3 つのどれより前ならセッションの上、それ以外は下に出る。</p>
       <ol class="section-order-list" id="settings-section-order" aria-labelledby="settings-section-order-title" aria-describedby="settings-section-order-note"></ol>
       <button type="button" id="settings-section-order-reset">既定に戻す</button>
     </div>
@@ -673,6 +673,18 @@ function renderSectionOrder(focusKey, focusDirection) {
 
 function orderedSectionKeys(keys) {
   return normalizeSectionOrder(displayPreferences.sectionOrder).filter((key) => keys.includes(key));
+}
+
+function productCardSectionOrder() {
+  const sectionOrder = orderedSectionKeys(DEFAULT_SECTION_ORDER);
+  const sessionKeys = new Set(['judgment', 'tasks', 'now']);
+  const firstSessionIndex = sectionOrder.findIndex((key) => sessionKeys.has(key));
+  const outsideKeys = sectionOrder.filter((key) => !sessionKeys.has(key));
+  return [
+    ...outsideKeys.filter((key) => sectionOrder.indexOf(key) < firstSessionIndex),
+    'sessions',
+    ...outsideKeys.filter((key) => sectionOrder.indexOf(key) > firstSessionIndex),
+  ];
 }
 
 function readDisplayPreferences() {
@@ -3384,19 +3396,35 @@ function productSection(product, index, products, pinnedCount, showOriginBands =
   const body = element('div', 'body');
   body.hidden = displayPreferences.collapsed.includes(product.key);
   const news = sinceSeenBox(product, false, showOriginBands);
-  if (news) body.append(news);
-  const multipleSessions = product.sessions.length > 1;
-  for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions, showOriginBands));
+  const sectionOrder = productCardSectionOrder();
+  const sessionOrderIndex = sectionOrder.indexOf('sessions');
+  const prsBeforeSessions = sectionOrder.indexOf('prs') < sessionOrderIndex;
+  const pullRequestContent = [];
   if (isFilterShown('prs')) {
-    body.append(element('div', 'product-pr-divider'));
     const openCount = pullRequestOpenCount(pullRequestGroups);
     const prsHeading = element('h3', 'sub', 'プルリクエスト');
     prsHeading.append(element('span', 'count', `(${openCount} 件)`));
-    body.append(prsHeading);
+    pullRequestContent.push(prsHeading);
     if (pullRequestGroups.length) {
-      for (const group of pullRequestGroups) appendPullRequestBlock(body, group, false, showOriginBands);
+      for (const group of pullRequestGroups) {
+        const groupContent = element('div');
+        appendPullRequestBlock(groupContent, group, false, showOriginBands);
+        pullRequestContent.push(...groupContent.children);
+      }
     } else {
-      body.append(element('div', 'empty', 'オープンの PR はありません'));
+      pullRequestContent.push(element('div', 'empty', 'オープンの PR はありません'));
+    }
+  }
+  const divider = element('div', 'product-pr-divider');
+  for (const key of sectionOrder) {
+    if (key === 'sinceSeen') {
+      if (news) body.append(news);
+    } else if (key === 'sessions') {
+      const multipleSessions = product.sessions.length > 1;
+      for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions, showOriginBands));
+    } else if (key === 'prs' && pullRequestContent.length) {
+      if (prsBeforeSessions) body.append(...pullRequestContent, divider);
+      else body.append(divider, ...pullRequestContent);
     }
   }
   section.append(body);

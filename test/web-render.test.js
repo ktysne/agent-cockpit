@@ -2094,9 +2094,10 @@ test('予約通知、予約マージ結果、PR 取得エラーがカードを�
 
 test('PR 群が無いプロダクトの空表示は完了表示の設定にかかわらずモックとそろう', () => {
   const productSection = functionSource(pageHtml, 'productSection');
+  const productOrder = functionSource(pageHtml, 'productCardSectionOrder');
   const element = functionSource(pageHtml, 'element');
   const judgments = functionSource(pageHtml, 'countJudgments');
-  assert.ok(productSection && element && judgments);
+  assert.ok(productSection && productOrder && element && judgments);
 
   class FakeElement {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.className = ''; this.textContent = ''; }
@@ -2107,7 +2108,9 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
     constructor(text) { this.textContent = text; }
   }
   const context = pageContext(pageHtml, {
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
     displayPreferences: { pinned: [], collapsed: [], hideFinished: true },
+    orderedSectionKeys: (keys) => keys,
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -2123,7 +2126,7 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
     pullRequestOpenCount: () => 0,
     appendPullRequestBlock() {},
   });
-  vm.runInContext(`${judgments}\n${element}\n${productSection}`, context);
+  vm.runInContext(`${productOrder}\n${judgments}\n${element}\n${productSection}`, context);
   const textOf = (node) => (node.textContent || '') + (node.children || []).map(textOf).join('');
   const product = { key: 'product', name: 'Project', branches: new Set(), sessions: [], pullRequestGroups: [] };
   const values = [];
@@ -2204,7 +2207,7 @@ test('タスクの有無にかかわらず終わったセッションと履歴�
   const names = [
     'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
     'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'isActiveDecision', 'countJudgments', 'sessionsAfterIdleFilter',
-    'orderedProducts', 'sessionReferences', 'element', 'productSection',
+    'orderedProducts', 'sessionReferences', 'element', 'productCardSectionOrder', 'productSection',
   ];
   const functions = names.map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
@@ -2214,6 +2217,7 @@ test('タスクの有無にかかわらず終わったセッションと履歴�
     append(...nodes) { this.children.push(...nodes); }
   }
   const context = pageContext(pageHtml, {
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
     displayPreferences: { hideFinished: true, idleHideMinutes: 30, order: [], pinned: [], collapsed: [] },
     showIdleSessions: false,
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
