@@ -95,6 +95,7 @@ Invoke-RestMethod http://127.0.0.1:48377/api/state | ConvertTo-Json -Depth 8
 ブラウザは環境変数 `MANUAL_BROWSER` で指定でき、無ければ Edge と Chrome の既定の場所を探します。
 
 配布ページの画像の撮影と配信は、[docs/design/site.md](design/site.md) を参照してください。
+配信はリポジトリ直下の `deploy-site.bat` で行います。
 配信だけは、`npm install` で開発用の依存を入れる必要があり、Node.js 22.15.0 以上が要ります。
 
 ## アプリアイコン

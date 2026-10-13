@@ -73,8 +73,12 @@ Claude Code のメインは Opus 5.5(`claude-opus-5-5`)、Codex のメインは 
 
 1. 初回だけ、`tools/deploy.config.example.json` を `tools/deploy.config.json` にコピーし、接続情報を書く。このファイルは認証情報を含むので、Git で管理しない。ファイルの代わりに、環境変数 `AGENT_COCKPIT_FTP_HOST`、`AGENT_COCKPIT_FTP_USER`、`AGENT_COCKPIT_FTP_PASSWORD`、`AGENT_COCKPIT_FTP_REMOTE_ROOT` でも設定できる。
 2. `npm install` で開発用の依存を入れる。
-3. `npm run site:deploy:dry` で、送るファイルとリモートのパスを確かめる。接続はしない。
-4. `npm run site:deploy` で送る。
+3. リポジトリ直下の `deploy-site.bat` をダブルクリックする。送る前の検査と、送るファイルとリモートのパスの表示が済んだ後に、送るかを尋ねられるので、`y` を入力する。
+
+`deploy-site.bat` は、Node.js の版、`basic-ftp` の有無、コミットしていない変更が無いことを確かめてから送る。
+main 以外のブランチでは警告を出す。
+`deploy-site.bat --dry-run` は、コミットしていない変更があっても警告だけで進み、送らずに終わる。
+bat を使わないときは、`npm run site:deploy:dry` で確かめてから `npm run site:deploy` で送る。
 
 画像を撮り直した後も、同じ手順で送る。
 通信が切れて途中で止まったときも、もう一度送れば揃う。
