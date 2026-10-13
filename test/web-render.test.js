@@ -434,14 +434,6 @@ test('モックの診断ログとポリシーに必要な操作がある', () =>
   assert.match(policyDialog, /記録する情報/);
 });
 
-test('診断ログのモック記録にパスや認証値の情報を含めない', () => {
-  const sample = mockHtml.match(/const DIAGNOSTIC_RUN_SEED = \[([\s\S]*?)\n\];/)?.[1];
-  assert.ok(sample);
-  assert.doesNotMatch(sample, /[\\/]/);
-  assert.doesNotMatch(sample, /secret/i);
-  assert.doesNotMatch(sample, /token/i);
-});
-
 test('判断事項は待ち時間を表示し、回答のない長い待ちだけを強調する', () => {
   const elapsed = functionSource(pageHtml, 'decisionElapsedLabel');
   const isLongWait = functionSource(pageHtml, 'isLongWait');

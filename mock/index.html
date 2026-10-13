@@ -1261,7 +1261,8 @@ async function copyDiagnosticText(text) {
   fallback.setAttribute('aria-hidden', 'true');
   fallback.style.position = 'fixed';
   fallback.style.opacity = '0';
-  document.body.append(fallback);
+  // モーダルの表示中はダイアログの外が inert になり、外の要素を選択できないため。
+  diagnosticsDialog.append(fallback);
   fallback.select();
   const copied = document.execCommand?.('copy') || false;
   fallback.remove();
@@ -1289,7 +1290,7 @@ function downloadDiagnosticText(runs, suffix) {
   const link = document.createElement('a');
   link.href = url;
   link.download = `agent-cockpit-diagnostics-${suffix}.txt`;
-  document.body.append(link);
+  diagnosticsDialog.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
@@ -1297,6 +1298,7 @@ function downloadDiagnosticText(runs, suffix) {
 
 document.getElementById('diagnostics-copy').addEventListener('click', async () => {
   const copied = await copyDiagnosticText(filteredDiagnosticEntries().map(formatDiagnosticEntry).join('\n'));
+  document.getElementById('diagnostics-copy').focus();
   diagnosticsStatus.textContent = copied ? '表示中の記録をコピーしました。' : 'コピーできませんでした。';
 });
 document.getElementById('diagnostics-export-run').addEventListener('click', () => {
