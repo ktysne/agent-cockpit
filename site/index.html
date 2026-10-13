@@ -71,6 +71,7 @@
     .mark.codex { background: var(--codex); border-radius: 50%; }
     .mark.ok { background: var(--ok); }
     .mark.warn { background: var(--warn); }
+    .mark.away { background: transparent; border: 2px solid var(--warn); }
     .featcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; }
     .featcard h2 { font-size: 12px; font-weight: 600; letter-spacing: .08em; color: var(--muted); margin-block-end: 10px; }
     .featcard ul { list-style: none; padding: 0; display: grid; }
@@ -142,6 +143,7 @@
             <li><span class="mark claude"></span><a href="#feat-sessions">Claude Code と Codex を一覧</a></li>
             <li><span class="mark"></span><a href="#feat-tasks">タスクと完了条件</a></li>
             <li><span class="mark warn"></span><a href="#feat-decisions">判断待ちに画面から回答</a></li>
+            <li><span class="mark away"></span><a href="#feat-away">席を外しても止めない</a></li>
             <li><span class="mark ok"></span><a href="#feat-prs">積み上げた PR を順にマージ</a></li>
             <li><span class="mark codex"></span><a href="#feat-routing">サブエージェントの経路を切り替え</a></li>
           </ul>
@@ -182,7 +184,11 @@
         </div>
         <div class="card" id="feat-decisions">
           <h3><span class="mark warn"></span>判断待ちに画面から回答</h3>
-          <p>質問や、推奨で仮に進めた判断を一覧にします。画面から回答すると、フックがセッションへ届けます。席を外している間は、締切を過ぎたら推奨で進めます。</p>
+          <p>質問や、推奨で仮に進めた判断を一覧にします。画面から回答すると、フックがセッションへ届けます。</p>
+        </div>
+        <div class="card" id="feat-away">
+          <h3><span class="mark away"></span>席を外しても止めない</h3>
+          <p>離席中にすると、質問は画面からの回答を決めた時間だけ待ち、締切を過ぎたら推奨で進めます。セッションには離席中であることを伝え、破壊的な操作をせずに作業を続けさせます。戻ったら、離席中に起きた変化を「前回見てから」で確かめられます。</p>
         </div>
         <div class="card" id="feat-prs">
           <h3><span class="mark ok"></span>積み上げた PR を順にマージ</h3>
