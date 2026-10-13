@@ -2222,7 +2222,18 @@ function providerOrigin(providers) {
   return hasClaude && hasCodex ? 'both' : hasClaude ? 'claude' : hasCodex ? 'codex' : '';
 }
 
-function appendPullRequestTree(target, group, pullRequest) {
+function hasCodexOrigin(state) {
+  const hasCodexProvider = (providers) => Array.isArray(providers) ? providers.includes('codex') : providers === 'codex';
+  const pullRequestHasCodex = (pullRequest) => hasCodexProvider(pullRequest.providers)
+    || (pullRequest.children || []).some(pullRequestHasCodex);
+  return (state.sessions || []).some((session) => session.provider === 'codex')
+    || (state.pullRequests || []).some((group) => (group.trees || []).some(pullRequestHasCodex)
+      || (group.mergeHistory || []).some((record) => hasCodexProvider(record.providers))
+      || (group.merged || []).some(pullRequestHasCodex))
+    || (state.sinceSeen || []).some((entry) => (entry.items || []).some((item) => hasCodexProvider(item.providers ?? item.provider)));
+}
+
+function appendPullRequestTree(target, group, pullRequest, showOriginBands = true) {
   const reservation = pullRequest.reservation || null;
   const queued = queuedPullRequestMerge(pullRequest);
   const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
@@ -2235,7 +2246,7 @@ function appendPullRequestTree(target, group, pullRequest) {
   const waiting = pullRequest.canMerge ? pullRequestMergeConditionWaits(pullRequest) : [];
   const conditionMet = pullRequest.canMerge === true && waiting.length === 0;
   const item = element('div', `pr ${reservation ? 'reserved' : conditionMet ? 'can-merge' : pullRequest.canMerge ? 'merge-pending' : ''}`.trim());
-  const origin = providerOrigin(pullRequest.providers);
+  const origin = showOriginBands ? providerOrigin(pullRequest.providers) : '';
   if (origin) {
     item.className = `${item.className} origin-${origin}`;
     item.dataset.origin = origin;
@@ -2320,7 +2331,7 @@ function appendPullRequestTree(target, group, pullRequest) {
   }
   if (pullRequest.children.length) {
     const children = element('div', 'stack-level');
-    for (const child of pullRequest.children) appendPullRequestTree(children, group, child);
+    for (const child of pullRequest.children) appendPullRequestTree(children, group, child, showOriginBands);
     item.append(children);
   }
   target.append(item);
@@ -2367,7 +2378,7 @@ function appendPullRequestMergeResults(content, group) {
   }
 }
 
-function appendPullRequestBlock(target, group, withTag = false) {
+function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {
   if (!group) return;
   const section = element('section', 'group-frame pr-repo-group');
   const head = element('header', 'prs-head');
@@ -2399,7 +2410,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
     base.append(element('code', '', tree.effectiveBase));
     if (tree.children.length) base.append(element('span', '', `スタック ${tree.stackPosition.total} 段`));
     stack.append(base);
-    appendPullRequestTree(stack, group, tree);
+    appendPullRequestTree(stack, group, tree, showOriginBands);
     content.append(stack);
   }
   const appendFoldedPrLine = (kind, heading, label, items, appendItem) => {
@@ -2430,7 +2441,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
   }
   if (Array.isArray(group.mergeHistory) && group.mergeHistory.length) {
     appendFoldedPrLine('merged', 'マージ済み (24 時間)', 'マージ済み', group.mergeHistory, (line, record) => {
-      const origin = providerOrigin(record.providers);
+      const origin = showOriginBands ? providerOrigin(record.providers) : '';
       const item = element('span', `${record.headMismatch === true ? 'badge long warn' : 'badge long mute'} ${origin ? `origin-${origin}` : ''}`.trim());
       if (origin) item.dataset.origin = origin;
       const link = element('a', '', `#${record.number}`);
@@ -2453,7 +2464,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
   const closed = group.merged.filter((pullRequest) => pullRequest.state === 'closed')
     .sort((a, b) => b.number - a.number);
   appendFoldedPrLine('closed', 'クローズ済み', 'クローズ済み', closed, (line, pullRequest) => {
-    const origin = providerOrigin(pullRequest.providers);
+    const origin = showOriginBands ? providerOrigin(pullRequest.providers) : '';
     const link = element('a', `badge mute ${origin ? `origin-${origin}` : ''}`.trim(), `#${pullRequest.number}`);
     if (origin) link.dataset.origin = origin;
     link.href = pullRequest.url;
@@ -3159,11 +3170,13 @@ function appendUnknownSessionControls(row, session) {
   if (controls) row.append(controls);
 }
 
-function sessionBlock(product, session, multipleSessions) {
-  const origin = session.provider === 'codex' ? 'codex' : 'claude';
+function sessionBlock(product, session, multipleSessions, showOriginBands = true) {
+  const origin = showOriginBands ? session.provider === 'codex' ? 'codex' : 'claude' : '';
   const block = element(multipleSessions ? 'section' : 'div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
-  block.className = `${block.className} origin-${origin}`;
-  block.dataset.origin = origin;
+  if (origin) {
+    block.className = `${block.className} origin-${origin}`;
+    block.dataset.origin = origin;
+  }
   if (multipleSessions) {
     const head = element('div', 'session-head');
     head.append(element('h3', '', sessionDisplayName(session)));
@@ -3174,7 +3187,7 @@ function sessionBlock(product, session, multipleSessions) {
   const body = element('div', 'session-body');
   if (!multipleSessions) {
     const context = element('div', 'session-tag session-context', sessionDisplayName(session));
-    context.dataset.origin = origin;
+    if (origin) context.dataset.origin = origin;
     body.append(context);
   }
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
@@ -3257,7 +3270,7 @@ function sharedBranch(product) {
   return product.branches.size === 1 ? [...product.branches][0] : '';
 }
 
-function productSection(product, index, products, pinnedCount) {
+function productSection(product, index, products, pinnedCount, showOriginBands = true) {
   const pinned = displayPreferences.pinned.includes(product.key);
   const section = element('section', `section ${pinned ? 'pinned' : ''}`.trim());
   const head = element('div', 'head');
@@ -3291,10 +3304,10 @@ function productSection(product, index, products, pinnedCount) {
 
   const body = element('div', 'body');
   body.hidden = displayPreferences.collapsed.includes(product.key);
-  const news = sinceSeenBox(product, false);
+  const news = sinceSeenBox(product, false, showOriginBands);
   if (news) body.append(news);
   const multipleSessions = product.sessions.length > 1;
-  for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions));
+  for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions, showOriginBands));
   if (isFilterShown('prs')) {
     body.append(element('div', 'product-pr-divider'));
     const openCount = pullRequestOpenCount(pullRequestGroups);
@@ -3302,7 +3315,7 @@ function productSection(product, index, products, pinnedCount) {
     prsHeading.append(element('span', 'count', `(${openCount} 件)`));
     body.append(prsHeading);
     if (pullRequestGroups.length) {
-      for (const group of pullRequestGroups) appendPullRequestBlock(body, group);
+      for (const group of pullRequestGroups) appendPullRequestBlock(body, group, false, showOriginBands);
     } else {
       body.append(element('div', 'empty', 'オープンの PR はありません'));
     }
@@ -3330,7 +3343,7 @@ function kindSection(title, content, extra, emptyCount = 0) {
   return section;
 }
 
-function sinceSeenBox(product, withProductTag) {
+function sinceSeenBox(product, withProductTag, showOriginBands = true) {
   const entry = visibleSinceSeen(lastState).find((item) => item.product?.key === product.key);
   if (!entry?.items?.length) return null;
   const box = element('div', 'news');
@@ -3343,7 +3356,7 @@ function sinceSeenBox(product, withProductTag) {
   header.append(seen);
   const list = element('ul');
   for (const item of entry.items) {
-    const origin = providerOrigin(item.providers ?? item.provider);
+    const origin = showOriginBands ? providerOrigin(item.providers ?? item.provider) : '';
     const row = element('li', origin ? `origin-${origin}` : '', item.text);
     if (origin) row.dataset.origin = origin;
     list.append(row);
@@ -3379,7 +3392,7 @@ function kindEndedAgentCount(references) {
   return references.reduce((count, reference) => count + reference.session.agents.filter(isEndedAgent).length, 0);
 }
 
-function renderKindSections(products) {
+function renderKindSections(products, showOriginBands = true) {
   const references = sessionReferences(products);
   const waitingItems = [];
   const endedDecisions = element('div', 'kind-ended');
@@ -3450,7 +3463,7 @@ function renderKindSections(products) {
 
   const sinceSeenContent = element('div', 'body');
   for (const product of products) {
-    const news = sinceSeenBox(product, true);
+    const news = sinceSeenBox(product, true, showOriginBands);
     if (news) sinceSeenContent.append(news);
   }
   const sections = {
@@ -3466,7 +3479,7 @@ function renderKindSections(products) {
     .map((group) => ({ product, group })));
   if (isFilterShown('prs')) {
     const pullRequests = element('div', 'body');
-    for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true);
+    for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true, showOriginBands);
     sections.prs = kindSection('プルリクエスト', pullRequests, null, pullRequestGroups.length);
   }
   return orderedSectionKeys(DEFAULT_SECTION_ORDER).map((key) => sections[key]).filter(Boolean);
@@ -3478,6 +3491,8 @@ function render(state) {
     return;
   }
   deferredRenderPending = false;
+  // 帯は混在を見分けるためのもので、Claude だけなら情報が無い。
+  const showOriginBands = hasCodexOrigin(state);
   renderRouting(state.routing, state.integrations);
   const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
   const sessions = allSessions.filter((session) => (session.hidden !== true || isIdleHiddenSession(session)));
@@ -3546,9 +3561,9 @@ function render(state) {
 
   if (displayPreferences.mode === 'product') {
     const pinnedCount = products.filter((product) => displayPreferences.pinned.includes(product.key)).length;
-    root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount)));
+    root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount, showOriginBands)));
   } else {
-    root.replaceChildren(...renderKindSections(products));
+    root.replaceChildren(...renderKindSections(products, showOriginBands));
   }
 
   if (focusData?.kind?.startsWith('merge-')) {

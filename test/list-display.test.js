@@ -1499,7 +1499,7 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
     root,
     element: (tag, className, textContent) => ({ tag, className, textContent }),
   });
-  vm.runInContext(`${render}\nthis.render = render;`, context);
+  vm.runInContext(`${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
 
   context.render({ sessions: [{}], pullRequests: [] });
 
@@ -1539,7 +1539,7 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
       root: { replaceChildren() {} },
       element: (tag, className, textContent) => ({ tag, className, textContent }),
     });
-    vm.runInContext(`${filters}\n${functionSource(web, 'filterFocusFallback')}\n${render}\nthis.render = render;`, context);
+    vm.runInContext(`${filters}\n${functionSource(web, 'filterFocusFallback')}\n${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
     context.render({ sessions: [], pullRequests: [] });
     return { modeButton, chips };
   };
@@ -1595,7 +1595,7 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
       root,
       element: fakeElement,
     });
-    vm.runInContext(`${render}\nthis.render = render;`, context);
+    vm.runInContext(`${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
     context.render({ sessions: [{}], pullRequests: [] });
     return { modeButton, mergeResultButton, root };
   };
