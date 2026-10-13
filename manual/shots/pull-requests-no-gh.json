@@ -10,6 +10,11 @@
   },
   "title": "GitHub CLI が使えないとき",
   "scenario": "no-gh",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
     {
       "do": "screenshot",
@@ -18,7 +23,8 @@
       "parts": {
         "error.repo": ".pr-repo-group .pr-repo-title",
         "error.fetched": ".pr-repo-group .prs-head > .meta",
-        "error.box": ".pr-repo-group .error-box"
+        "error.box": ".pr-repo-group .error-box",
+        "error.unregister": ".pr-repo-group [data-repo-unregister-action=\"open\"]"
       }
     }
   ]

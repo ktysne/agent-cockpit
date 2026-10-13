@@ -1,7 +1,7 @@
 <section class="section">
   <h1>席を外している間に判断を返す</h1>
   <p class="lead">席を外す前に離席中にしておくと、その間にセッションが出した質問へ、ダッシュボードから答えられます。
-  戻ったあとは、離席中を外し、席を外している間に起きた変化を確かめて既読にします。
+  戻ったあとは、席を外している間に起きた変化を確かめて既読にしてから、離席中を外します。
   各手順の細かな仕様は、手順の最後のリンク先で説明します。</p>
 
   <div class="guide-intro">
@@ -11,7 +11,7 @@
         <li>席を外す前に、離席中にする</li>
         <li>回答を待つ時間の中で、質問に答える</li>
         <li>締切を過ぎて推奨で進んだ判断事項に、戻ってから答える</li>
-        <li>戻ったら離席中を外し、「前回見てから」で変化を確かめて既読にする</li>
+        <li>戻ったら「前回見てから」で変化を確かめて既読にし、離席中を外す</li>
       </ul>
     </div>
     <div>
@@ -32,16 +32,18 @@
       ヘッダの背景が琥珀色になれば、離席中です。
       タスクトレイのメニューの同じ名前の項目でも切り替えられます(<a href="away.html#away-toggle">離席中の切り替え</a>)。
       <figure class="guide-map" data-shot="away-header/on" data-crop="1090-1700" data-crop-y="0-120" data-width="458"
-              data-alt="離席中にしたヘッダの右上。離席中のチェックが入り、右に設定の歯車のボタンがある。背景は琥珀色になっている"></figure></li>
+              data-alt="離席中にしたヘッダの右上。離席中のチェックが入り、右に画面を読み込み直すボタンと設定の歯車のボタンがある。背景は琥珀色になっている"></figure></li>
     <li><b>回答を待つ時間を確かめる</b>質問を預かる時間は、設定の <span class="ui">離席中に質問の回答を待つ時間 (1〜30 分)</span> で決めます。
       既定は 3 分です。
       この時間を過ぎると、質問は推奨案で進みます(<a href="settings.html#settings-away-wait">離席中に質問の回答を待つ時間</a>)。</li>
   </ol>
-  <div class="note warn">ツールの実行許可は、離席中も、デスクトップアプリで出す必要があります。
+  <div class="note warn">ツールの実行許可は、離席中も、Claude Code または Codex の元の画面で出す必要があります。
   許可待ちのまま席を離れると、作業はそこで止まります(<a href="permission.html">許可待ち</a>)。</div>
 
   <h2 id="guide-away-answer">回答を待つ時間の中で答える</h2>
-  <p>離席中にセッションが質問を出すと、デスクトップアプリにダイアログを出さず、ダッシュボードの判断事項のカードに回答欄つきで出ます。
+  <p>離席中に Claude Code のセッションが質問を出すと、デスクトップアプリにダイアログを出さず、ダッシュボードの判断事項のカードに回答欄つきで出ます。
+  Codex の質問も同じように待ちます。
+  待ちをやめた場合は、Codex の元の画面に質問が出ます(<a href="away.html#away-questions">離席中の質問</a>)。
   締切までに回答を送ると、その回答が質問への答えとして渡されます。</p>
   <ol class="steps">
     <li><b>質問を見つける</b>ヘッダの <span class="ui">止めて待っている</span> の件数が増えます。
@@ -72,26 +74,21 @@
               data-alt="仮に推奨案で進行中の判断事項のカード。見出しに新着の印、題、仮に推奨案で進行中の札、仮適用からの経過時間がある。推奨の札が付いた行ロックと楽観ロックの選択肢、指示の欄、回答を送るボタンが並ぶ"></figure></li>
     <li><b>戻ってから答える</b>「楽観ロック」を選び、指示の欄に「離席中は再試行の回数を 3 回までにする」と書いて、<span class="ui">回答を送る</span> を押します。
       この回答は、質問への答えではなく、作業への指示としてセッションに届きます。
+      Codex は、次のツールの実行後か次の入力で受け取ります。
+      離席中にターンが終わったときだけ、最大 59 分待って届けます(<a href="decisions.html#decisions-route">回答が届く経路</a>)。
       セッションは、回答に沿って作業を直します(<a href="decisions.html#decisions-route">回答が届く経路</a>)。
       <figure class="guide-map" data-shot="decisions-answer/picked" data-crop="0-1330" data-width="665"
               data-alt="楽観ロックを選び、離席中は再試行の回数を 3 回までにすると書いた回答欄。選んだ選択肢が枠で囲まれ、送る答えに楽観ロックと出て、回答を送るのボタンが押せる状態になっている"></figure></li>
   </ol>
 
-  <h2 id="guide-away-return">戻ったら離席中を外す</h2>
+  <h2 id="guide-away-since-seen">戻ったら変化を確かめて既読にする</h2>
+  <p>席を外している間に起きた変化は、離席中にしている間、<span class="ui">前回見てから</span> の欄に出ます。
+  設定の <span class="ui">前回見てから</span> が最初の設定の <span class="ui">離席中のみ</span> のときは、離席中を外すと欄が出なくなるので、離席中を外す前に確かめます。
+  既読にしなかった変化は記録に残り、次に離席中にしたときか、設定を <span class="ui">常に</span> にしたときに、また出ます(<a href="away.html#away-since-seen">前回見てから</a>)。</p>
   <ol class="steps">
-    <li><b>離席中のチェックを外す</b>ヘッダの <span class="ui">離席中</span> のチェックを外します。
-      預かっていた質問の待ちをやめ、まだ答えていない質問は、デスクトップアプリのダイアログに出ます。
-      締切より前に送った回答は、離席中を外したあとも、質問への答えとして渡ります(<a href="away.html#away-release">離席中を解除したとき</a>)。
-      <figure class="guide-map" data-shot="overview/product" data-crop="1090-1700" data-crop-y="0-120" data-width="458"
-              data-alt="離席中を外したヘッダの右上。離席中のチェックが外れ、右に設定の歯車のボタンがある。背景は通常の色に戻っている"></figure></li>
-  </ol>
-
-  <h2 id="guide-away-since-seen">変化を確かめて既読にする</h2>
-  <p>離席中の期間に起きた変化は、離席中を外したあとも、既読にするまで残ります。</p>
-  <ol class="steps">
-    <li><b>変化を確かめる</b>変化があるプロダクトのカードの先頭に、<span class="ui">前回見てから</span> の欄が出ます。
+    <li><b>変化を確かめる</b>プロダクト別では設定の欄の並び順に従って、種類別では専用の欄に、<span class="ui">前回見てから</span> の欄が出ます。
       プロダクト shift-planner には、「PR #115(週の開始曜日を設定にする)をマージした」など 3 件の変化が、新しい順に並びます。
-      欄が出ないときは、設定の <span class="ui">前回見てから</span> が <span class="ui">出さない</span> になっていないかを確かめます(<a href="away.html#away-since-seen">前回見てから</a>)。
+      欄が出ないときは、設定の <span class="ui">前回見てから</span> が <span class="ui">出さない</span> になっていないか、<span class="ui">離席中のみ</span> のときは離席中になっているかを確かめます(<a href="settings.html#settings-since-seen">前回見てから</a>)。
       <figure class="guide-map" data-shot="guide-away-return/unseen" data-crop-y="130-740" data-crop="0-1100" data-width="550" 
               data-alt="shift-planner のカードの先頭。前回見てから 3 件の欄に、PR #115 のマージ、タスクの完了、PR #119 の作成が並び、既読にするのリンクがある。その下の判断事項のカードには新着の印が付いている"></figure></li>
     <li><b>既読にする</b>確かめ終えたら、<span class="ui">既読にする</span> を押します。
@@ -99,6 +96,15 @@
       既読にするのはプロダクトごとなので、ほかのプロダクトの欄は残ります。
       <figure class="guide-map" data-shot="guide-away-return/seen" data-crop-y="0-520" data-crop="0-1100" data-width="550" 
               data-alt="既読にした後の shift-planner のカード。前回見てからの欄が消え、判断事項のカードの新着の印も外れている"></figure></li>
+  </ol>
+
+  <h2 id="guide-away-return">離席中を外す</h2>
+  <ol class="steps">
+    <li><b>離席中のチェックを外す</b>ヘッダの <span class="ui">離席中</span> のチェックを外します。
+      預かっていた質問の待ちをやめ、まだ答えていない質問は、Claude Code または Codex の元の画面に出ます。
+      締切より前に送った回答は、離席中を外したあとも、質問への答えとして渡ります(<a href="away.html#away-release">離席中を解除したとき</a>)。
+      <figure class="guide-map" data-shot="overview/product" data-crop="1090-1700" data-crop-y="0-120" data-width="458"
+              data-alt="離席中を外したヘッダの右上。離席中のチェックが外れ、右に画面を読み込み直すボタンと設定の歯車のボタンがある。背景は通常の色に戻っている"></figure></li>
   </ol>
   <p>席を外している間の質問が、どの経路で、どのように扱われるかは、<a href="away.html">離席中</a>と<a href="decisions.html">判断事項と回答</a>で説明しています。</p>
 </section>

@@ -4,6 +4,9 @@
   このページでは、それぞれの見方と、画面から行える操作を説明します。
   更新が無いまま時間が経ったセッションを、一覧から隠す条件も説明します。</p>
 
+  <p>このページの図はプロダクト別です。
+  既定の種類別では、行がセッションをまたいで並び、プロダクト名と、同じプロダクトに複数セッションがあるときのセッション名の札が付き、終了済みの開閉は「<span class="ui">終了済みを表示</span> (N 件)」／「<span class="ui">終了済み</span>を畳む」になります(<a href="screen.html#screen-kind-now">種類別の今やっていること</a>)。</p>
+
   <h2 id="work-tasks">タスクと完了条件</h2>
   <p>メインセッションは、作業を始めるときにタスクと完了条件を登録します。
   状態や完了条件が変わるたびに、メインセッションが一覧全体を登録し直します。
@@ -41,6 +44,12 @@
     <p>隠している終わったセッションの件数は、一覧の最下部の注記に出ます(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   </details>
 
+  <h3 id="work-session-end">セッションが終わる条件</h3>
+  <p>Claude Code は、セッションのファイルが消えてから 60 秒後に終了扱いになります。
+  Codex は、会話の終了が伝わったときに終了扱いになります。
+  それが届かない場合も、記録したプロセスの終了か、一度確認した会話のロックファイルの消失から 60 秒後に終了扱いになります。
+  プロセス番号を記録できず、終了も伝わらない行は、更新の無いセッションとして隠します(<a href="#work-idle">更新の無いセッションを隠す</a>)。</p>
+
   <h3 id="work-task-close">タスクを画面で完了にする</h3>
   <p><span class="ui">完了にする</span> を押すと、そのタスクを完了にします。
   押した直後は完了にせず、5 秒の間は取り消せます。
@@ -70,16 +79,21 @@
   <figure class="guide-map" id="work-main-map" data-shot="work-rows/rows" data-crop-y="0-225" data-alt="今やっていることの欄。メインの作業行の1行目にメイン、待機中の表示、右端に経過時間がある。その下に作業中のタスクの題と、実行中のツールの札とコマンドが全幅で続く">
     <ol class="guide-list">
       <li data-part="rows.heading"><b>欄の見出し</b>：<span class="ui">今やっていること</span> です。この下に、メインの行とサブエージェントの行が並びます。</li>
-      <li data-part="rows.main-state" data-place="top"><b>状態</b>：<span class="ui">作業中</span>、<span class="ui">待機中</span>、<span class="ui">状態不明</span> のどれかです。</li>
+      <li data-part="rows.main-state" data-place="top"><b>状態</b>：<span class="ui">作業中</span>、<span class="ui">待機中</span>、<span class="ui">状態不明</span>、<span class="ui">非対話の実行中</span> のどれかです。</li>
       <li data-part="rows.main-title"><b>作業中のタスクの題</b>：状態が <span class="ui">作業中</span> のタスクの題です。作業中のタスクが無いときは出ません。</li>
       <li data-part="rows.main-tool" data-place="right"><b>実行中のツール</b>：ツールの名前の札と、実行しているコマンドやファイルのパスです。ツールが終わると消えます。</li>
       <li data-part="rows.main-time"><b>経過時間</b>：実行中のツールがあればその開始から、無ければセッションの最後のイベントからの時間です。</li>
     </ol>
   </figure>
+  <p>メインの行にもモデルの札が付きます。
+  Claude は <span class="ui">Claude</span> にモデル名が続き、モデル不明の非対話の実行は <span class="ui">Claude (API)</span> と出ます。
+  Codex は <span class="ui">Codex</span> にモデル名が続き、同じ会話を再開したときは「再開 N 回」の札も付きます。
+  Claude の対話セッションでモデルが分からないときは、札を出しません。</p>
   <p>状態は次の意味です。</p>
   <ul>
     <li><span class="ui">作業中</span>：セッションがターンの途中です。</li>
     <li><span class="ui">待機中</span>：ターンが終わり、次の入力を待っています。ツールの実行許可を待っているときも、<span class="ui">待機中</span> と出ます。許可待ちは、判断が必要なことの欄に別のカードで出ます(<a href="permission.html">許可待ち</a>)。</li>
+    <li><span class="ui">非対話の実行中</span>：非対話の実行で、ターンの状態が分からない行です。<span class="ui">状態を推定</span> と <span class="ui">一覧から外す</span> は出ず、更新が無くても隠れません。</li>
     <li><span class="ui">状態不明</span>：セッションは見つかっているものの、ターンの状態を確定するイベントが届いていません(<a href="#work-unknown">状態不明のセッション</a>)。</li>
   </ul>
   <p>実行中のツールが複数あるときは、いちばん新しく始まったものを出します。
@@ -107,17 +121,21 @@
       <li data-part="unknown.hide" data-place="bottom"><b><span class="ui">一覧から外す</span></b>：このセッションを一覧から外します。外したセッションは、一覧の最下部で戻せます(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</li>
     </ol>
   </figure>
+  <p>推定できた結果を出した後は、状態の表示は <span class="ui">状態不明</span> だけになり、その後ろの経過時間は出ません。</p>
   <p>Notification やサブエージェントのイベントなど、ターンの状態を確定しないイベントだけが届いた行は、<span class="ui">状態不明</span> の後ろに最後のイベントからの経過時間を出します(例: <span class="ui">状態不明</span> (5 分前))。
-  セッションのファイルが入力待ち(idle)を示すときは、イベントの有無にかかわらず <span class="ui">待機中</span> と出します。稼働中のサブエージェントがあれば、<span class="ui">待機中</span>(サブエージェント稼働中)と出します。</p>
+  セッションのファイルが入力待ち(idle)を示すときは、イベントの有無にかかわらず <span class="ui">待機中</span> と出します。
+  稼働中のサブエージェントがあっても、状態の表示は <span class="ui">待機中</span> です。</p>
   <details class="more">
     <summary>状態を推定の詳細</summary>
-    <p>推定は、会話の記録の末尾(最大 256KB)の最後のやり取りから判断します。
+    <p>推定は、Claude Code の会話の記録の末尾(最大 256KB)の最後のやり取りから判断します。
     結果は <span class="ui">最後の記録</span> の時刻と最後のツールの名前、<span class="ui">入力待ちらしい</span> の判定として出ます。</p>
     <ul>
       <li><span class="ui">はい</span>：最後がモデルの応答の終わりか、利用者による中断です。</li>
       <li><span class="ui">いいえ (許可待ちかツールの実行中)</span>：最後がツールの呼び出しです。</li>
       <li><span class="ui">いいえ (応答の生成中)</span>：最後が利用者の入力か、ツールの結果です。</li>
     </ul>
+    <p>Codex の状態不明の行にも <span class="ui">状態を推定</span> は出ますが、Codex の会話は読みません。
+    Claude Code の会話記録だけを探すため、Codex の状態を推定する用途には使えません。</p>
     <p>記録を読めないときは、<span class="ui">推定できませんでした</span> と出ます。</p>
   </details>
 
@@ -136,6 +154,9 @@
       <li data-part="rows.toggle" data-place="bottom"><b><span class="ui">終了済みを隠す</span></b>：開いている終了済みの行を畳みます。畳んでいるときは <span class="ui">終了済みを表示</span> で、終了済みの件数が出ます。</li>
     </ol>
   </figure>
+  <p>Codex が自分で起動したサブエージェントも、この欄に出ます。
+  名前は子の種類で、種類の指定が無いときは <span class="ui">default</span> です。
+  モデルの札は <span class="ui">Codex</span> にモデル名が続く形だけで、effort と経路の札は付きません。</p>
   <p>稼働中のサブエージェントの数は、画面上部の <span class="ui">稼働中のサブエージェント</span> の札に出ます(<a href="screen.html#screen-summary">件数の札</a>)。</p>
   <p>終了した行は、設定の <span class="ui">終わったものを非表示にする</span> がオフのときだけ、<span class="ui">終了済みを表示</span> から開けます。
   オン(既定)のときは、終了した行を出しません。
@@ -145,12 +166,13 @@
     <summary>サブエージェントの行の詳細</summary>
     <p>Claude のモデルと effort は、サブエージェントの定義ファイルにある値です。
     サブエージェントを呼び出した Agent ツールの結果にモデルが含まれていれば、その値に置き換えます。</p>
+    <p>Claude のメインセッションが <code>codex-agent.sh</code> を直接動かした行では、モデルの札は <span class="ui">Codex</span> にモデル名と effort が続く形だけになります。</p>
     <p>Codex の札にマウスを載せると、Codex が使った設定の置き場所(<code>codex_home</code>)が出ます。
     Codex を起動するスクリプトの出力から読み取った値です。</p>
   </details>
 
   <h3 id="work-agent-route">経路の札</h3>
-  <p>経路の札は、claude-codex-bridge を入れているときの、稼働中のサブエージェントにだけ付きます。
+  <p>経路の札は、claude-codex-bridge を入れているときの、Claude のセッションの稼働中のサブエージェントにだけ付きます。
   <span class="ui">経路:</span> に続けて、<span class="ui">既定</span>、<span class="ui">Codex</span>、<span class="ui">Claude</span> のどれかが出ます。
   サブエージェントを起動した時点で効いていた、サブエージェントの経路の設定を示します。
   マウスを載せると、<span class="ui">起動時に効いていた経路の設定</span> と出ます。</p>
@@ -176,7 +198,7 @@
     <summary>終了未確認と終了にするの詳細</summary>
     <p>終了未確認になるのは、サブエージェントが終わったときに、背景の Codex の結果が届いていなかった場合と、Codex の実行を確かめる待ちが、終了を確認できないまま終わった場合です。</p>
     <p>メインセッションが背景で動かした Codex の行と、背景で起動した Claude のサブエージェントの行にも、動いている間は <span class="ui">終了にする</span> が付きます。</p>
-    <p>メインセッションがサブエージェントを止めた場合は、止めた時点か、メインセッションの会話記録に終了の知らせが書かれてから約 1 分以内に、自動で終了になります。
+    <p>Claude のメインセッションがサブエージェントを止めた場合は、止めた時点か、メインセッションの会話記録に終了の知らせが書かれてから約 1 分以内に、自動で終了になります。
     <span class="ui">終了にする</span> は、それでも稼働中のまま残った行を片付けるために使います。</p>
     <p>画面での終了は、常駐サーバーのメモリーにだけ置きます。
     常駐サーバーを再起動すると、元の表示に戻ります。
@@ -189,11 +211,12 @@
   <span class="ui">表示する</span> を押すと、開いているページの間だけ表示します(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   <p>次のどれにも当たらないセッションが、最後の更新から設定の時間を超えると隠れます。</p>
   <ul>
-    <li>状態が <span class="ui">作業中</span> である</li>
+    <li>状態が <span class="ui">作業中</span> または <span class="ui">非対話の実行中</span> である</li>
     <li>許可待ちがある</li>
     <li>止めて待っている判断事項か、仮に推奨案で進行中の判断事項がある</li>
     <li>稼働中か終了未確認のサブエージェントがある</li>
   </ul>
+  <p>外したセッションも、最後の更新と外した時刻の遅い方から判定します(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   <p>最後の更新は、セッションの最後のイベント、タスクの最後の登録、判断事項の最後の更新のうち、いちばん新しい時刻です。
   状態不明のセッションは、Claude Code のセッションの記録にある更新時刻で判定します。
   時間は、設定の <span class="ui">更新の無いセッションを隠すまで (分)</span> で決めます(<a href="settings.html#settings-idle">更新の無いセッションを隠すまで</a>)。

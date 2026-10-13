@@ -125,7 +125,8 @@
   <h1>経路の設定</h1>
   <p class="lead">経路の設定は、サブエージェントとクロスレビューを、Codex と Claude のどちらで行うかを選ぶ欄です。
   画面の上部にあり、全セッションに共通です。
-  変えた設定は、次に起動するサブエージェントと、次に始めるクロスレビューから効きます。</p>
+  サブエージェントの経路は Claude のセッションにだけ効き、Codex が自分で起動したサブエージェントには効きません。
+  変えた設定は、次に起動する Claude のサブエージェントと、次に始めるクロスレビューから効きます。</p>
 
   <h2 id="routing-choices">選べる経路</h2>
   <p>サブエージェントとクロスレビューのそれぞれに、<span class="ui">既定</span>、<span class="ui">Codex</span>、<span class="ui">Claude</span> の 3 つから 1 つを選びます。
@@ -137,7 +138,7 @@
     <li><span class="ui">Codex</span>：サブエージェントは、Codex へ委譲して作業するよう、起動時に伝えられます。クロスレビューは、Codex をレビュアーにします</li>
     <li><span class="ui">Claude</span>：サブエージェントは、Codex へ委譲せずに Claude 自身で作業するよう、起動時に伝えられます。クロスレビューは、Claude をレビュアーにします</li>
   </ul>
-  <p>サブエージェントの経路は、claude-codex-bridge の窓口(<code>impl-hard</code> など)が Codex を呼ぶ仕組みに対する指定です。
+  <p>Claude のサブエージェントの経路は、claude-codex-bridge の窓口(<code>impl-hard</code> など)が Codex を呼ぶ仕組みに対する指定です。
   <span class="ui">Claude</span> を選んだサブエージェントが Codex を呼び出そうとすると、フックが止めます。
   止められた窓口は、Claude 側で実装する担当への委譲し直しを、メインセッションに報告します。</p>
   <p>クロスレビューの経路は、ai-cross-review が、レビューを始める直前に読みます。
@@ -188,7 +189,7 @@
   起動した後で経路の設定を変えると、いまの設定と違う札に <span class="ui">(変更前)</span> が付きます。
   札は、稼働中のサブエージェントが、いまの設定とは別の経路で動いていることを示します。</p>
   <figure class="guide-map" id="routing-changed-setting-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1636"><div class="gm-segment" style="flex-grow:1636;aspect-ratio:1636/64"><div class="gm-clip"><img src="img/routing-changed/setting.png" width="818" height="32" alt="サブエージェントの経路を Claude に変えた経路の設定。サブエージェントの段で Claude が選ばれている" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#routing-changed-setting-map-1" style="left:24.633%;top:3.125%" aria-label="1. 変えた後の設定">1</a></div></div></div><ol class="gm-list"><li id="routing-changed-setting-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>変えた後の設定</b>：サブエージェントの経路を <span class="ui">Claude</span> にしました。</div></li></ol></figure>
-  <figure class="guide-map" id="routing-changed-agent-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/176"><div class="gm-clip"><img src="img/routing-changed/agent.png" width="762" height="88" alt="稼働中のサブエージェントの行。経路の札に、Codex と変更前が出ている。その右に、Claude のモデル、Codex が使えなかった表示が並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-left" data-gm="1" href="#routing-changed-agent-map-1" style="left:1.312%;top:80.114%" aria-label="1. 経路の札">1</a></div></div></div><ol class="gm-list"><li id="routing-changed-agent-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>経路の札</b>：起動したときは <span class="ui">Codex</span> の経路でした。いまの設定は <span class="ui">Claude</span> なので、<span class="ui">(変更前)</span> が付きます。</div></li></ol></figure>
+  <figure class="guide-map" id="routing-changed-agent-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/178"><div class="gm-clip"><img src="img/routing-changed/agent.png" width="762" height="89" alt="稼働中のサブエージェントの行。経路の札に、Codex と変更前が出ている。その右に、Claude のモデル、Codex が使えなかった表示が並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-left" data-gm="1" href="#routing-changed-agent-map-1" style="left:1.312%;top:79.213%" aria-label="1. 経路の札">1</a></div></div></div><ol class="gm-list"><li id="routing-changed-agent-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>経路の札</b>：起動したときは <span class="ui">Codex</span> の経路でした。いまの設定は <span class="ui">Claude</span> なので、<span class="ui">(変更前)</span> が付きます。</div></li></ol></figure>
   <p>札にマウスを載せると、<span class="ui">起動時に効いていた経路の設定</span> と出ます。
   行のほかの札の見方は、サブエージェントのページにあります(<a href="work.html#work-agent-route">経路の札</a>)。</p>
 </section>

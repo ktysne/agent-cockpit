@@ -124,7 +124,7 @@
       </details>
 <section class="section">
   <h1>使い始める</h1>
-  <p class="lead">Agent Cockpit は、導入が済んでいれば、Claude Code のセッションを開くと自動で動き始めます。
+  <p class="lead">Agent Cockpit は、導入が済んでいれば、Claude Code または Codex のセッションを開くと自動で動き始めます。
   このページでは、ダッシュボードの開き方、起動と終了、連携ツールの有無で変わる表示を説明します。
   導入の手順は、<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>にあります。</p>
 
@@ -134,19 +134,20 @@
     <li>タスクトレイから開く。Windows では、デスクトップかスタートメニューの「Agent Cockpit」のショートカットで、専用のウィンドウが開きます(<a href="tray.html">タスクトレイ</a>)</li>
     <li>ブラウザーで <code>http://127.0.0.1:47821/</code> を開く。ポートを変えているときは、変えた値を使います(<a href="server.html#server-config">ポートと保存先を変える</a>)</li>
   </ul>
-  <p>セッションを開始したときにも、Claude Code に、ダッシュボードの URL が <code>Agent Cockpit: http://127.0.0.1:47821/</code> の形で伝わります。</p>
+  <p>セッションを開始したときにも、Claude Code または Codex に、ダッシュボードの URL が <code>Agent Cockpit: http://127.0.0.1:47821/</code> の形で伝わります。</p>
   <p>ダッシュボードは、あなたの PC の中だけで開けます。
   別の PC のブラウザーからは、開けません。</p>
 
   <h2 id="start-first">最初に開いたとき</h2>
   <p>導入した直後や、セッションを開いていないときは、一覧にセッションがありません。
-  Claude Code でセッションを開始すると、一覧に出ます。</p>
+  Claude Code または Codex で、フックを導入したセッションを開始すると、一覧に出ます。</p>
   <figure class="guide-map" id="start-empty-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1636"><div class="gm-segment" style="flex-grow:1636;aspect-ratio:1636/170"><div class="gm-clip"><img src="img/list-empty/empty.png" width="818" height="85" alt="セッションが無いときのダッシュボード。表示モードの切り替えの下に、表示するセッションがありません、Claude Code でセッションを開始すると、ここに表示されますと出ている" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#start-empty-map-1" style="left:10.391%;top:0%" aria-label="1. 表示モードの切り替え">1</a><span class="gm-frame" data-gm="2" aria-hidden="true" style="left:0%;top:58.824%;width:100%;height:41.176%"></span><a class="gm-badge gm-place-left" data-gm="2" href="#start-empty-map-2" style="left:0%;top:79.412%" aria-label="2. 案内の文">2</a></div></div></div><ol class="gm-list"><li id="start-empty-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>表示モードの切り替え</b>：セッションが無くても出ます(<a href="screen.html#screen-modes">プロダクト別と種類別の違い</a>)。</div></li><li id="start-empty-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>案内の文</b>：セッションが 1 つも無いときの表示です。</div></li></ol></figure>
   <p>同じ場所に、<span class="ui">終わったものを隠しています。下の「表示する」から表示できます。</span> や、<span class="ui">更新の無いセッションを隠しています。下の「表示する」から表示できます。</span> と出ることもあります。
   このときは、セッションはあるのに、隠しています(<a href="settings.html#settings-hide-finished">終わったものを非表示にする</a>、<a href="work.html#work-idle">更新の無いセッションを隠す</a>)。</p>
   <p>導入の後に開いたセッションから、一覧に出ます。
-  導入の前から開いていたセッションは、フックの登録を読み込んでいないので、状態が分かりません(<a href="work.html#work-unknown">状態不明のセッション</a>)。新しく開き直してください。
+  Claude Code で導入の前から開いていたセッションは、フックの登録を読み込んでいないので、状態が分かりません(<a href="work.html#work-unknown">状態不明のセッション</a>)。新しく開き直してください。
   Claude Code の記録ファイルの更新時刻が読める状態不明のセッションは、その時刻から設定の時間を過ぎると、更新の無いセッションとして隠れます。初期値は 10 分です(<a href="work.html#work-idle">更新の無いセッションを隠す</a>)。
+  Codex は、フックを信頼するまで一覧に出ません。導入前から開いていたセッションも、次の出来事が届くまで行が出ません。<code>/hooks</code> で信頼し、新しく開き直してください。
   それでも出ないときは、<a href="trouble.html#trouble-sessions">セッションが一覧に出ない</a>を見てください。</p>
 
   <h2 id="start-run">起動と終了</h2>
@@ -167,9 +168,9 @@
   入れたり外したりした後は、画面を開き直さなくても、遅くとも 1 分ほどで表示が変わります。</p>
   <ul>
     <li><b>GitHub CLI(<code>gh</code>)</b>：セッションが作った PR を、スタックの形で、CI やレビューの状態と一緒に表示します。スタックの一番下の PR を、画面でマージできます。<code>gh</code> が使えないと、PR の状態を取得できず、登録した PR の欄に赤いエラーが出ます(<a href="pull-requests.html#pr-fetch-error">GitHub CLI が使えないとき</a>)</li>
-    <li><b>claude-codex-bridge</b>：サブエージェントを、Codex と Claude のどちらで動かすかを選べます。<span class="ui">サブエージェント</span> の経路の段と、サブエージェントの行の経路の札、Codex のモデルの表示が出ます(<a href="routing.html">経路の設定</a>、<a href="work.html#work-agent-route">経路の札</a>)</li>
+    <li><b>claude-codex-bridge</b>：Claude のセッションのサブエージェントを、Codex と Claude のどちらで動かすかを選べます。<span class="ui">サブエージェント</span> の経路の段と、サブエージェントの行の経路の札、Codex のモデルの表示が出ます(<a href="routing.html">経路の設定</a>、<a href="work.html#work-agent-route">経路の札</a>)</li>
     <li><b>ai-cross-review</b>：PR のカードにクロスレビューの往復と結論が出て、レビュー収束後マージの予約と、レビュー不要の記録ができます。<span class="ui">クロスレビュー</span> の経路の段も出ます(<a href="pull-requests.html#pr-cross-review">クロスレビューの行</a>、<a href="routing.html">経路の設定</a>)</li>
-    <li><b>Codex</b>：Codex(CLI とデスクトップ)のセッションも、Claude のセッションと同じように一覧に出ます。判断事項への回答、離席中の推奨の適用、PR の登録も同じように動きます。Claude 起点の情報は橙、Codex 起点の情報は青紫の色帯で見分けます(<a href="screen.html#screen-product-card">プロダクトのカード</a>)</li>
+    <li><b>Codex</b>：Codex(CLI とデスクトップ)のセッションも、Claude のセッションと同じように一覧に出ます。判断事項への回答と離席中の推奨の適用に対応します。シェルで作った PR は自動登録されますが、GitHub MCP で作った PR は明示して登録します(<a href="pull-requests.html#pr-register">PR の登録</a>)。Claude 起点の情報は橙、Codex 起点の情報は青紫の色帯で見分けます(<a href="screen.html#screen-product-card">プロダクトのカード</a>)</li>
   </ul>
   <p>連携ツールそのものの導入は、それぞれのツールのドキュメントに従ってください。
   Agent Cockpit 側に必要な設定は、導入手順書に、ツールごとにまとめています。</p>
@@ -191,6 +192,10 @@
     <li>MCP サーバー(<code>agent-cockpit</code>)：メインセッションが、タスクと完了条件、判断事項、PR を、ダッシュボードに登録するためのツールを持ちます</li>
     <li>スキル(<code>agent-cockpit</code>)：メインセッションに、これらのツールをいつ、どう使うかを教えます。<a href="https://github.com/ktysne/agent-cockpit/blob/main/skills/agent-cockpit/SKILL.md">スキルの本文</a>に書いてあります</li>
   </ul>
+  <p>Codex は、ホーム(<code>CODEX_HOME</code>、無ければ <code>~/.codex</code>)の <code>hooks.json</code> に、引数 <code>codex</code> 付きでフックを登録します。
+  MCP サーバーは <code>config.toml</code> の <code>mcp_servers.agent-cockpit</code> に登録し、各ツールに <code>approval_mode = "approve"</code> を設定します。
+  スキルは不要で、進め方はセッション開始時のフックが伝えます。
+  <code>/hooks</code> でフックを信頼する必要があり、フックを変更したときは信頼し直します(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md#パターン-e--codex">Codex の導入手順</a>)。</p>
   <p>新しく登録したものは、新しく開いたセッションから効きます。
   開いたままのセッションには、反映されません。</p>
   <details class="more">

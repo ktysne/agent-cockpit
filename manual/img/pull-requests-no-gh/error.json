@@ -2,7 +2,7 @@
   "name": "error",
   "target": ".pr-repo-group",
   "width": 1576,
-  "height": 204,
+  "height": 284,
   "parts": [
     {
       "key": "error.repo",
@@ -30,7 +30,17 @@
         "x": 26,
         "y": 84,
         "width": 1524,
-        "height": 97
+        "height": 177
+      },
+      "visible": true
+    },
+    {
+      "key": "error.unregister",
+      "bounds": {
+        "x": 56,
+        "y": 171,
+        "width": 312,
+        "height": 64
       },
       "visible": true
     }

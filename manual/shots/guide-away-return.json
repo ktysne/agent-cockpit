@@ -8,9 +8,22 @@
     "codexAgent": true,
     "crossReview": true
   },
-  "title": "戻ってから既読にする前と後の画面",
+  "title": "戻ったら離席中のまま既読にする前と後の画面",
   "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
+    {
+      "do": "click",
+      "selector": "#away-toggle"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(1) .news"
+    },
     {
       "do": "screenshot",
       "name": "unseen",

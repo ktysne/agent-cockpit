@@ -150,7 +150,9 @@
   </div>
 
   <h2 id="guide-stack-read">スタックの表示を読む</h2>
-  <p>PR は、プロダクトのカードの <span class="ui">プルリクエスト</span> の欄に、リポジトリごとの枠で並びます。
+  <p>PR は、<span class="ui">プルリクエスト</span> の欄に、リポジトリごとの枠で並びます。
+  既定の種類別では枠の見出しにプロダクト名の札が付き、プロダクト別ではカード内の設定順の位置に出ます。
+  このページの図はプロダクト別です。
   この例では、プロダクト parcel-api の PR #41、#42、#43 が、3 段のスタックになっています。</p>
   <ol class="steps">
     <li><div class="step-body"><b>リポジトリの枠を見つける</b>枠の見出しに、リポジトリ名と、<span class="ui">マージできる PR</span> の件数が出ます。
@@ -172,7 +174,7 @@
       <span class="ui">CI 実行中</span> のため、<span class="ui">待ち:</span> の行に満たしていない条件が出ます。
       クロスレビューの結論待ちは、クロスレビューの行の黄の札が示すので、<span class="ui">待ち:</span> の行には重ねて出しません。
       この PR も、確認欄から手でマージできます。
-      その場合、確認欄の先頭に、満たしていない条件の警告が出ます(<a href="pull-requests.html#pr-reason">マージできない理由と待ち</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-confirm-pending" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1476" style="max-width:738px;min-width:min(600px, 738px)"><div class="gm-segment" style="flex-grow:1000;aspect-ratio:1000/295"><div class="gm-clip"><img src="img/pull-requests-confirm/pending.png" width="788" height="995" alt="PR #118 の行。右の列にマージ操作は可能の文字とマージするのボタンがある。CI 実行中と承認は任意の札、クロスレビューの 2 往復目の結論待ちの行、待ち: CI 実行中の行が並ぶ" loading="lazy" decoding="async" style="width:157.6%;margin-left:0%;margin-top:-12%"></div></div><div class="gm-segment" style="flex-grow:476;aspect-ratio:476/295"><div class="gm-clip"><img src="img/pull-requests-confirm/pending.png" width="788" height="995" alt="" loading="lazy" decoding="async" style="width:331.092%;margin-left:-231.092%;margin-top:-25.21%"></div></div></div></div></figure></li>
+      その場合、確認欄の先頭に、満たしていない条件の警告が出ます(<a href="pull-requests.html#pr-merge">マージする</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-confirm-pending" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1476" style="max-width:738px;min-width:min(600px, 738px)"><div class="gm-segment" style="flex-grow:1000;aspect-ratio:1000/295"><div class="gm-clip"><img src="img/pull-requests-confirm/pending.png" width="788" height="994" alt="PR #118 の行。右の列にマージ操作は可能の文字とマージするのボタンがある。CI 実行中と承認は任意の札、クロスレビューの 2 往復目の結論待ちの行、待ち: CI 実行中の行が並ぶ" loading="lazy" decoding="async" style="width:157.6%;margin-left:0%;margin-top:-12%"></div></div><div class="gm-segment" style="flex-grow:476;aspect-ratio:476/295"><div class="gm-clip"><img src="img/pull-requests-confirm/pending.png" width="788" height="994" alt="" loading="lazy" decoding="async" style="width:331.092%;margin-left:-231.092%;margin-top:-25.21%"></div></div></div></div></figure></li>
   </ol>
 
   <h2 id="guide-stack-merge-run">確認欄で方式を選んでマージする</h2>
@@ -201,7 +203,8 @@
     <li><b>行のチェックを入れる</b>PR #118 の <span class="ui">収束後マージ</span> を入れます。
       画面で見た head、選ばれているマージ方式、ブランチ削除の設定を使います。
       チェックを入れた時点でサーバーが条件を取り直し、条件がすでにそろっていれば収束記録の SHA を照合してマージします。
-      その場合は結果の行と「PR #118 をマージしました。」が出ます。条件が残っていれば予約として保存され、「PR #118 のレビュー収束後マージを予約しました。」と知らせます。
+      その場合、結果の行は警告があるときだけ出ます。「PR #118 をマージしました。」は読み上げ用の知らせで、画面には見えません。
+      条件が残っていれば予約として保存され、「PR #118 のレビュー収束後マージを予約しました。」と知らせます。
       クロスレビューが止まっている(<code>halted</code>)など、予約できない状態なら、その場で取り消して理由を知らせます。
       予約は開発者が PR ごとに入れたときだけ作られます(<a href="pull-requests.html#pr-reserve">レビュー収束後マージ</a>)。</li>
     <li><div class="step-body"><b>予約中の表示を確かめる</b>予約中も <span class="ui">マージする</span> とチェックが表示されます。チェックは入った状態です。
@@ -214,7 +217,8 @@
 
   <h2 id="guide-stack-result">結果を確かめて次の PR へ進む</h2>
   <p>マージ後、結果に警告がある場合だけ PR の枠に結果の行が出ます。
-  直上の PR は、base が既定ブランチに付け替わり、新しい一番下になります。</p>
+  ブランチを削除する場合だけ、直上の PR の base をマージ先のブランチへ付け替え、新しい一番下にします。
+  ブランチを残す場合は、base を付け替えません。</p>
   <ol class="steps">
     <li><div class="step-body"><b>警告がある結果の行を確かめる</b>ブランチの削除に失敗した場合、枠の下端に警告つきの結果が出ます。
       設定の <span class="ui">終わったものを非表示にする</span> がオフなら、<span class="ui">マージ済み (24 時間)</span> の一覧にも #41 が時刻と方式つきで加わります。

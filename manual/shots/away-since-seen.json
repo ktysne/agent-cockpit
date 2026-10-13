@@ -10,7 +10,20 @@
   },
   "title": "前回見てから",
   "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
   "steps": [
+    {
+      "do": "click",
+      "selector": "#away-toggle"
+    },
+    {
+      "do": "wait",
+      "selector": ".news"
+    },
     {
       "do": "screenshot",
       "name": "box",
