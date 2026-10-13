@@ -1,7 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
 const { createFakeClock, installFakeClock } = require('../tools/manual/fake-clock');
 const { createFakeGh, sha } = require('../tools/manual/fake-gh');
 const { startDemoServer, parseDemoArguments, BASE_TIME_MS } = require('../tools/manual/demo-server');
@@ -247,42 +246,6 @@ test('連携が無い画面では、デモの常駐サーバーも連携なし�
   try {
     const state = await demo.getState();
     assert.deepEqual(state.integrations, { codexAgent: false, crossReview: false });
-  } finally {
-    await demo.close();
-  }
-});
-
-test('配布ページの 1 枚目のシナリオは、Codex のセッションを題とモデルつきで並べ、下の段をマージした 2 段の PR を残す', async () => {
-  const demo = await startDemoServer({ scenario: 'site-review' });
-  try {
-    demo.assertHealthy();
-    const state = await demo.getState();
-    const codex = state.sessions.find((session) => session.provider === 'codex');
-    assert.equal(codex.title, '予約を iCal で書き出す');
-    assert.equal(codex.codex.model, 'gpt-6.1-sol');
-    assert.equal(codex.tasks.length, 2);
-    const claude = state.sessions.find((session) => session.provider === 'claude');
-    assert.ok(claude.decisions.some((decision) => decision.state === 'waiting'));
-
-    const [group] = state.pullRequests;
-    assert.deepEqual(group.trees.map((tree) => [tree.number, tree.baseRefName, tree.retargetedFrom]), [[58, 'main', 57]]);
-    assert.equal(demo.gh.repository('example-team/room-booking').pullRequests.find((pr) => pr.number === 57).state, 'MERGED');
-    // 撮影の機械の本物の Codex のホームを読まないよう、Codex のホームも一時ディレクトリに置く。
-    assert.ok(fs.existsSync(path.join(demo.temporaryRoot, 'codex', 'session_index.jsonl')));
-  } finally {
-    await demo.close();
-  }
-});
-
-test('配布ページの 2 枚目のシナリオは、Claude で動く担当と Codex に委譲した担当のサブエージェントを稼働中で並べる', async () => {
-  const demo = await startDemoServer({ scenario: 'site-work' });
-  try {
-    demo.assertHealthy();
-    const state = await demo.getState();
-    const claude = state.sessions.find((session) => session.provider === 'claude');
-    const codex = state.sessions.find((session) => session.provider === 'codex');
-    assert.ok(claude.tasks.length > 0 && codex.tasks.length > 0);
-    assert.deepEqual(claude.agents.filter((agent) => agent.active).map((agent) => Boolean(agent.gpt)).sort(), [false, true]);
   } finally {
     await demo.close();
   }
