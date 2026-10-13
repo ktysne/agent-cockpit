@@ -4,7 +4,7 @@
 
 ## 進め方の決まり
 
-- `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/`、Codex の `~/.codex/hooks.json` と `~/.codex/config.toml` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。
+- `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/`、Codex の `~/.codex/hooks.json`、`~/.codex/config.toml`、`~/.codex/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。
 - 既存の設定は消さずに統合します。同じイベントの配列がすでにあるときは、その配列へ要素を足します。
 - 連携ツール(GitHub CLI、claude-codex-bridge、ai-cross-review)そのものの導入手順は、この文書では扱いません。導入されていなければ、各ツールのドキュメントへ案内してください。この文書は、連携ツールが導入済みのときに agent-cockpit 側で必要な設定だけを書いています。
 - 手順の中の `D:/path/to/agent-cockpit` は、このリポジトリを置いた絶対パスに置き換えます。worktree ではなく、残しておく本体のチェックアウトを指してください。worktree を消すと、フックの参照先が無くなります。
@@ -353,7 +353,7 @@ Claude の登録との違いと、timeout の値の理由は次のとおりで�
 
 - Codex のフックには `async` を付けません。非同期のフックは、短い実行で 1 件も届かないことがあるためです。
 - `SessionStart` の `event.js` は、Claude と同じく常駐サーバーが動いていなければ起動し、ダッシュボードの URL を `additionalContext` でセッションへ渡します。Codex 本体のプロセス ID を調べるので、ほかのフックより時間がかかることがあります。timeout は付けずに Codex の既定に任せます。
-- `SessionStart` と `UserPromptSubmit` の `away.js` は、タスクの登録を促す文と、離席中の指示を `additionalContext` で渡します。agent-cockpit のスキルは Claude 向けの内容なので、Codex には置きません。
+- `SessionStart` と `UserPromptSubmit` の `away.js` は、タスクの登録を促す文と、離席中の指示を `additionalContext` で渡します。判断事項の記録やレビュー不要の記録の使い方は、3 で置くスキルが伝えます。
 - `PreToolUse` の `away.js` は、Codex の質問ツール(`request_user_input_async` と `request_user_input`)だけを対象に、離席中にダッシュボードの回答を待ちます。timeout は Claude と同じ 1830 秒です。
 - Codex には `PostToolBatch` が無いので、`PostToolUse` の `answer.js`(timeout 2 秒)で、作業中のセッションへ回答を差し込みます。
 - `Stop` の `answer.js` は、ターンの終わりに未配信の回答があれば続行させます。離席中は回答や通知を最大 59 分待ってから続行させます。そのあいだ Codex の画面は作業中の表示になり、`Esc` で中断できます。timeout はこの待ちに余裕を足した 3600 秒です。
@@ -387,7 +387,30 @@ approval_mode = "approve"
 許可を求める設定のままだと、離席中にタスクや判断事項の記録が許可待ちで止まります。
 どのツールも、ダッシュボードにタスク、判断事項、PR を記録するだけで、ファイルやコマンドには触れません。
 
-### 3. フックを信頼する
+### 3. スキルを置く
+
+Codex のメインセッションが MCP ツールの使い方を読むスキルを、`~/.codex/skills/agent-cockpit/` にコピーします。
+Claude 向けの `skills/agent-cockpit/` ではなく、質問ツールの扱いを Codex に合わせた `skills/codex/agent-cockpit/` を使います。リポジトリのルートで実行します。
+
+PowerShell:
+
+```powershell
+$codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+$skillDirectory = Join-Path $codexHome 'skills\agent-cockpit'
+New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
+Copy-Item .\skills\codex\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
+```
+
+bash:
+
+```bash
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit"
+cp skills/codex/agent-cockpit/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit/SKILL.md"
+```
+
+リポジトリを更新してスキルが変わったときは、コピーし直します。
+
+### 4. フックを信頼する
 
 Codex は、開発者が信頼するまで新しいフックを動かしません。
 Codex CLI を起動して `/hooks` を開き、1 で足したフックを信頼してください。
@@ -397,7 +420,7 @@ Codex CLI を起動して `/hooks` を開き、1 で足したフックを信頼�
 ### 確認
 
 1. 新しい Codex のセッションを開き、ダッシュボードを再読み込みします。そのセッションの行が、左端に青紫の色帯を付けて出れば成功です。出ないときは、`/hooks` で信頼したかと、フックのパスと引数 `codex` を確かめます。
-2. `codex mcp list` を実行し、`agent-cockpit` の行の状態が `enabled` であることを確かめます。
+2. `codex mcp list` を実行し、`agent-cockpit` の行の状態が `enabled` であることを確かめます。あわせて、`~/.codex/skills/agent-cockpit/SKILL.md` があることを確かめます。
 3. Codex のセッションで「`cockpit_set_tasks` で確認用のタスクを 1 件登録して」と依頼します。そのセッションの欄にタスクが出れば、MCP サーバーとフックが同じセッションを指しています。「Codex のフックが届いていないため記録できなかった。」と返るときは、フックを信頼する前から開いていた会話か、フックが動いていません。1 を確かめてから、新しい会話で試します。
 4. 回答の経路を確かめるときは、画面上部の「離席中」をオンにしてから、Codex のセッションに「確認のために `request_user_input_async` で質問して」と依頼します。待つ形の `request_user_input` は Plan モードでだけ使えます。ダッシュボードに判断待ちとして出て、画面から回答するとセッションがその回答で進めば成功です。確かめ終わったら「離席中」をオフに戻します。
 5. パターン B も行っているときは、Codex のセッションで作った PR が、青紫の色帯を付けて PR の欄に出ることを確かめます。
@@ -408,7 +431,7 @@ Codex CLI を起動して `/hooks` を開き、1 で足したフックを信頼�
 
 1. 本体のチェックアウトで `git pull` を実行します。
 2. この文書のフックと MCP サーバーの登録を、登録済みの内容と見比べます。足りないイベントや、timeout の値の違いがあれば、パターン A の決まりどおり差分を示して確認を得てから直します。パターン E を行っているときは `~/.codex/hooks.json` と `~/.codex/config.toml` も見比べ、`hooks.json` を変えたら `/hooks` で信頼し直します。
-3. `skills/agent-cockpit/SKILL.md` が変わっていれば、パターン A の 4 と同じ手順でコピーし直します。
+3. `skills/agent-cockpit/SKILL.md` が変わっていれば、パターン A の 4 と同じ手順でコピーし直します。パターン E を行っているときは、`skills/codex/agent-cockpit/SKILL.md` もパターン E の 3 と同じ手順でコピーし直します。
 4. 常駐サーバーを再起動します。動いている常駐サーバーは起動したときのコードのままで、`git pull` では入れ替わりません。タスクトレイを使っているときは、メニューの「常駐サーバーを再起動」を選びます。使っていないときは、`AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `server.json` の `pid` のプロセスが、`src/server/server.js` を動かしている `node` であることを確かめてから終了します。次にセッションを開くと、フックが新しいコードで起動します。
 5. 新しいセッションを開き、パターン A の「確認」の 2〜4 を行います。パターン E を行っているときは、パターン E の「確認」の 1 と 2 も行います。
 
