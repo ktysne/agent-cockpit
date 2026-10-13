@@ -62,7 +62,7 @@ function createReadRoutes(ctx) {
         break;
       }
     }
-    jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), update: ctx.updateChecker?.snapshot() || null, routing: routing.snapshot(), integrations: { codexAgent, crossReview }, uiVersion });
+    jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), update: ctx.updateChecker?.snapshot() || null, appVersion: ctx.appVersion, routing: routing.snapshot(), integrations: { codexAgent, crossReview }, uiVersion });
   }
 
   function handleContext({ response, params }) {

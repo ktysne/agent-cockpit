@@ -2584,7 +2584,7 @@ function applyUpdateState(update) {
   }
   updatePrompt = prompt;
   if (updateNote.hidden) return;
-  document.getElementById('update-message').textContent = `新しい版 v${update.latest} があります(今は v${update.current})。`;
+  document.getElementById('update-message').textContent = `新しい版 v${update.latest} があります。`;
   document.getElementById('update-compare').href = update.compareUrl;
 }
 

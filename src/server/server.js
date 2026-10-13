@@ -270,6 +270,7 @@ function createRequestHandler(options) {
 
   const ctx = {
     updateChecker: options.updateChecker,
+    appVersion: options.appVersion,
     diagnostics: options.diagnostics,
     eventCounts: options.eventCounts,
     homeDir,
@@ -608,6 +609,7 @@ async function startServer(options = {}) {
   eventSummaryTimer.unref();
   const handler = createRequestHandler({
     updateChecker,
+    appVersion: options.appVersion === undefined ? version : options.appVersion,
     eventCounts,
     diagnostics,
     homeDir,
