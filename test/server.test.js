@@ -1645,8 +1645,9 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   const mode = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: validHeaders });
   assert.equal(mode.status, 200);
   assert.equal(jsonBody(mode).display.longWaitMinutes, 15);
-  assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 5);
-  assert.equal(jsonBody(mode).display.idleHideMinutes, 30);
+  assert.deepEqual(jsonBody(mode).display.sectionOrder, ['sinceSeen', 'judgment', 'prs', 'tasks', 'now']);
+  assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 3);
+  assert.equal(jsonBody(mode).display.idleHideMinutes, 10);
   assert.equal(jsonBody(mode).display.hideFinished, true);
   assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
   assert.equal(Object.hasOwn(jsonBody(mode).display, 'mergeAfterReviewDefault'), false);
@@ -1682,10 +1683,10 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     assert.equal(invalidMinutes.status, 400, `${key}: ${invalidValue}`);
   }
   const sectionOrder = await request(runtime.info.port, {
-    method: 'POST', path: endpoint, body: JSON.stringify({ sectionOrder: ['tasks', 'now'] }), headers: validHeaders,
+    method: 'POST', path: endpoint, body: JSON.stringify({ sectionOrder: ['tasks'] }), headers: validHeaders,
   });
   assert.equal(sectionOrder.status, 200);
-  assert.deepEqual(jsonBody(sectionOrder).display.sectionOrder, ['tasks', 'now', 'sinceSeen', 'judgment', 'prs']);
+  assert.deepEqual(jsonBody(sectionOrder).display.sectionOrder, ['tasks', 'sinceSeen', 'judgment', 'prs', 'now']);
   for (const idleHideMinutes of [5, 1440]) {
     const idleHideRange = await request(runtime.info.port, {
       method: 'POST', path: endpoint, body: JSON.stringify({ idleHideMinutes }), headers: validHeaders,
@@ -1722,7 +1723,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(removedPreference.status, 400);
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
-    sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
+    sectionOrder: ['tasks', 'sinceSeen', 'judgment', 'prs', 'now'],
     longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, mergeableCondition: 'cross-review',
   });
 });

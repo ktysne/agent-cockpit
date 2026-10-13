@@ -171,9 +171,10 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
 });
 
 test('古い表示設定は既定順を補い、保存済みの不明な種類や重複を正規化する', async (t) => {
-  const expectedDefault = ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'];
+  const expectedDefault = ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'];
   const cases = [
     ['並び順がない', undefined, expectedDefault],
+    ['並び順が一部だけある', ['tasks'], ['tasks', 'sinceSeen', 'judgment', 'prs', 'now']],
     ['不明な種類と重複がある', ['now', 'legacy', 'now', 'prs'], ['now', 'prs', 'sinceSeen', 'judgment', 'tasks']],
   ];
 
@@ -248,16 +249,16 @@ test('予約マージ結果の閉じた時刻を保存し、旧形式は未閉�
 
 test('保存時刻の欠落や範囲外の値は表示設定の既定値で補う', async (t) => {
   const cases = [
-    ['値がない', {}, 15, 5, 30, true],
-    ['終わったものの設定が偽', { hideFinished: false }, 15, 5, 30, false],
-    ['終わったものの設定が真偽値でない', { hideFinished: 'false' }, 15, 5, 30, true],
-    ['長い待ち時間が範囲外', { longWaitMinutes: 121, awayAnswerWaitMinutes: 12 }, 15, 12, 30, true],
-    ['回答待ち時間が整数でない', { longWaitMinutes: 30, awayAnswerWaitMinutes: 2.5 }, 30, 5, 30, true],
-    ['更新間隔が最小値', { idleHideMinutes: 5 }, 15, 5, 5, true],
-    ['更新間隔が最大値', { idleHideMinutes: 1440 }, 15, 5, 1440, true],
-    ['更新間隔が下限未満', { idleHideMinutes: 4 }, 15, 5, 30, true],
-    ['更新間隔が上限超過', { idleHideMinutes: 1441 }, 15, 5, 30, true],
-    ['更新間隔が整数でない', { idleHideMinutes: 30.5 }, 15, 5, 30, true],
+    ['値がない', {}, 15, 3, 10, true],
+    ['終わったものの設定が偽', { hideFinished: false }, 15, 3, 10, false],
+    ['終わったものの設定が真偽値でない', { hideFinished: 'false' }, 15, 3, 10, true],
+    ['長い待ち時間が範囲外', { longWaitMinutes: 121, awayAnswerWaitMinutes: 12 }, 15, 12, 10, true],
+    ['回答待ち時間が整数でない', { longWaitMinutes: 30, awayAnswerWaitMinutes: 2.5 }, 30, 3, 10, true],
+    ['更新間隔が最小値', { idleHideMinutes: 5 }, 15, 3, 5, true],
+    ['更新間隔が最大値', { idleHideMinutes: 1440 }, 15, 3, 1440, true],
+    ['更新間隔が下限未満', { idleHideMinutes: 4 }, 15, 3, 10, true],
+    ['更新間隔が上限超過', { idleHideMinutes: 1441 }, 15, 3, 10, true],
+    ['更新間隔が整数でない', { idleHideMinutes: 30.5 }, 15, 3, 10, true],
   ];
 
   for (const [name, settings, expectedLongWait, expectedAwayWait, expectedIdleHide, expectedHideFinished] of cases) {

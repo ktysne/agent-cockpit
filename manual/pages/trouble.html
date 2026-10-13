@@ -42,7 +42,7 @@
     <li>フックを正しく登録できているかを確かめます。<code>~/.claude/settings.json</code> の JSON が壊れていないか、フックのパスが本体のチェックアウトを指しているかを見ます(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>)</li>
     <li>常駐サーバーが動いているかを確かめます(<a href="#trouble-connect">画面がつながらない</a>)</li>
   </ul>
-  <p>Claude Code の記録ファイルの更新時刻を読み取れる状態不明のセッションは、その時刻から設定の時間を過ぎると、更新の無いセッションとして隠れます。初期値は 30 分です(<a href="work.html#work-idle">更新の無いセッションを隠す</a>)。</p>
+  <p>Claude Code の記録ファイルの更新時刻を読み取れる状態不明のセッションは、その時刻から設定の時間を過ぎると、更新の無いセッションとして隠れます。初期値は 10 分です(<a href="work.html#work-idle">更新の無いセッションを隠す</a>)。</p>
   <p>セッションの状態は、フックが送る出来事から組み立てます。
   <code>~/.claude/sessions/*.json</code> は、Claude Code が公開している仕様ではありません。
   読めなくても、フックから組み立てた表示は動きます。</p>

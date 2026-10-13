@@ -27,14 +27,14 @@
       "do": "screenshot",
       "name": "judgment",
       "target": [
-        "#root > section.kind-section:nth-child(2) > .head",
-        "#root > section.kind-section:nth-child(2) .decision-card .decision-head"
+        "#root > section.kind-section:nth-child(1) > .head",
+        "#root > section.kind-section:nth-child(1) .decision-card .decision-head"
       ],
       "parts": {
-        "kind.judgment-head": "#root > section.kind-section:nth-child(2) > .head h2",
-        "kind.card-product": "#root > section.kind-section:nth-child(2) .decision-card .decision-head .prod-tag",
-        "kind.card-state": "#root > section.kind-section:nth-child(2) .decision-card .decision-head .badge.wait",
-        "kind.card-time": "#root > section.kind-section:nth-child(2) .decision-card .decision-head time"
+        "kind.judgment-head": "#root > section.kind-section:nth-child(1) > .head h2",
+        "kind.card-product": "#root > section.kind-section:nth-child(1) .decision-card .decision-head .prod-tag",
+        "kind.card-state": "#root > section.kind-section:nth-child(1) .decision-card .decision-head .badge.wait",
+        "kind.card-time": "#root > section.kind-section:nth-child(1) .decision-card .decision-head time"
       }
     },
     {

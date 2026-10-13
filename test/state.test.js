@@ -410,8 +410,12 @@ test('既知の cwd は稼働中セッションと PR 登録から文字列だ�
   assert.deepEqual(state.knownCwds(), ['C:\\worktree\\active', 'D:\\worktree\\registered']);
 });
 
-test('更新の無いセッションを隠す時間は既定で30分', () => {
-  assert.equal(new DashboardState().getDisplayPreferences().idleHideMinutes, 30);
+test('表示設定の既定値は種類別、新しい欄順、3分、10分を使う', () => {
+  const display = new DashboardState().getDisplayPreferences();
+  assert.equal(display.mode, 'kind');
+  assert.deepEqual(display.sectionOrder, ['sinceSeen', 'judgment', 'prs', 'tasks', 'now']);
+  assert.equal(display.awayAnswerWaitMinutes, 3);
+  assert.equal(display.idleHideMinutes, 10);
 });
 
 test('予約取消の知らせは記録時刻から1分後に PR の状態へ含めない', () => {

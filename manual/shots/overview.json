@@ -12,6 +12,14 @@
   },
   "steps": [
     {
+      "do": "click",
+      "selector": "[data-action=\"mode\"][data-mode=\"product\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "[data-action=\"mode\"][data-mode=\"product\"][aria-pressed=\"true\"]"
+    },
+    {
       "do": "screenshot",
       "name": "product",
       "viewport": true,
