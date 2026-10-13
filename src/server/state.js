@@ -2637,7 +2637,7 @@ class DashboardState {
   withdrawFinishedDesktopAsks(event) {
     if (event.provider === 'codex' || event.agent_id) return false;
     const isNextTool = event.hook_event_name === 'PreToolUse' && event.tool_use_id;
-    if (!isNextTool && !['UserPromptSubmit', 'Stop'].includes(event.hook_event_name)) return false;
+    if (!isNextTool && !['UserPromptSubmit', 'Stop', 'Interrupt'].includes(event.hook_event_name)) return false;
     const sessionId = event.session_id;
     const bindings = this.askDecisionBindings.get(sessionId) || new Map();
     const entries = this.entries.get(sessionId) || [];

@@ -34,6 +34,7 @@ const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
 const MAX_BODY_BYTES = 64 * 1024;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
+const INTERRUPT_TAIL_WAIT_MS = 2 * 60_000;
 const MANUAL_CONTENT_TYPES = Object.freeze({
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -599,8 +600,11 @@ async function startServer(options = {}) {
         const result = await interruptReader(claudeHome, candidate.cwd, sessionId);
         // 読めなかったときは同じ状態でもう一度読む。
         if (closing || !result) return;
-        interruptChecked.set(sessionId, candidate.statusUpdatedAt);
         const recordedAt = Date.parse(result.recordedAt);
+        // 中断の行は idle より遅れて書かれることがあるので、末尾が idle より古い間は猶予の間だけ読み直す。
+        const statusAt = Date.parse(candidate.statusUpdatedAt);
+        const awaitingTail = !result.interrupted && !(recordedAt >= statusAt) && Date.now() - statusAt < INTERRUPT_TAIL_WAIT_MS;
+        if (!awaitingTail) interruptChecked.set(sessionId, candidate.statusUpdatedAt);
         if (!result.interrupted || !Number.isFinite(recordedAt) || recordedAt < candidate.lastPromptAt) return;
         if (state.interruptCandidate(sessionId)?.statusUpdatedAt !== candidate.statusUpdatedAt) return;
         state.recordInterruption(sessionId, recordedAt);

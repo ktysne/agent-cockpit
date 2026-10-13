@@ -204,7 +204,7 @@ test('中断を誤検出しない: 最後の入力より前の中断の行、bus
   assert.deepEqual(c.reads.sort(), ['before-prompt', 'plain-end']);
 });
 
-test('transcript に中断の行が遅れて書かれても、idle の時刻が変わった次の更新で中断にする', async (t) => {
+test('transcript に中断の行が idle より遅れて書かれても、idle の時刻が同じまま次の更新で中断にする', async (t) => {
   const c = await interruptionCockpit(t);
   await c.hook('late', 'UserPromptSubmit', 0);
   await c.transcript('late', [c.promptRow(0)]);
@@ -212,15 +212,24 @@ test('transcript に中断の行が遅れて書かれても、idle の時刻が�
   await c.runtime.refreshSessionFiles();
   assert.equal(c.status('late').status, '作業中');
 
-  await c.transcript('late', [c.promptRow(0), c.interruptedRow(2500)]);
-  await c.runtime.refreshSessionFiles();
-  assert.equal(c.status('late').status, '作業中');
-  assert.deepEqual(c.reads, ['late']);
-
-  await c.sessionFile('late', 'idle', 3500);
+  await c.transcript('late', [c.promptRow(0), c.interruptedRow(3200)]);
   await c.runtime.refreshSessionFiles();
   assert.equal(c.status('late').status, '中断');
   assert.deepEqual(c.reads, ['late', 'late']);
+});
+
+test('transcript の末尾が idle より新しいか、idle から猶予を過ぎたら、同じ idle の時刻では読み直さない', async (t) => {
+  const c = await interruptionCockpit(t);
+  await c.hook('answered', 'UserPromptSubmit', 0);
+  await c.transcript('answered', [c.promptRow(0), c.answerRow(4000)]);
+  await c.sessionFile('answered', 'idle', 3000);
+  await c.hook('stale', 'UserPromptSubmit', -200_000);
+  await c.transcript('stale', [c.promptRow(-200_000)]);
+  await c.sessionFile('stale', 'idle', -100_000);
+  await c.runtime.refreshSessionFiles();
+  await c.runtime.refreshSessionFiles();
+  assert.deepEqual(c.reads.sort(), ['answered', 'stale']);
+  for (const id of ['answered', 'stale']) assert.equal(c.status(id).status, '作業中', id);
 });
 
 test('中断中のセッションも、稼働中のサブエージェントの完了通知を transcript から取り込む', async (t) => {
