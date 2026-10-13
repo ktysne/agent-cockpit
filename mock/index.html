@@ -591,6 +591,13 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   </div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
+  <div class="filter-note" id="update-note" role="status" aria-live="polite" hidden>
+    <span id="update-message"></span>
+    <button type="button" class="link-btn" id="update-copy">更新の依頼文をコピー</button>
+    <a id="update-compare" target="_blank" rel="noopener noreferrer">変更を見る</a>
+    <span id="update-copy-status"></span>
+    <textarea id="update-prompt" aria-label="更新の依頼文" readonly hidden></textarea>
+  </div>
   <div id="root"></div>
   <div class="filter-note" id="filter-note" hidden></div>
   <div class="excluded-note" id="excluded-note" hidden></div>
@@ -600,6 +607,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 
 <script>
 const DATA = {
+  update: null,
   products: [
     {
       id: 'rec-studio', name: 'rec-studio', branch: 'feat/session-score-import', sessionTitle: 'Session Score の読み込み', status: 'busy',
@@ -2564,6 +2572,41 @@ function sharedBranch(p) {
   return branches.size === 1 ? [...branches][0] : '';
 }
 
+const updateNote = document.getElementById('update-note');
+let updatePrompt = '';
+
+function applyUpdateState(update) {
+  updateNote.hidden = update?.available !== true;
+  const prompt = update?.available ? update.prompt : '';
+  if (updatePrompt !== prompt) {
+    document.getElementById('update-copy-status').textContent = '';
+    document.getElementById('update-prompt').hidden = true;
+  }
+  updatePrompt = prompt;
+  if (updateNote.hidden) return;
+  document.getElementById('update-message').textContent = `新しい版 v${update.latest} があります(今は v${update.current})。`;
+  document.getElementById('update-compare').href = update.compareUrl;
+}
+
+async function copyUpdatePrompt() {
+  const prompt = updatePrompt;
+  const status = document.getElementById('update-copy-status');
+  try {
+    await navigator.clipboard.writeText(prompt);
+    status.textContent = '依頼文をコピーしました。AI に貼り付けて依頼してください。';
+    document.getElementById('update-prompt').hidden = true;
+  } catch {
+    const field = document.getElementById('update-prompt');
+    field.value = prompt;
+    field.hidden = false;
+    field.focus();
+    field.select();
+    status.textContent = '依頼文を選択しました。コピーして AI に貼り付けてください。';
+  }
+}
+
+document.getElementById('update-copy').addEventListener('click', copyUpdatePrompt);
+
 function renderConnectionNote() {
   const note = document.getElementById('connection-note');
   note.hidden = !DATA.connection.lost;
@@ -2752,6 +2795,7 @@ function render() {
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
   renderConnectionNote();
+  applyUpdateState(DATA.update);
   renderReloadNote();
   renderRouting();
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode(showOriginBands) : renderKindMode(showOriginBands);

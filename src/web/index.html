@@ -538,6 +538,13 @@ h3.sub .count { font-weight: normal; }
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
+  <div class="filter-note" id="update-note" role="status" aria-live="polite" hidden>
+    <span id="update-message"></span>
+    <button type="button" class="link-btn" id="update-copy">更新の依頼文をコピー</button>
+    <a id="update-compare" target="_blank" rel="noopener noreferrer">変更を見る</a>
+    <span id="update-copy-status"></span>
+    <textarea id="update-prompt" aria-label="更新の依頼文" readonly hidden></textarea>
+  </div>
   <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
   <div class="filter-note" id="filter-note" hidden></div>
   <div class="excluded-note" id="excluded-note" hidden></div>
@@ -655,6 +662,8 @@ const refreshButton = document.getElementById('refresh-button');
 const awayToggle = document.getElementById('away-toggle');
 const connectionNote = document.getElementById('connection-note');
 const reloadNote = document.getElementById('reload-note');
+const updateNote = document.getElementById('update-note');
+let updatePrompt = '';
 const header = document.querySelector('header.top');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsClose = document.getElementById('settings-close');
@@ -4968,6 +4977,38 @@ function renderReloadNote(pending) {
   reloadNote.innerHTML = html;
 }
 
+function applyUpdateState(update) {
+  updateNote.hidden = update?.available !== true;
+  const prompt = update?.available ? update.prompt : '';
+  if (updatePrompt !== prompt) {
+    document.getElementById('update-copy-status').textContent = '';
+    document.getElementById('update-prompt').hidden = true;
+  }
+  updatePrompt = prompt;
+  if (updateNote.hidden) return;
+  document.getElementById('update-message').textContent = `新しい版 v${update.latest} があります(今は v${update.current})。`;
+  document.getElementById('update-compare').href = update.compareUrl;
+}
+
+async function copyUpdatePrompt() {
+  const prompt = updatePrompt;
+  const status = document.getElementById('update-copy-status');
+  try {
+    await navigator.clipboard.writeText(prompt);
+    status.textContent = '依頼文をコピーしました。AI に貼り付けて依頼してください。';
+    document.getElementById('update-prompt').hidden = true;
+  } catch {
+    const field = document.getElementById('update-prompt');
+    field.value = prompt;
+    field.hidden = false;
+    field.focus();
+    field.select();
+    status.textContent = '依頼文を選択しました。コピーして AI に貼り付けてください。';
+  }
+}
+
+document.getElementById('update-copy').addEventListener('click', copyUpdatePrompt);
+
 function setRefreshConfirmPending(pending) {
   refreshConfirmPending = pending;
   renderReloadNote(uiUpdatePending);
@@ -5021,6 +5062,7 @@ async function refresh() {
     if (refreshConfirmPending && !hasUnsentAnswerDraft(state)) setRefreshConfirmPending(false);
     const awayBefore = header.dataset.away;
     applyAwayState(state.away);
+    applyUpdateState(state.update);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
     const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
     const pullRequestExpiry = pullRequestExpirySignature(state.pullRequests);
