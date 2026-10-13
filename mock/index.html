@@ -460,7 +460,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
     </div>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
-      <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」はカードの上、「プルリクエスト」は下に出る。</p>
+      <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」と「プルリクエスト」は、3 つのどれより前ならセッションの上、それ以外は下に出る。</p>
       <ol class="section-order-list" id="settings-section-order" aria-labelledby="settings-section-order-title" aria-describedby="settings-section-order-note"></ol>
       <button type="button" id="settings-section-order-reset">既定に戻す</button>
     </div>
@@ -950,6 +950,17 @@ document.getElementById('settings-section-order-reset').addEventListener('click'
   render();
 });
 const orderedSectionKeys = keys => normalizeSectionOrder(ui.sectionOrder).filter(key => keys.includes(key));
+function productCardSectionOrder() {
+  const sectionOrder = orderedSectionKeys(DEFAULT_SECTION_ORDER);
+  const sessionKeys = new Set(['judgment', 'tasks', 'now']);
+  const firstSessionIndex = sectionOrder.findIndex(key => sessionKeys.has(key));
+  const outsideKeys = sectionOrder.filter(key => !sessionKeys.has(key));
+  return [
+    ...outsideKeys.filter(key => sectionOrder.indexOf(key) < firstSessionIndex),
+    'sessions',
+    ...outsideKeys.filter(key => sectionOrder.indexOf(key) > firstSessionIndex),
+  ];
+}
 
 applyTheme(ui.theme);
 applyAway(ui.away);
@@ -2260,6 +2271,18 @@ function renderProductMode(showOriginBands = true) {
     const pend = pendingDecisions(p);
     const sessions = sessionsByActivity(p);
     const judgmentCounts = countJudgments(sessions);
+    const sectionOrder = productCardSectionOrder();
+    const sessionOrderIndex = sectionOrder.indexOf('sessions');
+    const prsBeforeSessions = sectionOrder.indexOf('prs') < sessionOrderIndex;
+    const content = sectionOrder.map(key => {
+      if (key === 'sinceSeen') return newsBox(p, false, showOriginBands);
+      if (key === 'sessions') return sessions.map(session => sessionBlock(p, session, showOriginBands)).join('');
+      if (!isShown('prs')) return '';
+      const pullRequests = `<h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false, showOriginBands)}`;
+      return prsBeforeSessions
+        ? `${pullRequests}<div class="product-pr-divider"></div>`
+        : `<div class="product-pr-divider"></div>${pullRequests}`;
+    }).join('');
     return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
       <div class="head">
         <h2 id="product-heading-${i}" tabindex="-1">${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
@@ -2270,9 +2293,7 @@ function renderProductMode(showOriginBands = true) {
         ${productCloseButton(p, `product-heading-${i}`) ? `<div class="product-remove">${productCloseButton(p, `product-heading-${i}`)}</div>` : ''}
       </div>
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
-        ${newsBox(p, false, showOriginBands)}
-        ${sessions.map(session => sessionBlock(p, session, showOriginBands)).join('')}
-        ${isShown('prs') ? `<div class="product-pr-divider"></div><h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false, showOriginBands)}` : ''}
+        ${content}
       </div></section>`;
   }).join('');
 }
