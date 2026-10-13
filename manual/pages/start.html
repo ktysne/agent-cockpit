@@ -66,16 +66,16 @@
   </details>
 
   <h2 id="start-hooks">セッションとのつながり</h2>
-  <p>Agent Cockpit は、Claude Code と Codex のフックと、MCP サーバーと、スキル(Claude Code だけ)でセッションとつながります。
+  <p>Agent Cockpit は、Claude Code と Codex のフックと、MCP サーバーと、スキルでセッションとつながります。
   導入の手順書の手順で登録します。</p>
   <ul>
     <li>フック：セッションの出来事(ツールの実行、サブエージェントの開始と終了、許可待ちなど)を常駐サーバーへ送ります。回答や離席中の指示を、セッションへ届けるのもフックです</li>
     <li>MCP サーバー(<code>agent-cockpit</code>)：メインセッションが、タスクと完了条件、判断事項、PR を、ダッシュボードに登録するためのツールを持ちます</li>
-    <li>スキル(<code>agent-cockpit</code>)：メインセッションに、これらのツールをいつ、どう使うかを教えます。<a href="https://github.com/ktysne/agent-cockpit/blob/main/skills/agent-cockpit/SKILL.md">スキルの本文</a>に書いてあります</li>
+    <li>スキル(<code>agent-cockpit</code>)：メインセッションに、これらのツールをいつ、どう使うかを教えます。<a href="https://github.com/ktysne/agent-cockpit/blob/main/skills/agent-cockpit/SKILL.md">スキルの本文</a>に書いてあります。Codex には、質問のツールの扱いを Codex に合わせた<a href="https://github.com/ktysne/agent-cockpit/blob/main/skills/codex/agent-cockpit/SKILL.md">別のスキル</a>を置きます</li>
   </ul>
   <p>Codex は、ホーム(<code>CODEX_HOME</code>、無ければ <code>~/.codex</code>)の <code>hooks.json</code> に、引数 <code>codex</code> 付きでフックを登録します。
   MCP サーバーは <code>config.toml</code> の <code>mcp_servers.agent-cockpit</code> に登録し、各ツールに <code>approval_mode = "approve"</code> を設定します。
-  スキルは不要で、進め方はセッション開始時のフックが伝えます。
+  スキルは、ホームの <code>skills/agent-cockpit/</code> に置きます。
   <code>/hooks</code> でフックを信頼する必要があり、フックを変更したときは信頼し直します(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md#パターン-e--codex">Codex の導入手順</a>)。</p>
   <p>新しく登録したものは、新しく開いたセッションから効きます。
   開いたままのセッションには、反映されません。</p>
