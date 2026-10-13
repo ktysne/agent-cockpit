@@ -122,6 +122,8 @@ button.chip[aria-pressed="false"] { background: transparent; border: 1px dashed 
 button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
 .filter-note[hidden] { display: none; }
+.error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
+.repository-unregister { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .link-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 4px 0; font-size: 12px; text-decoration: underline; }
 
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
@@ -690,6 +692,11 @@ for (const p of DATA.products) {
   for (const key of ['branch', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions', 'lastUpdatedMin']) delete p[key];
 }
 
+DATA.products.push({
+  id: 'unreachable-repository', name: '取得できないリポジトリ', sessions: [], news: [], prs: [],
+  repo: { name: 'example/missing-project', fetched: 'たった今', error: 'GitHub から PR を取得できません', unregisterableCount: 1 },
+});
+
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
@@ -710,6 +717,7 @@ ui.mergeableCondition = ['operation', 'ci', 'cross-review'].includes(ui.mergeabl
 ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.isArray(ui.reviewSkips) ? ui.reviewSkips : {};
 let hiddenSessionsUndo = null;
 const recordDeletionConfirmations = new Map();
+const repositoryUnregisterConfirmations = new Map();
 let showIdleSessions = false;
 const answerErrors = new Map();
 const pendingClosedTasks = new Map();
@@ -977,7 +985,7 @@ function orderedProducts() {
 // セッションを外すか終えて PR もマージを終えたプロダクトは、未読の変化を既読にした時点でカードを消す。
 // PR を非表示にしている間は、PR だけで残るカードの本文が空になるので、PR を理由に残さない。
 function hasProductContent(p) {
-  return visibleSessions(p).length > 0 || (isShown('prs') && (p.repo.loading || openPrs(p).length > 0 || hasPullRequestMergeResults(p)
+  return visibleSessions(p).length > 0 || (isShown('prs') && (p.repo.error || p.repo.loading || openPrs(p).length > 0 || hasPullRequestMergeResults(p)
     || p.prs.some(pr => isMerged(p, pr) && pr.headMismatch === true))) || (sinceSeenVisible() && p.news.length > 0 && !ui.seen.includes(p.id));
 }
 
@@ -2009,14 +2017,18 @@ function prBlock(p, withTag, showOriginBands = true) {
     const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
     return `<a class="badge mute${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''} href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`;
   }));
-  const empty = !roots.length
+  const empty = !roots.length && !p.repo.error
     ? p.repo.loading ? `<div class="empty">GitHub から取得しています</div>`
       : `<div class="empty">オープンの PR はありません</div>`
     : '';
   const results = (pullRequestMergeResults.get(p.repo.name) || [])
     .filter(result => result.productId === p.id && pullRequestMergeResultVisible(result))
     .map(result => `<div class="merge-result" role="status"><span>PR #${result.number}: ${pullRequestMergeResultLine(result)}</span><button type="button" class="link-btn" data-close-merge-result="${esc(result.id)}">閉じる</button></div>`).join('');
-  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${reservationNoticeRows(p)}${stacks || empty}${mergedLine}${closedLine}${results}</div></section>`;
+  const error = p.repo.error ? `<div class="error-box"><div>${esc(p.repo.error)}</div>${p.repo.unregisterableCount > 0
+    ? `<div class="repository-unregister">${repositoryUnregisterConfirmations.has(p.id)
+      ? `<span>状態を確認できない ${p.repo.unregisterableCount} 件の PR の記録を削除します。元に戻せません</span><button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="confirm">削除する</button><button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="cancel">やめる</button>`
+      : `<button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="open">このリポジトリの登録を外す</button>`}</div>` : ''}</div>` : '';
+  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${error}${reservationNoticeRows(p)}${stacks || empty}${mergedLine}${closedLine}${results}</div></section>`;
 }
 
 // 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
@@ -2372,6 +2384,20 @@ function render() {
 document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
+  if (t.dataset.unregisterRepository) {
+    const id = t.dataset.unregisterRepository;
+    if (t.dataset.unregisterAction === 'open') repositoryUnregisterConfirmations.set(id, true);
+    else {
+      repositoryUnregisterConfirmations.delete(id);
+      if (t.dataset.unregisterAction === 'confirm') {
+        const product = byId(id);
+        product.repo.error = null;
+        product.repo.unregisterableCount = 0;
+      }
+    }
+    render();
+    return;
+  }
   if (t.dataset.recordBand) {
     const band = t.dataset.recordBand;
     if (t.dataset.recordAction === 'open') {

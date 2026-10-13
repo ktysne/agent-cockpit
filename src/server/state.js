@@ -1897,6 +1897,30 @@ class DashboardState {
     return true;
   }
 
+  unregisterUnknownPullRequests(owner, repo) {
+    let deleted = 0;
+    const matches = (record) => record.owner.toLowerCase() === owner.toLowerCase()
+      && record.repo.toLowerCase() === repo.toLowerCase() && record.state === 'unknown';
+    for (const [sessionId, records] of this.pullRequests) {
+      for (const [key, record] of records) {
+        if (!matches(record)) continue;
+        records.delete(key);
+        deleted += 1;
+      }
+      if (!records.size) this.pullRequests.delete(sessionId);
+    }
+    for (const [key, record] of this.relatedPullRequests) {
+      if (!matches(record)) continue;
+      this.relatedPullRequests.delete(key);
+      deleted += 1;
+    }
+    if (deleted) {
+      this.touch();
+      this.requestStoreWrite();
+    }
+    return deleted;
+  }
+
   deleteClosedPullRequest(owner, repo, number) {
     const key = pullRequestRecordKey(owner, repo, number);
     let deleted = false;

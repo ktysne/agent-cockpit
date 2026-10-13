@@ -283,7 +283,7 @@ function createRequestHandler(options) {
   };
   const { handleHealth, handleState, handleContext, handleDevFields, handleIndex } = createReadRoutes(ctx);
   const { handleHookAnswers, handleEvents, handlePlan, handleSessionPullRequests } = createHookRoutes(ctx);
-  const { handleReviewSkip, handlePullRequestAction, handleMergeResultClose } = createPullRequestRoutes(ctx);
+  const { handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
   const {
     handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks,
     handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
@@ -312,6 +312,7 @@ function createRequestHandler(options) {
     { method: 'POST', path: '/api/hidden-sessions', auth: 'ui', body: 'json', handler: handleHiddenSessions },
     { method: 'POST', path: '/api/display', auth: 'ui', body: 'json', handler: handleDisplay },
     { method: 'POST', path: '/api/pull-requests/merge-result/close', auth: 'ui', body: 'json', handler: handleMergeResultClose },
+    { method: 'POST', path: '/api/pull-requests/repository/unregister', auth: 'ui', body: 'json', handler: handleRepositoryUnregister },
     { method: 'POST', path: '/api/seen', auth: 'ui', body: 'json', handler: handleSeen },
     { method: 'POST', path: '/api/closed-tasks', auth: 'ui', body: 'json', handler: handleClosedTasks },
     { method: 'POST', path: '/api/closed-agents', auth: 'ui', body: 'json', handler: handleClosedAgents },
