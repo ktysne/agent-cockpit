@@ -86,7 +86,7 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
   const context = vm.createContext({
     fetchUi: async () => ({ ok: true, json: async () => state }), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false,
+    applyAwayState() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, liveStatus: {}, render: () => assert.fail('状態全体は描き直さない'),
   });

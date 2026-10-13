@@ -723,14 +723,16 @@ const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
 const pullRequestReservationPending = new Map();
-// 操作の成功後に状態を取り直せなかった PR は、そのとき持っていた snapshot を描く間、古い mergeIntent や操作の口を出さない。
+// 操作の成功後に状態を取り直せなかった PR は、操作より後に始めた取得が反映されるまで、古い mergeIntent や操作の口を出さない。
+// 値は記録時点の取得の連番で、それ以前に始めた遅い応答では解除しない。
 const pullRequestUnconfirmedResults = new Map();
 const PULL_REQUEST_RESULT_UNCONFIRMED = '操作は完了しましたが、最新の PR の状態を取得できていません。接続が戻るまで操作を止めています。';
+let refreshSequence = 0;
+let appliedRefreshSequence = 0;
 
 function pullRequestResultUnconfirmed(key) {
-  const snapshot = pullRequestUnconfirmedResults.get(key);
-  if (!snapshot) return false;
-  if (snapshot === lastState) return true;
+  if (!pullRequestUnconfirmedResults.has(key)) return false;
+  if (appliedRefreshSequence <= pullRequestUnconfirmedResults.get(key)) return true;
   pullRequestUnconfirmedResults.delete(key);
   return false;
 }
@@ -4516,9 +4518,11 @@ async function runPullRequestAction({ button, key, inFlight, messages, startedMe
     }
     await onSuccess(result);
     messages.delete(key);
-    await refresh();
-    if (connectionLost && lastState && inFlight === pullRequestMergeInFlight) pullRequestUnconfirmedResults.set(key, lastState);
-    liveStatus.textContent = connectionLost ? PULL_REQUEST_RESULT_UNCONFIRMED : successMessage(result);
+    const sequenceBeforeRefresh = refreshSequence;
+    const refreshed = await refresh();
+    const unconfirmed = refreshed === false && inFlight === pullRequestMergeInFlight;
+    if (unconfirmed) pullRequestUnconfirmedResults.set(key, sequenceBeforeRefresh);
+    liveStatus.textContent = unconfirmed ? PULL_REQUEST_RESULT_UNCONFIRMED : successMessage(result);
   } catch {
     const message = '操作結果を取得できませんでした。PR の状態を取り直してください。';
     recordPullRequestTransientMessage(messages, key, message);
@@ -5083,6 +5087,7 @@ function reloadNow(event) {
 reloadNote.addEventListener('click', reloadNow);
 
 async function refresh() {
+  const sequence = ++refreshSequence;
   try {
     const response = await fetchUi('/api/state', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -5093,6 +5098,8 @@ async function refresh() {
     connectionLost = false;
     updateConnectionNote();
     lastState = state;
+    appliedRefreshSequence = Math.max(appliedRefreshSequence, sequence);
+    const hadUnconfirmedResults = pullRequestUnconfirmedResults.size > 0;
     if (refreshConfirmPending && !hasUnsentAnswerDraft(state)) setRefreshConfirmPending(false);
     const awayBefore = header.dataset.away;
     applyAwayState(state.away);
@@ -5102,7 +5109,7 @@ async function refresh() {
     const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
     const pullRequestExpiry = pullRequestExpirySignature(state.pullRequests);
     const pullRequestExpiryChanged = pullRequestExpiry !== renderedPullRequestExpirySignature;
-    if (state.version === lastVersion && (sinceSeenVisibilityChanged || pullRequestExpiryChanged)) {
+    if (state.version === lastVersion && (sinceSeenVisibilityChanged || pullRequestExpiryChanged || hadUnconfirmedResults)) {
       render(state);
       renderedPullRequestExpirySignature = pullRequestExpiry;
     }
@@ -5115,11 +5122,13 @@ async function refresh() {
       const judgmentCounts = countJudgments(visibleSessions);
       liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${judgmentCounts.permission} 件)、判断待ち (${judgmentCounts.decisions} 件)。`;
     }
+    return true;
   } catch {
     connectionLost = true;
     updateConnectionNote();
     liveStatus.textContent = '常駐サーバーに接続できません。';
     if (!hasRenderedState) root.replaceChildren(element('div', 'error-box', '状態を取得できません。常駐サーバーが起動しているか確認してください。'));
+    return false;
   }
 }
 

@@ -652,7 +652,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
     pullRequestMergeKey: () => 'repo#1',
     pullRequestMergeConfirmations: new Map(),
-    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), connectionLost: false, pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestMergeMessages: new Map(),
     queuedPullRequestMerges: new Map(),
     pullRequestMergeConditionWaits: (pullRequest) => pullRequest.ci === 'pending' ? ['CI 実行中'] : [],
@@ -779,7 +779,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   assert.ok(action && actionHelper);
   const actionContext = pageContext(web, {
     findPullRequestMergeTarget: () => ({ group: {}, pullRequest: {}, number: 1 }),
-    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), connectionLost: false, pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestMergeOptionsFor: () => ({ method: 'merge', deleteBranch: false }),
     postUiAction: async () => ({
       ok: true,
@@ -800,11 +800,10 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   assert.equal(actionContext.liveStatus.textContent, 'PR #1 をマージキューに追加しました。');
 });
 
-test('マージの成功後に状態を取り直せない間は、古い mergeIntent の札と操作を出さず、取り直せたら戻す', async () => {
+test('マージの成功後に状態を取り直せない間は、古い mergeIntent の札と操作を出さず、操作後に始めた取得が反映されたら戻す', async () => {
   const sources = ['runPullRequestAction', 'appendPullRequestTree', 'queuedPullRequestMerge', 'pullRequestResultUnconfirmed']
     .map((name) => functionSource(web, name));
   assert.ok(sources.every(Boolean));
-  const staleState = { pullRequests: [] };
   const context = pageContext(web, {
     element: fakeElement,
     providerOrigin: () => '',
@@ -819,14 +818,18 @@ test('マージの成功後に状態を取り直せない間は、古い mergeIn
     badge: (label, tone = '') => fakeElement('span', tone, label),
     appendPullRequestBadges() {},
     liveStatus: { textContent: '' },
-    lastState: staleState,
-    connectionLost: false,
+    lastState: { pullRequests: [] },
+    refreshSequence: 4,
+    appliedRefreshSequence: 4,
     PULL_REQUEST_RESULT_UNCONFIRMED: web.match(/const PULL_REQUEST_RESULT_UNCONFIRMED = '([^']+)'/)[1],
     recordPullRequestTransientMessage(messages, key, message) { messages.set(key, { message, shownAt: Date.now() }); },
     pullRequestTransientNoticeExpired: () => false,
     render() {},
   });
-  context.refresh = async () => { context.connectionLost = true; };
+  context.refresh = async () => {
+    context.refreshSequence += 1;
+    return false;
+  };
   vm.runInContext(`${sources.join('\n')}\nthis.renderPullRequest = appendPullRequestTree;`, context);
   await context.runPullRequestAction({
     button: {}, key: 'repo#1', inFlight: context.pullRequestMergeInFlight, messages: context.pullRequestMergeMessages,
@@ -843,7 +846,13 @@ test('マージの成功後に状態を取り直せない間は、古い mergeIn
   assert.doesNotMatch(staleTarget.textContent, /マージ処理中|マージする|収束後マージ/);
   assert.match(staleTarget.textContent, /操作は完了しましたが、最新の PR の状態を取得できていません/);
 
+  // 操作の前に始めて遅れて届いた取得の応答では解除しない。
   context.lastState = { pullRequests: [] };
+  const delayedTarget = fakeElement('div');
+  context.renderPullRequest(delayedTarget, {}, pullRequest);
+  assert.doesNotMatch(delayedTarget.textContent, /マージ処理中|マージする/);
+
+  context.appliedRefreshSequence = 6;
   const freshTarget = fakeElement('div');
   context.renderPullRequest(freshTarget, {}, pullRequest);
   assert.match(freshTarget.textContent, /マージ処理中 \(未マージ\)/);
@@ -1123,7 +1132,7 @@ test('予約中の PR は状態チェックとマージ操作を出し、マー�
     pullRequestMergeConditionWaits: () => ['CI 実行中', 'クロスレビュー未実施'],
     pullRequestMergeKey: () => mergeKey,
     pullRequestMergeConfirmations: new Map(),
-    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), connectionLost: false, pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     appendPullRequestBadges() {},
     absoluteTimeLabel: () => '2026/10/04 10:00',
     pullRequestReservationWaits: () => ['クロスレビューの収束待ち', 'CI 実行中', 'GitHub のレビュー承認待ち'],
@@ -1214,7 +1223,7 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
   const webResults = new Map();
   const webContext = pageContext(web, {
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
-    lastState: { pullRequests: [group] }, pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), connectionLost: false, pullRequestReservationPending: new Map(),
+    lastState: { pullRequests: [group] }, pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestMergeOptionsFor: () => ({ method: 'squash', deleteBranch: false }),
     pullRequestMergeConfirmations: new Map(), queuedPullRequestMerges: new Map(), pullRequestMergeMessages: new Map(),
     pullRequestMergeResults: webResults, nextPullRequestMergeResultId: 0,
