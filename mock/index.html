@@ -2630,7 +2630,7 @@ function renderProductMode(showOriginBands = true) {
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
       : idleHiddenSessions().length
         ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
-      : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'}</div>`;
+      : '表示するセッションがありません。Claude Code か Codex でセッションを開始すると、ここに表示されます。'}</div>`;
   }
   const pinnedCount = ps.filter(p => ui.pinned.includes(p.id)).length;
   return ps.map((p, i) => {
@@ -2672,7 +2672,7 @@ function renderKindMode(showOriginBands = true) {
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
       : idleHiddenSessions().length
         ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
-      : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'}</div>`;
+      : '表示するセッションがありません。Claude Code か Codex でセッションを開始すると、ここに表示されます。'}</div>`;
   }
   const sessions = ps.flatMap(p => sessionsByActivity(p).map(session => ({ p, session })));
   const section = (title, body, extra = '', emptyCount = 0) => body

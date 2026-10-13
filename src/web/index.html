@@ -2555,16 +2555,21 @@ function sessionDisplayName(session) {
   return session.title || (session.provider === 'codex' ? 'Codex のセッション' : session.session_id);
 }
 
-function pullRequestConflictSessionNames(sessionIds) {
+// 名前の無い Codex のセッションの表示名は「Codex のセッション」なので、後ろに「のセッション」を重ねない。
+function sessionReferenceLabel(session) {
+  return session.title || session.provider !== 'codex' ? `${sessionDisplayName(session)} のセッション` : sessionDisplayName(session);
+}
+
+function pullRequestConflictSessionLabels(sessionIds) {
   const sessions = Array.isArray(lastState?.sessions) ? lastState.sessions : [];
   return [...new Set((Array.isArray(sessionIds) ? sessionIds : []).map((sessionId) => {
     const session = sessions.find((item) => item.session_id === sessionId);
-    return session ? sessionDisplayName(session) : sessionId;
+    return session ? sessionReferenceLabel(session) : `${sessionId} のセッション`;
   }))];
 }
 
-function pullRequestConflictTargetNames(pullRequest, aliveOnly = false) {
-  return pullRequestConflictSessionNames((pullRequest.conflictRequestTargets || [])
+function pullRequestConflictTargetLabels(pullRequest, aliveOnly = false) {
+  return pullRequestConflictSessionLabels((pullRequest.conflictRequestTargets || [])
     .filter((target) => !aliveOnly || target.alive)
     .map((target) => target.sessionId));
 }
@@ -2577,10 +2582,10 @@ function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey
   heading.append(element('strong', '', `#${pullRequest.number}`), document.createTextNode(' の衝突の解消を依頼する'));
   panel.append(heading);
 
-  const names = pullRequestConflictTargetNames(pullRequest, true);
+  const labels = pullRequestConflictTargetLabels(pullRequest, true);
   const effects = element('ul', 'effects');
   const targetInstruction = element('li');
-  targetInstruction.append(document.createTextNode(`${names.length ? `${names.join('、')} のセッション` : 'PR を登録したセッション'}に、base の `));
+  targetInstruction.append(document.createTextNode(`${labels.length ? labels.join('、') : 'PR を登録したセッション'}に、base の `));
   targetInstruction.append(element('code', '', pullRequest.effectiveBase || pullRequest.baseRefName || group.defaultBranch || ''));
   targetInstruction.append(document.createTextNode(' を取り込んで衝突を解消し、push するよう依頼する'));
   effects.append(targetInstruction);
@@ -2594,7 +2599,7 @@ function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey
   const go = element('button', 'merge-go conflict-go', '依頼を送る');
   go.type = 'button';
   go.dataset.conflictGo = uiKey;
-  go.disabled = !names.length || !pullRequest.conflictRequestKey || pullRequestConflictInFlight.has(uiKey);
+  go.disabled = !labels.length || !pullRequest.conflictRequestKey || pullRequestConflictInFlight.has(uiKey);
   const cancel = element('button', 'ghost', 'やめる');
   cancel.type = 'button';
   cancel.dataset.conflictCancel = uiKey;
@@ -2607,27 +2612,27 @@ function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey
 function appendPullRequestConflictControls(actions, text, details, group, pullRequest) {
   if (!pullRequest.conflict) return;
   const uiKey = pullRequestConflictUiKey(group, pullRequest);
-  const names = pullRequestConflictTargetNames(pullRequest, true);
+  const labels = pullRequestConflictTargetLabels(pullRequest, true);
   const button = element('button', 'conflict-btn', pullRequest.conflictRequest ? 'もう一度依頼する' : 'コンフリクト解決');
   button.type = 'button';
   button.dataset.conflictOpen = uiKey;
-  button.disabled = !names.length || !pullRequest.conflictRequestKey || pullRequestConflictConfirmations.has(uiKey) || pullRequestConflictInFlight.has(uiKey);
+  button.disabled = !labels.length || !pullRequest.conflictRequestKey || pullRequestConflictConfirmations.has(uiKey) || pullRequestConflictInFlight.has(uiKey);
   actions.append(button);
 
   if (pullRequest.conflictRequest) {
-    const recipients = pullRequestConflictSessionNames(pullRequest.conflictRequest.sessionIds);
-    const namesForStatus = recipients.length ? recipients : ['PR を登録したセッション'];
+    const recipients = pullRequestConflictSessionLabels(pullRequest.conflictRequest.sessionIds);
+    const labelsForStatus = recipients.length ? recipients : ['PR を登録したセッション'];
     const time = absoluteTimeLabel(pullRequest.conflictRequest.requestedAt, Date.now(), '時刻不明');
     const status = element('div', 'badges');
     status.setAttribute('role', 'status');
-    status.append(badge(`${time} に ${namesForStatus.join('、')} のセッションへ衝突の解消を依頼した`, 'accent long'));
+    status.append(badge(`${time} に ${labelsForStatus.join('、')}へ衝突の解消を依頼した`, 'accent long'));
     text.append(status);
   }
 
-  if (!names.length) {
+  if (!labels.length) {
     const allTargets = pullRequest.conflictRequestTargets || [];
     const reason = allTargets.length
-      ? `依頼先の ${pullRequestConflictTargetNames(pullRequest).join('、')} のセッションが終了している`
+      ? `依頼先の ${pullRequestConflictTargetLabels(pullRequest).join('、')}が終了している`
       : 'PR を登録したセッションがありません';
     text.append(element('div', 'why-not', `衝突の解消を依頼できない理由: ${reason}`));
   }
@@ -4064,7 +4069,7 @@ function render(state) {
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
       : idleHiddenCount
         ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
-      : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。';
+      : '表示するセッションがありません。Claude Code か Codex でセッションを開始すると、ここに表示されます。';
     root.replaceChildren(element('section', 'section empty', emptyText));
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
@@ -4673,7 +4678,7 @@ async function runPullRequestConflictRequest(button) {
   const { pullRequest } = target;
   if (!pullRequest.conflictRequestKey || !pullRequest.conflict) return;
 
-  const recipients = pullRequestConflictTargetNames(pullRequest, true);
+  const recipients = pullRequestConflictTargetLabels(pullRequest, true);
   if (!recipients.length) return;
   return runPullRequestAction({
     button,
