@@ -16,51 +16,69 @@ const {
 const ROOT = path.resolve(__dirname, '..');
 const FTP_PREFIX = 'AGENT_COCKPIT_FTP_';
 
-function createSite(directory) {
-  const siteDir = path.join(directory, 'site');
-  fs.mkdirSync(path.join(siteDir, 'assets'), { recursive: true });
-  fs.mkdirSync(path.join(siteDir, 'img', 'review'), { recursive: true });
-  fs.mkdirSync(path.join(siteDir, 'img', 'work'), { recursive: true });
-  fs.mkdirSync(path.join(siteDir, 'shots'), { recursive: true });
-  fs.writeFileSync(path.join(siteDir, 'assets', 'logo.png'), 'asset');
-  fs.writeFileSync(path.join(siteDir, 'img', 'review', 'review.png'), 'review');
-  fs.writeFileSync(path.join(siteDir, 'img', 'review', 'review.json'), '{}');
-  fs.writeFileSync(path.join(siteDir, 'img', 'work', 'work.png'), 'work');
-  fs.writeFileSync(path.join(siteDir, 'shots', 'review.json'), '{}');
-  fs.writeFileSync(path.join(siteDir, 'license.html'), '<a href="./">Home</a>');
-  fs.writeFileSync(path.join(siteDir, 'index.html'), '<img src="assets/logo.png">');
-  return siteDir;
+function write(root, relativePath, content) {
+  const filePath = path.join(root, ...relativePath.split('/'));
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content);
 }
 
-test('siteItems は送信対象を指定順に並べ、shots と矩形 JSON を含めない', t => {
-  const { directory } = temporaryDirectory(t);
-  const siteDir = createSite(directory);
+function createSite(directory) {
+  const siteDir = path.join(directory, 'site');
+  const manualDir = path.join(directory, 'manual');
+  write(siteDir, 'assets/logo.png', 'asset');
+  write(siteDir, 'img/review/review.png', 'review');
+  write(siteDir, 'img/review/review.json', '{}');
+  write(siteDir, 'img/work/work.png', 'work');
+  write(siteDir, 'shots/review.json', '{}');
+  write(siteDir, 'license.html', '<a href="./">Home</a>');
+  write(siteDir, 'index.html', '<img src="assets/logo.png"><a href="manual/">manual</a>');
+  write(manualDir, 'img/guide/main.png', 'guide');
+  write(manualDir, 'img/guide/main.json', '{}');
+  write(manualDir, 'dist/assets/manual.css', 'body {}');
+  write(manualDir, 'dist/index.html', '<link href="assets/manual.css"><img src="img/guide/main.png"><a href="away.html#top">away</a>');
+  write(manualDir, 'dist/away.html', '<a href="index.html">top</a><a href="https://github.com/ktysne/agent-cockpit">GitHub</a>');
+  write(manualDir, 'pages/index.html', '<p>原稿は送らない</p>');
+  return { siteDir, manualDir };
+}
 
-  assert.deepEqual(siteItems(siteDir).map(item => item.label), [
-    'assets/logo.png',
-    'img/review/review.png',
-    'img/work/work.png',
-    'license.html',
-    'index.html',
+test('siteItems は画像とアセットを先に、ページを後に並べ、撮影の定義と矩形 JSON と原稿を含めない', t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+
+  assert.deepEqual(siteItems(siteDir, manualDir).map(item => [item.label, item.remoteSubDir]), [
+    ['assets/logo.png', 'assets'],
+    ['img/review/review.png', 'img/review'],
+    ['img/work/work.png', 'img/work'],
+    ['manual/img/guide/main.png', 'manual/img/guide'],
+    ['manual/assets/manual.css', 'manual/assets'],
+    ['manual/away.html', 'manual'],
+    ['manual/index.html', 'manual'],
+    ['license.html', ''],
+    ['index.html', ''],
   ]);
 });
 
-test('checkReferences は送信対象にないローカル参照を列挙し、揃っていれば通る', t => {
+test('checkReferences は紹介ページとマニュアルのページの参照を、ページの場所から解決して確かめる', t => {
   const { directory } = temporaryDirectory(t);
-  const siteDir = createSite(directory);
-  fs.writeFileSync(path.join(siteDir, 'index.html'), [
+  const { siteDir, manualDir } = createSite(directory);
+  write(siteDir, 'index.html', [
     '<img src="assets/logo.png">',
     '<a href="license.html">license</a>',
+    '<a href="manual/">manual</a>',
+    '<a href="manual/#help-settings">settings</a>',
     '<a href="#top">top</a>',
     '<a href="./">home</a>',
     '<a href="https://example.com">external</a>',
     '<a href="mailto:help@example.com">mail</a>',
   ].join('\n'));
-  const items = siteItems(siteDir);
+  const items = siteItems(siteDir, manualDir);
 
-  assert.doesNotThrow(() => checkReferences(items, siteDir));
-  fs.writeFileSync(path.join(siteDir, 'license.html'), '<a href="missing.html">missing</a>');
-  assert.throws(() => checkReferences(items, siteDir), /license\.html -> missing\.html/);
+  assert.doesNotThrow(() => checkReferences(items));
+  write(siteDir, 'license.html', '<a href="missing.html">missing</a>');
+  assert.throws(() => checkReferences(items), /license\.html -> missing\.html/);
+  write(siteDir, 'license.html', '<a href="./">Home</a>');
+  write(manualDir, 'dist/away.html', '<img src="img/guide/missing.png">');
+  assert.throws(() => checkReferences(items), /manual\/away\.html -> img\/guide\/missing\.png/);
 });
 
 test('loadConfig は設定ファイルを優先し、無ければ環境変数を読み、両方に無ければ失敗する', t => {
@@ -174,7 +192,7 @@ test('dry-run は対象と要確認を表示し、FTPS クライアントへ接�
 
   assert.equal(accessCount, 0);
   assert.ok(output.some(line => line.includes('要確認')));
-  assert.deepEqual(output.filter(line => line.includes('/assets/') || line.includes('/img/') || line.includes('/license.html') || line.includes('/index.html')).length, 5);
+  assert.equal(output.filter(line => line.startsWith('  (remoteRoot 未設定)/')).length, siteItems().length);
 });
 
 test('parseArgs は upload の dry-run と config を読み、未知のコマンドには使い方を表示する', async () => {

@@ -5,38 +5,42 @@ const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const SITE_DIR = path.join(ROOT, 'site');
+const MANUAL_DIR = path.join(ROOT, 'manual');
 const FTP_PREFIX = 'AGENT_COCKPIT_FTP_';
 
 function compareNames(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function siteItems(siteDir = SITE_DIR) {
-  const assetsDir = path.join(siteDir, 'assets');
-  const imagesDir = path.join(siteDir, 'img');
-  const assetItems = fs.readdirSync(assetsDir, { withFileTypes: true })
-    .filter(entry => entry.isFile())
+function filesIn(directory, remoteSubDir, accept = () => true) {
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && accept(entry.name))
     .map(entry => ({
-      label: 'assets/' + entry.name,
-      localPath: path.join(assetsDir, entry.name),
-      remoteSubDir: 'assets',
+      label: remoteSubDir ? remoteSubDir + '/' + entry.name : entry.name,
+      localPath: path.join(directory, entry.name),
+      remoteSubDir,
     }))
     .sort((left, right) => compareNames(left.label, right.label));
-  const imageItems = fs.readdirSync(imagesDir, { withFileTypes: true })
+}
+
+function imageItems(imagesDir, remotePrefix) {
+  return fs.readdirSync(imagesDir, { withFileTypes: true })
     .filter(entry => entry.isDirectory())
     .sort((left, right) => compareNames(left.name, right.name))
-    .flatMap(directory => fs.readdirSync(path.join(imagesDir, directory.name), { withFileTypes: true })
-      .filter(entry => entry.isFile() && entry.name.endsWith('.png'))
-      .map(entry => ({
-        label: 'img/' + directory.name + '/' + entry.name,
-        localPath: path.join(imagesDir, directory.name, entry.name),
-        remoteSubDir: 'img/' + directory.name,
-      }))
-      .sort((left, right) => compareNames(left.label, right.label)));
+    .flatMap(directory => filesIn(path.join(imagesDir, directory.name), remotePrefix + '/' + directory.name,
+      name => name.endsWith('.png')));
+}
 
+// ページが参照するファイルを先に揃えるため、画像とアセットを送ってからページを送る。
+// マニュアルの画像は manual/img/ にだけ置き、組み立て結果の manual/dist/ とは別の場所から送る。
+function siteItems(siteDir = SITE_DIR, manualDir = MANUAL_DIR) {
+  const manualDist = path.join(manualDir, 'dist');
   return [
-    ...assetItems,
-    ...imageItems,
+    ...filesIn(path.join(siteDir, 'assets'), 'assets'),
+    ...imageItems(path.join(siteDir, 'img'), 'img'),
+    ...imageItems(path.join(manualDir, 'img'), 'manual/img'),
+    ...filesIn(path.join(manualDist, 'assets'), 'manual/assets'),
+    ...filesIn(manualDist, 'manual', name => name.endsWith('.html')),
     { label: 'license.html', localPath: path.join(siteDir, 'license.html'), remoteSubDir: '' },
     { label: 'index.html', localPath: path.join(siteDir, 'index.html'), remoteSubDir: '' },
   ];
@@ -55,18 +59,25 @@ function referencePath(value) {
   }
 }
 
-function checkReferences(items, siteDir = SITE_DIR) {
+function referenceTarget(pageLabel, reference) {
+  const joined = reference.startsWith('/')
+    ? reference.slice(1)
+    : path.posix.join(path.posix.dirname(pageLabel), reference);
+  const target = path.posix.normalize(joined);
+  return reference.endsWith('/') || target === '.' ? path.posix.join(target, 'index.html') : target;
+}
+
+function checkReferences(items) {
   const included = new Set(items.map(item => path.posix.normalize(item.label.replaceAll('\\', '/'))));
   const missing = [];
 
-  for (const pageName of ['index.html', 'license.html']) {
-    const html = fs.readFileSync(path.join(siteDir, pageName), 'utf8');
+  for (const page of items.filter(item => item.label.endsWith('.html'))) {
+    const html = fs.readFileSync(page.localPath, 'utf8');
     const attributes = /\b(?:src|href)\s*=\s*(["'])(.*?)\1/gi;
     for (const match of html.matchAll(attributes)) {
       const reference = referencePath(match[2]);
       if (reference === null) continue;
-      const target = path.posix.normalize(reference.startsWith('/') ? reference.slice(1) : reference);
-      if (!included.has(target)) missing.push(pageName + ' -> ' + match[2]);
+      if (!included.has(referenceTarget(page.label, reference))) missing.push(page.label + ' -> ' + match[2]);
     }
   }
 
@@ -244,9 +255,8 @@ function printUsage() {
 }
 
 async function cmdUpload(opt, dependencies = {}) {
-  const siteDir = dependencies.siteDir ?? SITE_DIR;
-  const items = siteItems(siteDir);
-  checkReferences(items, siteDir);
+  const items = siteItems(dependencies.siteDir ?? SITE_DIR, dependencies.manualDir ?? MANUAL_DIR);
+  checkReferences(items);
 
   if (opt.dryRun) {
     let remoteRoot = null;

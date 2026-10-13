@@ -207,7 +207,7 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Startup
 6. `~/.claude/skills/agent-cockpit/SKILL.md` があることを確かめます。
 7. 回答の経路を確かめるときは、画面上部の「離席中」をオンにしてから、セッションに「確認のために `AskUserQuestion` で質問して」と依頼します。ダッシュボードに判断待ちとして出て、画面から回答するとセッションがその回答で進めば成功です。確かめ終わったら「離席中」をオフに戻します。離席中でないときは、質問はデスクトップアプリのダイアログに出ます。
 
-導入できたら、画面の使い方を利用者向けマニュアルで確かめます。常駐サーバーが `http://127.0.0.1:47821/manual/` で配ります。
+導入できたら、画面の使い方を利用者向けマニュアル(https://ktysne.info/agent-cockpit/manual/)で確かめます。ダッシュボードの設定画面の「マニュアル」からも開けます。
 
 ## パターン B: + GitHub CLI
 

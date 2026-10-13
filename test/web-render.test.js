@@ -400,10 +400,10 @@ test('削除の通信中も再描画でフォーカスを保ち、二重送信�
   await request;
 });
 
-test('設定画面から設定のマニュアルを新しいウィンドウで開く', () => {
+test('設定画面から配信先のマニュアルの設定の節を新しいウィンドウで開く', () => {
   const settingsDialog = pageHtml.match(/<dialog class="settings-dialog" id="settings-dialog"[\s\S]*?<\/dialog>/)?.[0];
   assert.ok(settingsDialog);
-  assert.match(settingsDialog, /<a\b(?=[^>]*\bhref="\/manual\/#help-settings")(?=[^>]*\btarget="_blank")(?=[^>]*\brel="noopener")[^>]*>マニュアル<\/a>/);
+  assert.match(settingsDialog, /<a\b(?=[^>]*\bhref="https:\/\/ktysne\.info\/agent-cockpit\/manual\/#help-settings")(?=[^>]*\btarget="_blank")(?=[^>]*\brel="noopener")[^>]*>マニュアル<\/a>/);
 });
 
 test('モックの設定画面で診断ログがマニュアルの右にある', () => {
@@ -878,10 +878,10 @@ test('外部 HTTPS リンクのクリックをサーバーへ送り、失敗時�
   assert.equal(harness.requests.length, 2);
 });
 
-test('同じオリジンのマニュアルリンクはサーバーへ送り、ほかの同じオリジンのリンクは送らない', async () => {
+test('配信先のマニュアルリンクはサーバーへ送り、同じオリジンのリンクは /manual/ も含めて送らない', async () => {
   const harness = externalLinkHarness(204);
   const manualLink = {
-    href: 'http://127.0.0.1:47821/manual/#help-settings',
+    href: 'https://ktysne.info/agent-cockpit/manual/#help-settings',
     closest: (selector) => selector === 'a[target="_blank"]' ? manualLink : null,
   };
   let manualDefaultPrevented = false;
@@ -897,18 +897,19 @@ test('同じオリジンのマニュアルリンクはサーバーへ送り、�
   assert.deepEqual(JSON.parse(harness.requests[0].options.body), { url: manualLink.href });
   assert.deepEqual(harness.openedWindows, []);
 
-  const sameOriginLink = {
-    href: 'http://127.0.0.1:47821/settings',
-    closest: (selector) => selector === 'a[target="_blank"]' ? sameOriginLink : null,
-  };
-  let sameOriginDefaultPrevented = false;
-  harness.listeners.click({
-    target: sameOriginLink,
-    button: 0,
-    preventDefault: () => { sameOriginDefaultPrevented = true; },
-  });
-
-  assert.equal(sameOriginDefaultPrevented, false);
+  for (const href of ['http://127.0.0.1:47821/settings', 'http://127.0.0.1:47821/manual/#help-settings']) {
+    const sameOriginLink = {
+      href,
+      closest: (selector) => selector === 'a[target="_blank"]' ? sameOriginLink : null,
+    };
+    let sameOriginDefaultPrevented = false;
+    harness.listeners.click({
+      target: sameOriginLink,
+      button: 0,
+      preventDefault: () => { sameOriginDefaultPrevented = true; },
+    });
+    assert.equal(sameOriginDefaultPrevented, false, href);
+  }
   assert.equal(harness.requests.length, 1);
 });
 

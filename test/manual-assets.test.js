@@ -6,7 +6,6 @@ const vm = require('node:vm');
 const {
   findManualSearchTarget,
   resolveManualHelpAnchor,
-  resolveManualTheme,
   searchManualIndex,
 } = require('../manual/assets/manual.js');
 
@@ -16,17 +15,12 @@ function fakeElement(tagName, textContent, children = [], open = false) {
   return { tagName, textContent, children, open, nextElementSibling: null };
 }
 
-function runManualScript(storage) {
+function runManualScript() {
   const root = { dataset: {} };
   const window = {
     manualHelpAnchors: {},
     addEventListener() {},
   };
-  if (storage === 'throws') {
-    Object.defineProperty(window, 'localStorage', { get() { throw new Error('blocked'); } });
-  } else {
-    window.localStorage = { getItem: () => storage };
-  }
   const document = {
     documentElement: root,
     readyState: 'complete',
@@ -85,13 +79,8 @@ test('入口の helpAnchors からページと節の URL を解決する', () =>
   assert.equal(resolveManualHelpAnchor({}, '#help-unknown', 'http://localhost/manual/', 'http://localhost/manual/#help-unknown'), null);
 });
 
-test('配色は light、dark、system に従い、保存領域が読めないときは system にする', () => {
-  assert.equal(resolveManualTheme('light'), 'light');
-  assert.equal(resolveManualTheme('dark'), 'dark');
-  assert.equal(resolveManualTheme('system'), 'system');
-  assert.equal(resolveManualTheme('unknown'), 'system');
-  assert.equal(runManualScript('dark'), 'dark');
-  assert.equal(runManualScript('throws'), 'system');
+test('マニュアルは配色を指定せず、OS の明るさの設定に従う', () => {
+  assert.equal(runManualScript(), undefined);
 });
 
 test('ガイドマップの紫の札はライトとダークの地の両方で 4.5:1 以上の差を保つ', () => {

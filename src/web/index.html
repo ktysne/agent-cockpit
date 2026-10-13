@@ -527,7 +527,7 @@ h3.sub .count { font-weight: normal; }
     </div>
   </section>
   <div class="settings-save-error" id="settings-save-error" role="alert" hidden></div>
-  <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
+  <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="https://ktysne.info/agent-cockpit/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
 <main>
   <div class="mode-row">
@@ -1485,8 +1485,7 @@ function defaultBrowserUrl(link) {
   try {
     const url = new URL(link.href, window.location.href);
     const isExternalHttps = url.protocol === 'https:' && url.origin !== window.location.origin;
-    const isManual = url.protocol === 'http:' && url.origin === window.location.origin && url.pathname.startsWith('/manual/');
-    return isExternalHttps || isManual ? url.href : null;
+    return isExternalHttps ? url.href : null;
   } catch {
     return null;
   }

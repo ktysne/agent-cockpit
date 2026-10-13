@@ -1,6 +1,6 @@
 # agent-cockpit の開発
 
-agent-cockpit 自体を開発するときの入口です。利用者向けの導入は [setup.md](setup.md)、画面と機能は、常駐サーバーが `/manual/` で配る利用者向けマニュアルにあります。
+agent-cockpit 自体を開発するときの入口です。利用者向けの導入は [setup.md](setup.md)、画面と機能は、利用者向けマニュアル(https://ktysne.info/agent-cockpit/manual/)にあります。
 
 ## 最初に読むもの
 

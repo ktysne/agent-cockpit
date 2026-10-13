@@ -30,16 +30,9 @@ const { recordClientEntries, MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYT
 const { importPendingHooks } = require('../client/hooks-pending');
 const { version } = require('../../package.json');
 
-const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
 const MAX_BODY_BYTES = 64 * 1024;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
-const MANUAL_CONTENT_TYPES = Object.freeze({
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.png': 'image/png',
-});
 
 async function defaultCodexAgentScriptExists(scriptPath) {
   try {
@@ -55,89 +48,6 @@ function requestHostIsLocal(request, port) {
   if (typeof host !== 'string') return false;
   const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
   return allowed.has(host.toLowerCase());
-}
-
-function rawRequestPath(requestUrl) {
-  const pathAndQuery = String(requestUrl).split(/[?#]/, 1)[0];
-  if (pathAndQuery.startsWith('/')) return pathAndQuery;
-  try {
-    return new URL(pathAndQuery).pathname;
-  } catch {
-    return '';
-  }
-}
-
-function isPathWithin(root, target) {
-  const relative = path.relative(root, target);
-  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-}
-
-async function serveManualRequest(request, response, manualDir) {
-  const requestPath = rawRequestPath(request.url);
-  if (requestPath !== '/manual' && !requestPath.startsWith('/manual/')) return false;
-  if (request.method !== 'GET') {
-    textResponse(response, 404, 'Not Found');
-    return true;
-  }
-  if (/%(?:2f|5c)/i.test(requestPath)) {
-    textResponse(response, 404, 'Not Found');
-    return true;
-  }
-  let decodedPath;
-  try {
-    decodedPath = decodeURIComponent(requestPath);
-  } catch {
-    textResponse(response, 404, 'Not Found');
-    return true;
-  }
-  if (decodedPath.includes('\\') || decodedPath.includes('//')
-      || decodedPath.split('/').some(segment => segment === '.' || segment === '..')) {
-    textResponse(response, 404, 'Not Found');
-    return true;
-  }
-
-  // 入口のページは相対パスで assets を指すので、末尾の / が無いと /assets/ を読みに行って崩れる。
-  if (decodedPath === '/manual') {
-    response.writeHead(308, { location: '/manual/', ...SECURITY_HEADERS });
-    response.end();
-    return true;
-  }
-  const manualPath = decodedPath;
-  let root;
-  let relativePath;
-  if (manualPath === '/manual/') {
-    root = path.join(manualDir, 'dist');
-    relativePath = 'index.html';
-  } else if (manualPath.startsWith('/manual/img/')) {
-    root = path.join(manualDir, 'img');
-    relativePath = manualPath.slice('/manual/img/'.length);
-  } else {
-    root = path.join(manualDir, 'dist');
-    relativePath = manualPath.slice('/manual/'.length);
-  }
-
-  const segments = relativePath.split('/');
-  const extension = path.extname(relativePath).toLowerCase();
-  if (!relativePath || segments.some(segment => !segment || segment === '.' || segment === '..')
-      || !Object.prototype.hasOwnProperty.call(MANUAL_CONTENT_TYPES, extension)) {
-    textResponse(response, 404, 'Not Found');
-    return true;
-  }
-  const resolvedRoot = path.resolve(root);
-  const filePath = path.resolve(resolvedRoot, ...segments);
-  if (!isPathWithin(resolvedRoot, filePath)) {
-    textResponse(response, 404, 'Not Found');
-    return true;
-  }
-  try {
-    const stat = await fs.stat(filePath);
-    if (!stat.isFile()) throw new Error('not a file');
-    const content = await fs.readFile(filePath);
-    textResponse(response, 200, content, MANUAL_CONTENT_TYPES[extension]);
-  } catch {
-    textResponse(response, 404, 'Not Found');
-  }
-  return true;
 }
 
 function readJsonBody(request, maxBytes = MAX_BODY_BYTES) {
@@ -266,7 +176,6 @@ function createRequestHandler(options) {
     openExternalUrl = defaultOpenExternalUrl,
   } = options;
   const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
-  const manualDir = options.manualDir || DEFAULT_MANUAL_DIR;
 
   const ctx = {
     updateChecker: options.updateChecker,
@@ -368,7 +277,7 @@ function createRequestHandler(options) {
     { method: 'POST', path: /^\/api\/sessions\/([^/]+)\/prs$/, auth: 'hook', body: 'json', idCheck: invalidSessionId, handler: handleSessionPullRequests },
   ];
 
-  // 順序は Host、markRequest、/manual、ルートの決定、秘密値(401)、Origin(403)、ID の検査、本文で固定する。
+  // 順序は Host、markRequest、ルートの決定、秘密値(401)、Origin(403)、ID の検査、本文で固定する。
   // 外部の Host の要求でアイドル終了を延ばさず、照合の前に ID や本文の妥当性を応答して漏らさないため。
   return async (request, response) => {
     const info = getServerInfo();
@@ -399,8 +308,6 @@ function createRequestHandler(options) {
     markRequest();
 
     const requestUrl = new URL(request.url, `http://127.0.0.1:${info.port}`);
-    if (requestUrl.pathname === '/manual' || requestUrl.pathname.startsWith('/manual/')) diagnosticPath = '/manual/:path';
-    if (await serveManualRequest(request, response, manualDir)) return;
 
     const matched = findRoute(routes, request.method, requestUrl.pathname);
     const diagnosticRoute = matched || findRoute(routes, 'GET', requestUrl.pathname) || findRoute(routes, 'POST', requestUrl.pathname);
@@ -626,7 +533,6 @@ async function startServer(options = {}) {
     crossReviewToolExists: options.crossReviewToolExists,
     openExternalUrl: options.openExternalUrl,
     webPath: options.webPath,
-    manualDir: options.manualDir,
     dev,
     scheduleTaskNotifications,
     scheduleSessionModel,

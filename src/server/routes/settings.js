@@ -41,7 +41,7 @@ function createSettingsRoutes(ctx) {
 
   async function handleOpenUrl({ request, response, info, body }) {
     const externalUrl = body && typeof body === 'object' && !Array.isArray(body)
-      ? normalizeExternalUrl(body.url, info.port)
+      ? normalizeExternalUrl(body.url)
       : null;
     if (!externalUrl) {
       jsonResponse(response, 400, { error: 'Invalid request' });
