@@ -51,3 +51,7 @@ AI には、次のように依頼してください。
 ## 開発者向けドキュメント
 
 agent-cockpit 自体を開発するときは、[docs/development.md](docs/development.md) から読み始めてください。テストの流し方、イベントの再生、設計資料と計画書の場所をまとめています。
+
+## ライセンス
+
+MIT License。全文は [LICENSE](LICENSE) にあります。
