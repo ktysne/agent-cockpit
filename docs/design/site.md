@@ -8,6 +8,7 @@ https://ktysne.info/agent-cockpit/ に置く紹介ページの構成と、画面
 - **説明の正本は README と `docs/setup.md`**:ページには、README にある導入の依頼文と、README と手順書へのリンクだけを置く。導入の手順、連携ツールの設定、確認の方法をページに写すと、片方だけが直って食い違うためである。
 - **ダウンロードの導線は置かない**:Agent Cockpit は zip で配らず、リポジトリを置いて AI に導入させる。ほかの紹介ページのダウンロードの欄は、導入の依頼文をコピーする欄に置き換える。
 - **版の差し込みは無い**:版ごとの値を持たないので、テンプレートではなく `site/index.html` をそのまま配る。
+- **ライセンス**:ほかのアプリと同じく、紹介ページの横に `license.html` を置き、本体の著作権の帰属と、同梱する第三者のソフトウェアを書く。Agent Cockpit は外部パッケージを使わないので、同梱は無い。外部パッケージを足したら、このページに足す。
 - **配色**:ダッシュボードのダークの配色トークン(`src/web/index.html` の `:root[data-theme="dark"]`)を使う。画面の画像がダークで撮られているためである。
 
 ## 構成
@@ -15,12 +16,13 @@ https://ktysne.info/agent-cockpit/ に置く紹介ページの構成と、画面
 ```
 site/
 ├── index.html          紹介ページ
+├── license.html        ライセンスのページ
 ├── assets/             アイコン(app-icon-256.png。assets/agent-cockpit_icon.png を縮小したもの)
 ├── shots/*.json        画面の画像の撮影の定義
 └── img/<定義名>/       撮影した画像(.png)と部品の矩形(.json)。撮影が生成し、コミットする
 ```
 
-配信するのは `index.html`、`assets/`、`img/` の `.png` である。撮影の定義と部品の矩形の `.json` は配信しない。
+配信するのは `index.html`、`license.html`、`assets/`、`img/` の `.png` である。撮影の定義と部品の矩形の `.json` は配信しない。
 
 ## 画面の画像
 
