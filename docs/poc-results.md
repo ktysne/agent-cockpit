@@ -1,7 +1,7 @@
 # PoC の結果
 
 Claude Code 2.1.284(デスクトップアプリ、Windows)で確かめた。
-再現に使った一式は `poc/` にある。
+再現に使った一式は、固定参照 8c701b1 の [`poc/`](https://github.com/ktysne/agent-cockpit/tree/8c701b1e8a5718eccff69f84775f21171b6663d0/poc) にある。
 
 ## 確かめたこと
 
