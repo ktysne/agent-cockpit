@@ -57,7 +57,7 @@ Claude Code のメインは Opus 5.5(`claude-opus-5-5`)、Codex のメインは 
    - 表示する内容(プロダクト名、セッションの題、タスク、判断事項、PR、モデル、時刻):シナリオ `tools/manual/demo/site-review.js` と `site-work.js`
    - 撮る範囲、ウィンドウの幅、倍率、配色:撮影の定義 `site/shots/<定義名>.json`
 3. 画面を見ながら直したいときは、`node tools/manual/demo-server.js site-review` でデモのダッシュボードを起動し、表示された URL を開く。止めるには Ctrl+C を押す。
-4. `npm run site:capture` で 2 枚を撮る。1 枚だけ撮るときは、`npm run site:capture -- review` のように定義名を足す。画像は `site/img/<定義名>/<定義名>.png` に書かれ、中身が前と同じなら書き換えない。
+4. `npm run site:capture` で 2 枚を撮る。1 枚だけ撮るときは、`npm run site:capture -- review` のように定義名を足す。画像は `site/img/<定義名>/<定義名>.png` に書かれ、中身が前と同じか、差が描画の揺れの範囲なら書き換えない(docs/design/manual.md「撮影の実行」)。
 5. 画像の大きさを `site/img/<定義名>/<定義名>.json` の `width` と `height` で確かめる。幅は 820 になる。大きさが変わったら、`site/index.html` の該当する `img` の `width` と `height` を合わせる。
 6. 画像が「各画像が満たす条件」を満たしているかを目で確かめる。内容を変えたら、条件の表と `site/index.html` の画像の説明(`figcaption` と `alt`)も合わせる。
 7. `npm test` を流す。撮影の定義の検査は、`site/shots/` の定義も対象にする。
