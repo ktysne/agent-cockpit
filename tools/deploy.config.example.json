@@ -1,0 +1,10 @@
+{
+  "_comment": "このファイルを tools/deploy.config.json にコピーして FTPS の接続情報を設定します。deploy.config.json は認証情報を含むため gitignore で管理します。ファイルを置けない環境では AGENT_COCKPIT_FTP_HOST、USER、PASSWORD、REMOTE_ROOT を環境変数で設定してください。",
+  "host": "ftp.example.com",
+  "port": 21,
+  "user": "your-username",
+  "password": "your-password",
+  "secure": true,
+  "remoteRoot": "/ktysne.info/agent-cockpit",
+  "secureOptions": null
+}

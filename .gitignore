@@ -2,6 +2,7 @@
 .codegraph/
 
 node_modules/
+tools/deploy.config.json
 
 # Claude Code local state
 .claude/worktrees/

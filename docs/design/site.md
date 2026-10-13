@@ -8,7 +8,7 @@ https://ktysne.info/agent-cockpit/ に置く紹介ページの構成と、画面
 - **説明の正本は README と `docs/setup.md`**:ページには、README にある導入の依頼文と、README と手順書へのリンクだけを置く。導入の手順、連携ツールの設定、確認の方法をページに写すと、片方だけが直って食い違うためである。
 - **ダウンロードの導線は置かない**:Agent Cockpit は zip で配らず、リポジトリを置いて AI に導入させる。ほかの紹介ページのダウンロードの欄は、導入の依頼文をコピーする欄に置き換える。
 - **版の差し込みは無い**:版ごとの値を持たないので、テンプレートではなく `site/index.html` をそのまま配る。
-- **ライセンス**:ほかのアプリと同じく、紹介ページの横に `license.html` を置き、本体のライセンスと、同梱する第三者のソフトウェアを書く。本体は MIT License で、`license.html` には、リポジトリ直下の `LICENSE` と同じ全文を載せる。利用者は公開リポジトリのソースを取得して使うので、利用、改変、再配布の許可をはっきりさせるためである。Agent Cockpit は外部パッケージを使わないので、同梱は無い。外部パッケージを足したら、このページに足す。
+- **ライセンス**:ほかのアプリと同じく、紹介ページの横に `license.html` を置き、本体のライセンスと、同梱する第三者のソフトウェアを書く。本体は MIT License で、`license.html` には、リポジトリ直下の `LICENSE` と同じ全文を載せる。利用者は公開リポジトリのソースを取得して使うので、利用、改変、再配布の許可をはっきりさせるためである。Agent Cockpit は外部パッケージを使わないので、同梱は無い。外部パッケージを足したら、このページに足す。開発用の依存である `basic-ftp` は配布物に含めないため、このページには載せない。
 - **配色**:ダッシュボードのダークの配色トークン(`src/web/index.html` の `:root[data-theme="dark"]`)を使う。画面の画像がダークで撮られているためである。
 
 ## 構成
@@ -22,7 +22,7 @@ site/
 └── img/<定義名>/       撮影した画像(.png)と部品の矩形(.json)。撮影が生成し、コミットする
 ```
 
-配信するのは `index.html`、`license.html`、`assets/`、`img/` の `.png` である。撮影の定義と部品の矩形の `.json` は配信しない。
+撮影の定義と部品の矩形の `.json` は配信しない。送る対象は「配信」の節にある。
 
 ## 画面の画像
 
@@ -62,6 +62,31 @@ Claude Code のメインは Opus 5.5(`claude-opus-5-5`)、Codex のメインは 
 6. 画像が「各画像が満たす条件」を満たしているかを目で確かめる。内容を変えたら、条件の表と `site/index.html` の画像の説明(`figcaption` と `alt`)も合わせる。
 7. `npm test` を流す。撮影の定義の検査は、`site/shots/` の定義も対象にする。
 
-## 決めていないこと
+## 配信
 
-- 配信の手段。ほかのアプリは FTPS で送るスクリプトをリポジトリに持つが、agent-cockpit は外部パッケージを使わない方針である。
+配信スクリプト `tools/site-deploy.js` が、FTPS で https://ktysne.info/agent-cockpit/ へ送る。
+送る処理は agent-limit-checker の `tools/release-site.js` と同じで、`basic-ftp` を開発用の依存として使う。
+開発用の依存は配信する人だけが入れるので、利用者が `npm install` をしなくてよい方針は変わらない。
+配信には Node.js 22.15.0 以上が要る。npm のスクリプトが、OS の証明書を使う `--use-system-ca` を付けて起動するためである。
+
+### 送る手順
+
+1. 初回だけ、`tools/deploy.config.example.json` を `tools/deploy.config.json` にコピーし、接続情報を書く。このファイルは認証情報を含むので、Git で管理しない。ファイルの代わりに、環境変数 `AGENT_COCKPIT_FTP_HOST`、`AGENT_COCKPIT_FTP_USER`、`AGENT_COCKPIT_FTP_PASSWORD`、`AGENT_COCKPIT_FTP_REMOTE_ROOT` でも設定できる。
+2. `npm install` で開発用の依存を入れる。
+3. `npm run site:deploy:dry` で、送るファイルとリモートのパスを確かめる。接続はしない。
+4. `npm run site:deploy` で送る。
+
+画像を撮り直した後も、同じ手順で送る。
+通信が切れて途中で止まったときも、もう一度送れば揃う。
+置き換えの途中で止まると、配信先に `.uploading` や `.previous` の付いたファイルが残ることがあるが、公開するファイルは次の配信で置かれる。
+
+### 送る対象
+
+送る対象はスクリプトが決める。
+`assets/` の直下のファイル、`img/<定義名>/` の直下の `.png`、`license.html`、`index.html` を、この順に送る。
+ページを最後に送るのは、ページが参照する画像を先に揃えるためである。
+`shots/` と `.json` は送らない。
+
+送る前に、`index.html` と `license.html` の `src` と `href` が指すローカルのファイルが、すべて送る対象に入っているかを確かめる。
+入っていなければ、何も送らずに止まる。
+外部の URL、`mailto:`、ページ内のリンク、`./` は確かめない。
