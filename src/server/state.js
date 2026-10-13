@@ -253,12 +253,13 @@ function normalizeCodexRecovery(value) {
     .filter(([id, record]) => validStoredSessionId(id) && isRecord(record) &&
       Number.isInteger(record.pid) && record.pid > 0 && typeof record.cwd === 'string' &&
       typeof record.model === 'string' && Number.isInteger(record.resumes) && record.resumes >= 0 &&
-      validTimestamp(record.updatedAt))
+      validTimestamp(record.updatedAt) && (record.lockSeen === undefined || typeof record.lockSeen === 'boolean'))
     .sort(([, left], [, right]) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
     .slice(0, MAX_CODEX_RECOVERY_SESSIONS)
     .map(([id, record]) => [id, {
       pid: record.pid, cwd: record.cwd.slice(0, 4096), model: record.model.slice(0, 160),
       resumes: record.resumes, updatedAt: record.updatedAt,
+      ...(record.lockSeen === true ? { lockSeen: true } : {}),
     }]));
 }
 
@@ -2271,13 +2272,16 @@ class DashboardState {
       model: session.codex.model,
       resumes: session.codex.resumes + (this.codexResumesBeforeEnd.get(event.session_id) || 0),
       updatedAt: previous?.updatedAt || isoTime(event.hookAt),
+      // 再開(codex exec resume など)はロックを作らないことがあり、プロセス ID の照会も失敗しうるので、本体の SessionStart では印を外す。
+      // ロックを作る画面なら、次の走査で印が付き直る。
+      ...(previous?.lockSeen && !(event.hook_event_name === 'SessionStart' && !event.agent_id) ? { lockSeen: true } : {}),
     };
     // updatedAt は再起動の後の行の無操作の判定にも使う。イベントのたびに保存しないよう、1 分以上進んだときだけ進める。
     const activityAdvanced = event.hookAt - Date.parse(record.updatedAt) >= CODEX_RECOVERY_ACTIVITY_STEP_MS;
     if (activityAdvanced) record.updatedAt = isoTime(event.hookAt);
     this.codexRecovery.set(event.session_id, record);
     this.sessionFileLastSeenAt.set(event.session_id, event.hookAt);
-    const changed = !previous || activityAdvanced || ['pid', 'cwd', 'model', 'resumes'].some((key) => previous[key] !== record[key]);
+    const changed = !previous || activityAdvanced || ['pid', 'cwd', 'model', 'resumes', 'lockSeen'].some((key) => previous[key] !== record[key]);
     if (!changed) return;
     const oldest = [...this.codexRecovery].sort(([, left], [, right]) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt));
     for (const [id] of oldest.slice(0, Math.max(0, oldest.length - MAX_CODEX_RECOVERY_SESSIONS))) {
@@ -2288,7 +2292,7 @@ class DashboardState {
     this.requestStoreWrite();
   }
 
-  liveCodexSessionFiles(isAlive) {
+  liveCodexSessionFiles(isAlive, locks = null) {
     const files = [];
     for (const [sessionId, record] of this.codexRecovery) {
       if (!isAlive(record.pid)) {
@@ -2296,6 +2300,12 @@ class DashboardState {
         this.requestStoreWrite();
         continue;
       }
+      if (locks?.has(sessionId) && !record.lockSeen) {
+        record.lockSeen = true;
+        this.requestStoreWrite();
+      }
+      // 閉じた会話も記録は残す。プロセス ID は SessionStart でしか届かないので、消すと再開した行を生存の一覧へ戻せないため。
+      if (locks !== null && record.lockSeen && !locks.has(sessionId)) continue;
       files.push({
         session_id: sessionId, provider: 'codex', pid: record.pid, cwd: record.cwd,
         updatedAt: record.updatedAt, codex: { model: record.model, resumes: record.resumes },

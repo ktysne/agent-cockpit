@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
 const { RoutingState } = require('./routing');
@@ -393,12 +394,25 @@ async function hasSessionJsonFiles(claudeHome) {
   }
 }
 
+// thread-writer-locks は公開仕様ではないため、読めないときはロックで判断しない。
+// デスクトップのアーカイブでは SessionEnd が届かないため、ロックの消失で終了を判断する。
+async function listCodexThreadLocks(codexHome) {
+  try {
+    const entries = await fs.readdir(path.join(codexHome, 'thread-writer-locks'), { withFileTypes: true });
+    return new Set(entries.filter((entry) => entry.isFile() && !entry.name.startsWith('.') && entry.name.endsWith('.lock'))
+      .map((entry) => entry.name.slice(0, -5)));
+  } catch {
+    return null;
+  }
+}
+
 async function startServer(options = {}) {
   for (const key of Object.keys(process.env)) {
     if (isGithubCredentialEnvironmentVariable(key)) delete process.env[key];
   }
   const homeDir = cockpitHomeFromOptions(options);
   const claudeHome = claudeHomeFromOptions(options);
+  const codexHome = options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
   const port = options.port === undefined ? DEFAULT_PORT : Number(options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('port must be between 0 and 65535');
   const dev = Boolean(options.dev);
@@ -548,7 +562,8 @@ async function startServer(options = {}) {
   pullRequestMergeManager.start?.();
   async function refreshSessionFiles(now = Date.now()) {
     const files = await listLiveSessionFiles(claudeHome, { isAlive: options.isAlive || processIsAlive });
-    const codexFiles = state.liveCodexSessionFiles(options.isAlive || processIsAlive);
+    const locks = await listCodexThreadLocks(codexHome);
+    const codexFiles = state.liveCodexSessionFiles(options.isAlive || processIsAlive, locks);
     state.syncSessionFiles([...(files || []), ...codexFiles]
       .map((file) => ({ ...file, product: productFromCwd(file.cwd) })), now, { codexOnly: files === null });
     // Claude の一覧を読めないときは生死を保留し、保存の期限切れの片付けだけを進める。
