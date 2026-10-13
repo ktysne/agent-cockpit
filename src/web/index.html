@@ -224,6 +224,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
 .group-frame > .empty, .pr-repo-content > .empty, .pr-repo-content > .stack, .pr-repo-content > .merged-list { padding-inline: 0; }
 .error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
+.repository-unregister { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 640px) {
   .top-inner { gap: 8px; }
@@ -2378,6 +2379,8 @@ function appendPullRequestMergeResults(content, group) {
   }
 }
 
+const repositoryUnregisterConfirmations = new Map();
+
 function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {
   if (!group) return;
   const section = element('section', 'group-frame pr-repo-group');
@@ -2392,7 +2395,7 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
   head.append(element('span', 'meta', `GitHub から ${durationAgoLabel(group.fetchedAt || group.checkedAt)}に取得`));
   section.append(head);
   const content = element('div', 'pr-repo-content');
-  if (group.error) content.append(element('div', 'error-box', group.error));
+  appendPullRequestError(content, group);
   for (const notice of group.reservationNotices || []) {
     if (pullRequestTransientNoticeExpired(notice.at)) continue;
     const row = element('div', 'merge-result');
@@ -2477,6 +2480,57 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
   appendPullRequestMergeResults(content, group);
   section.append(content);
   target.append(section);
+}
+
+function appendPullRequestError(content, group) {
+  if (!group.error) return;
+  const error = element('div', 'error-box');
+  error.append(element('div', '', group.error));
+  if (group.unregisterableCount > 0) {
+    const key = `${group.owner}/${group.repo}`.toLowerCase();
+    const confirmation = repositoryUnregisterConfirmations.get(key);
+    const controls = element('div', 'repository-unregister');
+    const buttonFor = (label, action) => {
+      const button = element('button', 'link-btn', label);
+      button.type = 'button';
+      button.disabled = confirmation?.pending === true;
+      button.addEventListener('click', action);
+      return button;
+    };
+    if (confirmation) {
+      controls.append(element('span', '', `状態を確認できない ${group.unregisterableCount} 件の PR の記録を削除します。元に戻せません`));
+      controls.append(buttonFor(confirmation.pending ? '削除中…' : '削除する', () => { void unregisterPullRequestRepository(group); }));
+      controls.append(buttonFor('やめる', () => {
+        repositoryUnregisterConfirmations.delete(key);
+        render(lastState);
+      }));
+    } else {
+      controls.append(buttonFor('このリポジトリの登録を外す', () => {
+        repositoryUnregisterConfirmations.set(key, { pending: false });
+        render(lastState);
+      }));
+    }
+    error.append(controls);
+  }
+  content.append(error);
+}
+
+async function unregisterPullRequestRepository(group) {
+  const key = `${group.owner}/${group.repo}`.toLowerCase();
+  const confirmation = repositoryUnregisterConfirmations.get(key);
+  if (!confirmation || confirmation.pending) return;
+  confirmation.pending = true;
+  render(lastState);
+  try {
+    const response = await postUiAction('/api/pull-requests/repository/unregister', { owner: group.owner, repo: group.repo });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    repositoryUnregisterConfirmations.delete(key);
+    await refresh();
+  } catch {
+    confirmation.pending = false;
+    showWriteError('リポジトリの登録を外せませんでした');
+    render(lastState);
+  }
 }
 
 function productGroups(sessions, pullRequestGroups = []) {

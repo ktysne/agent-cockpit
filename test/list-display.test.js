@@ -236,7 +236,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}`,
     appendPullRequestTree(target) { target.append(fakeElement('article', 'pr', 'オープン #1')); },
   });
-  vm.runInContext(`${webResultLine}\n${webResults}\n${webBlock}`, webContext);
+  vm.runInContext(`${webResultLine}\n${webResults}\n${functionSource(web, 'appendPullRequestError')}\n${webBlock}`, webContext);
   const group = {
     owner: 'owner', repo: 'repo', product: { name: 'Product' }, fetchedAt: 'now',
     reservationNotices: [],
@@ -1405,7 +1405,7 @@ test('マージの実行中は方式とブランチ削除の変更を受け付�
 });
 
 test('PR の初回取得中は空一覧の代わりに取得中の案内を出す', () => {
-  const resultFunctions = [functionSource(web, 'pullRequestMergeResultLine'), functionSource(web, 'appendPullRequestMergeResults'), functionSource(web, 'appendPullRequestBlock')];
+  const resultFunctions = ['pullRequestMergeResultLine', 'appendPullRequestMergeResults', 'appendPullRequestError', 'appendPullRequestBlock'].map(name => functionSource(web, name));
   assert.ok(resultFunctions.every(Boolean));
   const context = pageContext(web, {
     MERGE_METHOD_LABELS: {}, MERGED_VISIBLE_COUNT: 5, displayPreferences: { hideFinished: true },

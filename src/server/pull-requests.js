@@ -1054,6 +1054,27 @@ class PullRequestTracker {
     });
   }
 
+  async unregisterUnknownRepository(owner, repo) {
+    const key = repoKey(owner, repo);
+    // 取得中に確かめられた open を削除せず、取得処理が表示を復活させないように待つ。
+    await this.inFlight.get(key)?.catch(() => {});
+    const deleted = this.state.unregisterUnknownPullRequests(owner, repo);
+    if (!deleted) return deleted;
+    if (this.state.pullRequestRegistrationsForRepo(owner, repo).length
+      || this.state.relatedPullRequestRegistrationsForRepo(owner, repo).length) {
+      await this.refreshRepo(owner, repo);
+    } else {
+      this.repositories.delete(key);
+      this.crossReviewByRepository.delete(key);
+      this.initialFetchCompleted.delete(key);
+      for (const [identity, view] of this.productViews) {
+        if (repoKey(view.owner, view.repo) === key) this.productViews.delete(identity);
+      }
+      this.state.touch();
+    }
+    return deleted;
+  }
+
   refreshRepo(owner, repo) {
     const repository = safeRepo(owner, repo);
     const key = repoKey(owner, repo);
@@ -1486,6 +1507,7 @@ class PullRequestTracker {
         openStateUnknown: !repositoryState.listAvailable
           || group.registrations.some((registration) => repositoryState.uninspectedNumbers.has(registration.number)),
         registeredCount: group.registrations.length,
+        unregisterableCount: [...registrations, ...relatedPullRequests].filter((record) => record.state === 'unknown').length,
         openCount: assembled.openCount,
         mergeableCount: mergeablePullRequestCount(trees),
         trees,
