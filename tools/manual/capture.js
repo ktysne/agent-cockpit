@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const { findBrowser, launchBrowser, sleep } = require('./cdp');
 const { startDemoServer } = require('./demo-server');
 const { scenarioNames } = require('./demo');
@@ -146,6 +147,93 @@ function pngSize(buffer) {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
+// 描画の揺れを吸収するための許容で、文字や色の変更はこれを超える。
+// 差が IGNORED 以下の画素はグラデーションの揺れとして数えず、それを超える画素は縁のにじみとして MAX_PIXELS 個まで許す。
+const RENDERING_NOISE_IGNORED_DIFFERENCE = 2;
+const RENDERING_NOISE_MAX_PIXELS = 32;
+const RENDERING_NOISE_MAX_CHANNEL_DIFFERENCE = 48;
+const PNG_SIGNATURE = '89504e470d0a1a0a';
+const PNG_CHANNELS_BY_COLOR_TYPE = new Map([[2, 3], [6, 4]]);
+
+function pngPredictor(filter, left, up, upLeft) {
+  if (filter === 0) return 0;
+  if (filter === 1) return left;
+  if (filter === 2) return up;
+  if (filter === 3) return (left + up) >> 1;
+  const estimate = left + up - upLeft;
+  const distanceLeft = Math.abs(estimate - left);
+  const distanceUp = Math.abs(estimate - up);
+  const distanceUpLeft = Math.abs(estimate - upLeft);
+  if (distanceLeft <= distanceUp && distanceLeft <= distanceUpLeft) return left;
+  return distanceUp <= distanceUpLeft ? up : upLeft;
+}
+
+// 8 ビットの RGB と RGBA で、インターレースでない PNG だけ画素を取り出す。それ以外は null を返す。
+function decodePngPixels(buffer) {
+  if (buffer.length < 8 || buffer.subarray(0, 8).toString('hex') !== PNG_SIGNATURE) return null;
+  let header = null;
+  const dataChunks = [];
+  for (let offset = 8; offset + 8 <= buffer.length;) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString('latin1', offset + 4, offset + 8);
+    const data = buffer.subarray(offset + 8, offset + 8 + length);
+    if (data.length !== length) return null;
+    if (type === 'IHDR') header = data;
+    else if (type === 'IDAT') dataChunks.push(data);
+    else if (type === 'IEND') break;
+    offset += 12 + length;
+  }
+  if (!header || header.length < 13) return null;
+  const width = header.readUInt32BE(0);
+  const height = header.readUInt32BE(4);
+  const channels = PNG_CHANNELS_BY_COLOR_TYPE.get(header[9]);
+  if (!width || !height || header[8] !== 8 || header[12] !== 0 || !channels) return null;
+
+  const stride = width * channels;
+  let raw;
+  try {
+    raw = zlib.inflateSync(Buffer.concat(dataChunks));
+  } catch {
+    return null;
+  }
+  if (raw.length !== height * (stride + 1)) return null;
+
+  const data = Buffer.alloc(height * stride);
+  for (let y = 0; y < height; y += 1) {
+    const filter = raw[y * (stride + 1)];
+    if (filter > 4) return null;
+    const source = y * (stride + 1) + 1;
+    const row = y * stride;
+    for (let i = 0; i < stride; i += 1) {
+      const left = i >= channels ? data[row + i - channels] : 0;
+      const up = y > 0 ? data[row - stride + i] : 0;
+      const upLeft = y > 0 && i >= channels ? data[row - stride + i - channels] : 0;
+      data[row + i] = (raw[source + i] + pngPredictor(filter, left, up, upLeft)) & 0xff;
+    }
+  }
+  return { width, height, channels, data };
+}
+
+// 描画の揺れとして許す差かを返す。大きさ、チャネル数、比べられない形式は許さない(false)。
+function isRenderingNoise(existingPng, nextPng) {
+  const existing = decodePngPixels(existingPng);
+  const next = decodePngPixels(nextPng);
+  if (!existing || !next) return false;
+  if (existing.width !== next.width || existing.height !== next.height || existing.channels !== next.channels) return false;
+  const { channels } = existing;
+  let differentPixels = 0;
+  for (let offset = 0; offset < existing.data.length; offset += channels) {
+    let differs = false;
+    for (let channel = 0; channel < channels; channel += 1) {
+      const difference = Math.abs(existing.data[offset + channel] - next.data[offset + channel]);
+      if (difference > RENDERING_NOISE_MAX_CHANNEL_DIFFERENCE) return false;
+      if (difference > RENDERING_NOISE_IGNORED_DIFFERENCE) differs = true;
+    }
+    if (differs) differentPixels += 1;
+  }
+  return differentPixels <= RENDERING_NOISE_MAX_PIXELS;
+}
+
 // 要素の矩形を取り込み範囲の外側へ整数に丸めて広げる。画像の画素と矩形がずれないようにするため。
 function clipFromRect(rect) {
   const x = Math.floor(rect.x);
@@ -170,14 +258,16 @@ function buildRectsJson({ name, target, image, parts }) {
   return `${JSON.stringify({ name, target: target ?? null, width: image.width, height: image.height, parts }, null, 2)}\n`;
 }
 
-// 中身が前と同じファイルは書き換えない。書いたかどうかを返す。
-async function writeIfChanged(filePath, content) {
+// 中身が前と同じファイル、または isSameContent が真を返すファイルは書き換えない。書いたかどうかを返す。
+async function writeIfChanged(filePath, content, { isSameContent = () => false } = {}) {
   const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+  let existing = null;
   try {
-    if ((await fsp.readFile(filePath)).equals(buffer)) return false;
+    existing = await fsp.readFile(filePath);
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
+  if (existing && (existing.equals(buffer) || isSameContent(existing, buffer))) return false;
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
   await fsp.writeFile(filePath, buffer);
   return true;
@@ -283,7 +373,7 @@ async function takeScreenshot(page, step, context) {
     throw new Error(`撮った画像の大きさが想定と違います: ${image.width}x${image.height}(想定 ${clip.width * definition.scale}x${clip.height * definition.scale})`);
   }
   const base = path.join(outputDirectory, step.name);
-  const pngChanged = await writeIfChanged(`${base}.png`, png);
+  const pngChanged = await writeIfChanged(`${base}.png`, png, { isSameContent: isRenderingNoise });
   const jsonChanged = await writeIfChanged(`${base}.json`, buildRectsJson({ name: step.name, target: step.target, image, parts }));
   written.push({ file: `${base}.png`, changed: pngChanged }, { file: `${base}.json`, changed: jsonChanged });
 }
@@ -357,6 +447,21 @@ function loadDefinition(manualRoot, definitionName) {
   return validateShotDefinition(raw, { label });
 }
 
+// 1 件の定義が失敗しても残りを撮り続ける。失敗は都度ログに出し、最後に失敗した定義名をまとめて例外にする。
+async function runEachDefinition(definitions, runDefinition, { log = console.log } = {}) {
+  const failed = [];
+  for (const [name, definition] of definitions) {
+    log(`撮影: ${name}(${definition.title})`);
+    try {
+      await runDefinition(name, definition);
+    } catch (error) {
+      failed.push(name);
+      log(`失敗: ${name}: ${error.message}`);
+    }
+  }
+  if (failed.length) throw new Error(`撮影に失敗した定義: ${failed.join(', ')}`);
+}
+
 async function capture(names, { manualRoot = MANUAL_ROOT, log = console.log } = {}) {
   const targets = names.length ? names : listDefinitionNames(manualRoot);
   if (!targets.length) throw new Error('撮影の定義がありません');
@@ -364,10 +469,11 @@ async function capture(names, { manualRoot = MANUAL_ROOT, log = console.log } = 
   const definitions = targets.map((name) => [name, loadDefinition(manualRoot, name)]);
   const browser = await launchBrowser({ browserPath: findBrowser() });
   try {
-    for (const [name, definition] of definitions) {
-      log(`撮影: ${name}(${definition.title})`);
-      await captureDefinition(browser, name, definition, { manualRoot, log });
-    }
+    await runEachDefinition(
+      definitions,
+      (name, definition) => captureDefinition(browser, name, definition, { manualRoot, log }),
+      { log },
+    );
   } finally {
     await browser.close();
   }
@@ -406,10 +512,13 @@ module.exports = {
   storageEntries,
   initializationScript,
   pngSize,
+  decodePngPixels,
+  isRenderingNoise,
   clipFromRect,
   partBounds,
   buildRectsJson,
   writeIfChanged,
   listDefinitionNames,
+  runEachDefinition,
   capture,
 };
