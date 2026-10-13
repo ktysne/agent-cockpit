@@ -8,6 +8,7 @@ const {
   loadConfig,
   main,
   parseArgs,
+  isFtpConnectionLost,
   remoteRootOf,
   siteItems,
   uploadSite,
@@ -166,6 +167,139 @@ test('uploadSite は各ファイルを .uploading で送り、リネーム後に
     items.filter(item => item.remoteSubDir).length + 1);
   assert.equal(currentDirectory, remoteRoot);
   assert.deepEqual([...remoteFiles.keys()].sort(), items.map(item => path.posix.join(remoteRoot, item.label)).sort());
+});
+
+const FTP_CONFIG = { host: 'ftp.example.com', port: 21, user: 'user', password: 'password', secure: true, remoteRoot: '/remote/site' };
+
+function fakeFtpServer() {
+  const remoteFiles = new Map();
+  const failures = [];
+  const pauses = [];
+  let clients = 0;
+  const createClient = () => {
+    clients += 1;
+    let currentDirectory = '/';
+    let closed = false;
+    const failIfPlanned = (operation, name) => {
+      const index = failures.findIndex(failure => failure(operation, name, currentDirectory));
+      if (index < 0) return;
+      failures.splice(index, 1);
+      closed = true;
+      throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    };
+    const remotePath = name => path.posix.join(currentDirectory, name);
+    return {
+      get closed() { return closed; },
+      async access() {},
+      async cd(directory) { currentDirectory = directory === '/' ? '/' : path.posix.join(currentDirectory, directory); },
+      async ensureDir(directory) {
+        currentDirectory = path.posix.normalize(directory.startsWith('/') ? directory : path.posix.join(currentDirectory, directory));
+      },
+      async uploadFrom(localPath, name) {
+        failIfPlanned('upload', name);
+        remoteFiles.set(remotePath(name), fs.statSync(localPath).size);
+      },
+      async list() {
+        return [...remoteFiles]
+          .filter(([filePath]) => path.posix.dirname(filePath) === currentDirectory)
+          .map(([filePath, size]) => ({ name: path.posix.basename(filePath), size }));
+      },
+      async rename(oldName, newName) {
+        failIfPlanned('rename', newName);
+        if (!remoteFiles.has(remotePath(oldName)) || remoteFiles.has(remotePath(newName))) throw new Error('rename failed');
+        remoteFiles.set(remotePath(newName), remoteFiles.get(remotePath(oldName)));
+        remoteFiles.delete(remotePath(oldName));
+      },
+      async remove(name) { remoteFiles.delete(remotePath(name)); },
+      close() { closed = true; },
+    };
+  };
+  return {
+    remoteFiles,
+    failures,
+    pauses,
+    clientCount: () => clients,
+    dependencies: { createClient, pauseBeforeReconnect: async ms => { pauses.push(ms); } },
+  };
+}
+
+function expectedRemoteFiles(items) {
+  return items.map(item => [path.posix.join(FTP_CONFIG.remoteRoot, item.label), fs.statSync(item.localPath).size])
+    .sort(([left], [right]) => (left < right ? -1 : 1));
+}
+
+function sortedEntries(map) {
+  return [...map].sort(([left], [right]) => (left < right ? -1 : 1));
+}
+
+test('uploadSite は送信中に接続が切れたら、つなぎ直してそのファイルから送り直す', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  server.failures.push((operation, name) => operation === 'upload' && name === 'main.png.uploading');
+
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.equal(server.clientCount(), 2);
+  assert.deepEqual(server.pauses, [3000]);
+  assert.deepEqual(sortedEntries(server.remoteFiles), expectedRemoteFiles(items));
+});
+
+test('uploadSite は置き換えの途中で切れて退避名だけが残ったら、公開名へ戻してから送り直す', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  const indexPath = path.posix.join(FTP_CONFIG.remoteRoot, 'index.html');
+  server.remoteFiles.set(indexPath, 1);
+  server.failures.push((operation, name) => operation === 'rename' && name === 'index.html'
+    && server.remoteFiles.has(indexPath + '.previous'));
+
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.equal(server.clientCount(), 2);
+  assert.deepEqual(sortedEntries(server.remoteFiles), expectedRemoteFiles(items));
+});
+
+test('uploadSite は同じファイルで接続が 4 回切れたら止める', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  for (let count = 0; count < 4; count += 1) {
+    server.failures.push((operation, name) => operation === 'upload' && name === 'license.html.uploading');
+  }
+
+  await assert.rejects(uploadSite(items, FTP_CONFIG, server.dependencies), /license\.html の送信中に FTP の接続が 4 回切れた/);
+  assert.equal(server.clientCount(), 4);
+  assert.equal(server.remoteFiles.has(path.posix.join(FTP_CONFIG.remoteRoot, 'index.html')), false);
+});
+
+test('isFtpConnectionLost は通信の切断と、接続を閉じる 421 の応答を接続の切断として扱う', () => {
+  assert.equal(isFtpConnectionLost({ closed: false }, { code: 'ECONNRESET' }), true);
+  assert.equal(isFtpConnectionLost({ closed: false }, { code: 421 }), true);
+  assert.equal(isFtpConnectionLost({ closed: true }, new Error('closed')), true);
+  assert.equal(isFtpConnectionLost({ closed: false }, { code: 550 }), false);
+});
+
+test('uploadSite は接続が切れたのではない失敗を送り直さない', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  const dependencies = {
+    ...server.dependencies,
+    createClient() {
+      const client = server.dependencies.createClient();
+      client.uploadFrom = async () => { throw new Error('550 Permission denied'); };
+      return client;
+    },
+  };
+
+  await assert.rejects(uploadSite(items, FTP_CONFIG, dependencies), /550 Permission denied/);
+  assert.equal(server.clientCount(), 1);
+  assert.deepEqual(server.pauses, []);
 });
 
 test('dry-run は対象と要確認を表示し、FTPS クライアントへ接続しない', async t => {
