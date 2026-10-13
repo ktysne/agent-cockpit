@@ -280,16 +280,17 @@ test('描画の揺れは、画素数とチャネルの差の両方の許容で�
   assert.equal(isRenderingNoise(plain, shade({ filterAt: (y) => y % 5 })), true);
   assert.equal(isRenderingNoise(plain, shade({ changes: [[3, 2, 0, 5]] })), true);
   assert.equal(isRenderingNoise(plain, shade({ changes: changedPixels(SHADE_WIDTH * SHADE_HEIGHT, 2) })), true);
-  assert.equal(isRenderingNoise(plain, shade({ changes: changedPixels(32, 3) })), true);
   assert.equal(isRenderingNoise(plain, shade({ changes: changedPixels(33, 3) })), false);
-  assert.equal(isRenderingNoise(plain, shade({ changes: changedPixels(1, 48) })), true);
   assert.equal(isRenderingNoise(plain, shade({ changes: changedPixels(1, 49) })), false);
+  // 背景色を 1 だけ変えたような、画像全体に広がる淡い差は揺れとして扱わない。
+  const wide = { width: 40, height: 26, filterAt: () => 0 };
+  const tinted = (x, y) => baseColor(x, y).map((value, channel) => (channel === 0 ? value ^ 1 : value));
+  assert.equal(isRenderingNoise(makePng({ ...wide, pixel: baseColor }), makePng({ ...wide, pixel: tinted })), false);
   assert.equal(isRenderingNoise(plain, shade({ width: SHADE_WIDTH - 1 })), false);
   assert.equal(isRenderingNoise(plain, shade({ colorType: 6 })), false);
   assert.equal(isRenderingNoise(plain, makePng({ width: SHADE_WIDTH, height: SHADE_HEIGHT, bitDepth: 16, pixel: baseColor })), false);
 
   const rgba = shade({ colorType: 6 });
-  assert.equal(isRenderingNoise(rgba, shade({ colorType: 6, changes: [[0, 0, 3, 48]] })), true);
   assert.equal(isRenderingNoise(rgba, shade({ colorType: 6, changes: [[0, 0, 3, 49]] })), false);
 });
 

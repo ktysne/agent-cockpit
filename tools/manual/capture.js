@@ -147,9 +147,10 @@ function pngSize(buffer) {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
-// 描画の揺れを吸収するための許容で、文字や色の変更はこれを超える。
-// 差が IGNORED 以下の画素はグラデーションの揺れとして数えず、それを超える画素は縁のにじみとして MAX_PIXELS 個まで許す。
-const RENDERING_NOISE_IGNORED_DIFFERENCE = 2;
+// 描画の揺れを吸収するための許容で、文字や色の変更はこれを超える(docs/design/manual.md「撮影の実行」)。
+// 差が FAINT 以下の画素はグラデーションの揺れとして MAX_FAINT_PIXELS 個まで、それを超える画素は縁のにじみとして MAX_PIXELS 個まで許す。
+const RENDERING_NOISE_FAINT_DIFFERENCE = 2;
+const RENDERING_NOISE_MAX_FAINT_PIXELS = 1000;
 const RENDERING_NOISE_MAX_PIXELS = 32;
 const RENDERING_NOISE_MAX_CHANNEL_DIFFERENCE = 48;
 const PNG_SIGNATURE = '89504e470d0a1a0a';
@@ -221,17 +222,18 @@ function isRenderingNoise(existingPng, nextPng) {
   if (!existing || !next) return false;
   if (existing.width !== next.width || existing.height !== next.height || existing.channels !== next.channels) return false;
   const { channels } = existing;
+  let faintPixels = 0;
   let differentPixels = 0;
   for (let offset = 0; offset < existing.data.length; offset += channels) {
-    let differs = false;
+    let largest = 0;
     for (let channel = 0; channel < channels; channel += 1) {
-      const difference = Math.abs(existing.data[offset + channel] - next.data[offset + channel]);
-      if (difference > RENDERING_NOISE_MAX_CHANNEL_DIFFERENCE) return false;
-      if (difference > RENDERING_NOISE_IGNORED_DIFFERENCE) differs = true;
+      largest = Math.max(largest, Math.abs(existing.data[offset + channel] - next.data[offset + channel]));
     }
-    if (differs) differentPixels += 1;
+    if (largest > RENDERING_NOISE_MAX_CHANNEL_DIFFERENCE) return false;
+    if (largest > RENDERING_NOISE_FAINT_DIFFERENCE) differentPixels += 1;
+    else if (largest) faintPixels += 1;
   }
-  return differentPixels <= RENDERING_NOISE_MAX_PIXELS;
+  return differentPixels <= RENDERING_NOISE_MAX_PIXELS && faintPixels <= RENDERING_NOISE_MAX_FAINT_PIXELS;
 }
 
 // 要素の矩形を取り込み範囲の外側へ整数に丸めて広げる。画像の画素と矩形がずれないようにするため。
