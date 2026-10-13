@@ -588,7 +588,7 @@ h3.sub .count { font-weight: normal; }
   <p class="diagnostics-policy-callout"><strong>あなたの操作なしに記録が外に出ることはありません。外に出るのは「コピー」か「書き出す」を押したときだけです。</strong></p>
   <section aria-labelledby="diagnostics-policy-storage-title">
     <h3 id="diagnostics-policy-storage-title">保存先と保持期間</h3>
-    <p>記録はこの端末の <code>~/.agent-cockpit/diagnostics/</code> に保存します。直近 10 回の起動を残し、区分ファイルは全体で 30 件まで、1 区分は 2000 行までです。上限を超えたときは古い記録から削除します。サーバーに届かなかったフックの記録は、一時的に <code>hooks-pending.jsonl</code> に 256 KiB まで保存し、サーバーが取り込んだ後に削除します。</p>
+    <p>記録はこの端末の <code>~/.agent-cockpit/diagnostics/</code> に保存します。直近 10 回の起動を残し、区分ファイルは全体で 30 件まで、1 区分は 2000 行までです。上限を超えたときは古い記録から削除します。同じ記録が 10 分以内に続いたときは、最初の 1 件と繰り返した件数だけを残します。サーバーに届かなかったフックの記録は、一時的に <code>hooks-pending.jsonl</code> に 256 KiB まで保存し、サーバーが取り込んだ後に削除します。</p>
   </section>
   <section aria-labelledby="diagnostics-policy-level-title">
     <h3 id="diagnostics-policy-level-title">レベルごとに残る記録</h3>

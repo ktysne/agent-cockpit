@@ -1386,11 +1386,15 @@ test('gh の連続失敗は操作と回数を残し、コマンド行と標準�
   await fixture.tracker.refreshRepo('example', 'project');
   fixture.control.failOpenList = true;
   await fixture.tracker.refreshRepo('example', 'project');
-  const entries = (await fixture.diagnostics.readRun(fixture.diagnostics.run)).filter(entry => entry.msg === 'gh.failed');
-  assert.deepEqual(entries.map(entry => entry.data.consecutive), [1, 2, 1]);
+  await fixture.diagnostics.flush();
+  const runEntries = await fixture.diagnostics.readRun(fixture.diagnostics.run);
+  const entries = runEntries.filter(entry => entry.msg === 'gh.failed');
+  assert.deepEqual(entries.map(entry => entry.data.consecutive), [1, 2]);
   assert.ok(entries.every(entry => entry.data.operation === 'pr.list' && entry.data.repository === 'example/project'));
   assert.ok(entries.every(entry => entry.data.exitCode === 17 && entry.data.failure === 'exit'));
-  assert.doesNotMatch(JSON.stringify(entries), /private|stderr|message|stack|--json/);
+  assert.ok(runEntries.some(entry => entry.msg === 'diagnostics.repeated'
+    && entry.data.msg === 'gh.failed' && entry.data.count === 1));
+  assert.doesNotMatch(JSON.stringify(runEntries), /private|stderr|message|stack|--json/);
 });
 
 test('マージ予約と head の照合と未成立の条件は本文を残さない', async t => {
