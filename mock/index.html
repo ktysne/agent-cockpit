@@ -1471,16 +1471,25 @@ function providerOrigin(providers) {
   return hasClaude && hasCodex ? 'both' : hasClaude ? 'claude' : hasCodex ? 'codex' : '';
 }
 
-function originAttributes(providers) {
-  const origin = providerOrigin(providers);
+function hasCodexOrigin() {
+  const hasCodexProvider = providers => Array.isArray(providers) ? providers.includes('codex') : providers === 'codex';
+  const pullRequestHasCodex = pr => hasCodexProvider(pr.providers) || (pr.children || []).some(pullRequestHasCodex);
+  return DATA.products.some(p => [...(p.sessions || []), ...(p.extraSessions || [])].some(session => session.provider === 'codex')
+    || (p.prs || []).some(pullRequestHasCodex)
+    || (p.closedPrs || []).some(pullRequestHasCodex)
+    || (p.news || []).some(item => hasCodexProvider(item.providers ?? item.provider)));
+}
+
+function originAttributes(providers, showOriginBands = true) {
+  const origin = showOriginBands ? providerOrigin(providers) : '';
   return origin ? ` class="origin-${origin}" data-origin="${origin}"` : '';
 }
 
-function newsBox(p, withTag) {
+function newsBox(p, withTag, showOriginBands = true) {
   if (!sinceSeenVisible() || !p.news.length || ui.seen.includes(p.id)) return '';
   return `<div class="news"><div class="nhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}前回見てから (${p.news.length} 件)
     <button type="button" class="link-btn" data-seen="${p.id}">既読にする</button></div>
-    <ul>${p.news.map(n => `<li${originAttributes(n.providers ?? n.provider ?? 'claude')}>${esc(n.t)}</li>`).join('')}</ul></div>`;
+    <ul>${p.news.map(n => `<li${originAttributes(n.providers ?? n.provider ?? 'claude', showOriginBands)}>${esc(n.t)}</li>`).join('')}</ul></div>`;
 }
 
 function decisionCard(p, session, d, withTag) {
@@ -1915,7 +1924,7 @@ function conflictStatus(p, pr) {
   return at ? `<div class="badges"><span class="badge accent long">${esc(absoluteTimeLabel(at, Date.now(), at))} に ${esc(pr.requestSession.name)} のセッションへ衝突の解消を依頼した</span></div>` : '';
 }
 
-function prItem(p, pr) {
+function prItem(p, pr, showOriginBands = true) {
   const k = prKey(p, pr.number);
   const confirmManual = ui.confirm?.key === k && ui.confirm.action === 'manual';
   const operationBlocker = mergeOperationBlocker(p, pr);
@@ -1931,7 +1940,7 @@ function prItem(p, pr) {
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
-  const origin = providerOrigin(pr.providers ?? ['claude']);
+  const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
   const classes = ['pr', rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : '', origin ? `origin-${origin}` : '']
     .filter(Boolean).join(' ');
   const actions = [
@@ -1962,9 +1971,9 @@ function prItem(p, pr) {
   </div>`;
 }
 
-function prTree(p, pr) {
+function prTree(p, pr, showOriginBands = true) {
   const kids = childPrs(p, pr);
-  return prItem(p, pr) + (kids.length ? `<div class="stack-level">${kids.map(k => prTree(p, k)).join('')}</div>` : '');
+  return prItem(p, pr, showOriginBands) + (kids.length ? `<div class="stack-level">${kids.map(k => prTree(p, k, showOriginBands)).join('')}</div>` : '');
 }
 
 function reservationNoticeRows(p) {
@@ -1979,7 +1988,7 @@ function reservationNoticeRows(p) {
 }
 
 const MERGED_VISIBLE_COUNT = 5;
-function prBlock(p, withTag) {
+function prBlock(p, withTag, showOriginBands = true) {
   const roots = openPrs(p).filter(pr => !parentPr(p, pr));
   const merged = p.prs.filter(pr => isMerged(p, pr) && !ui.dismissedMergeHistory.includes(`${p.repo.name}#${pr.number}`.toLowerCase()));
   const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
@@ -1987,17 +1996,17 @@ function prBlock(p, withTag) {
   const head = `<header class="prs-head"><${headingTag} class="pr-repo-title"><strong>${esc(p.repo.name)}</strong></${headingTag}>${tag}<span class="meta">GitHub から ${esc(p.repo.fetched)}に取得</span></header>`;
   const stacks = roots.map(r => `<div class="stack">
       <div class="stack-base"><code>${esc(effective(p, r).base)}</code>${childPrs(p, r).length ? `<span>スタック ${stackPos(p, r).total} 段</span>` : ''}</div>
-      ${prTree(p, r)}</div>`).join('');
+      ${prTree(p, r, showOriginBands)}</div>`).join('');
   const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
   const visibleMerged = ui.hideFinished ? mergedNewestFirst.filter(({ pr }) => pr.headMismatch === true) : mergedNewestFirst;
   const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', visibleMerged.map(({ pr, m }) => {
-    const origin = providerOrigin(pr.providers ?? ['claude']);
+    const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
     return `<span class="badge long ${pr.headMismatch === true ? 'warn' : 'mute'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`;
   }), true);
   const closed = visibleClosedPrs(p);
   const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr => {
-    const origin = providerOrigin(pr.providers ?? ['claude']);
+    const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
     return `<a class="badge mute${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''} href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`;
   }));
   const empty = !roots.length
@@ -2124,19 +2133,19 @@ function unknownSessionControls(session) {
   return `<div class="session-extra"><div class="session-actions"><button type="button" class="ended-toggle" data-estimate="${esc(session.id)}">状態を推定</button><button type="button" class="ended-toggle" data-hide-session="${esc(session.id)}">一覧から外す</button></div>${estimate}</div>`;
 }
 
-function sessionBlock(p, session) {
+function sessionBlock(p, session, showOriginBands = true) {
   const multiple = p.sessions.length > 1;
   const groupTag = multiple ? 'section' : 'div';
-  const origin = session.provider === 'codex' ? 'codex' : 'claude';
+  const origin = showOriginBands ? session.provider === 'codex' ? 'codex' : 'claude' : '';
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
     || (!ui.hideFinished && session.decisions.some(isEndedDecision))
     || !hasHiddenJudgmentItems(session);
-  return `<${groupTag} class="session-group ${multiple ? '' : 'single'} origin-${origin}" data-origin="${origin}">
+  return `<${groupTag} class="session-group ${multiple ? '' : 'single'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}</div>` : ''}
     <div class="session-body">
-      ${multiple ? '' : `<div class="session-tag session-context" data-origin="${origin}">${esc(sessionDisplayName(session))}</div>`}
+      ${multiple ? '' : `<div class="session-tag session-context"${origin ? ` data-origin="${origin}"` : ''}>${esc(sessionDisplayName(session))}</div>`}
       ${orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
         judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
@@ -2213,7 +2222,7 @@ function productCloseButton(p, describedById) {
   return `<button type="button" class="icon-btn" data-close-product="${p.id}" aria-label="このプロダクトのセッションを一覧から外す" aria-describedby="${describedById}" title="このプロダクトのセッションを一覧から外す">×</button>`;
 }
 
-function renderProductMode() {
+function renderProductMode(showOriginBands = true) {
   const ps = orderedProducts();
   if (!ps.length) {
     const hidden = finishedHiddenCounts();
@@ -2238,14 +2247,14 @@ function renderProductMode() {
         ${productCloseButton(p, `product-heading-${i}`) ? `<div class="product-remove">${productCloseButton(p, `product-heading-${i}`)}</div>` : ''}
       </div>
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
-        ${newsBox(p, false)}
-        ${sessions.map(session => sessionBlock(p, session)).join('')}
-        ${isShown('prs') ? `<div class="product-pr-divider"></div><h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false)}` : ''}
+        ${newsBox(p, false, showOriginBands)}
+        ${sessions.map(session => sessionBlock(p, session, showOriginBands)).join('')}
+        ${isShown('prs') ? `<div class="product-pr-divider"></div><h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false, showOriginBands)}` : ''}
       </div></section>`;
   }).join('');
 }
 
-function renderKindMode() {
+function renderKindMode(showOriginBands = true) {
   const ps = orderedProducts();
   if (!ps.length) {
     const hidden = finishedHiddenCounts();
@@ -2277,7 +2286,7 @@ function renderKindMode() {
   const decisionControls = endedDecisionToggle ? `<div class="kind-section-controls">${endedDecisionToggle}</div>` : '';
   const decisions = decisionItems;
   const showJudgment = Boolean(decisionItems || endedDecisionToggle) || !hiddenJudgmentItems;
-  const news = ps.map(p => newsBox(p, true)).join('');
+  const news = ps.map(p => newsBox(p, true, showOriginBands)).join('');
   const showEndedAgents = ui.expandedKindAgents && !ui.hideFinished;
   const nowRowsByAge = sessions.flatMap(({ p, session }) => {
     const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || showEndedAgents);
@@ -2306,7 +2315,7 @@ function renderKindMode() {
   const taskControls = todoTaskToggle || doneTaskToggle
     ? `<div class="kind-section-controls">${todoTaskToggle}${doneTaskToggle}</div>`
     : '';
-  const prs = ps.filter(p => reservationNoticeRows(p) || (ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true)).join('');
+  const prs = ps.filter(p => reservationNoticeRows(p) || (ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true, showOriginBands)).join('');
   const sections = {
     sinceSeen: news ? section('前回見てから', news) : '',
     judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls, waits.length + endedDecisionEntries.length) : '',
@@ -2318,6 +2327,7 @@ function renderKindMode() {
 }
 
 function render() {
+  const showOriginBands = hasCodexOrigin();
   const active = document.activeElement;
   const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
   const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
@@ -2334,7 +2344,7 @@ function render() {
   renderConnectionNote();
   renderReloadNote();
   renderRouting();
-  document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
+  document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode(showOriginBands) : renderKindMode(showOriginBands);
   if (focusData?.kind === 'record-deletion') {
     focusRecordDeletion(focusData.band, focusData.action);
   } else if (focusData?.attribute) {

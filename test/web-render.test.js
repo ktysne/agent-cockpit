@@ -266,7 +266,7 @@ function recordDeletionHarness(sessions, postUiAction = async () => ({ ok: true,
   vm.runInContext(['isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
     'renderExcludedNote', 'renderFinishedNote', 'renderIdleNote', 'finishedHiddenCounts', 'finishedDeletionTargets',
     'recordDeletionTargetKey', 'intersectRecordDeletionTargets', 'countRecordDeletionTargets', 'appendRecordDeletion',
-    'focusRecordDeletion', 'deleteNoteRecords', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+    'focusRecordDeletion', 'deleteNoteRecords', 'hasCodexOrigin', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
   context.render(context.lastState);
   return { context, notes, buttons, nodes: () => Object.values(notes).flatMap(flatten), get activeElement() { return activeElement; } };
 }
@@ -579,7 +579,8 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
   const render = functionSource(html, 'render');
   const renderDeferredState = functionSource(html, 'renderDeferredState');
   const visibleSinceSeen = functionSource(html, 'visibleSinceSeen');
-  assert.ok(render && visibleSinceSeen);
+  const hasCodexOrigin = functionSource(html, 'hasCodexOrigin');
+  assert.ok(render && visibleSinceSeen && hasCodexOrigin);
   assert.ok(renderDeferredState);
 
   let activeElement;
@@ -681,7 +682,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     },
     productSection: () => ({}),
   });
-  vm.runInContext(`${visibleSinceSeen}\n${render}\n${renderDeferredState}`, context);
+  vm.runInContext(`${visibleSinceSeen}\n${hasCodexOrigin}\n${render}\n${renderDeferredState}`, context);
   return {
     context,
     get renderCount() { return renderCount; },
@@ -1679,8 +1680,8 @@ test('プロダクト別と種類別に前回見てからを表示し、新し�
   assert.ok(renderKindSections);
   assert.ok(appendDecisionCard);
   assert.ok(markProductSeen);
-  assert.match(productSection, /sinceSeenBox\(product, false\)/);
-  assert.match(renderKindSections, /sinceSeenBox\(product, true\)/);
+  assert.match(productSection, /sinceSeenBox\(product, false, showOriginBands\)/);
+  assert.match(renderKindSections, /sinceSeenBox\(product, true, showOriginBands\)/);
   assert.match(source, /前回見てから \(\$\{entry\.items\.length\} 件\)/);
   assert.match(source, /seen\.dataset\.seen = product\.key/);
   assert.match(source, /postUiAction\('\/api\/seen'/);
@@ -2323,7 +2324,7 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
     orderedProducts: () => [{ key: 'product-ui' }],
     productSection: () => ({}),
   });
-  vm.runInContext(render, context);
+  vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
   context.render(context.lastState);
 
   assert.equal(replacementPick.focused, true);
@@ -3184,10 +3185,10 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   assert.equal(flatten(reservedNoMethodsRoot).find((node) => node.dataset?.reservationToggle === key).disabled, false);
 });
 
-test('マージ済みかクローズ済みの PR だけがあるときもオープンの欄を空表示する', () => {
+test('マージ済み・クローズ済みだけの PR では空表示し、Claude だけなら履歴に起点帯を付けない', () => {
   const element = functionSource(pageHtml, 'element');
   const shortShaElement = functionSource(pageHtml, 'shortShaElement');
-  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && shortShaElement && appendBlock);
 
   class FakeElement {
@@ -3211,6 +3212,7 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     expandedPrLines: new Set(),
     MERGED_VISIBLE_COUNT: 5,
     durationAgoLabel: () => '1 分前',
+    absoluteTimeLabel: () => '1 分前',
     appendPullRequestMergeResults() {},
   });
   vm.runInContext(`${element}\n${shortShaElement}\n${functionSource(pageHtml, 'providerOrigin')}\n${appendBlock}`, context);
@@ -3224,6 +3226,17 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     const content = root.children[0].children.find((node) => node.className === 'pr-repo-content');
     assert.ok(content.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'));
   }
+
+  const claudeHistory = new FakeElement('div');
+  context.appendPullRequestBlock(claudeHistory, {
+    owner: 'acme', repo: 'widget', trees: [], registeredCount: 1,
+    mergeHistory: [{ number: 41, providers: ['claude'], mergedAt: '2026-10-03T00:00:00.000Z' }],
+    merged: [{ number: 40, state: 'closed', providers: ['claude'], url: 'https://github.com/acme/widget/pull/40', title: 'Closed PR' }],
+  }, false, false);
+  const historyNodes = [];
+  const visitHistory = (node) => { historyNodes.push(node); for (const child of node.children || []) visitHistory(child); };
+  visitHistory(claudeHistory);
+  assert.equal(historyNodes.some((node) => /origin-(claude|codex|both)/.test(node.className || '') || node.dataset?.origin), false);
 
   const counted = new FakeElement('div');
   context.appendPullRequestBlock(counted, {
@@ -3490,7 +3503,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
 
 test('終わったものを隠すとマージ済みとクローズ済みの PR 行を出さない', () => {
   const element = functionSource(pageHtml, 'element');
-  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && appendBlock);
 
   class FakeElement {
@@ -3530,7 +3543,7 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = functionSource(html, 'element');
   const shortShaElement = functionSource(html, 'shortShaElement');
-  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && shortShaElement);
   assert.ok(appendBlock);
 
@@ -3585,7 +3598,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = functionSource(html, 'element');
   const expandToggle = functionSource(html, 'appendExpandToggle');
-  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && expandToggle);
   assert.ok(appendBlock);
 
@@ -3679,7 +3692,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = functionSource(html, 'element');
   const expandToggle = functionSource(html, 'appendExpandToggle');
-  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && expandToggle);
   assert.ok(appendBlock);
 
@@ -3804,7 +3817,7 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
-    vm.runInContext(render, context);
+    vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
     context.render(context.lastState);
 
     const expected = dataAttribute === 'conflictCancel' ? cancel : go;
@@ -3854,7 +3867,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
-    vm.runInContext(render, context);
+    vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
     context.render(context.lastState);
 
     assert.equal(replacementButton.focused, true, kind);
@@ -3942,7 +3955,7 @@ test('レビュー不要の通信後は有効な同じPRの操作へフォーカ
       refresh: async () => context.render(context.lastState),
       showWriteError() {},
     });
-    vm.runInContext(`${render}\n${runAction}`, context);
+    vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}\n${runAction}`, context);
 
     const pending = context.runCrossReviewSkipAction(activeButton);
     if (moveFocus) activeElement = buttons.find((button) => button.dataset.filter === 'prs');
@@ -4013,7 +4026,7 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
     orderedProducts: () => [{ key: 'product-ui' }],
     productSection: () => ({}),
   });
-  vm.runInContext(render, context);
+  vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
   context.render(context.lastState);
 
   assert.equal(replacementButton.focused, true);
@@ -4462,7 +4475,7 @@ test('読み込み直すボタンは書きかけの回答が無ければ読み�
   assert.match(withDraft.html, /data-reload-now>回答を消して読み込み直す</);
 });
 
-test('セッション、PR、「前回見てから」の項目に起点クラスと data-origin を付ける', () => {
+test('Codex が状態にあるときセッション、PR、「前回見てから」に起点帯を付ける', () => {
   class FakeElement {
     constructor(tagName) {
       this.tagName = tagName;
@@ -4499,13 +4512,17 @@ test('セッション、PR、「前回見てから」の項目に起点クラス
     orderedSectionKeys: (keys) => keys,
   });
   vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'sessionBlock')}`, sessionContext);
-  const claudeSession = sessionContext.sessionBlock({}, { title: 'Claude', decisions: [] }, true);
-  const codexSession = sessionContext.sessionBlock({}, { title: 'Codex', provider: 'codex', decisions: [] }, false);
+  const claudeSession = sessionContext.sessionBlock({}, { title: 'Claude', decisions: [] }, true, true);
+  const codexSession = sessionContext.sessionBlock({}, { title: 'Codex', provider: 'codex', decisions: [] }, false, true);
   assert.match(claudeSession.className, /origin-claude/);
   assert.equal(claudeSession.dataset.origin, 'claude');
   assert.match(codexSession.className, /origin-codex/);
   assert.equal(codexSession.dataset.origin, 'codex');
   assert.equal(codexSession.children[0].children[0].dataset.origin, 'codex');
+  const claudeOnlySession = sessionContext.sessionBlock({}, { title: 'Claude', decisions: [] }, false, false);
+  assert.doesNotMatch(claudeOnlySession.className, /origin-(claude|codex|both)/);
+  assert.equal(claudeOnlySession.dataset.origin, undefined);
+  assert.equal(claudeOnlySession.children[0].dataset.origin, undefined);
 
   const component = sourceBetween(pageHtml, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   assert.ok(component);
@@ -4519,9 +4536,9 @@ test('セッション、PR、「前回見てから」の項目に起点クラス
     appendPullRequestBadges() {},
   });
   vm.runInContext(`${helpers}\n${component}`, prContext);
-  const renderPr = (providers) => {
+  const renderPr = (providers, showOriginBands = true) => {
     const root = new FakeElement('div');
-    prContext.appendPullRequestTree(root, {}, { number: 1, title: 'PR', canMerge: false, providers, children: [] });
+    prContext.appendPullRequestTree(root, {}, { number: 1, title: 'PR', canMerge: false, providers, children: [] }, showOriginBands);
     return root.children[0];
   };
   for (const [providers, origin] of [
@@ -4535,6 +4552,13 @@ test('セッション、PR、「前回見てから」の項目に起点クラス
   const unmarkedPr = renderPr([]);
   assert.doesNotMatch(unmarkedPr.className, /origin-/);
   assert.equal(unmarkedPr.dataset.origin, undefined);
+  const claudeOnlyPr = renderPr(['claude'], false);
+  assert.doesNotMatch(claudeOnlyPr.className, /origin-(claude|codex|both)/);
+  assert.equal(claudeOnlyPr.dataset.origin, undefined);
+  const codexPrOnlyState = { sessions: [], pullRequests: [{ trees: [{ providers: ['codex'], children: [] }] }], sinceSeen: [] };
+  assert.equal(prContext.hasCodexOrigin(codexPrOnlyState), true);
+  const claudePrWithCodexOnlyInState = renderPr(['claude'], prContext.hasCodexOrigin(codexPrOnlyState));
+  assert.match(claudePrWithCodexOnlyInState.className, /origin-claude/);
 
   const product = { key: 'origin-test', name: 'Origin test' };
   const seenContext = pageContext(pageHtml, {
@@ -4548,11 +4572,55 @@ test('セッション、PR、「前回見てから」の項目に起点クラス
     ] }],
   });
   vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'providerOrigin')}\n${functionSource(pageHtml, 'sinceSeenBox')}`, seenContext);
-  const listItems = seenContext.sinceSeenBox(product, false).children[1].children;
+  const hiddenOrigins = seenContext.sinceSeenBox(product, false, false).children[1].children;
+  assert.equal(hiddenOrigins.some((item) => /origin-(claude|codex|both)/.test(item.className) || item.dataset?.origin), false);
+  const listItems = seenContext.sinceSeenBox(product, false, true).children[1].children;
   for (const [item, origin] of listItems.slice(0, 3).map((item, index) => [item, ['claude', 'codex', 'both'][index]])) {
     assert.match(item.className, new RegExp(`origin-${origin}`));
     assert.equal(item.dataset.origin, origin);
   }
   assert.equal(listItems[3].className, '');
   assert.equal(listItems[3].dataset.origin, undefined);
+});
+
+test('起点帯の判定は非表示セッション、PR の履歴、新着まで状態全体を調べる', () => {
+  const context = pageContext(pageHtml, {});
+  vm.runInContext(functionSource(pageHtml, 'hasCodexOrigin'), context);
+  const claudeOnly = { sessions: [{ provider: 'claude' }], pullRequests: [{
+    trees: [{ providers: ['claude'], children: [] }],
+    mergeHistory: [{ providers: ['claude'] }],
+    merged: [{ providers: ['claude'] }],
+  }], sinceSeen: [{ items: [{ provider: 'claude' }] }] };
+  assert.equal(context.hasCodexOrigin(claudeOnly), false);
+  for (const state of [
+    { ...claudeOnly, sessions: [{ provider: 'codex', hidden: true, finished: true }] },
+    { ...claudeOnly, pullRequests: [{ trees: [{ providers: ['codex'], children: [] }], mergeHistory: [], merged: [] }] },
+    { ...claudeOnly, pullRequests: [{ trees: [], mergeHistory: [{ providers: ['codex'] }], merged: [] }] },
+    { ...claudeOnly, pullRequests: [{ trees: [], mergeHistory: [], merged: [{ providers: ['claude', 'codex'] }] }] },
+    { ...claudeOnly, sinceSeen: [{ items: [{ providers: ['codex'] }] }] },
+  ]) assert.equal(context.hasCodexOrigin(state), true);
+
+  const mockContext = pageContext(mockHtml, { DATA: { products: [{
+    sessions: [{ provider: 'claude' }], extraSessions: [], prs: [{ providers: ['claude'] }], closedPrs: [], news: [],
+  }] } });
+  vm.runInContext(functionSource(mockHtml, 'hasCodexOrigin'), mockContext);
+  assert.equal(mockContext.hasCodexOrigin(), false);
+  vm.runInContext(`${functionSource(mockHtml, 'providerOrigin')}\n${functionSource(mockHtml, 'originAttributes')}`, mockContext);
+  assert.equal(mockContext.originAttributes(['claude'], false), '');
+  assert.equal(mockContext.originAttributes(['claude'], true), ' class="origin-claude" data-origin="claude"');
+  mockContext.DATA.products[0].prs.push({ providers: ['codex'] });
+  assert.equal(mockContext.hasCodexOrigin(), true);
+
+  const mockSessionContext = pageContext(mockHtml, {
+    ui: { hideFinished: true },
+    esc: (value) => String(value),
+    visibleDecisions: () => [], visiblePerms: () => [], hasHiddenJudgmentItems: () => true,
+    sessionDisplayName: (session) => session.title, sharedBranch: () => '', orderedSectionKeys: (keys) => keys,
+    taskSessionBlock: () => '', mainRow: () => '', agentSection: () => '',
+  });
+  vm.runInContext(functionSource(mockHtml, 'sessionBlock'), mockSessionContext);
+  const mockSessionProduct = { sessions: [{}] };
+  const mockClaudeSession = { title: 'Claude', decisions: [] };
+  assert.doesNotMatch(mockSessionContext.sessionBlock(mockSessionProduct, mockClaudeSession, false), /origin-claude|data-origin/);
+  assert.match(mockSessionContext.sessionBlock(mockSessionProduct, mockClaudeSession, true), /origin-claude/);
 });
