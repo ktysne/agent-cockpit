@@ -7,6 +7,7 @@ const path = require('node:path');
 const { makeHookEvent, runHook } = require('../src/hooks/event');
 const { productFromCwd } = require('../src/server/identity');
 const { DashboardState } = require('../src/server/state');
+const { readTranscriptInterruption } = require('../src/server/transcript');
 const {
   startServer,
   MAX_BODY_BYTES,
@@ -109,6 +110,139 @@ test('待機中で稼働中の Claude サブエージェントがあるセッシ
   await new Promise(resolve => setTimeout(resolve, 80));
   assert.deepEqual(reads, [{ cwd: runtime.homeDir, id: 'waiting-claude' }]);
   assert.equal(state.snapshot().sessions.find(session => session.session_id === 'waiting-claude').status, '待機中');
+});
+
+// 中断の検出は、フックの状態、セッションファイル、transcript の三つがそろったときだけ働く。
+async function interruptionCockpit(t, options = {}) {
+  const reads = [];
+  const runtime = await runningServer(t, {
+    ...options,
+    readTranscriptInterruption: async (home, cwd, id) => {
+      reads.push(id);
+      return readTranscriptInterruption(home, cwd, id);
+    },
+  });
+  const claudeHome = path.join(runtime.homeDir, '.claude');
+  const base = Date.now() - 60_000;
+  const projectDirectory = path.join(claudeHome, 'projects', runtime.homeDir.replace(/[^A-Za-z0-9]/g, '-'));
+  await fs.mkdir(projectDirectory, { recursive: true });
+  await fs.mkdir(path.join(claudeHome, 'sessions'), { recursive: true });
+  const row = (type, offset, content) => JSON.stringify({
+    type, timestamp: new Date(base + offset).toISOString(),
+    message: { role: type, stop_reason: type === 'assistant' ? 'end_turn' : null, content },
+  });
+  return {
+    runtime, reads, base,
+    interruptedRow: (offset) => row('user', offset, [{ type: 'text', text: '[Request interrupted by user]' }]),
+    promptRow: (offset) => row('user', offset, [{ type: 'text', text: '続きをお願いします' }]),
+    answerRow: (offset) => row('assistant', offset, [{ type: 'text', text: '完了しました' }]),
+    async transcript(id, rows) {
+      await fs.writeFile(path.join(projectDirectory, `${id}.jsonl`), `${rows.join('\n')}\n`);
+    },
+    async sessionFile(id, status, statusOffset) {
+      await fs.writeFile(path.join(claudeHome, 'sessions', `${id}.json`), JSON.stringify({
+        sessionId: id, pid: process.pid, cwd: runtime.homeDir, status,
+        updatedAt: base + statusOffset, statusUpdatedAt: base + statusOffset,
+      }));
+    },
+    async hook(id, event, offset, fields = {}) {
+      const response = await request(runtime.info.port, {
+        method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+        body: JSON.stringify({ session_id: id, hook_event_name: event, hookAt: base + offset, ...fields }),
+      });
+      assert.equal(response.status, 202);
+    },
+    status: (id) => runtime.state.snapshot().sessions.find(session => session.session_id === id),
+  };
+}
+
+test('ファイルが idle になり transcript の最後が中断の行のセッションを、その行の時刻で中断にして解除まで保つ', async (t) => {
+  const c = await interruptionCockpit(t);
+  await c.hook('main', 'UserPromptSubmit', 0);
+  await c.transcript('main', [c.promptRow(0), c.interruptedRow(2000)]);
+
+  await c.sessionFile('main', 'busy', 1000);
+  await c.runtime.refreshSessionFiles();
+  assert.equal(c.status('main').status, '作業中');
+  assert.deepEqual(c.reads, []);
+
+  await c.sessionFile('main', 'idle', 5000);
+  await c.runtime.refreshSessionFiles();
+  const interrupted = c.status('main');
+  assert.equal(interrupted.status, '中断');
+  assert.equal(interrupted.lastActivityAt, new Date(c.base + 2000).toISOString());
+
+  await c.runtime.refreshSessionFiles();
+  assert.deepEqual(c.reads, ['main']);
+  assert.equal(c.status('main').status, '中断');
+
+  await c.hook('main', 'UserPromptSubmit', 10_000);
+  assert.equal(c.status('main').status, '作業中');
+  await c.runtime.refreshSessionFiles();
+  assert.equal(c.status('main').status, '作業中');
+  assert.deepEqual(c.reads, ['main']);
+
+  const rows = await jsonBody(await request(c.runtime.info.port, { path: '/api/state' })).sessions;
+  assert.equal(rows.find(session => session.session_id === 'main').status, '作業中');
+});
+
+test('中断を誤検出しない: 最後の入力より前の中断の行、busy のまま、区切りより古い idle の時刻、中断の行ではない末尾', async (t) => {
+  const c = await interruptionCockpit(t);
+  for (const id of ['before-prompt', 'still-busy', 'old-idle', 'plain-end']) await c.hook(id, 'UserPromptSubmit', 0);
+  await c.transcript('before-prompt', [c.interruptedRow(-5000)]);
+  await c.sessionFile('before-prompt', 'idle', 5000);
+  await c.transcript('still-busy', [c.promptRow(0), c.interruptedRow(2000)]);
+  await c.sessionFile('still-busy', 'busy', 5000);
+  await c.transcript('old-idle', [c.promptRow(0), c.interruptedRow(2000)]);
+  await c.sessionFile('old-idle', 'idle', -1000);
+  await c.transcript('plain-end', [c.promptRow(0), c.answerRow(2000)]);
+  await c.sessionFile('plain-end', 'idle', 5000);
+
+  await c.runtime.refreshSessionFiles();
+  for (const id of ['before-prompt', 'still-busy', 'old-idle', 'plain-end']) assert.equal(c.status(id).status, '作業中', id);
+  // Stop の取りこぼしは対象にしないが、transcript は idle の時刻ごとに一度だけ読む。
+  assert.deepEqual(c.reads.sort(), ['before-prompt', 'plain-end']);
+});
+
+test('transcript に中断の行が遅れて書かれても、idle の時刻が変わった次の更新で中断にする', async (t) => {
+  const c = await interruptionCockpit(t);
+  await c.hook('late', 'UserPromptSubmit', 0);
+  await c.transcript('late', [c.promptRow(0)]);
+  await c.sessionFile('late', 'idle', 3000);
+  await c.runtime.refreshSessionFiles();
+  assert.equal(c.status('late').status, '作業中');
+
+  await c.transcript('late', [c.promptRow(0), c.interruptedRow(2500)]);
+  await c.runtime.refreshSessionFiles();
+  assert.equal(c.status('late').status, '作業中');
+  assert.deepEqual(c.reads, ['late']);
+
+  await c.sessionFile('late', 'idle', 3500);
+  await c.runtime.refreshSessionFiles();
+  assert.equal(c.status('late').status, '中断');
+  assert.deepEqual(c.reads, ['late', 'late']);
+});
+
+test('中断中のセッションも、稼働中のサブエージェントの完了通知を transcript から取り込む', async (t) => {
+  const notificationReads = [];
+  const c = await interruptionCockpit(t, {
+    taskNotificationDelayMs: 5,
+    readTaskNotifications: async (home, cwd, id) => {
+      notificationReads.push(id);
+      return new Map([['bg-task', { status: 'completed', recordedAt: null }]]);
+    },
+  });
+  await c.hook('bg', 'UserPromptSubmit', 0);
+  await c.hook('bg', 'SubagentStart', 100, { agent_id: 'bg-task', agent_type: 'impl' });
+  await c.transcript('bg', [c.promptRow(0), c.interruptedRow(2000)]);
+  await c.sessionFile('bg', 'idle', 5000);
+  await c.runtime.refreshSessionFiles();
+  await new Promise(resolve => setTimeout(resolve, 80));
+
+  assert.ok(notificationReads.includes('bg'));
+  const session = c.status('bg');
+  assert.equal(session.status, '中断');
+  assert.equal(session.agents[0].active, false);
 });
 
 async function temporaryHome(testContext, { deferCleanup = false } = {}) {

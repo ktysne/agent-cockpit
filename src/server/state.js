@@ -591,7 +591,7 @@ function agentModelFromDefinition(agentType, definition) {
  * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
  * }} SessionAgent */
 
-/** @typedef {{session_id: string, provider: 'claude'|'codex', codex?: {model: string, resumes: number}, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
+/** @typedef {{session_id: string, provider: 'claude'|'codex', codex?: {model: string, resumes: number}, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, interrupted: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
 
 /** @typedef {{tools: SessionTool[], completedToolIds: Set<string>, agentToolBindings: Object<string, string|symbol|null>}} SessionTools */
 
@@ -628,6 +628,7 @@ function newSession(event, askDecisionState = {}) {
     codexQuestionTools: Object.create(null),
     startedAskToolUseIds: new Set(),
     stopped: false,
+    interrupted: false,
     turnKnown: false,
     ended: false,
     pendingCodex: Object.create(null),
@@ -809,11 +810,13 @@ function sessionSnapshot(session) {
     ? '許可待ち'
     : !session.turnKnown
       ? '不明'
-      : session.stopped && session.agents.some((agent) => agent.active)
-        ? '待機中(サブエージェント稼働中)'
-        : session.stopped
-          ? '待機中'
-          : '作業中';
+      : session.interrupted
+        ? '中断'
+        : session.stopped && session.agents.some((agent) => agent.active)
+          ? '待機中(サブエージェント稼働中)'
+          : session.stopped
+            ? '待機中'
+            : '作業中';
 
   return {
     session_id: session.session_id,
@@ -1223,9 +1226,10 @@ function applyPermissionPrompt(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'tools'> & SessionPermissions & SessionDecisions & Pick<SessionIdentity, 'provider'|'stopped'|'turnKnown'|'ended'>} session
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions & SessionDecisions & Pick<SessionIdentity, 'provider'|'stopped'|'interrupted'|'turnKnown'|'ended'>} session
  */
 function applySessionLifecycle(session, event) {
+  // Interrupt は Stop と同じ後始末をしたうえで、メインなら中断の印を付ける。印は次の入力か新しい開始まで残す。
   const eventName = event.hook_event_name === 'Interrupt' ? 'Stop' : event.hook_event_name;
   const agentId = event.agent_id || null;
   if (session.provider === 'codex' && eventName === 'UserPromptSubmit' && !agentId) {
@@ -1260,6 +1264,8 @@ function applySessionLifecycle(session, event) {
   if (eventName === 'Stop') {
     session.stopped = true;
   }
+  if (!agentId && (startsIdle || eventName === 'UserPromptSubmit')) session.interrupted = false;
+  if (!agentId && event.hook_event_name === 'Interrupt') session.interrupted = true;
   if (eventName === 'SessionEnd') session.ended = true;
 }
 
@@ -2776,6 +2782,33 @@ class DashboardState {
       this.addEvent({ session_id: sessionId, hook_event_name: 'SubagentStop', agent_id: agent.agent_id,
         hookAt: Number.isFinite(recordedAt) ? recordedAt : now });
     }
+  }
+
+  // Claude はターンの中断で Stop を送らないので、ファイルが idle なのにメインの最後の区切りより新しく、
+  // フックの状態が作業中か許可待ちのままのセッションだけを、transcript で中断を確かめる候補にする。
+  interruptCandidate(sessionId) {
+    const session = this.sessions.get(sessionId);
+    const file = this.sessionFiles.get(sessionId);
+    if (!session || session.provider !== 'claude' || file?.status !== 'idle') return null;
+    if (session.status !== '作業中' && session.status !== '許可待ち') return null;
+    const statusAt = Date.parse(file.statusUpdatedAt || '');
+    if (!Number.isFinite(statusAt)) return null;
+    let lastLifecycleAt = -Infinity;
+    let lastPromptAt = -Infinity;
+    for (const { event } of this.entries.get(sessionId) || []) {
+      if (event.agent_id) continue;
+      const name = event.hook_event_name;
+      if (name === 'UserPromptSubmit') lastPromptAt = Math.max(lastPromptAt, event.hookAt);
+      if (name === 'SessionStart' || name === 'UserPromptSubmit' || name === 'Stop') {
+        lastLifecycleAt = Math.max(lastLifecycleAt, event.hookAt);
+      }
+    }
+    if (statusAt <= lastLifecycleAt) return null;
+    return { cwd: file.cwd, statusUpdatedAt: file.statusUpdatedAt, lastPromptAt };
+  }
+
+  recordInterruption(sessionId, hookAt) {
+    return this.addEvent({ session_id: sessionId, hook_event_name: 'Interrupt', hookAt });
   }
 
   // 読み取り中に状態が分かったセッションには推定を保存しない。

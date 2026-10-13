@@ -281,6 +281,7 @@ h3.sub .count { font-weight: normal; }
 .dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--text-2); }
 .dot.busy { background: var(--ok); animation: pulse 1.6s infinite; }
 .dot.wait { background: var(--warn); }
+.dot.interrupted { background: transparent; box-shadow: inset 0 0 0 2px var(--warn); }
 .dot.unknown { border: 1px dashed var(--text-2); background: transparent; }
 .activity-title { font-weight: 600; }
 @keyframes pulse { 50% { opacity: .35; } }
@@ -2046,7 +2047,7 @@ function renderFinishedNote(counts, targets) {
 
 function isIdleHiddenSession(session, now = Date.now()) {
   // 非対話の実行中は作業中として見せるので、更新時刻が古くても隠さない。
-  if (session.status === '作業中' || (session.status === '不明' && session.nonInteractive)
+  if (session.status === '作業中' || session.status === '中断' || (session.status === '不明' && session.nonInteractive)
     || (session.permissionWaits || []).length > 0) return false;
   if ((session.decisions || []).some(isActiveDecision)) return false;
   if ((session.agents || []).some((agent) => !isEndedAgent(agent))) return false;
@@ -3087,6 +3088,7 @@ function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
 
 function activityStatus(session) {
   if (session.status === '作業中') return { label: '作業中', tone: 'busy' };
+  if (session.status === '中断') return { label: '中断', tone: 'interrupted' };
   if (session.status === '不明' && session.nonInteractive) return { label: '非対話の実行中', tone: 'busy' };
   if (session.status === '不明') return { label: '状態不明', tone: 'unknown' };
   return { label: '待機中', tone: 'wait' };
@@ -3112,7 +3114,9 @@ function mainRow(session, product, withTags = false, multipleSessions = false, s
   const who = element('div', 'who');
   who.append(element('span', `dot ${status.tone}`), document.createTextNode('メイン'));
   appendContextTags(who, product, session, withTags, multipleSessions);
-  who.append(element('strong', '', isUnknown && !hasEstimate ? `${status.label} (${durationAgoLabel(session.lastActivityAt)})` : status.label));
+  const statusLabel = element('strong', '', isUnknown && !hasEstimate ? `${status.label} (${durationAgoLabel(session.lastActivityAt)})` : status.label);
+  if (status.tone === 'interrupted') statusLabel.title = '利用者が中断した。セッションは生きていて、次の入力を待っている';
+  who.append(statusLabel);
   const detail = element('div', 'detail');
   if (doingTask) detail.append(element('div', 'activity-title', doingTask.title));
   if (mainTool) appendToolLine(detail, mainTool);
