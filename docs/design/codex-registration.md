@@ -125,7 +125,6 @@ Codex から呼ばれた MCP の書き込み先を、フックで登録したセ
 
 ## 未確認
 
-- デスクトップで `SessionEnd` が届く条件。CLI の TUI は、どの終わらせ方でも約 1 分後に届く([codex-recovery.md](codex-recovery.md)「会話の終わりと SessionEnd」)
 - 実機の `PermissionRequest`。確認した操作では、CLI もデスクトップも許可を求めずに権限昇格か失敗で終わった
 - `PermissionRequest` と `PreToolUse` の順序
 - 確認の最初のやり取りで、Codex がフックの失敗(終了コード 1)を表示した原因。終了コードを記録した後のやり取りでは、cockpit のフックはすべて 0 で終わった

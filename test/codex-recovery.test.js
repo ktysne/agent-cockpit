@@ -9,17 +9,27 @@ const { temporaryHome } = require('./support/temp');
 
 async function cockpit(t, { claudeFilesReadable = true } = {}) {
   const temporary = temporaryHome(t, 'cockpit-codex-recovery-', { deferCleanup: true });
+  const codexHome = path.join(temporary.homeDir, '.codex');
   if (claudeFilesReadable) await fs.mkdir(path.join(temporary.claudeHome, 'sessions'), { recursive: true });
   let alive = true;
   let now = Date.now();
   let runtime;
   const start = async () => {
-    runtime = await startServer({ ...temporary, port: 0, isAlive: pid => alive && pid === 1234 });
+    runtime = await startServer({ ...temporary, codexHome, port: 0, isAlive: pid => alive && pid === 1234 });
   };
   t.after(async () => { await runtime?.close(); await temporary.cleanup(); });
   await start();
   return {
     ...temporary,
+    codexHome,
+    async lock(id = 'thread') {
+      const directory = path.join(codexHome, 'thread-writer-locks');
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, `${id}.lock`), '');
+    },
+    async unlock(id = 'thread') {
+      await fs.unlink(path.join(codexHome, 'thread-writer-locks', `${id}.lock`));
+    },
     get runtime() { return runtime; },
     setAlive(value) { alive = value; },
     async restart() { await runtime.close(); await start(); },
@@ -142,6 +152,97 @@ for (const claudeFilesReadable of [true, false]) {
     assert.equal(c.runtime.state.sessionHasEnded('thread'), true);
   });
 }
+
+test('ロックを見た Codex はイベントの後も印を保ち、ロック消失で一覧と保存から外れて60秒後に終了する', async (t) => {
+  const c = await cockpit(t);
+  await c.lock();
+  await c.event('SessionStart', { codexPid: 1234 });
+  const now = Date.now();
+  await c.runtime.refreshSessionFiles(now);
+  await c.event('Stop');
+  assert.equal((await c.store()).codexRecovery.thread.lockSeen, true);
+  await c.unlock();
+  await c.runtime.refreshSessionFiles(now + 10_000);
+  assert.equal(c.runtime.state.sessionFiles.has('thread'), false);
+  assert.deepEqual((await c.store()).codexRecovery, {});
+  assert.equal((await c.rows())[0].session_id, 'thread');
+  await c.runtime.refreshSessionFiles(now + 60_000);
+  assert.deepEqual(await c.rows(), []);
+  assert.equal(c.runtime.state.sessionHasEnded('thread'), true);
+});
+
+test('ロックを一度も見ていない Codex は空のロック一覧でも PID が生きていれば残る', async (t) => {
+  const c = await cockpit(t);
+  await fs.mkdir(path.join(c.codexHome, 'thread-writer-locks'), { recursive: true });
+  await c.event('SessionStart', { codexPid: 1234 });
+  await c.runtime.refreshSessionFiles(Date.now() + 120_000);
+  assert.equal((await c.rows())[0].session_id, 'thread');
+  assert.equal((await c.store()).codexRecovery.thread.lockSeen, undefined);
+});
+
+for (const unreadable of ['missing', 'file']) {
+  test(`ロック一覧を読めないときは印があっても PID の生死だけで扱う（${unreadable}）`, async (t) => {
+    const c = await cockpit(t);
+    await c.lock();
+    await c.event('SessionStart', { codexPid: 1234 });
+    const now = Date.now();
+    await c.runtime.refreshSessionFiles(now);
+    const directory = path.join(c.codexHome, 'thread-writer-locks');
+    await c.unlock();
+    await fs.rmdir(directory);
+    if (unreadable === 'file') await fs.writeFile(directory, '');
+    await c.runtime.refreshSessionFiles(now + 120_000);
+    assert.equal((await c.rows())[0].session_id, 'thread');
+    assert.equal((await c.store()).codexRecovery.thread.lockSeen, true);
+    c.setAlive(false);
+    await c.runtime.refreshSessionFiles(now + 180_000);
+    assert.deepEqual(await c.rows(), []);
+    assert.deepEqual((await c.store()).codexRecovery, {});
+  });
+}
+
+test('保存したロックの印は再起動後も残り、ロック消失後の再起動では行を戻さない', async (t) => {
+  const c = await cockpit(t);
+  await c.lock();
+  await c.event('SessionStart', { codexPid: 1234 });
+  await c.runtime.refreshSessionFiles();
+  await c.restart();
+  assert.equal((await c.store()).codexRecovery.thread.lockSeen, true);
+  assert.equal((await c.rows())[0].session_id, 'thread');
+  await c.unlock();
+  await c.restart();
+  assert.deepEqual(await c.rows(), []);
+  assert.deepEqual((await c.store()).codexRecovery, {});
+});
+
+test('ロック消失で終了した Codex は同じ会話のイベントで行と復旧記録が戻る', async (t) => {
+  const c = await cockpit(t);
+  await c.lock();
+  await c.event('SessionStart', { codexPid: 1234 });
+  const now = Date.now();
+  await c.runtime.refreshSessionFiles(now);
+  await c.unlock();
+  await c.runtime.refreshSessionFiles(now + 60_000);
+  assert.deepEqual(await c.rows(), []);
+  await c.event('SessionStart', { codexPid: 1234, hookAt: now + 60_001 });
+  await c.runtime.refreshSessionFiles(now + 60_002);
+  assert.equal((await c.rows())[0].session_id, 'thread');
+  assert.equal(c.runtime.state.sessionHasEnded('thread'), false);
+  assert.equal((await c.store()).codexRecovery.thread.pid, 1234);
+  assert.equal((await c.store()).codexRecovery.thread.lockSeen, undefined);
+});
+
+test('ロック一覧は隠しファイル、別の拡張子、ディレクトリを会話のロックに含めない', async (t) => {
+  const c = await cockpit(t);
+  const directory = path.join(c.codexHome, 'thread-writer-locks');
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, '.hidden.lock'), '');
+  await fs.writeFile(path.join(directory, 'other.txt'), '');
+  await fs.mkdir(path.join(directory, 'folder.lock'));
+  for (const id of ['.hidden', 'other', 'folder']) await c.event('SessionStart', { codexPid: 1234 }, id);
+  await c.runtime.refreshSessionFiles();
+  for (const record of Object.values((await c.store()).codexRecovery)) assert.equal(record.lockSeen, undefined);
+});
 
 test('Claude の一覧を読めない間は終了判定と生存確認の時刻を進めない', async (t) => {
   const c = await cockpit(t);
