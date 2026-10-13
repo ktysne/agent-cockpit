@@ -1,4 +1,5 @@
 const EVENT_DELAY_THRESHOLD_MS = 5000;
+const { recordClientEntries } = require('../../client/diagnostic-events');
 const { jsonResponse } = require('../http-helpers');
 const { validSessionId, validText, validPlanInput, decisionSummaries } = require('../request-validation');
 const { sanitizeEvent, isQuestionTool } = require('../events');
@@ -130,6 +131,7 @@ function createHookRoutes(ctx) {
   }
 
   async function handleEvents({ response, body }) {
+    recordClientEntries(ctx.diagnostics, body?.diagnostics, 'hook');
     const receivedAt = Date.now();
     state.captureFieldNames(body);
     const product = productFromCwd(body.cwd);

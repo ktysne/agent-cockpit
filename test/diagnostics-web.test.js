@@ -6,6 +6,25 @@ const { functionSource } = require('./support/page-context');
 const web = fs.readFileSync('src/web/index.html', 'utf8');
 const mock = fs.readFileSync('mock/index.html', 'utf8');
 
+test('画面の取得と保存の失敗は ID とクエリーとエラー文を伏せ、診断失敗を再送しない', async () => {
+  const sent = [];
+  const context = vm.createContext({ AbortSignal,
+    document: { querySelector: () => ({ content: 'test-secret' }) },
+    fetch: async (url, init) => {
+      if (url === '/api/diagnostics') { sent.push(JSON.parse(init.body)); throw new Error('private-diagnostic'); }
+      if (init?.method === 'POST') throw new Error('private-message');
+      return { ok: false, status: 503 };
+    },
+  });
+  vm.runInContext(['reportWebFailure', 'fetchUi', 'postUiAction'].map(name => functionSource(web, name)).join('\n'), context);
+  assert.equal((await context.fetchUi('/api/sessions/private-id/context?secret=private-query')).status, 503);
+  await assert.rejects(context.postUiAction('/api/decisions/private-id/answer', { answer: 'private-answer' }), /private-message/);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sent, [{ entries: [{ msg: 'web.failed', data: { operation: 'fetch', path: '/api/sessions/:id/context', status: 503 } }] },
+    { entries: [{ msg: 'web.failed', data: { operation: 'save', path: '/api/decisions/:id/answer' } }] }]);
+  assert.doesNotMatch(JSON.stringify(sent), /private|test-secret/);
+});
+
 function diagnosticPage() {
   const nodes = new Map();
   const requests = [];

@@ -541,11 +541,14 @@ MCP サーバーは `claude mcp add --scope user` で登録し、スキルは `~
 |---|---|---|
 | `GET /api/diagnostics` | なし | `{runs: [{id, startedAt, count, current}], version}`。現在の起動を先頭に返す |
 | `GET /api/diagnostics?run=<起動>` | なし | `{entries, version}`。区分を古い順に連結する |
+| `POST /api/diagnostics` | MCP は secret と Origin 無し、画面は uiSecret と同一 Origin | `{entries: [{msg, data}]}`。本文は 16 KiB、記録は 8 件まで。応答は `202 {accepted: true}` |
 | `POST /api/diagnostics/delete` | uiSecret と同一 Origin | 本文は `{run}` または `{all: true}`。応答は `{ok: true}` |
 
 起動識別子の形式が違うと `400` を返す。
 削除と追記は同じキューで処理し、現在の起動を削除した後は新しい区分に追記する。
-この段階では、外から記録を受ける `POST /api/diagnostics` は設けない。
+外部の識別子、鍵、値は `src/client/diagnostic-events.js` で照合し、出どころとレベルはサーバーが決める。
+`POST /api/events` の `diagnostics` は先頭 8 件まで照合する。
+フックの送信失敗の退避は起動時とセッションの定期走査で取り込む。
 
 `src/server/diagnostics.js` は `Diagnostics` と起動識別子の `RUN_PATTERN` を公開する。
 常駐サーバーが使う操作は `record(level, tag, msg, data)`、`listRuns()`、`readRun(run)`、`deleteRuns({run, all})`、`flush()` である。

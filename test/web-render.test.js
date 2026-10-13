@@ -826,10 +826,11 @@ function externalLinkHarness(responseStatus) {
     },
     fetch: async (url, options) => {
       requests.push({ url, options });
-      return { status: responseStatus };
+      return { status: responseStatus, ok: responseStatus >= 200 && responseStatus < 300 };
     },
   });
   vm.runInContext([
+    functionSource(html, 'reportWebFailure'),
     postUiAction,
     openExternalLink,
     defaultBrowserUrl,
@@ -3560,7 +3561,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     root: { replaceChildren() {} },
     liveStatus: { textContent: '' },
   });
-  vm.runInContext(`${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = 7, lastStateAt = null, connectionLost = false, hasRenderedState = true, refreshConfirmPending = false, sinceSeenMode = 'always';`, context);
+  vm.runInContext(`${functionSource(pageHtml, 'fetchUi')}\n${functionSource(pageHtml, 'reportWebFailure')}\n${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = 7, lastStateAt = null, connectionLost = false, hasRenderedState = true, refreshConfirmPending = false, sinceSeenMode = 'always';`, context);
 
   await context.refresh();
   assert.equal(renders, 0);
@@ -4304,7 +4305,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       root: { replaceChildren() {} },
       liveStatus: { textContent: '' },
     });
-    vm.runInContext(`${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, refreshConfirmPending = false, sinceSeenMode = '${mode}';`, context);
+    vm.runInContext(`${functionSource(pageHtml, 'fetchUi')}\n${functionSource(pageHtml, 'reportWebFailure')}\n${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, refreshConfirmPending = false, sinceSeenMode = '${mode}';`, context);
     for (let step = 0; step < awaySequence.length; step += 1) await context.refresh();
     return renders;
   };

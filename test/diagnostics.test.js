@@ -4,6 +4,159 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { startServer } = require('../src/server/server');
 const { request, jsonBody, startTestServer, uiHeaders } = require('./support/server');
+const { runHook, runHookText } = require('../src/hooks/event');
+const { callTool } = require('../src/mcp/server');
+const { appendPendingHook, MAX_HOOK_PENDING_BYTES } = require('../src/client/hooks-pending');
+const { MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYTES } = require('../src/client/diagnostic-events');
+const { temporaryHome } = require('./support/temp');
+
+test('常駐サーバーの起動時に退避済みのフック失敗を取り込む', async t => {
+  const { homeDir, claudeHome } = temporaryHome(t);
+  await appendPendingHook(homeDir, { msg: 'hook.delivery', data: { failure: 'timeout', secret: 'private' } });
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+  assert.deepEqual((await read(runtime)).filter(entry => entry.tag === 'hook').map(entry => entry.data), [{ failure: 'timeout' }]);
+});
+
+test('フックの PID 照会の失敗と時間切れはエラー文を送らず分類する', async t => {
+  const { runtime, info } = await startTestServer(t);
+  for (const [result, findCodexParentPid] of [['failed', async () => { throw new Error('private-command stderr'); }],
+    ['timeout', () => new Promise(() => {})], ['missing', async () => null]]) {
+    await runHook({ session_id: `pid-${result}`, hook_event_name: 'SessionStart' }, {
+      homeDir: runtime.homeDir, provider: 'codex', initialInfo: info, findCodexParentPid, codexParentTimeoutMs: 5,
+    });
+    assert.equal((await read(runtime)).filter(entry => entry.msg === 'hook.pid').at(-1).data.result, result);
+  }
+  assert.doesNotMatch(JSON.stringify((await read(runtime)).filter(entry => entry.tag === 'hook')), /private|stderr/);
+});
+
+test('フックが常駐サーバーを起動した場合は起動した段を送る', async t => {
+  const { homeDir, claudeHome } = temporaryHome(t);
+  let runtime;
+  t.after(async () => { if (runtime) await runtime.close(); });
+  await runHook({ session_id: 'hook-launch', hook_event_name: 'SessionStart' }, {
+    homeDir, startServer: async () => { runtime = await startServer({ homeDir, claudeHome, port: 0 }); },
+  });
+  assert.deepEqual((await read(runtime)).find(entry => entry.msg === 'hook.server').data, { started: true });
+});
+
+test('診断の POST は送り手を認証で固定し、未知の識別子と鍵と自由文の値を捨てる', async t => {
+  const { runtime, info } = await startTestServer(t);
+  const entries = [{ msg: 'mcp.write', tag: 'server', level: 'mark', data: { tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200,
+    secret: info.secret, arguments: 'private', failure: 'private' } }, { msg: 'server.start', data: { pid: 123 } },
+    { msg: 'web.failed', data: { path: '/api/state' } }];
+  assert.equal((await uiPost(info, '/api/diagnostics', { entries }, { 'x-cockpit-secret': info.secret })).status, 202);
+  const saved = (await read(runtime)).filter(entry => entry.tag === 'mcp');
+  assert.deepEqual(saved.map(entry => entry.data), [{ tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200 }]);
+  assert.equal(saved[0].level, 'info');
+  await uiPost(info, '/api/diagnostics', { entries: [{ msg: 'web.failed', data: { operation: 'save', path: '/api/decisions/:id/answer', status: 500, message: 'private' } },
+    { msg: 'web.failed', data: { path: '/private/path', status: 'private' } }, entries[0]] });
+  assert.deepEqual((await read(runtime)).filter(entry => entry.tag === 'web').map(entry => entry.data),
+    [{ operation: 'save', path: '/api/decisions/:id/answer', status: 500 }, {}]);
+  assert.doesNotMatch(JSON.stringify(await read(runtime)), /private/);
+});
+
+test('診断の POST は秘密値と Origin と上限に違反する記録を採らない', async t => {
+  const { runtime, info } = await startTestServer(t);
+  const body = { entries: [{ msg: 'web.failed', data: { path: '/api/state', status: 500 } }] };
+  for (const [headers, status] of [[{}, 401], [uiHeaders(info), 403], [uiHeaders(info, 'https://example.com'), 403],
+    [{ 'x-cockpit-secret': info.secret, origin: `http://127.0.0.1:${info.port}` }, 403]]) {
+    assert.equal((await uiPost(info, '/api/diagnostics', body, headers)).status, status);
+  }
+  assert.equal((await uiPost(info, '/api/diagnostics', { entries: Array(MAX_DIAGNOSTICS_PER_EVENT + 1).fill(body.entries[0]) })).status, 400);
+  assert.equal((await uiPost(info, '/api/diagnostics', { entries: [], extra: 'x'.repeat(MAX_DIAGNOSTICS_BODY_BYTES) })).status, 413);
+  assert.equal((await read(runtime)).filter(entry => ['mcp', 'web'].includes(entry.tag)).length, 0);
+});
+
+test('フックの入口は解釈と PID 照会と起動の段を送り、成功時には退避を作らない', async t => {
+  const { runtime, info } = await startTestServer(t);
+  await runHook({ session_id: 'diagnostic-hook', hook_event_name: 'SessionStart', cwd: 'private-path', tool_input: 'private-input' }, {
+    homeDir: runtime.homeDir, provider: 'codex', findCodexParentPid: async () => 123, initialInfo: info,
+  });
+  const entries = (await read(runtime)).filter(entry => entry.tag === 'hook');
+  assert.equal(entries.find(entry => entry.msg === 'hook.pid').data.result, 'found');
+  assert.equal(typeof entries.find(entry => entry.msg === 'hook.pid').data.durationMs, 'number');
+  assert.deepEqual(entries.find(entry => entry.msg === 'hook.server').data, { started: false });
+  assert.deepEqual(entries.find(entry => entry.msg === 'hook.input').data, { result: 'parsed' });
+  assert.doesNotMatch(JSON.stringify(entries), /private/);
+  await assert.rejects(fs.stat(path.join(runtime.homeDir, 'diagnostics/hooks-pending.jsonl')), { code: 'ENOENT' });
+  await runHookText('private-invalid-json', { homeDir: runtime.homeDir, initialInfo: info });
+  assert.equal((await read(runtime)).filter(entry => entry.msg === 'hook.input').at(-1).data.result, 'invalid');
+});
+
+test('フックの HTTP 受付は添付の件数を制限し、hook 以外の記録を捨てる', async t => {
+  const { runtime, info } = await startTestServer(t);
+  await uiPost(info, '/api/events', { session_id: 'diagnostics-cap', hook_event_name: 'Stop', diagnostics: [
+    { msg: 'hook.input', data: { result: 'parsed', secret: info.secret, input: 'private' } },
+    { msg: 'mcp.write', data: { tool: 'cockpit_set_tasks' } },
+    ...Array(MAX_DIAGNOSTICS_PER_EVENT).fill({ msg: 'hook.server', data: { started: false } }),
+  ] }, { 'x-cockpit-secret': info.secret });
+  const entries = (await read(runtime)).filter(entry => entry.tag === 'hook');
+  assert.equal(entries.length, MAX_DIAGNOSTICS_PER_EVENT - 1);
+  assert.deepEqual(entries[0].data, { result: 'parsed' });
+});
+
+test('届かないフックは安全な一行だけ退避し、走査は壊れた行を捨てて一度だけ取り込む', async t => {
+  const { runtime } = await startTestServer(t);
+  await runHook({ session_id: 'private-session', hook_event_name: 'Stop', cwd: 'private-path' }, {
+    homeDir: runtime.homeDir, ensureServerRunning: async () => null,
+  });
+  const file = path.join(runtime.homeDir, 'diagnostics/hooks-pending.jsonl');
+  const text = await fs.readFile(file, 'utf8');
+  const pending = JSON.parse(text);
+  assert.match(pending.data.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.deepEqual(pending, { msg: 'hook.delivery', data: { failure: 'unreachable', at: pending.data.at } });
+  await fs.appendFile(file, 'broken\n' + JSON.stringify({ msg: 'server.start', data: { secret: 'private' } }) + '\n');
+  await Promise.all([runtime.refreshSessionFiles(), appendPendingHook(runtime.homeDir, { msg: 'hook.input', data: { result: 'invalid', input: 'private' } })]);
+  await runtime.refreshSessionFiles();
+  await runtime.refreshSessionFiles();
+  const imported = (await read(runtime)).filter(entry => entry.tag === 'hook');
+  assert.deepEqual(imported.map(entry => entry.msg).sort(), ['hook.delivery', 'hook.input']);
+  assert.equal(imported.find(entry => entry.msg === 'hook.delivery').data.at, pending.data.at);
+  await assert.rejects(fs.stat(file), { code: 'ENOENT' });
+});
+
+test('退避が上限を超えていると届かないフックは追記せず正常に終わる', async t => {
+  const { runtime } = await startTestServer(t);
+  const file = path.join(runtime.homeDir, 'diagnostics/hooks-pending.jsonl');
+  await fs.writeFile(file, 'x'.repeat(MAX_HOOK_PENDING_BYTES + 1));
+  assert.equal((await runHook({ session_id: 'pending-full', hook_event_name: 'Stop' }, {
+    homeDir: runtime.homeDir, ensureServerRunning: async () => null,
+  })).exitCode, 0);
+  assert.equal((await fs.stat(file)).size, MAX_HOOK_PENDING_BYTES + 1);
+});
+
+test('MCP の入口は書き込みの試行と HTTP の結果を記録し、引数の本文を含めない', async t => {
+  const { runtime, info } = await startTestServer(t);
+  const pending = [];
+  await callTool('cockpit_set_tasks', { tasks: [{ title: 'private-task', state: 'doing', criteria: [] }] }, {
+    homeDir: runtime.homeDir, environment: { CLAUDE_CODE_SESSION_ID: 'mcp-diagnostic' },
+    ensureServerRunning: async () => info,
+    fetchImpl: (url, init) => { const operation = fetch(url, init); pending.push(operation); return operation; },
+  });
+  await Promise.all(pending);
+  const entries = (await read(runtime)).filter(entry => entry.tag === 'mcp');
+  assert.deepEqual(entries.map(entry => entry.data), [{ tool: 'cockpit_set_tasks', phase: 'attempt' },
+    { tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200 }]);
+  assert.doesNotMatch(JSON.stringify(entries), /private/);
+});
+
+test('MCP の診断送信が失敗しても書き込みは完了し、診断を再送しない', async t => {
+  const { runtime, info } = await startTestServer(t);
+  const diagnostics = [];
+  const result = await callTool('cockpit_set_tasks', { tasks: [] }, {
+    homeDir: runtime.homeDir, environment: { CLAUDE_CODE_SESSION_ID: 'diagnostic-failure' },
+    ensureServerRunning: async () => info,
+    fetchImpl: (url, init) => {
+      if (!url.endsWith('/api/diagnostics')) return fetch(url, init);
+      diagnostics.push(JSON.parse(init.body));
+      return Promise.reject(new Error('private-message'));
+    },
+  });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(diagnostics.map(body => body.entries[0].data.phase), ['attempt', 'result']);
+  assert.equal((await read(runtime)).filter(entry => entry.tag === 'mcp').length, 0);
+});
 
 const uiPost = (info, route, body, headers = uiHeaders(info, `http://127.0.0.1:${info.port}`)) => request(info.port,
   { method: 'POST', path: route, headers, body: JSON.stringify(body) });

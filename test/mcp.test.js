@@ -38,6 +38,7 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
     ppid: 321,
     ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
     fetchImpl: async (url, init) => {
+      if (url.endsWith('/api/diagnostics')) return new Response('{}', { status: 202 });
       sent = { url, headers: init.headers, body: JSON.parse(init.body) };
       return new Response(JSON.stringify({ tasks: [{ title: 'テストを書く', state: 'doing' }] }), { status: 200 });
     },
@@ -74,6 +75,7 @@ test('cockpit_add_pr は PR URL を秘密値付きで常駐サーバーへ登録
     cwd: 'D:\\project\\.claude\\worktrees\\mcp-session',
     ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
     fetchImpl: async (url, init) => {
+      if (url.endsWith('/api/diagnostics')) return new Response('{}', { status: 202 });
       sent = { url, headers: init.headers, body: JSON.parse(init.body) };
       return new Response(JSON.stringify({ owner: 'example', repo: 'project', number: 45, url: 'https://github.com/example/project/pull/45' }), { status: 200 });
     },
@@ -103,6 +105,7 @@ test('cockpit_skip_review は理由と指定 head を秘密値付きで常駐サ
     ppid: 321,
     ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
     fetchImpl: async (url, init) => {
+      if (url.endsWith('/api/diagnostics')) return new Response('{}', { status: 202 });
       sent = { url, headers: init.headers, body: JSON.parse(init.body) };
       return new Response(JSON.stringify({ number: 45, owner: 'example', repo: 'project', headRefOid }), { status: 200 });
     },
@@ -139,6 +142,7 @@ test('cockpit_skip_review は GitHub 同期の 60 秒期限内に応答した要
       return { port: 49124, secret: 'test-secret' };
     },
     fetchImpl: async (_url, init) => {
+      if (_url.endsWith('/api/diagnostics')) return new Response('{}', { status: 202 });
       requestCount += 1;
       await new Promise((resolve, reject) => {
         const timer = setTimeout(resolve, 2100);
@@ -212,8 +216,8 @@ test('3 種類の MCP 書き込みは未知の失敗と再試行後の 401 を�
         environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
         ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
         readServerInfo: async () => ({ port: 49125, secret: 'updated-secret' }),
-        fetchImpl: async () => {
-          fetchCount += 1;
+        fetchImpl: async url => {
+          if (!url.endsWith('/api/diagnostics')) fetchCount += 1;
           return new Response('{}', { status });
         },
       });
@@ -248,6 +252,7 @@ test('時間切れの add_pr、skip_review、plan は結果未確認の文を is
         return { port: 49124, secret: 'test-secret' };
       },
       fetchImpl: async (_url, init) => {
+        if (_url.endsWith('/api/diagnostics')) return new Response('{}', { status: 202 });
         fetchCount += 1;
         return new Promise((_, reject) => {
           init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });

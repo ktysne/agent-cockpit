@@ -61,6 +61,28 @@ agent-cockpit の不具合を調べるための記録を、利用者の端末の
 - MCP と画面は、新しい `POST /api/diagnostics` で送る。MCP は起動ごとの秘密値、画面は `uiSecret` と同一 Origin で照合する。
 - 常駐サーバーは、外から届いた記録の `msg` を既知の識別子の一覧と照合し、一覧に無いものは捨てる。`data` は識別子ごとの許可一覧の鍵だけを残す。
 
+外部からの識別子、鍵、値の分類は `src/client/diagnostic-events.js` の `CLIENT_EVENTS` が正本である。
+固定の分類、ツール名、ID を伏せた既知の経路、数値、真偽値だけを許し、自由文は受け付けない。
+送り手の tag と level は使わず、認証した送り手と識別子から決める。
+フックの添付は先頭 8 件まで受け取り、`POST /api/diagnostics` は本文 16 KiB と 8 件を超える要求を拒否する。
+MCP の Origin は既存のフック用の認証と同じく無いことを求め、画面は Host に一致する Origin を必須にする。
+
+| 識別子 | 出どころ | 記録すること |
+|---|---|---|
+| `hook.input` | `hook` | 標準入力の JSON の解釈が `parsed` / `invalid`。失敗は `warn` |
+| `hook.pid` | `hook` | Codex の PID 照会が `found` / `missing` / `timeout` / `failed` と所要時間。時間切れと失敗は `warn` |
+| `hook.server` | `hook` | フックが常駐サーバーを起動したか。`info` |
+| `hook.delivery` | `hook` | 応答が無い送信の `unreachable` / `timeout` と、発生時刻(`at`、ISO 形式)。取り込みは常駐サーバーの次の起動まで遅れうるため。`warn` |
+| `mcp.write` | `mcp` | 固定のツール名、試行または結果、成否、HTTP の状態、失敗の `http` / `timeout` / `unreachable`。失敗は `error`、それ以外は `info` |
+| `web.failed` | `web` | 取得または保存の失敗、ID とクエリーを伏せた既知の経路、HTTP の状態。応答が無いと状態を省く。`warn` |
+
+フックの退避は 256 KiB を超える追記を行わず、送信が HTTP の応答を受けた場合は作らない。
+追記と取り込みは共通の排他ファイルを使い、取り込み側は rename で分離したファイルを読む。
+排他区間は同期のファイル操作だけとし、競合時は最大 50 ms 待つ。
+退避の書き込みの失敗は無視し、壊れた行と許可しない記録は取り込み時に捨てる。
+起動時と 10 秒ごとのセッション走査で取り込み、取り込んだファイルを削除する。
+MCP と画面は診断の応答を本来の処理で待たず、250 ms で打ち切り、再送と診断の再帰を行わない。
+
 ## 読み出しと削除
 
 - `GET /api/diagnostics` は起動の一覧、`GET /api/diagnostics?run=<起動>` はその起動の記録を返す。`/api/state` と同じく認証を求めない。返す内容は、`/api/state` が既に出している情報(プロダクト名、PR 番号、セッション ID の先頭)を超えない。
