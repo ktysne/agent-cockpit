@@ -2,6 +2,8 @@ const { setTimeout: sleep } = require('node:timers/promises');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { readServerInfo, serverIsHealthy, ensureServerRunning } = require('./server-connection');
 
+const STORE_SETTLE_MS = 1000;
+
 async function restartServer(options = {}) {
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const readInfo = options.readInfo || readServerInfo;
@@ -14,6 +16,8 @@ async function restartServer(options = {}) {
   let stoppedPid = null;
   if (info && Number.isInteger(info.pid) && info.pid > 0 &&
       await healthy(info, { fetchImpl: options.fetchImpl, now, deadline: now() + 1000 })) {
+    // 強制終了になるので、直前の書き込みが 500ms のまとめ書き(state.js)で保存されるまで待つ。
+    await wait(STORE_SETTLE_MS);
     try {
       kill(info.pid);
       stoppedPid = info.pid;
@@ -33,6 +37,9 @@ async function restartServer(options = {}) {
   }
   const started = await ensure({ homeDir, fetchImpl: options.fetchImpl, now, deadline: now() + 15_000 });
   if (!started) throw new Error('常駐サーバーを起動できませんでした。');
+  if (stoppedPid === null && info && started.pid === info.pid && started.startedAt === info.startedAt) {
+    throw new Error('動いている常駐サーバーを確認できなかったため、再起動していません。もう一度実行してください。');
+  }
   return { stoppedPid, pid: started.pid };
 }
 

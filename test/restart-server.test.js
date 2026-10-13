@@ -22,7 +22,15 @@ test('health の pid と起動時刻が一致すれば停止を待ってから�
     ensureServerRunning: async options => { assert.equal(options.homeDir, 'test-home'); steps.push('start'); return { pid: 456 }; },
   });
   assert.deepEqual(result, { stoppedPid: 123, pid: 456 });
-  assert.deepEqual(steps, ['stop', 'wait', 'start']);
+  assert.deepEqual(steps, ['wait', 'stop', 'wait', 'start']);
+});
+
+test('最初の health 確認に失敗し、起動の確認で同じサーバーが返れば再起動していないとして失敗する', async () => {
+  await assert.rejects(restartServer({ homeDir: 'test-home', readInfo: async () => info,
+    serverIsHealthy: async () => false,
+    kill: () => assert.fail('確認できないプロセスは止めない'),
+    ensureServerRunning: async () => ({ ...info }),
+  }), /再起動していません/);
 });
 
 test('health が一致しないか動いていなければ停止せずに起動だけ行う', async () => {
