@@ -549,6 +549,11 @@ function isNonInteractiveSessionFile(file) {
   return typeof file?.kind === 'string' && file.kind.trim() !== '' && file.kind !== 'interactive';
 }
 
+// 状態が不明なときにセッションファイルの status で状態を決めてよいか。非対話の実行中は busy では決めず、「非対話の実行中」を保つ。
+function fileStatusDecidesState(file) {
+  return file?.status === 'idle' || (file?.status === 'busy' && !isNonInteractiveSessionFile(file));
+}
+
 function claudeModelName(modelId) {
   if (typeof modelId !== 'string' || !modelId) return '';
   const id = modelId.replace(/\[[^\]]*\]$/, '');
@@ -2411,9 +2416,10 @@ class DashboardState {
         persistentChanged = true;
       }
     }
+    // ファイルの status で状態が決まる間は推定を使わない。決まった状態が後で不明に戻っても古い推定を出さないため、ここで消す。
     for (const sessionId of this.estimates.keys()) {
       if (!shouldSyncSession(sessionId)) continue;
-      if (!next.has(sessionId)) {
+      if (!next.has(sessionId) || fileStatusDecidesState(next.get(sessionId))) {
         this.estimates.delete(sessionId);
         changed = true;
       }
@@ -3201,10 +3207,16 @@ class DashboardState {
         tasksUpdatedAt: plan?.tasksUpdatedAt || null,
         ...(isNonInteractiveSessionFile(file) ? { nonInteractive: true } : {}),
       };
-      if (current.status === '不明' && file?.status === 'idle') {
-        current.status = base.agents.some((agent) => agent.active && !isClosedByUser(agent))
-          ? '待機中(サブエージェント稼働中)'
-          : '待機中';
+      if (current.status === '不明' && fileStatusDecidesState(file)) {
+        if (file.status === 'busy') {
+          current.status = '作業中';
+        } else {
+          current.status = base.agents.some((agent) => agent.active && !isClosedByUser(agent))
+            ? '待機中(サブエージェント稼働中)'
+            : '待機中';
+        }
+        // 再起動の直後はフックの時刻が無いので、経過時間の基準にファイルの時刻を載せる。
+        current.statusSince = file.statusUpdatedAt || file.updatedAt || null;
       }
       const estimate = this.estimates.get(sessionId);
       if (estimate && current.status === '不明') current.estimate = { ...estimate };

@@ -82,7 +82,7 @@
       <li data-part="rows.main-state" data-place="top"><b>状態</b>：<span class="ui">作業中</span>、<span class="ui">待機中</span>、<span class="ui">状態不明</span>、<span class="ui">非対話の実行中</span> のどれかです。</li>
       <li data-part="rows.main-title"><b>作業中のタスクの題</b>：状態が <span class="ui">作業中</span> のタスクの題です。作業中のタスクが無いときは出ません。</li>
       <li data-part="rows.main-tool" data-place="right"><b>実行中のツール</b>：ツールの名前の札と、実行しているコマンドやファイルのパスです。ツールが終わると消えます。</li>
-      <li data-part="rows.main-time"><b>経過時間</b>：実行中のツールがあればその開始から、無ければセッションの最後のイベントからの時間です。</li>
+      <li data-part="rows.main-time"><b>経過時間</b>：実行中のツールがあればその開始から、無ければセッションの最後のイベントからの時間です。常駐サーバーの再起動の直後でイベントが無いときは、Claude Code が記録したセッションの状態が変わってからの時間です。</li>
     </ol>
   </figure>
   <p>メインの行にもモデルの札が付きます。
@@ -113,7 +113,8 @@
   <h3 id="work-unknown">状態不明のセッション</h3>
   <p>セッションのファイルは見つかるのに、ターンの状態を確定するイベントが届いていないセッションは、<span class="ui">状態不明</span> と出ます。
   ターンの状態を確定するイベントは、プロンプトの送信、メインのツールの開始と終了、ターンの終了、起動・再開・クリアによるセッションの開始です。
-  常駐サーバーを起動する前から動いていたセッションや、再起動の後でまだこれらのイベントが届いていないセッションがこうなります。</p>
+  常駐サーバーを起動する前から動いていたセッションや、再起動の後でまだこれらのイベントが届いていないセッションがこうなります。
+  ただし、Claude Code がセッションのファイルに作業中か待機中かを記録していれば、その状態で出します。</p>
   <figure class="guide-map" id="work-unknown-map" data-shot="work-states/unknown" data-alt="状態不明のセッションの作業行。1行目にメインと状態不明が並び、その下に状態を推定と一覧から外すのボタンが全幅で並ぶ">
     <ol class="guide-list">
       <li data-part="unknown.state" data-place="top"><b>状態</b>：<span class="ui">状態不明</span> と、<span class="ui">時刻不明</span> が出ます。イベントが 1 件も届いていないので、経過時間は出ません。</li>
