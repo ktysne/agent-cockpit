@@ -136,11 +136,10 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .meta { color: var(--text-2); font-size: 12px; }
 .session-group { border-left: 2px solid var(--border); padding: 8px 0 0 12px; margin-top: 8px; }
 .session-group.single { border-left: 0; padding: 0; margin-top: 0; }
+.session-group.single.origin-claude, .session-group.single.origin-codex { padding-left: 12px; border-left-width: 2px; border-left-style: solid; }
 .origin-codex { --accent: var(--origin-codex); --accent-soft: var(--origin-codex-soft); --accent-text: var(--origin-codex-text); }
-.session-group:not(.single).origin-claude { border-left-color: var(--origin-claude); }
-.session-group:not(.single).origin-codex { border-left-color: var(--origin-codex); }
-.session-group.single.origin-claude .session-context { border-left: 3px solid var(--origin-claude); }
-.session-group.single.origin-codex .session-context { border-left: 3px solid var(--origin-codex); }
+.session-group.origin-claude { border-left-color: var(--origin-claude); }
+.session-group.origin-codex { border-left-color: var(--origin-codex); }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
 .session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
 /* .session-tag の nowrap より強くするため、2 つのクラスで指定する */
@@ -164,6 +163,10 @@ h3.sub .count { font-weight: normal; }
 .now { display: grid; gap: 6px; }
 .now-row, .agent-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: start; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .now-row > .detail, .agent-row > .detail { grid-column: 1 / -1; min-width: 0; }
+.kind-session-tasks.origin-claude, .kind-session-tasks.origin-codex, .now-row.origin-claude, .now-row.origin-codex, .agent-row.origin-claude, .agent-row.origin-codex { position: relative; padding-left: 10px; }
+.kind-session-tasks.origin-claude::before, .kind-session-tasks.origin-codex::before, .now-row.origin-claude::before, .now-row.origin-codex::before, .agent-row.origin-claude::before, .agent-row.origin-codex::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.kind-session-tasks.origin-claude::before, .now-row.origin-claude::before, .agent-row.origin-claude::before { background: var(--origin-claude); }
+.kind-session-tasks.origin-codex::before, .now-row.origin-codex::before, .agent-row.origin-codex::before { background: var(--origin-codex); }
 .detail { overflow-wrap: anywhere; }
 .tool-line { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
 .tool-name { display: block; flex: none; max-width: 60%; min-height: 20px; overflow: hidden; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1320,7 +1323,7 @@ function sessionTag(p, session, withTag, includeSession = false) {
   return `${product}${title}`;
 }
 
-function mainRow(p, session, withTag) {
+function mainRow(p, session, withTag, showOriginBands = false) {
   // 非対話の実行は、状態不明のときだけ稼働中として出す。作業中と待機中は対話と同じ文言と色にする。
   const nonInteractive = session.nonInteractive === true;
   const nonInteractiveUnknown = session.status === 'unknown' && nonInteractive;
@@ -1335,7 +1338,8 @@ function mainRow(p, session, withTag) {
   const model = session.codex ? `<div class="models"><span class="model gpt">Codex ${esc(session.codex.model)}</span>${resumes}</div>`
     : session.modelName || nonInteractive ? `<div class="models"><span class="model claude">${session.modelName ? `Claude ${esc(session.modelName)}` : 'Claude (API)'}</span></div>` : '';
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}${model}`;
-  return `<div class="now-row main-row">
+  const origin = sessionOrigin(session, showOriginBands);
+  return `<div class="now-row main-row${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
       <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<strong>${status}</strong></div>
       ${unknown ? '' : `<div class="since">${esc(session.main.since || '')}</div>`}
       ${detail ? `<div class="detail">${detail}</div>` : ''}
@@ -1366,12 +1370,13 @@ function isFinishedSession(session) {
     && !session.subagents.some(agent => !isEndedAgent(session, agent));
 }
 
-function agentRow(p, session, agent, withTag) {
+function agentRow(p, session, agent, withTag, showOriginBands = false) {
   const state = isClosedByUser(session, agent) ? ['終了', 'done'] : isBusyAgent(session, agent) ? ['稼働中', 'busy'] : isUnconfirmed(session, agent) ? ['終了未確認', 'wait'] : ['終了', 'done'];
   const close = isClosable(session, agent) ? `<button type="button" class="link-btn close-agent" data-close-agent="${esc(closedAgentKey(session, agent))}">終了にする</button>` : '';
   const description = agent.text ? `<div class="agent-description">${esc(agent.text)}</div>` : agent.tool ? renderToolLine(agent.tool) : '';
   const detail = description + modelLine(agent, routeTag(agent));
-  return `<div class="agent-row">
+  const origin = sessionOrigin(session, showOriginBands);
+  return `<div class="agent-row${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
     <div class="who"><span class="dot ${state[1]}"></span>サブエージェント${sessionTag(p, session, withTag)}<span class="agent-name"><span class="badge ${state[1]}">${state[0]}</span><strong>${esc(agent.type)}</strong>${close}</span></div>
     <div class="since">${esc(agent.since)}</div>${detail ? `<div class="detail">${detail}</div>` : ''}</div>`;
 }
@@ -1469,6 +1474,10 @@ function providerOrigin(providers) {
   const hasClaude = values.includes('claude');
   const hasCodex = values.includes('codex');
   return hasClaude && hasCodex ? 'both' : hasClaude ? 'claude' : hasCodex ? 'codex' : '';
+}
+
+function sessionOrigin(session, showOriginBands) {
+  return showOriginBands ? session.provider === 'codex' ? 'codex' : 'claude' : '';
 }
 
 function hasCodexOrigin() {
@@ -2080,14 +2089,15 @@ function taskSessionBlock(p, session, withTag) {
   return `<h3 class="sub">タスクと完了条件 <span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}${toggle}`;
 }
 
-function kindTaskSessionBlock(p, session, expanded) {
+function kindTaskSessionBlock(p, session, expanded, showOriginBands = false) {
   const { doneCount, visible } = taskVisibility(session, ui.expandedKindTodoTasks, expanded);
   const updated = Number.isFinite(session.tasksUpdatedMin) ? `最終更新 ${session.tasksUpdatedMin} 分前` : '最終更新 時刻不明';
   const items = visible.map(task => taskItem(p, session, task, false)).join('');
   const empty = session.tasks.length ? '未完了のタスクはありません。' : 'タスクはありません。';
+  const origin = sessionOrigin(session, showOriginBands);
   return {
     doneCount,
-    html: `<section class="kind-session-tasks group-frame"><h3 class="kind-task-head">${sessionTag(p, session, true, true)}<span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}</section>`,
+    html: `<section class="kind-session-tasks group-frame${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}><h3 class="kind-task-head">${sessionTag(p, session, true, true)}<span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}</section>`,
   };
 }
 
@@ -2136,7 +2146,7 @@ function unknownSessionControls(session) {
 function sessionBlock(p, session, showOriginBands = true) {
   const multiple = p.sessions.length > 1;
   const groupTag = multiple ? 'section' : 'div';
-  const origin = showOriginBands ? session.provider === 'codex' ? 'codex' : 'claude' : '';
+  const origin = sessionOrigin(session, showOriginBands);
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
@@ -2145,7 +2155,7 @@ function sessionBlock(p, session, showOriginBands = true) {
   return `<${groupTag} class="session-group ${multiple ? '' : 'single'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}</div>` : ''}
     <div class="session-body">
-      ${multiple ? '' : `<div class="session-tag session-context"${origin ? ` data-origin="${origin}"` : ''}>${esc(sessionDisplayName(session))}</div>`}
+      ${multiple ? '' : `<div class="session-tag session-context">${esc(sessionDisplayName(session))}</div>`}
       ${orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
         judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
@@ -2291,8 +2301,8 @@ function renderKindMode(showOriginBands = true) {
   const nowRowsByAge = sessions.flatMap(({ p, session }) => {
     const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || showEndedAgents);
     return [
-      { age: ageMinutes(session.main), html: mainRow(p, session, true) },
-      ...agents.map(agent => ({ age: ageMinutes(agent), html: agentRow(p, session, agent, true) })),
+      { age: ageMinutes(session.main), html: mainRow(p, session, true, showOriginBands) },
+      ...agents.map(agent => ({ age: ageMinutes(agent), html: agentRow(p, session, agent, true, showOriginBands) })),
     ];
   }).sort((a, b) => a.age - b.age);
   const endedAgentCount = kindEndedAgentCount(sessions);
@@ -2302,7 +2312,7 @@ function renderKindMode(showOriginBands = true) {
   const now = nowRowsByAge.length ? `<div class="now">${nowRowsByAge.map(row => row.html).join('')}</div>` : '';
   const activityControls = endedAgentToggle ? `<div class="kind-section-controls">${endedAgentToggle}</div>` : '';
   const taskSessions = sessions.filter(({ session }) => session.tasks.length > 0);
-  const taskGroups = taskSessions.map(({ p, session }) => kindTaskSessionBlock(p, session, ui.expandedKindTasks));
+  const taskGroups = taskSessions.map(({ p, session }) => kindTaskSessionBlock(p, session, ui.expandedKindTasks, showOriginBands));
   const doneTaskCount = kindDoneTaskCount(sessions);
   const doneTaskToggle = doneTaskCount
     ? kindToggle('tasks', '完了したタスク', doneTaskCount, ui.expandedKindTasks)

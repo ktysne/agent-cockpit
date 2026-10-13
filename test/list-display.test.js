@@ -42,7 +42,7 @@ function descendants(node) {
 }
 
 test('状態不明の操作と推定結果は種類別・プロダクト別のメイン行内にまとまる', () => {
-  const sourceFunctions = ['mainRow', 'unknownSessionControls', 'appendUnknownSessionControls']
+  const sourceFunctions = ['sessionOrigin', 'mainRow', 'unknownSessionControls', 'appendUnknownSessionControls']
     .map((name) => functionSource(web, name));
   assert.ok(sourceFunctions.every(Boolean));
   const sourceContext = pageContext(web, {
@@ -76,7 +76,7 @@ test('状態不明の操作と推定結果は種類別・プロダクト別の�
   assert.equal((estimatedText.match(/10:00/g) || []).length, 1);
   assert.match(estimatedText, /入力待ちらしい: いいえ/);
 
-  const mockFunctions = ['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name));
+  const mockFunctions = ['sessionOrigin', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name));
   assert.ok(mockFunctions.every(Boolean));
   const mockContext = pageContext(mock, {
     ui: { estimatedSessions: ['unknown'] },
@@ -112,8 +112,8 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
   }
   const webKind = functionSource(web, 'renderKindSections');
   const mockKind = functionSource(mock, 'renderKindMode');
-  assert.match(webKind, /mainRow\(session, product, true, multipleSessions\)/);
-  assert.match(mockKind, /mainRow\(p, session, true\)/);
+  assert.match(webKind, /mainRow\(session, product, true, multipleSessions, showOriginBands\)/);
+  assert.match(mockKind, /mainRow\(p, session, true, showOriginBands\)/);
   assert.ok(webKind.indexOf('activity.append(activityList)') < webKind.indexOf("appendKindToggle(activityControls, 'agents'"));
   assert.match(mockKind, /const now = nowRowsByAge\.length \? `<div class="now">[\s\S]*?<\/div>` : '';/);
   assert.match(mockKind, /now: section\('今やっていること', now, activityControls, nowRowsByAge\.length \+ endedAgentCount\)/);
@@ -133,7 +133,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     mainRow: () => fakeElement('div', 'now-row main-row'),
     appendAgents() {},
   });
-  vm.runInContext(`${webSession}\n${functionSource(web, 'sessionDisplayName')}\nthis.renderSession = sessionBlock;`, webContext);
+  vm.runInContext(`${functionSource(web, 'sessionOrigin')}\n${webSession}\n${functionSource(web, 'sessionDisplayName')}\nthis.renderSession = sessionBlock;`, webContext);
   const webVisible = webContext.renderSession({ key: 'p', name: 'P' }, {
     session_id: 'active', status: '不明', title: '稼働中', decisions: [], tasks: [], permissionWaits: [], agents: [],
   }, true);
@@ -152,7 +152,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     agentSection: () => '',
     esc: (value) => String(value ?? ''),
   });
-  vm.runInContext(`${mockSession}\nthis.renderSession = sessionBlock;`, mockContext);
+  vm.runInContext(`${functionSource(mock, 'sessionOrigin')}\n${mockSession}\nthis.renderSession = sessionBlock;`, mockContext);
   const mockVisible = mockContext.renderSession({ sessions: [{}, {}] }, {
     id: 'active', status: 'unknown', title: '稼働中', decisions: [], tasks: [], perms: [], subagents: [],
   });
@@ -353,6 +353,9 @@ test('プロダクト別の PR 欄はセッション群の外に区切って置�
   assert.match(sessionBlock, /element\(multipleSessions \? 'section' : 'div', `session-group \$\{multipleSessions \? '' : 'single'\}`/);
   assert.match(web, /\.session-group\.single \{ margin-top: 0; padding: 0; border-left: 0; \}/);
   assert.match(mock, /\.session-group\.single \{ border-left: 0; padding: 0; margin-top: 0; \}/);
+  for (const page of [web, mock]) {
+    assert.match(page, /\.session-group\.single\.origin-claude, \.session-group\.single\.origin-codex \{ padding-left: 12px; border-left-width: 2px; border-left-style: solid; \}/);
+  }
   assert.match(web, /\.session-group:not\(\.single\) \.session-body \{ padding-left: 12px; \}/);
   assert.match(mock, /\.session-group:not\(\.single\) \.session-body \{ padding-left: 12px; \}/);
 });
@@ -367,7 +370,7 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     appendContextTags(target) { target.append(fakeElement('span', 'prod-tag', 'Product'), fakeElement('span', 'session-tag', 'Session')); },
     durationAgoLabel: () => '少し前',
   });
-  vm.runInContext(`${taskBlock}\nthis.renderTaskGroup = appendKindTaskSession;`, webContext);
+  vm.runInContext(`${functionSource(web, 'sessionOrigin')}\n${taskBlock}\nthis.renderTaskGroup = appendKindTaskSession;`, webContext);
   const taskGroup = fakeElement('div');
   webContext.renderTaskGroup(taskGroup, {
     product: { name: 'Product' }, session: { session_id: 'session', title: 'Session', tasks: [] }, multipleSessions: true,
@@ -383,7 +386,7 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     sessionTag: () => '<span class="prod-tag">Product</span><span class="session-tag">Session</span>',
     esc: (value) => String(value ?? ''),
   });
-  vm.runInContext(`${mockTaskBlock}\nthis.renderTaskGroup = kindTaskSessionBlock;`, mockContext);
+  vm.runInContext(`${functionSource(mock, 'sessionOrigin')}\n${mockTaskBlock}\nthis.renderTaskGroup = kindTaskSessionBlock;`, mockContext);
   const mockTaskGroup = mockContext.renderTaskGroup({ name: 'Product' }, { id: 'session', title: 'Session', tasks: [], tasksUpdatedMin: NaN }, false);
   assert.match(mockTaskGroup.html, /^<section class="kind-session-tasks group-frame"><h3 class="kind-task-head">/);
 

@@ -145,6 +145,10 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .permission-list { gap: 0; }
 .now-row, .agent-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: start; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .now-row > .detail, .agent-row > .detail { grid-column: 1 / -1; min-width: 0; }
+.kind-session-tasks.origin-claude, .kind-session-tasks.origin-codex, .now-row.origin-claude, .now-row.origin-codex, .agent-row.origin-claude, .agent-row.origin-codex { position: relative; padding-left: 10px; }
+.kind-session-tasks.origin-claude::before, .kind-session-tasks.origin-codex::before, .now-row.origin-claude::before, .now-row.origin-codex::before, .agent-row.origin-claude::before, .agent-row.origin-codex::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.kind-session-tasks.origin-claude::before, .now-row.origin-claude::before, .agent-row.origin-claude::before { background: var(--origin-claude); }
+.kind-session-tasks.origin-codex::before, .now-row.origin-codex::before, .agent-row.origin-codex::before { background: var(--origin-codex); }
 .who { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; min-width: 0; color: var(--text-2); font-size: 12px; }
 .who .dot { margin-right: 0; flex: none; }
 .who strong { color: var(--text); font-size: 13px; font-weight: 600; }
@@ -257,12 +261,11 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .icon-btn:focus-visible, .link-btn:focus-visible, button.chip:focus-visible, .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .session-group { margin-top: 8px; padding: 8px 0 0 12px; border-left: 2px solid var(--border); }
 .session-group.single { margin-top: 0; padding: 0; border-left: 0; }
+.session-group.single.origin-claude, .session-group.single.origin-codex { padding-left: 12px; border-left-width: 2px; border-left-style: solid; }
 /* Codex のセッションの中では強調色を起点の色にし、Claude の色と見分ける。状態の色(危険、警告、成功)は変えない。 */
 .origin-codex { --accent: var(--origin-codex); --accent-soft: var(--origin-codex-soft); --accent-text: var(--origin-codex-text); }
-.session-group:not(.single).origin-claude { border-left-color: var(--origin-claude); }
-.session-group:not(.single).origin-codex { border-left-color: var(--origin-codex); }
-.session-group.single.origin-claude .session-context { border-left: 3px solid var(--origin-claude); }
-.session-group.single.origin-codex .session-context { border-left: 3px solid var(--origin-codex); }
+.session-group.origin-claude { border-left-color: var(--origin-claude); }
+.session-group.origin-codex { border-left-color: var(--origin-codex); }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
 .session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
 .session-group:not(.single) .session-body { padding-left: 12px; }
@@ -2222,6 +2225,10 @@ function providerOrigin(providers) {
   return hasClaude && hasCodex ? 'both' : hasClaude ? 'claude' : hasCodex ? 'codex' : '';
 }
 
+function sessionOrigin(session, showOriginBands) {
+  return showOriginBands ? session.provider === 'codex' ? 'codex' : 'claude' : '';
+}
+
 function hasCodexOrigin(state) {
   const hasCodexProvider = (providers) => Array.isArray(providers) ? providers.includes('codex') : providers === 'codex';
   const pullRequestHasCodex = (pullRequest) => hasCodexProvider(pullRequest.providers)
@@ -2585,13 +2592,15 @@ function isFinishedSession(session) {
     && !session.agents.some((agent) => !isEndedAgent(agent));
 }
 
-function mainRow(session, product, withTags = false, multipleSessions = false) {
+function mainRow(session, product, withTags = false, multipleSessions = false, showOriginBands = false) {
   const status = activityStatus(session);
   const isUnknown = status.tone === 'unknown';
   const hasEstimate = isUnknown && session.estimate?.canEstimate;
   const mainTool = hasEstimate ? null : newestFirst(session.tools.filter((tool) => !tool.agent_id))[0];
   const doingTask = session.tasks.find((task) => task.state === 'doing');
-  const row = element('div', 'now-row main-row');
+  const origin = sessionOrigin(session, showOriginBands);
+  const row = element('div', `now-row main-row${origin ? ` origin-${origin}` : ''}`);
+  if (origin) row.dataset.origin = origin;
   const who = element('div', 'who');
   who.append(element('span', `dot ${status.tone}`), document.createTextNode('メイン'));
   appendContextTags(who, product, session, withTags, multipleSessions);
@@ -2612,7 +2621,7 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
   return row;
 }
 
-function appendAgents(body, session, product, withTags = false, multipleSessions = false, showEnded = expandedEndedSessions.has(session.session_id), includeToggle = true) {
+function appendAgents(body, session, product, withTags = false, multipleSessions = false, showEnded = expandedEndedSessions.has(session.session_id), includeToggle = true, showOriginBands = false) {
   if (!session.agents.length) {
     if (!isFilterShown('agents')) return;
     body.append(element('h3', 'sub', 'サブエージェント'));
@@ -2628,8 +2637,10 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
   body.append(element('h3', 'sub', 'サブエージェント'));
   if (!visibleAgents.length && !hiddenRunningAgents) body.append(element('div', 'empty', '稼働中のサブエージェントはありません。'));
   const list = element('div', 'agent-list');
+  const origin = sessionOrigin(session, showOriginBands);
   for (const agent of visibleAgents) {
-    const row = element('div', 'agent-row');
+    const row = element('div', `agent-row${origin ? ` origin-${origin}` : ''}`);
+    if (origin) row.dataset.origin = origin;
     row.dataset.startedAt = agent.startedAt || '';
     const who = element('div', 'who');
     const agentState = agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
@@ -3115,10 +3126,12 @@ function kindTodoTaskCount(references) {
   return references.reduce((count, { session }) => count + taskVisibility(session, true, true).todoCount, 0);
 }
 
-function appendKindTaskSession(body, reference, showTodo, showDone) {
+function appendKindTaskSession(body, reference, showTodo, showDone, showOriginBands = false) {
   const { product, session, multipleSessions } = reference;
   const { visible } = taskVisibility(session, showTodo, showDone);
-  const group = element('section', 'kind-session-tasks group-frame');
+  const origin = sessionOrigin(session, showOriginBands);
+  const group = element('section', `kind-session-tasks group-frame${origin ? ` origin-${origin}` : ''}`);
+  if (origin) group.dataset.origin = origin;
   const heading = element('h3', 'kind-task-head');
   appendContextTags(heading, product, session, true, true);
   heading.append(element('span', 'meta', `最終更新 ${session.tasksUpdatedAt ? durationAgoLabel(session.tasksUpdatedAt) : '時刻不明'}`));
@@ -3171,7 +3184,7 @@ function appendUnknownSessionControls(row, session) {
 }
 
 function sessionBlock(product, session, multipleSessions, showOriginBands = true) {
-  const origin = showOriginBands ? session.provider === 'codex' ? 'codex' : 'claude' : '';
+  const origin = sessionOrigin(session, showOriginBands);
   const block = element(multipleSessions ? 'section' : 'div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
   if (origin) {
     block.className = `${block.className} origin-${origin}`;
@@ -3187,7 +3200,6 @@ function sessionBlock(product, session, multipleSessions, showOriginBands = true
   const body = element('div', 'session-body');
   if (!multipleSessions) {
     const context = element('div', 'session-tag session-context', sessionDisplayName(session));
-    if (origin) context.dataset.origin = origin;
     body.append(context);
   }
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
@@ -3433,9 +3445,9 @@ function renderKindSections(products, showOriginBands = true) {
   const showEndedAgents = expandedKindSections.has('agents');
   const endedAgentCount = kindEndedAgentCount(references);
   for (const { product, session, multipleSessions } of references) {
-    activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions) });
+    activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions, showOriginBands) });
     const holder = element('div');
-    appendAgents(holder, session, product, true, multipleSessions, showEndedAgents, false);
+    appendAgents(holder, session, product, true, multipleSessions, showEndedAgents, false, showOriginBands);
     const list = holder.querySelector('.agent-list');
     if (list) for (const row of [...list.children]) {
       const startedAt = Date.parse(row.dataset.startedAt);
@@ -3455,7 +3467,7 @@ function renderKindSections(products, showOriginBands = true) {
   const doneTaskCount = kindDoneTaskCount(references);
   for (const { product, session, multipleSessions } of references) {
     if (!session.tasks.length) continue;
-    appendKindTaskSession(tasks, { product, session, multipleSessions }, showTodoTasks, showDoneTasks);
+    appendKindTaskSession(tasks, { product, session, multipleSessions }, showTodoTasks, showDoneTasks, showOriginBands);
   }
   const taskControls = element('div', 'kind-section-controls');
   if (todoTaskCount) appendKindToggle(taskControls, 'todoTasks', showTodoTasks, todoTaskCount, '未着手のタスク');

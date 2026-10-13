@@ -696,7 +696,8 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       appendAgents(target) { target.append({ marker: 'agent' }); },
       mainRow: () => ({ marker: 'main' }),
     });
-    vm.runInContext([constants, defaultOrder, normalize, ordered, visiblePullRequests, endedDecision, renderKinds, renderSession].join('\n'), context);
+    vm.runInContext([constants, defaultOrder, normalize, ordered, visiblePullRequests, endedDecision,
+      functionSource(web, 'sessionOrigin'), renderKinds, renderSession].join('\n'), context);
     const kindSections = JSON.parse(JSON.stringify(
       context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label),
     ));
@@ -1059,7 +1060,7 @@ test('種類別タスクのまとまりは先頭行に札と更新時刻を置�
     sessionTag: (_product, _session, _withTag, includeSession) => includeSession ? 'PRODUCT SESSION' : '',
     taskItem: (_product, _session, task, withTag) => `<li data-tags="${withTag}">${task.title}</li>`,
   });
-  vm.runInContext(`${mockVisibility}\n${mockTaskBlock}\nthis.renderTasks = kindTaskSessionBlock;`, mockContext);
+  vm.runInContext(`${mockVisibility}\n${functionSource(mock, 'sessionOrigin')}\n${mockTaskBlock}\nthis.renderTasks = kindTaskSessionBlock;`, mockContext);
   const output = mockContext.renderTasks(
     { name: 'agent-cockpit' },
     { id: 'session-a', tasksUpdatedMin: 5, tasks: [{ title: '表示タスク', state: 'doing' }, { title: '未着手タスク', state: 'todo' }, { title: '完了タスク', state: 'done' }] },
@@ -1074,7 +1075,7 @@ test('種類別タスクのまとまりは先頭行に札と更新時刻を置�
 
   const webKind = functionSource(web, 'renderKindSections');
   const webTaskBlock = functionSource(web, 'appendKindTaskSession');
-  assert.match(webKind, /appendKindTaskSession\(tasks, \{ product, session, multipleSessions \}, showTodoTasks, showDoneTasks\)/);
+  assert.match(webKind, /appendKindTaskSession\(tasks, \{ product, session, multipleSessions \}, showTodoTasks, showDoneTasks, showOriginBands\)/);
   assert.match(webKind, /appendKindToggle\(taskControls, 'todoTasks', showTodoTasks, todoTaskCount, '未着手のタスク'\)/);
   assert.match(webKind, /appendKindToggle\(taskControls, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク'\)/);
   assert.match(webTaskBlock, /appendContextTags\(heading, product, session, true, true\)/);
