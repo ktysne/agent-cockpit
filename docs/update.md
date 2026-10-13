@@ -39,9 +39,17 @@ git merge --ff-only vX.Y.Z
 追加作業がある場合は、更新前の版より新しく、更新先の版以下の節だけを、版の小さい順に実行します。
 版はピリオドで区切った 3 つの整数で比較します。
 
+## フックと MCP サーバーの登録の見比べ
+
+[導入手順](setup.md)のフックと MCP サーバーの登録を、登録済みの内容と見比べます。
+対象は、Claude Code の `~/.claude/settings.json` と `claude mcp list`、Codex を使っているときの `~/.codex/hooks.json` と `~/.codex/config.toml` です。
+足りないイベントや、timeout の値の違いがあれば、差分を利用者に示して確認を取ってから直します。
+Codex の `hooks.json` を変えたときは、利用者に Codex の `/hooks` で信頼し直すよう伝えます。
+
 ## スキルのコピー
 
 [導入手順](setup.md#4-スキルを置く)と同じコマンドで、スキルをコピーし直します。
+Claude Code を使っていない環境では、Claude Code のスキルは飛ばします。
 リポジトリ外を書き換えるため、コピー先と内容を利用者に示して確認を取ります。
 
 PowerShell:
@@ -59,6 +67,24 @@ mkdir -p ~/.claude/skills/agent-cockpit
 cp skills/agent-cockpit/SKILL.md ~/.claude/skills/agent-cockpit/SKILL.md
 ```
 
+Codex を使っているときは、[導入手順](setup.md#3-スキルを置く)と同じコマンドで、Codex のスキルもコピーし直します。
+
+PowerShell:
+
+```powershell
+$codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+$skillDirectory = Join-Path $codexHome 'skills\agent-cockpit'
+New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
+Copy-Item .\skills\codex\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
+```
+
+bash:
+
+```bash
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit"
+cp skills/codex/agent-cockpit/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit/SKILL.md"
+```
+
 ## 常駐サーバーの再起動と確認
 
 ```sh
@@ -67,7 +93,7 @@ node src/client/restart-server.js
 
 停止した pid と起動後の pid が出ます。
 失敗した場合は、出力を利用者に伝えて止めます。
-実行中のセッションは古い MCP とフックの読み込みを使っているため、利用者にセッションを開き直すよう伝えます。
+実行中のセッションは古い MCP とフックの読み込みを使っているため、利用者に Claude Code と Codex のセッションを開き直すよう伝えます。
 
 ダッシュボードを開き、更新通知が消えたことを確かめます。
 確認は新しいサーバーの初回の版確認が行われる起動 1 分後にも行い、通知が再び出ていないことを確かめます。
