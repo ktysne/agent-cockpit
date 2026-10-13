@@ -768,6 +768,12 @@ const DATA = {
           main: { tool: '', since: '5 分前' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 5,
         },
+        // 常駐サーバーの再起動直後。フックの時刻は無く、セッションファイルの status が busy なので作業中と経過時間を出す。
+        {
+          id: 'agent-cockpit-file-busy', title: '再起動直後に作業中と分かったセッション', status: 'busy', branch: 'claude/session-file-busy',
+          main: { tool: '', since: '4 分前' },
+          perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 4,
+        },
         {
           id: 'agent-cockpit-noninteractive', title: '非対話の claude -p (クロスレビュー)', status: 'unknown', nonInteractive: true, branch: 'plan/pr-stack-view',
           main: { tool: '', since: '3 分前' },

@@ -4539,6 +4539,43 @@ test('非対話の行は作業中と待機中を対話と同じ文言と色に�
   }
 });
 
+test('再起動直後の作業中と待機中は、経過時間にセッションファイルの状態の時刻を使う', () => {
+  const context = pageContext(pageHtml, {
+    element: (tag, className, text) => {
+      const node = { tag, className: className || '', textContent: text, children: [], childNodes: [], dataset: {} };
+      node.append = (...nodes) => { node.children.push(...nodes); node.childNodes.push(...nodes); };
+      return node;
+    },
+    document: { createTextNode: (text) => ({ nodeType: 'text', textContent: text }) },
+    appendContextTags: () => {},
+    sessionOrigin: () => '',
+    appendUnknownSessionControls: () => {},
+    appendToolLine: () => {},
+    appendSessionModelLine: () => {},
+    newestFirst: (items) => items,
+    durationAgoLabel: (value) => (value ? '5 分前' : '時刻不明'),
+    relativeTimeElement: (value, className, label) => ({ tag: 'time', className, textContent: label, value }),
+  });
+  vm.runInContext(['activityStatus', 'mainRow'].map((name) => functionSource(pageHtml, name)).join('\n'), context);
+  const statusSince = '2026-10-05T00:00:00.000Z';
+  const session = { session_id: 'restarted', status: '作業中', lastActivityAt: null, statusSince, tools: [], tasks: [], decisions: [] };
+  const row = context.mainRow(session, { name: 'agent-cockpit' });
+  assert.equal(row.children.find((child) => child.className === 'since').value, statusSince);
+  assert.equal(row.children.find((child) => child.className === 'since').textContent, '5 分前');
+});
+
+test('セッションファイルの状態で決めたセッションは、フックの更新時刻が無くても状態の時刻で隠す判定をする', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const context = pageContext(pageHtml, { displayPreferences: { idleHideMinutes: 30 }, isActiveDecision: () => false });
+  vm.runInContext(['isEndedAgent', 'isIdleHiddenSession'].map((name) => functionSource(pageHtml, name)).join('\n'), context);
+  const idle = {
+    status: '待機中', lastUpdatedAt: null, statusSince: new Date(now - 31 * 60_000).toISOString(),
+    sessionFileUpdatedAt: new Date(now - 60_000).toISOString(), agents: [], decisions: [], permissionWaits: [],
+  };
+  assert.equal(context.isIdleHiddenSession(idle, now), true);
+  assert.equal(context.isIdleHiddenSession({ ...idle, statusSince: null }, now), false);
+});
+
 test('読み込み直すボタンは書きかけの回答が無ければ読み込み直し、あれば案内で確かめる', () => {
   const handler = pageHtml.match(/refreshButton\.addEventListener\('click', (\(\) => \{[\s\S]*?\n\})\);/)?.[1];
   assert.ok(handler);

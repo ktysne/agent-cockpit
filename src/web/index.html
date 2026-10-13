@@ -2049,7 +2049,7 @@ function isIdleHiddenSession(session, now = Date.now()) {
     || (session.permissionWaits || []).length > 0) return false;
   if ((session.decisions || []).some(isActiveDecision)) return false;
   if ((session.agents || []).some((agent) => !isEndedAgent(agent))) return false;
-  const lastUpdatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
+  const lastUpdatedAt = Date.parse(session.lastUpdatedAt || session.statusSince || session.sessionFileUpdatedAt || '');
   const hiddenAt = session.hidden === true ? Date.parse(session.hiddenAt || '') : NaN;
   const updatedAt = Number.isFinite(hiddenAt) ? Math.max(Number.isFinite(lastUpdatedAt) ? lastUpdatedAt : hiddenAt, hiddenAt) : lastUpdatedAt;
   return Number.isFinite(updatedAt) && now - updatedAt > displayPreferences.idleHideMinutes * 60_000;
@@ -3120,7 +3120,8 @@ function mainRow(session, product, withTags = false, multipleSessions = false, s
   if (!isUnknown) {
     // 非対話の行は hook の時刻が無いことがあるので、セッションファイルの更新時刻で代える。
     const nonInteractiveAt = session.nonInteractive ? (session.lastUpdatedAt || session.sessionFileUpdatedAt) : null;
-    const elapsedAt = mainTool?.startedAt || session.lastActivityAt || nonInteractiveAt;
+    // フックの時刻が無い再起動直後は、セッションファイルから決めた状態の時刻で代える。
+    const elapsedAt = mainTool?.startedAt || session.lastActivityAt || nonInteractiveAt || session.statusSince;
     row.append(relativeTimeElement(elapsedAt, 'since', durationAgoLabel(elapsedAt)));
   }
   if (detail.childNodes.length) row.append(detail);
