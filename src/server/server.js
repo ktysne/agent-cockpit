@@ -25,6 +25,8 @@ const { createPullRequestRoutes } = require('./routes/pull-requests');
 const { createUiSessionRoutes } = require('./routes/ui-sessions');
 const { createSettingsRoutes } = require('./routes/settings');
 const { Diagnostics } = require('./diagnostics');
+const { recordClientEntries, MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYTES } = require('../client/diagnostic-events');
+const { importPendingHooks } = require('../client/hooks-pending');
 const { version } = require('../../package.json');
 
 const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
@@ -137,10 +139,10 @@ async function serveManualRequest(request, response, manualDir) {
   return true;
 }
 
-function readJsonBody(request) {
+function readJsonBody(request, maxBytes = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     const contentLength = Number(request.headers['content-length']);
-    if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
       request.resume();
       reject(Object.assign(new Error('request body is too large'), { statusCode: 413 }));
       return;
@@ -150,7 +152,7 @@ function readJsonBody(request) {
     let size = 0;
     request.on('data', (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         request.removeAllListeners('data');
         request.resume();
         reject(Object.assign(new Error('request body is too large'), { statusCode: 413 }));
@@ -159,7 +161,7 @@ function readJsonBody(request) {
       chunks.push(chunk);
     });
     request.on('end', () => {
-      if (size <= MAX_BODY_BYTES) resolve(Buffer.concat(chunks).toString('utf8'));
+      if (size <= maxBytes) resolve(Buffer.concat(chunks).toString('utf8'));
     });
     request.on('error', reject);
   });
@@ -301,6 +303,15 @@ function createRequestHandler(options) {
   // method と path の両方が一致した最初の行を使う。
   // 本文は body が 'json' の行だけが読む。estimate は本文を使わないので 'none' にする。
   const routes = [
+    { method: 'POST', path: '/api/diagnostics', auth: 'hook', body: 'json', maxBytes: MAX_DIAGNOSTICS_BODY_BYTES,
+      handler: async ({ request, response, body }) => {
+        if (!Array.isArray(body?.entries) || body.entries.length > MAX_DIAGNOSTICS_PER_EVENT) {
+          jsonResponse(response, 400, { error: 'Invalid diagnostics' });
+          return;
+        }
+        recordClientEntries(options.diagnostics, body.entries, request.diagnosticSender);
+        jsonResponse(response, 202, { accepted: true });
+      } },
     { method: 'GET', path: '/api/diagnostics', auth: 'none', body: 'none', handler: async ({ response, request }) => {
       const run = new URL(request.url, 'http://localhost').searchParams.get('run');
       try {
@@ -397,7 +408,11 @@ function createRequestHandler(options) {
     }
     if (matched) {
       const { route, params } = matched;
-      const failure = authFailure(route.auth, request, info);
+      const auth = route.method === 'POST' && route.path === '/api/diagnostics'
+        && request.headers['x-cockpit-secret'] === info.uiSecret ? 'ui' : route.auth;
+      diagnosticAuth = auth;
+      request.diagnosticSender = auth === 'ui' ? 'web' : 'mcp';
+      const failure = authFailure(auth, request, info);
       if (failure) {
         jsonResponse(response, failure.status, { error: failure.error });
         return;
@@ -409,7 +424,7 @@ function createRequestHandler(options) {
       let body;
       if (route.body === 'json') {
         try {
-          body = JSON.parse(await readJsonBody(request));
+          body = JSON.parse(await readJsonBody(request, route.maxBytes));
         } catch (error) {
           requestError = error;
           jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
@@ -643,6 +658,7 @@ async function startServer(options = {}) {
   pullRequestTracker.start();
   pullRequestMergeManager.start?.();
   async function refreshSessionFiles(now = Date.now()) {
+    await importPendingHooks(homeDir, diagnostics).catch(() => {});
     const files = await listLiveSessionFiles(claudeHome, { isAlive: options.isAlive || processIsAlive });
     const locks = await listCodexThreadLocks(codexHome);
     const codexNames = await readCodexSessionNames(codexHome, codexSessionNameCache);

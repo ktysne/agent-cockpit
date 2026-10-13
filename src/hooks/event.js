@@ -3,6 +3,7 @@ const { isHookSessionId } = require('../server/session-ids');
 const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
 const { readRouting } = require('../server/routing');
 const { execFile } = require('node:child_process');
+const { appendPendingHook } = require('../client/hooks-pending');
 const { promisify } = require('node:util');
 const {
   HOOK_TIMEOUT_MS,
@@ -56,14 +57,15 @@ async function findCodexParentPid() {
   return null;
 }
 
-async function codexParentPid(findParent, timeoutMs = CODEX_PARENT_TIMEOUT_MS) {
+async function codexParentPid(findParent, timeoutMs = CODEX_PARENT_TIMEOUT_MS, diagnostic = {}) {
   let timer;
   try {
     return await Promise.race([
       Promise.resolve().then(findParent),
-      new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+      new Promise((resolve) => { timer = setTimeout(() => { diagnostic.result = 'timeout'; resolve(null); }, timeoutMs); }),
     ]);
-  } catch {
+  } catch (error) {
+    diagnostic.result = error.killed || error.code === 'ETIMEDOUT' ? 'timeout' : 'failed';
     return null;
   } finally {
     clearTimeout(timer);
@@ -415,28 +417,43 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
 
 async function postEvent(event, options = {}) {
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
+  event.diagnostics ||= [];
+  const startServer = options.startServer || ((args) => launchServer(args));
+  const deadline = options.deadline || Date.now() + HOOK_TIMEOUT_MS;
   const result = await postToServer('/api/events', event, {
     homeDir,
     fetchImpl: options.fetchImpl || fetch,
-    startServer: options.startServer,
+    startServer: async args => {
+      await startServer(args);
+      const stage = event.diagnostics.find(entry => entry.msg === 'hook.server');
+      if (stage) stage.data.started = true;
+      else event.diagnostics.push({ msg: 'hook.server', data: { started: true } });
+    },
     environment: options.environment || process.env,
-    deadline: options.deadline || Date.now() + HOOK_TIMEOUT_MS,
+    deadline,
     attemptTimeoutMs: 500,
     ensureServerRunning: options.ensureServerRunning,
     readServerInfo: options.readServerInfo,
-    ensure: true,
+    ensure: options.ensure ?? true,
     parseJson: false,
     reuseInfoOnUnauthorized: true,
     ...(Object.hasOwn(options, 'initialInfo') ? { initialInfo: options.initialInfo } : {}),
   });
+  if (!result.ok && result.status === null) await appendPendingHook(homeDir, { msg: 'hook.delivery', data: {
+    failure: result.timedOut || Date.now() >= deadline ? 'timeout' : 'unreachable', at: new Date().toISOString(),
+  } });
   return result.ok;
 }
 
 async function runHook(input, options = {}) {
   const event = makeHookEvent(input, options.now === undefined ? Date.now() : options.now, options);
   if (!event) return { exitCode: 0, additionalContext: null };
+  event.diagnostics = [{ msg: 'hook.input', data: { result: 'parsed' } }, { msg: 'hook.server', data: { started: false } }];
   if (event.provider === 'codex' && event.hook_event_name === 'SessionStart') {
-    const pid = await codexParentPid(options.findCodexParentPid || findCodexParentPid, options.codexParentTimeoutMs);
+    const startedAt = Date.now();
+    const diagnostic = {};
+    const pid = await codexParentPid(options.findCodexParentPid || findCodexParentPid, options.codexParentTimeoutMs, diagnostic);
+    event.diagnostics.push({ msg: 'hook.pid', data: { result: diagnostic.result || (pid ? 'found' : 'missing'), durationMs: Date.now() - startedAt } });
     if (Number.isInteger(pid) && pid > 0) event.codexPid = pid;
   }
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
@@ -448,7 +465,10 @@ async function runHook(input, options = {}) {
     const info = await ensureServerRunning({
       homeDir,
       fetchImpl: options.fetchImpl || fetch,
-      startServer: options.startServer || ((args) => launchServer(args)),
+      startServer: async args => {
+        await (options.startServer || launchServer)(args);
+        event.diagnostics.find(entry => entry.msg === 'hook.server').data.started = true;
+      },
       environment: options.environment || process.env,
       deadline,
     });
@@ -475,10 +495,19 @@ async function readStdin(stream = process.stdin) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+async function runHookText(text, options = {}) {
+  let input;
+  try { input = JSON.parse(text); }
+  catch {
+    await postEvent({ diagnostics: [{ msg: 'hook.input', data: { result: 'invalid' } }] }, { ...options, ensure: false });
+    return { exitCode: 0, additionalContext: null };
+  }
+  return runHook(input, options);
+}
+
 async function main() {
   try {
-    const input = JSON.parse(await readStdin());
-    const result = await runHook(input, { provider: process.argv[2] === 'codex' ? 'codex' : 'claude' });
+    const result = await runHookText(await readStdin(), { provider: process.argv[2] === 'codex' ? 'codex' : 'claude' });
     if (result.additionalContext) {
       process.stdout.write(`${JSON.stringify({
         hookSpecificOutput: {
@@ -511,4 +540,5 @@ module.exports = {
   ensureServerRunning,
   postEvent,
   runHook,
+  runHookText,
 };

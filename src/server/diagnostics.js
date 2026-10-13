@@ -3,12 +3,14 @@
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { CLIENT_EVENTS } = require('../client/diagnostic-events');
 
 const RUN_PATTERN = /^\d{8}T\d{6}(?:\d{3})?Z-\d+$/;
 const FILE_PATTERN = /^(\d{8}T\d{6}(?:\d{3})?Z-\d+)\.(\d+)\.jsonl$/;
 const LEVELS = ['silent', 'error', 'warn', 'info', 'debug'];
 const TAGS = ['server', 'hook', 'mcp', 'web', 'gh', 'merge', 'codex'];
 const ALLOWED_DATA = Object.freeze({
+  ...Object.fromEntries(Object.entries(CLIENT_EVENTS).map(([msg, spec]) => [msg, Object.keys(spec.fields)])),
   'server.start': ['pid', 'port', 'version', 'commit'],
   'server.stop': ['pid'],
   'request.failed': ['method', 'path', 'status', 'error', 'secret', 'origin'],

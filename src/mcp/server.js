@@ -1,6 +1,16 @@
 const readline = require('node:readline');
 const { cockpitHomeFromOptions } = require('../server/identity');
-const { postToServer } = require('../client/server-connection');
+const { postToServer, requestFromServer } = require('../client/server-connection');
+
+function reportMcpWrite(info, options, data) {
+  void (async () => {
+    if (!info) return;
+    await requestFromServer(info, '/api/diagnostics', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-cockpit-secret': info.secret },
+      body: JSON.stringify({ entries: [{ msg: 'mcp.write', data }] }),
+    }, { fetchImpl: options.fetchImpl || fetch, attemptTimeoutMs: 250, deadline: Date.now() + 250 });
+  })().catch(() => {});
+}
 const { COMPLETE_COMMIT_SHA_PATTERN, isCompleteCommitSha, parsePullRequestUrl, validRepositoryPart } = require('../server/pull-request-utils');
 const { isHookSessionId } = require('../server/session-ids');
 
@@ -175,7 +185,12 @@ function shortSavedList(toolName, saved) {
 
 // 常駐サーバーは、フックで登録されていないか終了した Codex のセッションへの書き込みを 403 で拒否する。
 async function postMcpRequest(requestPath, body, options, deadline, attemptTimeoutMs = 2000) {
+  let serverInfo;
   const result = await postToServer(requestPath, body, {
+    onServerInfo: info => {
+      serverInfo = info;
+      reportMcpWrite(info, options, { tool: options.diagnosticTool, phase: 'attempt' });
+    },
     homeDir: options.homeDir || cockpitHomeFromOptions(options),
     environment: options.environment || process.env,
     fetchImpl: options.fetchImpl || fetch,
@@ -189,6 +204,8 @@ async function postMcpRequest(requestPath, body, options, deadline, attemptTimeo
     retryAfterTimeout: false,
     ensure: true,
   });
+  reportMcpWrite(serverInfo, options, { tool: options.diagnosticTool, phase: 'result', ok: result.ok, status: result.status,
+    ...(!result.ok ? { failure: result.timedOut ? 'timeout' : result.status ? 'http' : 'unreachable' } : {}) });
   return { ...result, codexUnregistered: Boolean(options.codexSessionId) && result.status === 403 };
 }
 
@@ -278,6 +295,7 @@ async function callTool(name, args, options = {}) {
   const tool = TOOL_DEFINITIONS.find((item) => item.name === name);
   if (!tool) return toolResult('指定されたツールはありません。', true);
   if (!args || typeof args !== 'object' || Array.isArray(args)) return toolResult('入力が正しくありません。', true);
+  options = { ...options, diagnosticTool: name };
   if (name === 'cockpit_add_pr') {
     const saved = await postPullRequest(args, options);
     if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);

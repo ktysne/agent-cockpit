@@ -256,6 +256,7 @@ async function postToServer(requestPath, body, options = {}) {
         body: JSON.stringify(body),
       };
       if (options.cache) requestOptions.cache = options.cache;
+      options.onServerInfo?.(info);
       const result = await fetchWithDeadline(
         fetchImpl,
         `http://127.0.0.1:${info.port}${requestPath}`,
