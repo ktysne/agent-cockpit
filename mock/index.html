@@ -222,6 +222,7 @@ h3.sub .count { font-weight: normal; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--text-2); }
 .dot.busy { background: var(--ok); animation: pulse 1.6s infinite; }
 .dot.wait { background: var(--warn); }
+.dot.interrupted { background: transparent; box-shadow: inset 0 0 0 2px var(--warn); }
 @keyframes pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
 
@@ -773,6 +774,14 @@ const DATA = {
           id: 'agent-cockpit-file-busy', title: '再起動直後に作業中と分かったセッション', status: 'busy', branch: 'claude/session-file-busy',
           main: { tool: '', since: '4 分前' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 4,
+        },
+        // 利用者がターンを中断した。セッションは生きていて次の入力を待つので、待機中とも終了とも分けて出し、終わったものを隠す設定でも隠さない。
+        {
+          id: 'agent-cockpit-interrupted', title: 'ターンを中断したセッション', status: 'interrupted', branch: 'claude/session-interrupted',
+          main: { tool: '—', since: '3 分前' },
+          perms: [], subagents: [],
+          tasks: [{ title: '中断の検出を実装する', state: 'doing', updatedMin: 3, criteria: [{ t: '中断した行が「中断」と出る', met: false }] }],
+          tasksUpdatedMin: 3, decisions: [], lastUpdatedMin: 3,
         },
         {
           id: 'agent-cockpit-noninteractive', title: '非対話の claude -p (クロスレビュー)', status: 'unknown', nonInteractive: true, branch: 'plan/pr-stack-view',
@@ -1407,7 +1416,7 @@ const answerDirty = (answer, decision) => {
 const allSessions = () => DATA.products.flatMap(p => p.sessions).filter(s => !ui.deletedSessionIds.includes(s.id));
 function isIdleHiddenSession(session, now = Date.now()) {
   // 非対話の実行中は作業中として見せるので、更新時刻が古くても隠さない。
-  if (session.status === 'busy' || (session.status === 'unknown' && session.nonInteractive) || session.perms.length > 0) return false;
+  if (session.status === 'busy' || session.status === 'interrupted' || (session.status === 'unknown' && session.nonInteractive) || session.perms.length > 0) return false;
   if (session.decisions.some(isActiveDecision)) return false;
   if (session.subagents.some(agent => isBusyAgent(session, agent))) return false;
   const lastUpdatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
@@ -1731,7 +1740,8 @@ function mainRow(p, session, withTag, showOriginBands = false) {
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
   // 状態不明の行の main.since は、ターンを確定しないイベントが最後に届いた時刻。無いときは時刻不明にする。
-  const status = nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
+  const status = nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
+  const statusTitle = session.status === 'interrupted' ? ' title="利用者が中断した。セッションは生きていて、次の入力を待っている"' : '';
   const stateClass = nonInteractiveUnknown ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
   const resumes = session.codex?.resumes ? `<span class="route-tag" title="同じ会話を再開しても 1 行にまとめて表示する">再開 ${session.codex.resumes} 回</span>` : '';
@@ -1740,7 +1750,7 @@ function mainRow(p, session, withTag, showOriginBands = false) {
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}${model}`;
   const origin = sessionOrigin(session, showOriginBands);
   return `<div class="now-row main-row${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
-      <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<strong>${status}</strong></div>
+      <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<strong${statusTitle}>${status}</strong></div>
       ${unknown ? '' : `<div class="since">${esc(session.main.since || '')}</div>`}
       ${detail ? `<div class="detail">${detail}</div>` : ''}
       ${unknownSessionControls(session)}</div>`;

@@ -71,36 +71,41 @@ async function readTail(fileSystem, filePath) {
   }
 }
 
+function scanTail(tail) {
+  const lines = tail.text.split(/\r?\n/);
+  if (tail.startedMidFile) lines.shift();
+
+  let lastRecord = null;
+  let lastInterrupted = false;
+  let lastTool = null;
+  for (const line of lines) {
+    if (!line) continue;
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const parsed = targetRecord(value);
+    if (!parsed) continue;
+    if (parsed.invalid) {
+      lastRecord = null;
+      continue;
+    }
+    lastRecord = parsed.record;
+    lastInterrupted = parsed.interrupted;
+    for (const toolName of parsed.toolNames) lastTool = toolName;
+  }
+  return { lastRecord, lastInterrupted, lastTool };
+}
+
 async function estimateTranscript(claudeHome, cwd, sessionId, fileSystem = fs) {
   const filePath = transcriptPathFor(claudeHome, cwd, sessionId);
   if (!filePath) return null;
   try {
     const tail = await readTail(fileSystem, filePath);
     if (!tail) return null;
-    const lines = tail.text.split(/\r?\n/);
-    if (tail.startedMidFile) lines.shift();
-
-    let lastRecord = null;
-    let lastInterrupted = false;
-    let lastTool = null;
-    for (const line of lines) {
-      if (!line) continue;
-      let value;
-      try {
-        value = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const parsed = targetRecord(value);
-      if (!parsed) continue;
-      if (parsed.invalid) {
-        lastRecord = null;
-        continue;
-      }
-      lastRecord = parsed.record;
-      lastInterrupted = parsed.interrupted;
-      for (const toolName of parsed.toolNames) lastTool = toolName;
-    }
+    const { lastRecord, lastInterrupted, lastTool } = scanTail(tail);
     if (!lastRecord) return null;
 
     const message = lastRecord.message;
@@ -112,6 +117,21 @@ async function estimateTranscript(claudeHome, cwd, sessionId, fileSystem = fs) {
         ? 'input'
         : 'tool';
     return { recordedAt: lastRecord.timestamp, lastTool, state };
+  } catch {
+    return null;
+  }
+}
+
+// 読めないときは null を返し、最後の対象行が中断の行かどうかを interrupted で返す。
+async function readTranscriptInterruption(claudeHome, cwd, sessionId, fileSystem = fs) {
+  const filePath = transcriptPathFor(claudeHome, cwd, sessionId);
+  if (!filePath) return null;
+  try {
+    const tail = await readTail(fileSystem, filePath);
+    if (!tail) return null;
+    const { lastRecord, lastInterrupted } = scanTail(tail);
+    if (!lastRecord) return null;
+    return { interrupted: lastInterrupted, recordedAt: lastRecord.timestamp };
   } catch {
     return null;
   }
@@ -169,4 +189,4 @@ async function readSessionModel(claudeHome, cwd, sessionId, fileSystem = fs) {
   return null;
 }
 
-module.exports = { MAX_TRANSCRIPT_BYTES, estimateTranscript, transcriptPathFor, readTaskNotifications, readSessionModel };
+module.exports = { MAX_TRANSCRIPT_BYTES, estimateTranscript, readTranscriptInterruption, transcriptPathFor, readTaskNotifications, readSessionModel };

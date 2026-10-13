@@ -2291,3 +2291,99 @@ test('背景タスクの途中の出力に run= の行があれば、行に実�
   assert.equal(flags.filter((active) => active === false).length, 1);
   assert.equal(flags.filter((active) => active === true).length, 1);
 });
+
+function interruptedFixture(provider = 'claude') {
+  const state = new DashboardState();
+  const add = (event) => state.addEvent({ session_id: 'main', provider, ...event });
+  const session = () => state.snapshot().sessions[0];
+  return { state, add, session };
+}
+
+test('Interrupt は Stop と同じ後始末をして中断にし、稼働中のサブエージェントがあっても中断を優先する', () => {
+  const { add, session } = interruptedFixture();
+  add({ hook_event_name: 'UserPromptSubmit', hookAt: 1000 });
+  add({ hook_event_name: 'SubagentStart', agent_id: 'worker', agent_type: 'impl', hookAt: 1100 });
+  add({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'main-tool', summary: 'npm test', hookAt: 1200 });
+  add({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', summary: 'npm test', hookAt: 1300 });
+  assert.equal(session().status, '許可待ち');
+
+  add({ hook_event_name: 'Interrupt', hookAt: 1400 });
+  assert.equal(session().status, '中断');
+  assert.deepEqual(session().permissionWaits, []);
+  assert.deepEqual(session().tools, []);
+  assert.equal(session().agents[0].active, true);
+});
+
+test('中断はメインの UserPromptSubmit と新しい開始で解除し、それ以外のイベントでは解除しない', () => {
+  for (const [release, status] of [
+    [{ hook_event_name: 'UserPromptSubmit' }, '作業中'],
+    [{ hook_event_name: 'SessionStart', source: 'startup' }, '待機中'],
+    [{ hook_event_name: 'SessionStart', source: 'resume' }, '待機中'],
+    [{ hook_event_name: 'SessionStart', source: 'clear' }, '待機中'],
+  ]) {
+    const { add, session } = interruptedFixture();
+    add({ hook_event_name: 'UserPromptSubmit', hookAt: 1000 });
+    add({ hook_event_name: 'Interrupt', hookAt: 1100 });
+    add({ ...release, hookAt: 1200 });
+    assert.equal(session().status, status, JSON.stringify(release));
+  }
+
+  const { add, session } = interruptedFixture();
+  add({ hook_event_name: 'UserPromptSubmit', hookAt: 1000 });
+  add({ hook_event_name: 'Interrupt', hookAt: 1100 });
+  for (const [index, event] of [
+    { hook_event_name: 'SubagentStart', agent_id: 'late', agent_type: 'impl' },
+    { hook_event_name: 'PreToolUse', agent_id: 'late', tool_name: 'Read', tool_use_id: 'late-read', summary: 'a.js' },
+    { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_use_id: 'interrupted-tool' },
+    { hook_event_name: 'PostToolBatch' },
+    { hook_event_name: 'SubagentStop', agent_id: 'late' },
+    { hook_event_name: 'SessionStart', source: 'compact' },
+  ].entries()) {
+    add({ ...event, hookAt: 1200 + index });
+    assert.equal(session().status, '中断', event.hook_event_name);
+  }
+});
+
+test('Codex の Interrupt も中断にし、次の UserPromptSubmit で作業中へ戻る', () => {
+  const { add, session } = interruptedFixture('codex');
+  add({ hook_event_name: 'UserPromptSubmit', hookAt: 1000 });
+  add({ hook_event_name: 'Interrupt', hookAt: 1100 });
+  assert.equal(session().status, '中断');
+  add({ hook_event_name: 'Stop', hookAt: 1200 });
+  assert.equal(session().status, '中断');
+  add({ hook_event_name: 'UserPromptSubmit', hookAt: 1300 });
+  assert.equal(session().status, '作業中');
+});
+
+test('サブエージェントの Interrupt は中断にしない', () => {
+  const { add, session } = interruptedFixture('codex');
+  add({ hook_event_name: 'UserPromptSubmit', hookAt: 1000 });
+  add({ hook_event_name: 'Interrupt', agent_id: 'child', hookAt: 1100 });
+  assert.notEqual(session().status, '中断');
+});
+
+test('中断の確認の候補は、フックが作業中か許可待ちのまま、ファイルの idle の時刻がメインの最後の区切りより新しいセッションだけにする', () => {
+  const at = (milliseconds) => new Date(milliseconds).toISOString();
+  const idle = (statusAt, extra = {}) => ({ session_id: 'main', cwd: '/work', status: 'idle', statusUpdatedAt: at(statusAt), ...extra });
+  const candidate = (events, file, provider = 'claude') => {
+    const { state, add } = interruptedFixture(provider);
+    for (const event of events) add(event);
+    state.syncSessionFiles(file ? [file] : []);
+    return state.interruptCandidate('main');
+  };
+  const prompt = { hook_event_name: 'UserPromptSubmit', hookAt: 1000 };
+
+  assert.deepEqual(candidate([prompt], idle(3000)), { cwd: '/work', statusUpdatedAt: at(3000), lastPromptAt: 1000 });
+  assert.notEqual(candidate([prompt, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', hookAt: 1500 }], idle(3000)), null);
+  // 背景のサブエージェントのイベントは、メインの区切りの時刻に数えない。
+  assert.notEqual(candidate([prompt, { hook_event_name: 'SubagentStop', agent_id: 'bg', hookAt: 4000 }], idle(3000)), null);
+
+  assert.equal(candidate([prompt], { ...idle(3000), status: 'busy' }), null);
+  assert.equal(candidate([prompt], idle(500)), null);
+  assert.equal(candidate([prompt], idle(1000)), null);
+  assert.equal(candidate([prompt], { session_id: 'main', cwd: '/work', status: 'idle' }), null);
+  assert.equal(candidate([prompt], null), null);
+  assert.equal(candidate([prompt, { hook_event_name: 'Stop', hookAt: 2000 }], idle(3000)), null);
+  assert.equal(candidate([prompt, { hook_event_name: 'Interrupt', hookAt: 2000 }], idle(3000)), null);
+  assert.equal(candidate([prompt], idle(3000), 'codex'), null);
+});

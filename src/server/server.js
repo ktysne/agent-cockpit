@@ -10,7 +10,7 @@ const { RoutingState } = require('./routing');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers');
-const { readTaskNotifications, readSessionModel } = require('./transcript');
+const { readTaskNotifications, readSessionModel, readTranscriptInterruption } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { isShortSessionId } = require('./session-ids');
 const { listLiveSessionFiles, readCodexSessionNames, findLiveSessionIdByPid, processIsAlive } = require('./session-files');
@@ -33,6 +33,7 @@ const { version } = require('../../package.json');
 const MAX_BODY_BYTES = 64 * 1024;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
+const INTERRUPT_TAIL_WAIT_MS = 2 * 60_000;
 
 async function defaultCodexAgentScriptExists(scriptPath) {
   try {
@@ -476,7 +477,8 @@ async function startServer(options = {}) {
   }
   function needsTaskNotifications(sessionId) {
     const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
-    return session?.provider !== 'codex' && session?.status === '待機中(サブエージェント稼働中)'
+    // メインが止まっているのは、Stop の後と、利用者が中断した後。どちらも背景のタスクの完了通知を取り込む。
+    return session?.provider !== 'codex' && (session?.status === '待機中(サブエージェント稼働中)' || session?.status === '中断')
       && session.agents.some((agent) => !agent.isCodex && agent.active);
   }
   function reconcileTaskNotifications(sessionId) {
@@ -490,6 +492,33 @@ async function startServer(options = {}) {
       } catch {}
     })().finally(() => notificationReads.delete(sessionId));
     notificationReads.set(sessionId, reading);
+    return reading;
+  }
+  const interruptReader = options.readTranscriptInterruption || readTranscriptInterruption;
+  const interruptReads = new Map();
+  const interruptChecked = new Map();
+  // Claude は中断で Stop を送らないので、ファイルが idle になったセッションの transcript の末尾で中断を確かめる。
+  function reconcileInterruption(sessionId) {
+    if (closing || interruptReads.has(sessionId)) return interruptReads.get(sessionId) || Promise.resolve();
+    const candidate = state.interruptCandidate(sessionId);
+    if (!candidate || interruptChecked.get(sessionId) === candidate.statusUpdatedAt) return Promise.resolve();
+    const reading = (async () => {
+      try {
+        const result = await interruptReader(claudeHome, candidate.cwd, sessionId);
+        // 読めなかったときは同じ状態でもう一度読む。
+        if (closing || !result) return;
+        const recordedAt = Date.parse(result.recordedAt);
+        // 中断の行は idle より遅れて書かれることがあるので、末尾が idle より古い間は猶予の間だけ読み直す。
+        const statusAt = Date.parse(candidate.statusUpdatedAt);
+        const awaitingTail = !result.interrupted && !(recordedAt >= statusAt) && Date.now() - statusAt < INTERRUPT_TAIL_WAIT_MS;
+        if (!awaitingTail) interruptChecked.set(sessionId, candidate.statusUpdatedAt);
+        if (!result.interrupted || !Number.isFinite(recordedAt) || recordedAt < candidate.lastPromptAt) return;
+        if (state.interruptCandidate(sessionId)?.statusUpdatedAt !== candidate.statusUpdatedAt) return;
+        state.recordInterruption(sessionId, recordedAt);
+        scheduleTaskNotifications(sessionId);
+      } catch {}
+    })().finally(() => interruptReads.delete(sessionId));
+    interruptReads.set(sessionId, reading);
     return reading;
   }
   function scheduleTaskNotifications(sessionId) {
@@ -585,6 +614,10 @@ async function startServer(options = {}) {
     // Claude の一覧を読めないときは生死を保留し、保存の期限切れの片付けだけを進める。
     if (!files) state.pruneExpiredStoreRecords(now);
     for (const session of state.snapshot().sessions) scheduleSessionModel(session);
+    for (const sessionId of interruptChecked.keys()) {
+      if (!state.sessionFileFor(sessionId)) interruptChecked.delete(sessionId);
+    }
+    await Promise.all([...state.sessions.keys()].map((sessionId) => reconcileInterruption(sessionId)));
   }
   await refreshSessionFiles().catch(() => {});
   for (const session of state.snapshot().sessions) scheduleTaskNotifications(session.session_id);
@@ -617,6 +650,7 @@ async function startServer(options = {}) {
       modelTimers.clear();
       await Promise.all(modelReads.values());
       await Promise.all(notificationReads.values());
+      await Promise.all(interruptReads.values());
       answerDelivery.close();
       pullRequestMergeManager.close?.();
       pullRequestTracker.close();

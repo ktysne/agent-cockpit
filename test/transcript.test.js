@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { MAX_TRANSCRIPT_BYTES, estimateTranscript, readTaskNotifications, readSessionModel } = require('../src/server/transcript');
+const { MAX_TRANSCRIPT_BYTES, estimateTranscript, readTranscriptInterruption, readTaskNotifications, readSessionModel } = require('../src/server/transcript');
 
 const { temporaryDirectory } = require('./support/temp');
 
@@ -93,6 +93,27 @@ test('終了通知は末尾の上限内だけを読み読めない記録は空�
   await fs.writeFile(fixture.filePath, `${enqueued('old', 'killed')}\n${'x'.repeat(MAX_TRANSCRIPT_BYTES)}\n${enqueued('new', 'killed')}\n`);
   assert.deepEqual([...await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId)].map(([id]) => id), ['new']);
   assert.equal((await readTaskNotifications(fixture.claudeHome, fixture.cwd, 'missing')).size, 0);
+});
+
+test('最後の対象行が中断の行かどうかを、その行の時刻とともに返す', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const interrupted = transcriptRecord('user', { timestamp: '2026-10-02T01:03:00.000Z', stopReason: null, content: [{ type: 'text', text: '[Request interrupted by user]' }] });
+  await fs.writeFile(fixture.filePath, `${transcriptRecord('assistant')}\n${interrupted}\n`);
+  assert.deepEqual(await readTranscriptInterruption(fixture.claudeHome, fixture.cwd, fixture.sessionId),
+    { interrupted: true, recordedAt: '2026-10-02T01:03:00.000Z' });
+
+  const next = transcriptRecord('user', { timestamp: '2026-10-02T01:04:00.000Z', stopReason: null, content: [{ type: 'text', text: '続きをお願いします' }] });
+  await fs.appendFile(fixture.filePath, `${next}\n`);
+  assert.deepEqual(await readTranscriptInterruption(fixture.claudeHome, fixture.cwd, fixture.sessionId),
+    { interrupted: false, recordedAt: '2026-10-02T01:04:00.000Z' });
+});
+
+test('中断の確認は記録が無いか対象行が無いときは null を返す', async (t) => {
+  const fixture = await transcriptFixture(t);
+  assert.equal(await readTranscriptInterruption(fixture.claudeHome, fixture.cwd, fixture.sessionId), null);
+  await fs.writeFile(fixture.filePath, `${transcriptRecord('user', { isSidechain: true, stopReason: null })}\n{壊れた行}\n`);
+  assert.equal(await readTranscriptInterruption(fixture.claudeHome, fixture.cwd, fixture.sessionId), null);
+  assert.equal(await readTranscriptInterruption(fixture.claudeHome, '', fixture.sessionId), null);
 });
 
 async function transcriptFixture(testContext, sessionId = 'session_1') {
