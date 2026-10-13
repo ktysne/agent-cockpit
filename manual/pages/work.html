@@ -79,7 +79,7 @@
   <figure class="guide-map" id="work-main-map" data-shot="work-rows/rows" data-crop-y="0-225" data-alt="今やっていることの欄。メインの作業行の1行目にメイン、待機中の表示、右端に経過時間がある。その下に作業中のタスクの題と、実行中のツールの札とコマンドが全幅で続く">
     <ol class="guide-list">
       <li data-part="rows.heading"><b>欄の見出し</b>：<span class="ui">今やっていること</span> です。この下に、メインの行とサブエージェントの行が並びます。</li>
-      <li data-part="rows.main-state" data-place="top"><b>状態</b>：<span class="ui">作業中</span>、<span class="ui">待機中</span>、<span class="ui">状態不明</span>、<span class="ui">非対話の実行中</span> のどれかです。</li>
+      <li data-part="rows.main-state" data-place="top"><b>状態</b>：<span class="ui">作業中</span>、<span class="ui">待機中</span>、<span class="ui">中断</span>、<span class="ui">状態不明</span>、<span class="ui">非対話の実行中</span> のどれかです。</li>
       <li data-part="rows.main-title"><b>作業中のタスクの題</b>：状態が <span class="ui">作業中</span> のタスクの題です。作業中のタスクが無いときは出ません。</li>
       <li data-part="rows.main-tool" data-place="right"><b>実行中のツール</b>：ツールの名前の札と、実行しているコマンドやファイルのパスです。ツールが終わると消えます。</li>
       <li data-part="rows.main-time"><b>経過時間</b>：実行中のツールがあればその開始から、無ければセッションの最後のイベントからの時間です。常駐サーバーの再起動の直後でイベントが無いときは、Claude Code が記録したセッションの状態が変わってからの時間です。</li>
@@ -93,6 +93,7 @@
   <ul>
     <li><span class="ui">作業中</span>：セッションがターンの途中です。</li>
     <li><span class="ui">待機中</span>：ターンが終わり、次の入力を待っています。ツールの実行許可を待っているときも、<span class="ui">待機中</span> と出ます。許可待ちは、判断が必要なことの欄に別のカードで出ます(<a href="permission.html">許可待ち</a>)。</li>
+    <li><span class="ui">中断</span>：利用者がターンを中断しました。点は輪郭だけの黄色で出ます。セッションは終了しておらず、次の入力を待っています。次にプロンプトを送るか、セッションを開始し直すと消えます。終わったものを隠す設定でも、更新の無いセッションを隠す設定でも、隠れません。</li>
     <li><span class="ui">非対話の実行中</span>：非対話の実行で、ターンの状態が分からない行です。<span class="ui">状態を推定</span> と <span class="ui">一覧から外す</span> は出ず、更新が無くても隠れません。</li>
     <li><span class="ui">状態不明</span>：セッションは見つかっているものの、ターンの状態を確定するイベントが届いていません(<a href="#work-unknown">状態不明のセッション</a>)。</li>
   </ul>
@@ -105,6 +106,9 @@
     プロンプトの送信やメインのツールの開始で作業中になり、ターンの終了で待機中になります。
     起動、再開、クリアによるセッションの開始は、入力を待つ状態で始まるので待機中になります。
     ターンが終わると、実行中のツールの行は消えます。</p>
+    <p>中断は、Claude Code がターンの中断でフックを送らないため、セッションのファイルと会話の記録から見つけます。
+    セッションのファイルが入力待ち(idle)に変わり、会話の記録の最後が利用者の中断の行であるときに、<span class="ui">中断</span> と出ます。
+    見つけるまでに、最大で 10 秒ほどかかります。</p>
     <p>ツールの札の後ろに出る要約は、コマンドか、ファイルのパスです。
     80 文字を超えるときは、79 文字までで切って「…」を付けます。
     コマンドやファイルを持たないツールは、札だけを出します。</p>
@@ -219,7 +223,7 @@
   <span class="ui">表示する</span> を押すと、開いているページの間だけ表示します(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   <p>次のどれにも当たらないセッションが、最後の更新から設定の時間を超えると隠れます。</p>
   <ul>
-    <li>状態が <span class="ui">作業中</span> または <span class="ui">非対話の実行中</span> である</li>
+    <li>状態が <span class="ui">作業中</span>、<span class="ui">中断</span>、<span class="ui">非対話の実行中</span> のどれかである</li>
     <li>許可待ちがある</li>
     <li>止めて待っている判断事項か、仮に推奨案で進行中の判断事項がある</li>
     <li>稼働中か終了未確認のサブエージェントがある</li>

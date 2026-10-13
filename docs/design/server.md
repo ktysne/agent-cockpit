@@ -111,10 +111,22 @@ Windows では `process.kill(pid)` は対象を終了させるため、停止の
   `hiddenAt` は保存済みの `hiddenSessionUpdatedAt` である。
   時間経過による移動は画面の分類だけで行い、サーバーは外した集合から戻さない。
 
+## 中断の検出
+
+- Claude Code は利用者がターンを中断したときに Stop を送らないので、フックの状態は「作業中」か「許可待ち」のまま残る。会話記録には、中断の行(`[Request interrupted` で始まる user の行)が書かれる。
+- 常駐サーバーは、セッションファイルを定期取得した後に、次をすべて満たす Claude のセッションだけ会話記録の末尾を読む。
+  - フックの状態が「作業中」または「許可待ち」である(ファイルで補った状態は対象にしない)。
+  - セッションファイルの `status` が `idle` で、`statusUpdatedAt` がメインの最後の区切りのイベント(`agent_id` の無い UserPromptSubmit、Stop、SessionStart)の hookAt より新しい。背景のサブエージェントのイベントの時刻とは比べない。
+  - 前回読んだときの `statusUpdatedAt` と違う。同じ値なら読み直さない。会話記録を読めなかったときは記録せず、次の取得でもう一度読む。
+    中断の行は `idle` より遅れて書かれることがあるので、末尾の行が中断の行でなく `statusUpdatedAt` より古いときは、`statusUpdatedAt` から 2 分の間は記録せずに次の取得で読み直す。
+- 読み取りは sessionId ごとに同時に 1 つとする。記録の場所と末尾 256KB の読み方は、状態不明の推定と同じとする。
+- 最後の対象行が中断の行で、その timestamp が最後の UserPromptSubmit の hookAt 以上なら、`hook_event_name` が `Interrupt` で `agent_id` の無いイベントを、その timestamp を hookAt として通常のイベントの取り込みに入れる。中断の行でなければ何もしない。Stop の取りこぼしは対象にしない。
+- 状態を派生状態への直接の書き込みにしないのは、派生状態が全イベントから毎回作り直され、次のサブエージェントのイベントで消えるためである。合成したイベントは他のイベントと同じくメモリーにだけ置き、離席中の回答の配信の経路には流さない。
+
 ## サブエージェントの終了通知
 
 - `TaskStop` などで止まったサブエージェントには `SubagentStop` が届かないことがあるので、常駐サーバーはメインの会話記録から終了の通知を読む。
-- 読むのは、状態が「待機中(サブエージェント稼働中)」で、稼働中の Claude のサブエージェントがあるセッションだけとする。メインのイベント(`agent_id` を持たないもの)を受けて約 500ms 後に 1 回読み、その状態が続く間は 60 秒ごとに読み直す。サブエージェントのイベントでは読まない。
+- 読むのは、メインが止まっている(状態が「待機中(サブエージェント稼働中)」か「中断」)で、稼働中の Claude のサブエージェントがあるセッションだけとする。メインのイベント(`agent_id` を持たないもの)を受けて約 500ms 後に 1 回読み、その状態が続く間は 60 秒ごとに読み直す。サブエージェントのイベントでは読まない。
 - 記録の場所と末尾 256KB の読み方は、状態不明の推定と同じとする。
 - 対象の行は、`type` が `queue-operation`、`operation` が `enqueue` で、`content` が `<task-notification>` で始まるものだけとする。ツールの入出力や会話の本文に写った通知の文字列を、終了と取り違えないためである。
   enqueue の行を書かない古い版の Claude Code では、通知を読み取れないので、手で「終了にする」を使う。
@@ -215,7 +227,7 @@ PostToolUse の出力全文は送らない。
 - プロダクト: 鍵はリポジトリのルートの絶対パス(Windows では小文字にする)、表示名はそのフォルダー名。`cwd` が `<ルート>/.claude/worktrees/<名前>` の下なら、`<ルート>` をリポジトリのルートとする。ブランチ名は `cwd` から上へ探した `.git/HEAD` から読む。`.git` が worktree のポインター ファイルなら `gitdir:` の場所にある `HEAD` を読む。`ref: refs/heads/<名前>` はブランチ名、detached HEAD は短い SHA とし、読めなければ `null` にする。子プロセスは起動せず、同じ `cwd` の結果を 10 秒間キャッシュする。読み取るファイルは `.git` のポインターと `HEAD` に限り、どちらも 4 KB を上限とする。
 - 最終イベント時刻: `lastActivityAt` にセッションの最新フック時刻を ISO 形式で持ち、メイン行の経過表示に使う。
 - セッションファイル: `~/.claude/sessions/*.json` の `name` を題名に使い、有限の数値 `updatedAt` は ISO 形式にして `sessionFileUpdatedAt` に載せる。状態不明のセッションを隠す判定に使う。`status` は文字列の場合だけ先頭 50 文字を読み、文字列でない値は捨てる。項目が無い場合やファイルを読めない場合も動作を続ける。
-- 状態: 作業中、待機中、待機中(サブエージェント稼働中)、許可待ち、不明。ターンの状態は、agent_id の無い PreToolUse、PostToolUse、PostToolUseFailure、UserPromptSubmit、Stop、source が startup、resume、clear の SessionStart で確定する。許可待ちを優先し、それ以外で未確定なら「不明」にする。SessionStart の compact、Notification、サブエージェントのイベント、PostToolBatch では確定しない。イベント由来とセッションファイルだけの行のどちらも、「不明」でセッションファイルの status が idle なら待機中、対話セッションで busy なら作業中で補う。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。SessionStart の source が startup、resume、clear のときは、入力を待つ状態で始まるので待機中にし、メインの実行中のツールと許可待ちを外す。compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。SessionEnd を受けたら一覧から外す。一度生きている一覧に載ったセッションファイルが 60 秒以上一覧から消えた場合も、不在による終了として一覧から外す。不在による終了は、セッションファイルが再び一覧に載ったときに解除する。SessionStart と、それ以外のイベントは、hookAt が終了判定時刻より後なら終了扱いを解除して受け付ける。SessionEnd による終了は解除しない。
+- 状態: 作業中、待機中、待機中(サブエージェント稼働中)、中断、許可待ち、不明。ターンの状態は、agent_id の無い PreToolUse、PostToolUse、PostToolUseFailure、UserPromptSubmit、Stop、source が startup、resume、clear の SessionStart で確定する。許可待ちを優先し、それ以外で未確定なら「不明」にする。SessionStart の compact、Notification、サブエージェントのイベント、PostToolBatch では確定しない。イベント由来とセッションファイルだけの行のどちらも、「不明」でセッションファイルの status が idle なら待機中、対話セッションで busy なら作業中で補う。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。Interrupt(Codex のフックと、下の「中断の検出」が合成するもの)は Stop と同じ後始末をして、メインに中断の印を付け、状態を「中断」にする。稼働中のサブエージェントがあっても「中断」を優先し、許可待ちだけがそれより優先される。印は、後から届いたメインの UserPromptSubmit と、source が startup、resume、clear の SessionStart で外す。サブエージェントのイベントと、中断したツールの遅れた PostToolUseFailure などでは外さない。SessionStart の source が startup、resume、clear のときは、入力を待つ状態で始まるので待機中にし、メインの実行中のツールと許可待ちを外す。compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。SessionEnd を受けたら一覧から外す。一度生きている一覧に載ったセッションファイルが 60 秒以上一覧から消えた場合も、不在による終了として一覧から外す。不在による終了は、セッションファイルが再び一覧に載ったときに解除する。SessionStart と、それ以外のイベントは、hookAt が終了判定時刻より後なら終了扱いを解除して受け付ける。SessionEnd による終了は解除しない。
 - 実行中のツール: PostToolUse が来ていない `tool_use_id` ごとの、ツール名と要約と開始時刻。メインの Stop と UserPromptSubmit ではメインのツールを消し、PostToolBatch ではその時刻より前に始まった、同じエージェント(メインかサブエージェント)のツールを消す。拒否されたツールには PostToolUse も PostToolUseFailure も届かないためである。サブエージェントの PostToolBatch では、そのサブエージェントの、その時刻より前に始まった許可待ちも消す。メインの許可待ちは PostToolBatch では消さず、Stop と UserPromptSubmit で消す。
 - サブエージェント: `agent_id` ごとに、`agent_type`、作業の説明、開始時刻、最後のツール、モデル、effort。
 - `SubagentStart` が記録されていなくても、`SubagentStop` 以外のイベントで初めて届いた `agent_id` から行を作る。

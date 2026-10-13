@@ -85,7 +85,7 @@ test('Codex の許可待ちはツール完了またはターンの区切りで�
     await c.event(name, name, { tool_name: 'exec_command', tool_use_id: 'tool' });
     const done = (await c.snapshot()).sessions.find(s => s.session_id === name);
     assert.deepEqual(done.permissionWaits, []);
-    assert.equal(done.status, ['Stop', 'Interrupt'].includes(name) ? '待機中' : '作業中');
+    assert.equal(done.status, { Stop: '待機中', Interrupt: '中断' }[name] ?? '作業中');
   }
 });
 

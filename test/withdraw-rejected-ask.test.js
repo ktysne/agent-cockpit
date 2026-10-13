@@ -28,7 +28,7 @@ async function restart(state) {
   });
 }
 
-for (const eventName of ['UserPromptSubmit', 'Stop', 'PreToolUse']) {
+for (const eventName of ['UserPromptSubmit', 'Stop', 'Interrupt', 'PreToolUse']) {
   test(`終了フックのない質問は後続の ${eventName} で withdrawn になる`, () => {
     const state = new DashboardState();
     state.addEvent(ask());

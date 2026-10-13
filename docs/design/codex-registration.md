@@ -62,7 +62,7 @@ Codex から呼ばれた MCP の書き込み先を、フックで登録したセ
 ### イベントの扱い
 
 - 常駐サーバーが受け付けるイベント名に `PermissionRequest` と `Interrupt` を足す。名前は変換せずに保つ。#391 で中断を区別するときに要るためである。
-- `Stop` と `Interrupt` はターンの終わりとして扱う。`Interrupt` を中断として区別する表示は #391 で作る。
+- `Stop` と `Interrupt` はターンの終わりとして扱う。`Interrupt` はさらに状態を「中断」にする([server.md](server.md) の「中断の検出」と状態の項目)。
 - `SessionEnd` はセッションの終わりとして扱う。
 - `SubagentStop` は子の終わりとして扱う。
 - `PermissionRequest` は許可待ちにする。`tool_use_id` が無いので、同じエージェントで同じ名前の実行中のツールが 1 つに決まればその完了で、決まらなければ同じ名前のツールの完了で解消する。`Stop`、`Interrupt`、`UserPromptSubmit` でも解消する。別のツールの完了では解消しない。並行して動くツールの完了で、許可待ちを見落とさないためである。
@@ -113,7 +113,7 @@ Codex から呼ばれた MCP の書き込み先を、フックで登録したセ
 - Codex の `_meta` を持つ `tools/call` は、登録済みの Codex のセッションへ書き込み、未登録や終了済みのセッションへは書き込まない。
 - `CLAUDE_CODE_SESSION_ID` を持つ環境で Codex から呼ばれても、その Claude のセッションへ書き込まない。
 - 独立した 2 つの Codex のセッションの書き込みが、別々の行に入る。
-- `PermissionRequest` で許可待ちになり、`PostToolUse` などで解消する。`Interrupt` でターンが終わる。
+- `PermissionRequest` で許可待ちになり、`PostToolUse` などで解消する。`Interrupt` でターンが終わり、状態が中断になる。
 - Codex のセッションは、`~/.claude/sessions` に無くても不在で終了しない。Codex の子があっても `~/.claude/agents` と `~/.claude/tasks` を読まない。
 - 既定のオプションで常駐サーバーを起動し、provider の無い Claude のフックと `_meta` の無い MCP の書き込みを流して、今と同じ応答になる(#207 の転記)。既存のテストは、スナップショットに provider が増える以外で変わらない。
 

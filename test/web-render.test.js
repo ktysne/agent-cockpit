@@ -542,6 +542,7 @@ test('終わったセッションは待機中で未完了のものが無い場�
     { agents: [{ active: true, unconfirmed: false }] },
     { agents: [{ active: false, unconfirmed: true }] },
     { status: '作業中' },
+    { status: '中断' },
     { status: '不明' },
   ]) {
     assert.equal(context.isFinishedSession({ ...finished, ...update }), false, JSON.stringify(update));
@@ -4867,4 +4868,77 @@ test('種類別のタスクと作業行の帯は画面とモックで既存の�
       }
     }
   }
+});
+
+test('中断したセッションは「中断」と輪郭だけの点で出し、終わったものにも更新の無い帯にも入れない', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const old = new Date(now - 31 * 60_000).toISOString();
+  const element = (tag, className, text) => {
+    const node = { tag, className: className || '', textContent: text, title: '', children: [], childNodes: [], dataset: {} };
+    node.append = (...nodes) => { node.children.push(...nodes); node.childNodes.push(...nodes); };
+    return node;
+  };
+  const context = pageContext(pageHtml, {
+    element,
+    displayPreferences: { idleHideMinutes: 30 },
+    isActiveDecision: () => false,
+    document: { createTextNode: (text) => ({ nodeType: 'text', textContent: text }) },
+    appendContextTags: () => {},
+    sessionOrigin: () => '',
+    appendUnknownSessionControls: () => {},
+    appendToolLine: () => {},
+    appendSessionModelLine: () => {},
+    newestFirst: (items) => items,
+    durationAgoLabel: () => '5 分前',
+    relativeTimeElement: (value, className, label) => ({ tag: 'time', className, textContent: label, value }),
+  });
+  vm.runInContext(['activityStatus', 'isEndedAgent', 'isEndedDecision', 'isFinishedSession', 'isIdleHiddenSession', 'mainRow']
+    .map((name) => functionSource(pageHtml, name)).join('\n'), context);
+  const session = {
+    session_id: 'interrupted', status: '中断', lastActivityAt: old, lastUpdatedAt: old, tools: [], tasks: [{ state: 'done' }],
+    decisions: [], permissionWaits: [], agents: [], sessionFileUpdatedAt: old,
+  };
+
+  assert.deepEqual({ ...context.activityStatus(session) }, { label: '中断', tone: 'interrupted' });
+  assert.equal(context.isFinishedSession(session), false);
+  assert.equal(context.isFinishedSession({ ...session, status: '待機中' }), true);
+  assert.equal(context.isIdleHiddenSession(session, now), false);
+  assert.equal(context.isIdleHiddenSession({ ...session, status: '待機中' }, now), true);
+
+  const who = context.mainRow(session, { name: 'agent-cockpit' }).children.find((child) => child.className === 'who');
+  assert.equal(who.children[0].className, 'dot interrupted');
+  const label = who.children.find((child) => child.tag === 'strong');
+  assert.equal(label.textContent, '中断');
+  assert.equal(label.title, '利用者が中断した。セッションは生きていて、次の入力を待っている');
+  assert.match(pageHtml, /\.dot\.interrupted \{ background: transparent; box-shadow: inset 0 0 0 2px var\(--warn\); \}/);
+});
+
+test('モックの中断の行は画面と同じ文言と点で出し、終わったものにも更新の無い帯にも入れない', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const old = new Date(now - 31 * 60_000).toISOString();
+  const context = pageContext(mockHtml, {
+    ui: { estimatedSessions: [], idleHideMinutes: 30, hiddenSessions: [], hiddenSessionUpdatedAt: {} },
+    taskState: (session, task) => task.state,
+    esc: (value) => String(value),
+    sessionTag: () => '',
+    renderToolLine: () => '<div class="tool-line"></div>',
+    absoluteTimeLabel: () => '',
+    ESTIMATE_WAITING: {},
+    isActiveDecision: () => false,
+    isBusyAgent: () => false,
+    isEndedDecision: () => true,
+    isEndedAgent: () => true,
+  });
+  vm.runInContext(['sessionOrigin', 'mainRow', 'unknownSessionControls', 'isIdleHiddenSession', 'isFinishedSession']
+    .map((name) => functionSource(mockHtml, name)).join('\n'), context);
+  const session = { id: 'interrupted', status: 'interrupted', tasks: [], perms: [], decisions: [], subagents: [], lastUpdatedAt: old, main: { tool: '—', since: '3 分前' } };
+
+  const row = context.mainRow({}, session, false);
+  assert.match(row, /<span class="dot interrupted"><\/span>/);
+  assert.match(row, /<strong title="利用者が中断した。セッションは生きていて、次の入力を待っている">中断<\/strong>/);
+  assert.equal(context.isFinishedSession(session), false);
+  assert.equal(context.isFinishedSession({ ...session, status: 'wait' }), true);
+  assert.equal(context.isIdleHiddenSession(session, now), false);
+  assert.equal(context.isIdleHiddenSession({ ...session, status: 'wait' }, now), true);
+  assert.match(mockHtml, /\.dot\.interrupted \{ background: transparent; box-shadow: inset 0 0 0 2px var\(--warn\); \}/);
 });
