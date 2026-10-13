@@ -1022,7 +1022,7 @@ test('終了ボタンは状態と名前を含む flex 行の右端に置く', ()
 });
 
 test('作業行は先頭に名前と時刻を置き、詳細と状態不明の操作を全幅で続ける', () => {
-  const functions = ['element', 'appendToolLine', 'sessionDisplayName', 'appendContextTags', 'appendUnknownSessionControls', 'mainRow', 'appendAgents']
+  const functions = ['element', 'appendToolLine', 'sessionDisplayName', 'appendContextTags', 'appendUnknownSessionControls', 'sessionOrigin', 'mainRow', 'appendAgents']
     .map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
 
@@ -1121,7 +1121,7 @@ test('作業行は先頭に名前と時刻を置き、詳細と状態不明の�
 
 test('モックの作業行も名前と時刻の後に全幅の詳細を並べる', () => {
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
-  const functions = ['mainRow', 'agentRow'].map((name) => functionSource(mock, name));
+  const functions = ['sessionOrigin', 'mainRow', 'agentRow'].map((name) => functionSource(mock, name));
   assert.ok(functions.every(Boolean));
   const context = pageContext(mock, {
     ui: { estimatedSessions: [] },
@@ -4103,7 +4103,7 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
 test('一部完了のセッションでは完了タスクを表示できる', () => {
   const names = [
     'element', 'activityStatus', 'isEndedAgent', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
-    'kindEndedDecisionEntries', 'kindEndedAgentCount',
+    'kindEndedDecisionEntries', 'kindEndedAgentCount', 'sessionOrigin',
   ];
   const functions = names.map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
@@ -4166,7 +4166,7 @@ test('一部完了のセッションでは完了タスクを表示できる', ()
 
 test('種類別では未着手の合計数を一つのボタンで切り替える', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['element', 'appendExpandToggle', 'taskVisibility', 'kindTodoTaskCount', 'kindDoneTaskCount', 'appendKindTaskSession', 'kindToggleLabel', 'appendKindToggle']
+  const functions = ['element', 'appendExpandToggle', 'taskVisibility', 'kindTodoTaskCount', 'kindDoneTaskCount', 'sessionOrigin', 'appendKindTaskSession', 'kindToggleLabel', 'appendKindToggle']
     .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
@@ -4303,7 +4303,7 @@ test('文や名前を差し込むバッジは折り返し、枠の外へはみ�
 });
 
 test('非対話の実行中の行は状態名と時刻と API の札を出し、状態推定と一覧からの除外を出さない', () => {
-  const functions = ['element', 'activityStatus', 'unknownSessionControls', 'appendUnknownSessionControls', 'appendToolLine',
+  const functions = ['element', 'activityStatus', 'unknownSessionControls', 'appendUnknownSessionControls', 'appendToolLine', 'sessionOrigin',
     'sessionDisplayName', 'appendContextTags', 'appendSessionModelLine', 'mainRow']
     .map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
@@ -4401,7 +4401,7 @@ test('モックの非対話の行は稼働中の札で出し、状態推定と�
     absoluteTimeLabel: () => '',
     ESTIMATE_WAITING: {},
   });
-  vm.runInContext(['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), context);
+  vm.runInContext(['sessionOrigin', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), context);
 
   const nonInteractive = context.mainRow({}, {
     id: 'batch', status: 'unknown', nonInteractive: true, tasks: [], main: { tool: '', since: '3 分前' },
@@ -4460,7 +4460,7 @@ test('非対話の行は作業中と待機中を対話と同じ文言と色に�
     absoluteTimeLabel: () => '',
     ESTIMATE_WAITING: {},
   });
-  vm.runInContext(['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), mockContext);
+  vm.runInContext(['sessionOrigin', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), mockContext);
 
   const cases = [
     { implSession: { status: '作業中', nonInteractive: true }, mockSession: { status: 'busy', nonInteractive: true }, label: '作業中', tone: 'busy' },
@@ -4539,18 +4539,18 @@ test('Codex が状態にあるときセッション、PR、「前回見てから
     appendAgents() {},
     orderedSectionKeys: (keys) => keys,
   });
-  vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'sessionBlock')}`, sessionContext);
+  vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'sessionOrigin')}\n${functionSource(pageHtml, 'sessionBlock')}`, sessionContext);
   const claudeSession = sessionContext.sessionBlock({}, { title: 'Claude', decisions: [] }, true, true);
   const codexSession = sessionContext.sessionBlock({}, { title: 'Codex', provider: 'codex', decisions: [] }, false, true);
   assert.match(claudeSession.className, /origin-claude/);
   assert.equal(claudeSession.dataset.origin, 'claude');
   assert.match(codexSession.className, /origin-codex/);
   assert.equal(codexSession.dataset.origin, 'codex');
-  assert.equal(codexSession.children[0].children[0].dataset.origin, 'codex');
+  assert.equal(codexSession.children[0].children[0].dataset.origin, undefined);
   const claudeOnlySession = sessionContext.sessionBlock({}, { title: 'Claude', decisions: [] }, false, false);
   assert.doesNotMatch(claudeOnlySession.className, /origin-(claude|codex|both)/);
   assert.equal(claudeOnlySession.dataset.origin, undefined);
-  assert.equal(claudeOnlySession.children[0].dataset.origin, undefined);
+  assert.equal(claudeOnlySession.children[0].children[0].dataset.origin, undefined);
 
   const component = sourceBetween(pageHtml, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   assert.ok(component);
@@ -4646,9 +4646,128 @@ test('起点帯の判定は非表示セッション、PR の履歴、新着ま�
     sessionDisplayName: (session) => session.title, sharedBranch: () => '', orderedSectionKeys: (keys) => keys,
     taskSessionBlock: () => '', mainRow: () => '', agentSection: () => '',
   });
-  vm.runInContext(functionSource(mockHtml, 'sessionBlock'), mockSessionContext);
+  vm.runInContext(`${functionSource(mockHtml, 'sessionOrigin')}\n${functionSource(mockHtml, 'sessionBlock')}`, mockSessionContext);
   const mockSessionProduct = { sessions: [{}] };
   const mockClaudeSession = { title: 'Claude', decisions: [] };
   assert.doesNotMatch(mockSessionContext.sessionBlock(mockSessionProduct, mockClaudeSession, false), /origin-claude|data-origin/);
-  assert.match(mockSessionContext.sessionBlock(mockSessionProduct, mockClaudeSession, true), /origin-claude/);
+  const markedMockSession = mockSessionContext.sessionBlock(mockSessionProduct, mockClaudeSession, true);
+  assert.match(markedMockSession, /class="session-group single origin-claude" data-origin="claude"/);
+  assert.doesNotMatch(markedMockSession, /session-context" data-origin=/);
+});
+
+function renderedKindOriginRows(provider, showOriginBands) {
+  class FakeElement {
+    constructor(tagName, className = '', textContent = '') {
+      this.tagName = tagName;
+      this.className = className;
+      this.textContent = textContent;
+      this.children = [];
+      this.childNodes = this.children;
+      this.dataset = {};
+    }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+  const element = (tagName, className = '', textContent = '') => new FakeElement(tagName, className, textContent);
+  const context = pageContext(pageHtml, {
+    document: { createTextNode: text => ({ textContent: text }) },
+    element,
+    activityStatus: () => ({ tone: 'wait', label: '待機中' }),
+    newestFirst: items => items,
+    durationAgoLabel: () => '',
+    relativeTimeElement: () => element('time'),
+    appendContextTags() {},
+    appendUnknownSessionControls() {},
+    appendSessionModelLine() {},
+    appendModelLine() {},
+    badge: () => element('span'),
+    displayPreferences: { hideFinished: true },
+    isFilterShown: () => true,
+    isEndedAgent: () => false,
+    taskVisibility: () => ({ visible: [], todoCount: 0, doneCount: 0 }),
+  });
+  const functions = ['sessionOrigin', 'mainRow', 'appendAgents', 'appendKindTaskSession']
+    .map(name => functionSource(pageHtml, name));
+  vm.runInContext(functions.join('\n'), context);
+  const session = {
+    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], agents: [{ active: true, agent_type: 'worker' }],
+  };
+  const activity = context.mainRow(session, {}, true, false, showOriginBands);
+  const agentBody = element('div');
+  context.appendAgents(agentBody, session, {}, false, false, false, false, showOriginBands);
+  const agent = agentBody.children.find(node => node.className === 'agent-list').children[0];
+  const taskBody = element('div');
+  context.appendKindTaskSession(taskBody, { product: {}, session, multipleSessions: false }, false, false, showOriginBands);
+  return [activity, agent, taskBody.children[0]];
+}
+
+function renderedMockKindOriginRows(provider, showOriginBands) {
+  const context = pageContext(mockHtml, {
+    ui: { estimatedSessions: [], closedAgents: [], expandedKindTodoTasks: false },
+    taskState: (_session, task) => task.state,
+    taskVisibility: () => ({ visible: [], doneCount: 0 }),
+    taskItem: () => '',
+    sessionTag: () => '',
+    esc: value => String(value ?? ''),
+    renderToolLine: () => '',
+    modelLine: () => '',
+    routeTag: () => '',
+    unknownSessionControls: () => '',
+    isClosedByUser: () => false,
+    isBusyAgent: () => true,
+    isUnconfirmed: () => false,
+    isClosable: () => false,
+  });
+  const functions = ['sessionOrigin', 'mainRow', 'agentRow', 'kindTaskSessionBlock']
+    .map(name => functionSource(mockHtml, name));
+  vm.runInContext(functions.join('\n'), context);
+  const session = { provider, status: 'wait', tasks: [], main: { tool: '—', since: '1 分前' } };
+  return [
+    context.mainRow({}, session, true, showOriginBands),
+    context.agentRow({}, session, { type: 'worker', state: 'busy', since: '1 分前' }, true, showOriginBands),
+    context.kindTaskSessionBlock({}, session, false, showOriginBands).html,
+  ];
+}
+
+test('種類別のタスクと作業行はセッションの起点色で帯を表示する', () => {
+  for (const [provider, origin] of [['claude', 'claude'], ['codex', 'codex']]) {
+    for (const row of renderedKindOriginRows(provider, true)) {
+      assert.match(row.className, new RegExp(`origin-${origin}`));
+      assert.equal(row.dataset.origin, origin);
+    }
+    for (const row of renderedMockKindOriginRows(provider, true)) {
+      assert.match(row, new RegExp(`origin-${origin}`));
+      assert.match(row, new RegExp(`data-origin="${origin}"`));
+    }
+  }
+});
+
+test('サブエージェントの種類別の帯は親セッションの provider を使う', () => {
+  const [, agent] = renderedKindOriginRows('codex', true);
+  assert.match(agent.className, /origin-codex/);
+  assert.equal(agent.dataset.origin, 'codex');
+});
+
+test('種類別の起点帯を表示しないときはタスクと作業行に起点属性を付けない', () => {
+  for (const row of renderedKindOriginRows('codex', false)) {
+    assert.doesNotMatch(row.className, /origin-(claude|codex|both)/);
+    assert.equal(row.dataset.origin, undefined);
+  }
+  for (const row of renderedMockKindOriginRows('codex', false)) {
+    assert.doesNotMatch(row, /origin-(claude|codex|both)|data-origin=/);
+  }
+});
+
+test('種類別のタスクと作業行の帯は画面とモックで既存の起点色を使う', () => {
+  for (const html of [pageHtml, mockHtml]) {
+    for (const origin of ['claude', 'codex']) {
+      for (const selector of [`.kind-session-tasks.origin-${origin}::before`, `.now-row.origin-${origin}::before`, `.agent-row.origin-${origin}::before`]) {
+        const style = Object.fromEntries(cssDeclarations(html, selector));
+        const rowStyle = Object.fromEntries(cssDeclarations(html, selector.replace('::before', '')));
+        assert.equal(style.position, 'absolute');
+        assert.equal(style.width, '3px');
+        assert.equal(style.background, `var(--origin-${origin})`);
+        assert.equal(rowStyle['padding-left'], '10px');
+      }
+    }
+  }
 });
