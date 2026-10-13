@@ -2490,29 +2490,40 @@ function appendPullRequestError(content, group) {
     const key = `${group.owner}/${group.repo}`.toLowerCase();
     const confirmation = repositoryUnregisterConfirmations.get(key);
     const controls = element('div', 'repository-unregister');
-    const buttonFor = (label, action) => {
+    const buttonFor = (label, unregisterAction, action) => {
       const button = element('button', 'link-btn', label);
       button.type = 'button';
       button.disabled = confirmation?.pending === true;
+      button.dataset.repoUnregister = key;
+      button.dataset.repoUnregisterAction = unregisterAction;
       button.addEventListener('click', action);
       return button;
     };
     if (confirmation) {
       controls.append(element('span', '', `状態を確認できない ${group.unregisterableCount} 件の PR の記録を削除します。元に戻せません`));
-      controls.append(buttonFor(confirmation.pending ? '削除中…' : '削除する', () => { void unregisterPullRequestRepository(group); }));
-      controls.append(buttonFor('やめる', () => {
+      controls.append(buttonFor(confirmation.pending ? '削除中…' : '削除する', 'confirm', () => { void unregisterPullRequestRepository(group); }));
+      controls.append(buttonFor('やめる', 'cancel', () => {
         repositoryUnregisterConfirmations.delete(key);
         render(lastState);
+        focusRepositoryUnregister(key, 'open');
       }));
     } else {
-      controls.append(buttonFor('このリポジトリの登録を外す', () => {
+      // 開いた直後のフォーカスは、取り消せない「削除する」ではなく「やめる」に置く。
+      controls.append(buttonFor('このリポジトリの登録を外す', 'open', () => {
         repositoryUnregisterConfirmations.set(key, { pending: false });
         render(lastState);
+        focusRepositoryUnregister(key, 'cancel');
       }));
     }
     error.append(controls);
   }
   content.append(error);
+}
+
+function focusRepositoryUnregister(key, action) {
+  [...document.querySelectorAll('button')]
+    .find((item) => item.dataset.repoUnregister === key && item.dataset.repoUnregisterAction === action)
+    ?.focus({ preventScroll: true });
 }
 
 async function unregisterPullRequestRepository(group) {
@@ -2530,6 +2541,7 @@ async function unregisterPullRequestRepository(group) {
     confirmation.pending = false;
     showWriteError('リポジトリの登録を外せませんでした');
     render(lastState);
+    focusRepositoryUnregister(key, 'confirm');
   }
 }
 
@@ -3575,6 +3587,7 @@ function render(state) {
          : active?.dataset?.showFinished ? { kind: 'show-finished' }
          : active?.dataset?.showIdle ? { kind: 'show-idle' }
            : active?.dataset?.closeMergeResult ? { kind: 'merge-result-close', id: active.dataset.closeMergeResult }
+             : active?.dataset?.repoUnregister ? { kind: 'repo-unregister', key: active.dataset.repoUnregister, action: active.dataset.repoUnregisterAction }
              : active?.dataset?.closeTask ? { kind: 'close-task', key: active.dataset.closeTask }
                : active?.dataset?.cancelCloseTask ? { kind: 'cancel-close-task', key: active.dataset.cancelCloseTask }
                  : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
@@ -3686,6 +3699,7 @@ function render(state) {
       if (focusData.kind === 'show-idle') return item.hasAttribute('data-show-idle');
       if (focusData.kind === 'merge-result-close') return item.dataset.closeMergeResult === focusData.id;
       if (focusData.kind === 'review-skip') return item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip === focusData.action;
+      if (focusData.kind === 'repo-unregister') return item.dataset.repoUnregister === focusData.key && item.dataset.repoUnregisterAction === focusData.action;
       if (['close-task', 'cancel-close-task'].includes(focusData.kind)) {
         return item.dataset.closeTask === focusData.key || item.dataset.cancelCloseTask === focusData.key;
       }

@@ -10,14 +10,16 @@ const { cssDeclarations, functionSource, pageContext, sourceBetween } = require(
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
-test('PR の取得エラーに unknown の記録がある場合だけ登録解除ボタンを表示する', () => {
+test('PR の取得エラーに unknown の記録がある場合だけ登録解除ボタンを表示し、開くとやめるへ、やめると元のボタンへフォーカスを移す', () => {
   const element = (tagName, className = '', textContent = '') => ({
-    tagName, className, textContent, children: [], handlers: {},
+    tagName, className, textContent, children: [], handlers: {}, dataset: {},
     append(...nodes) { this.children.push(...nodes); },
     addEventListener(name, handler) { this.handlers[name] = handler; },
   });
   const confirmations = new Map();
-  const context = pageContext(pageHtml, { element, repositoryUnregisterConfirmations: confirmations, render() {}, lastState: {} });
+  const focused = [];
+  const context = pageContext(pageHtml, { element, repositoryUnregisterConfirmations: confirmations, render() {}, lastState: {},
+    focusRepositoryUnregister: (key, action) => focused.push(`${key}:${action}`) });
   vm.runInContext(functionSource(pageHtml, 'appendPullRequestError'), context);
   for (const [error, count, shown] of [['取得できません', 1, true], ['取得できません', 0, false], [null, 1, false]]) {
     const root = element('div');
@@ -32,6 +34,7 @@ test('PR の取得エラーに unknown の記録がある場合だけ登録解�
     assert.ok(flatten(confirmed).some(node => node.textContent.includes('元に戻せません')));
     flatten(confirmed).find(node => node.textContent === 'やめる').handlers.click();
     assert.equal(confirmations.size, 0);
+    assert.deepEqual(focused.splice(0), ['example/project:cancel', 'example/project:open']);
   }
 });
 
