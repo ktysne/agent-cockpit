@@ -2944,7 +2944,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
     },
     pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
     pullRequestConflictConfirmations: conflictConfirmations, pullRequestConflictMessages: conflictMessages, pullRequestConflictInFlight: conflictInFlight,
-    lastState: { sessions: [{ session_id: 'session-pr', title: 'Feature session' }], pullRequests: [group] },
+    lastState: { sessions: [{ session_id: 'session-pr', title: 'Feature session' }, { session_id: 'session-codex', provider: 'codex' }], pullRequests: [group] },
     appendPullRequestBadges() {},
     crossReviewState: () => ({}),
     pullRequestTransientNoticeExpired: () => false,
@@ -3001,6 +3001,21 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   const sentStatus = textOf(sentOnlyToFirst.find((node) => node.attributes?.role === 'status'));
   assert.match(sentStatus, /Feature session のセッションへ/);
   assert.doesNotMatch(sentStatus, /session-later/);
+
+  // 名前の無い Codex のセッションは表示名が「Codex のセッション」なので、「のセッション」を重ねない。
+  const sentToCodex = renderPullRequest({
+    ...pullRequest,
+    conflictRequestTargets: [{ sessionId: 'session-codex', alive: false }],
+    conflictRequest: { requestedAt: '2026-10-03T03:04:00.000Z', sessionIds: ['session-codex'] },
+  });
+  const codexText = sentToCodex.map(textOf).join('\n');
+  assert.ok(codexText.includes('Codex のセッションへ衝突の解消を依頼した'));
+  assert.ok(codexText.includes('依頼先の Codex のセッションが終了している'));
+  assert.doesNotMatch(codexText, /のセッション のセッション/);
+  conflictConfirmations.add(uiKey);
+  const confirmToCodex = renderPullRequest({ ...pullRequest, conflictRequestTargets: [{ sessionId: 'session-codex', alive: true }] });
+  assert.ok(confirmToCodex.some((node) => textOf(node).includes('Codex のセッションに、base の main')));
+  conflictConfirmations.delete(uiKey);
 
   pullRequest.conflictRequest = { requestedAt: '2026-10-03T03:04:00.000Z', sessionIds: ['session-pr'] };
   context.pullRequestConflictConfirmations.add(uiKey);
@@ -4334,7 +4349,7 @@ test('文や名前を差し込むバッジは折り返し、枠の外へはみ�
   }
   // 予約中、衝突の解消の依頼、base の付け替え、マージ履歴は、時刻やセッション名やブランチ名が入って長くなる。
   assert.match(source, /badge\(reservedText, 'accent long'\)/);
-  assert.match(source, /のセッションへ衝突の解消を依頼した`, 'accent long'\)/);
+  assert.match(source, /へ衝突の解消を依頼した`, 'accent long'\)/);
   assert.match(source, /に付け替え済み`, 'accent long'\)/);
   assert.match(source, /'badge long warn' : 'badge long mute'/);
   assert.match(mock, /class="badge accent long">レビュー収束後にマージ予約中/);
