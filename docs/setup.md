@@ -4,7 +4,7 @@
 
 ## 進め方の決まり
 
-- `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。
+- `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/`、Codex の `~/.codex/hooks.json` と `~/.codex/config.toml` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。
 - 既存の設定は消さずに統合します。同じイベントの配列がすでにあるときは、その配列へ要素を足します。
 - 連携ツール(GitHub CLI、claude-codex-bridge、ai-cross-review)そのものの導入手順は、この文書では扱いません。導入されていなければ、各ツールのドキュメントへ案内してください。この文書は、連携ツールが導入済みのときに agent-cockpit 側で必要な設定だけを書いています。
 - 手順の中の `D:/path/to/agent-cockpit` は、このリポジトリを置いた絶対パスに置き換えます。worktree ではなく、残しておく本体のチェックアウトを指してください。worktree を消すと、フックの参照先が無くなります。
@@ -34,6 +34,7 @@ agent-cockpit、[claude-codex-bridge](https://github.com/ktysne/claude-codex-bri
 2. この文書のパターン A、B、C を行います。
 3. レビューを回すリポジトリごとに、ai-cross-review をそのドキュメントに従って導入します(ai-cross-review のパターン A〜D)。
 4. この文書のパターン D を行います。
+5. Codex のセッションも画面に出すなら、この文書のパターン E を行います。フックと MCP サーバーは通常の Codex のホームにだけ入れ、bridge が実装の委譲に使う Codex のホームには入れません(パターン E の前提)。
 
 ## パターン A: agent-cockpit だけ
 
@@ -251,6 +252,7 @@ bridge は `CLAUDE_CONFIG_DIR` にかかわらず `~/.claude/tools/` に置く�
 
 `route.js` は同期フックです。`SubagentStart` で、その時点の経路を `AGENT_COCKPIT_HOME` の `route-agents/` に記録し、Codex か Claude を選んでいればサブエージェントへ伝えます。Claude を選んだサブエージェントが `codex-agent.sh` を呼ぶと、`PreToolUse` で止めます。
 経路は起動時に決まり、稼働中のサブエージェントは設定を変えても切り替わりません。
+経路の設定が効くのは、Claude のセッションが起動するサブエージェントだけです。Codex のセッション(パターン E)のサブエージェントには効かないので、Codex のフックに `route.js` は登録しません。
 経路を Claude にしたとき、bridge の窓口(`impl-hard`、`impl-light`、`impl-standard`)は自分では実装しないので、`codex-agent.sh` の実行を拒否されると `再委譲: impl-*-claude` を報告します。メインセッションは bridge の手順に従って、報告された `impl-*-claude` へ委譲し直します。`codex-review` と `codex-subagent` は、拒否の文言を報告して止まります。定義側での明文化と実機での確認は [ktysne/claude-codex-bridge#129](https://github.com/ktysne/claude-codex-bridge/issues/129) で進めています。
 bridge を外したときは、`codex-agent.sh` が無いので `route.js` は何も差し込みません。登録は残したままで構いません。
 
@@ -264,7 +266,7 @@ bridge を外したときは、`codex-agent.sh` が無いので `route.js` は�
 
 ### 前提
 
-[ai-cross-review](https://github.com/ktysne/ai-cross-review) を、そのドキュメントに従って、レビューを回すリポジトリへ導入しておきます。ai-cross-review はリポジトリごとに入れるツールです。agent-cockpit は、稼働中のセッション(`~/.claude/sessions/*.json`)の作業ディレクトリと、PR を登録したセッションの作業ディレクトリについて、その worktree のルートに `tools/cross-review.js` があるかで判断します。
+[ai-cross-review](https://github.com/ktysne/ai-cross-review) を、そのドキュメントに従って、レビューを回すリポジトリへ導入しておきます。ai-cross-review はリポジトリごとに入れるツールです。agent-cockpit は、稼働中のセッション(Claude は `~/.claude/sessions/*.json`、Codex はフックで届いたセッション)の作業ディレクトリと、PR を登録したセッションの作業ディレクトリについて、その worktree のルートに `tools/cross-review.js` があるかで判断します。
 
 ### agent-cockpit 側の設定
 
@@ -295,7 +297,8 @@ Codex(CLI とデスクトップ)のセッションも、Claude のセッショ�
 
 - パターン A を終えていること。常駐サーバー、保存先、ポートは Claude と共通です。
 - [Codex](https://github.com/openai/codex) を導入し、ログインしておきます。
-- `~/.codex` は Codex のホームを指します。`CODEX_HOME` を設定しているときは、そのディレクトリを使ってください。
+- `~/.codex` は Codex のホームを指します。`CODEX_HOME` を設定しているときは、そのディレクトリを使ってください。常駐サーバーも `CODEX_HOME` から会話の名前と終わりを読むので、`AGENT_COCKPIT_HOME` と同じく、Claude Code と Codex の両方を起動する環境(ユーザーの環境変数など)に設定します。
+- フックと MCP サーバーは、普段使う Codex のホームにだけ入れます。claude-codex-bridge が実装の委譲に使う Codex のホーム(`~/.codex-subagent` など、bridge の定義の `codex_home`)には入れません。入れると、委譲した Codex が親の Claude のセッションの行と、独立した Codex のセッションの行の両方に出ます。
 - `~/.codex` の `hooks.json` と `config.toml` も、開発者のすべての Codex のセッションに効きます。パターン A と同じく、差分を開発者に示して確認を得てから書き込み、既存の設定は消さずに統合します。
 
 ### 1. フックを登録する
@@ -349,7 +352,8 @@ Codex(CLI とデスクトップ)のセッションも、Claude のセッショ�
 Claude の登録との違いと、timeout の値の理由は次のとおりです。値を変えずに登録してください。
 
 - Codex のフックには `async` を付けません。非同期のフックは、短い実行で 1 件も届かないことがあるためです。
-- `SessionStart` の `event.js` は、Claude と同じく常駐サーバーが動いていなければ起動し、作業の進め方を `additionalContext` でセッションへ渡します。Codex にはスキルを置く必要はありません。
+- `SessionStart` の `event.js` は、Claude と同じく常駐サーバーが動いていなければ起動し、ダッシュボードの URL を `additionalContext` でセッションへ渡します。Codex 本体のプロセス ID を調べるので、ほかのフックより時間がかかることがあります。timeout は付けずに Codex の既定に任せます。
+- `SessionStart` と `UserPromptSubmit` の `away.js` は、タスクの登録を促す文と、離席中の指示を `additionalContext` で渡します。agent-cockpit のスキルは Claude 向けの内容なので、Codex には置きません。
 - `PreToolUse` の `away.js` は、Codex の質問ツール(`request_user_input_async` と `request_user_input`)だけを対象に、離席中にダッシュボードの回答を待ちます。timeout は Claude と同じ 1830 秒です。
 - Codex には `PostToolBatch` が無いので、`PostToolUse` の `answer.js`(timeout 2 秒)で、作業中のセッションへ回答を差し込みます。
 - `Stop` の `answer.js` は、ターンの終わりに未配信の回答があれば続行させます。離席中は回答や通知を最大 59 分待ってから続行させます。そのあいだ Codex の画面は作業中の表示になり、`Esc` で中断できます。timeout はこの待ちに余裕を足した 3600 秒です。
@@ -386,19 +390,34 @@ approval_mode = "approve"
 ### 3. フックを信頼する
 
 Codex は、開発者が信頼するまで新しいフックを動かしません。
-Codex を起動して `/hooks` を開き、1 で足したフックを信頼してください。
+Codex CLI を起動して `/hooks` を開き、1 で足したフックを信頼してください。
+信頼の記録は `~/.codex/config.toml` の `[hooks.state]` に残り、同じ Codex のホームを使う CLI とデスクトップで共通です。
 `hooks.json` を変えたときは、変えたフックを信頼し直します。
 
 ### 確認
 
 1. 新しい Codex のセッションを開き、ダッシュボードを再読み込みします。そのセッションの行が、左端に青紫の色帯を付けて出れば成功です。出ないときは、`/hooks` で信頼したかと、フックのパスと引数 `codex` を確かめます。
-2. Codex のセッションで「`cockpit_set_tasks` で確認用のタスクを 1 件登録して」と依頼します。そのセッションの欄にタスクが出れば、MCP サーバーとフックが同じセッションを指しています。
-3. 回答の経路を確かめるときは、画面上部の「離席中」をオンにしてから、Codex のセッションに「確認のために `request_user_input_async` で質問して」と依頼します。待つ形の `request_user_input` は Plan モードでだけ使えます。ダッシュボードに判断待ちとして出て、画面から回答するとセッションがその回答で進めば成功です。確かめ終わったら「離席中」をオフに戻します。
-4. パターン B も行っているときは、Codex のセッションで作った PR が、青紫の色帯を付けて PR の欄に出ることを確かめます。
+2. `codex mcp list` を実行し、`agent-cockpit` の行の状態が `enabled` であることを確かめます。
+3. Codex のセッションで「`cockpit_set_tasks` で確認用のタスクを 1 件登録して」と依頼します。そのセッションの欄にタスクが出れば、MCP サーバーとフックが同じセッションを指しています。「Codex のフックが届いていないため記録できなかった。」と返るときは、フックを信頼する前から開いていた会話か、フックが動いていません。1 を確かめてから、新しい会話で試します。
+4. 回答の経路を確かめるときは、画面上部の「離席中」をオンにしてから、Codex のセッションに「確認のために `request_user_input_async` で質問して」と依頼します。待つ形の `request_user_input` は Plan モードでだけ使えます。ダッシュボードに判断待ちとして出て、画面から回答するとセッションがその回答で進めば成功です。確かめ終わったら「離席中」をオフに戻します。
+5. パターン B も行っているときは、Codex のセッションで作った PR が、青紫の色帯を付けて PR の欄に出ることを確かめます。
+
+## 更新するとき
+
+導入済みの agent-cockpit を新しい版にするときは、次の順に進めます。
+
+1. 本体のチェックアウトで `git pull` を実行します。
+2. この文書のフックと MCP サーバーの登録を、登録済みの内容と見比べます。足りないイベントや、timeout の値の違いがあれば、パターン A の決まりどおり差分を示して確認を得てから直します。パターン E を行っているときは `~/.codex/hooks.json` と `~/.codex/config.toml` も見比べ、`hooks.json` を変えたら `/hooks` で信頼し直します。
+3. `skills/agent-cockpit/SKILL.md` が変わっていれば、パターン A の 4 と同じ手順でコピーし直します。
+4. 常駐サーバーを再起動します。動いている常駐サーバーは起動したときのコードのままで、`git pull` では入れ替わりません。タスクトレイを使っているときは、メニューの「常駐サーバーを再起動」を選びます。使っていないときは、`AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `server.json` の `pid` のプロセスが、`src/server/server.js` を動かしている `node` であることを確かめてから終了します。次にセッションを開くと、フックが新しいコードで起動します。
+5. 新しいセッションを開き、パターン A の「確認」の 2〜4 を行います。パターン E を行っているときは、パターン E の「確認」の 1 と 2 も行います。
+
+Codex 対応より前の版から更新したときは、Codex のセッションも画面に出すなら、更新の後にパターン E を行います。
 
 ## うまくいかないとき
 
 - 画面にセッションが出ない:フックの登録後に開いたセッションかを確かめます。`~/.claude/settings.json` の JSON が壊れていないか、パスが本体のチェックアウトを指しているかを確かめます。
+- Codex のセッションが画面に出ない:`/hooks` でフックを信頼したか、`~/.codex/hooks.json` の JSON が壊れていないか、コマンドの最後に引数 `codex` があるかを確かめます。
 - 常駐サーバーのログは `AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `server.log` にあります。
 - 常駐サーバーを手で起動するときは、リポジトリのルートで `npm start` を実行します。終了は `Ctrl+C` です。
-- `~/.claude/sessions/*.json` は Claude Code の公開仕様ではありません。読めない版でも、フックから組み立てた表示は動きます。ただし、パターン D のクロスレビューの段は、そのリポジトリの PR を登録するまで出ません。
+- `~/.claude/sessions/*.json` は Claude Code の公開仕様ではありません。読めない版でも、フックから組み立てた表示は動きます。ただし、パターン D のクロスレビューの段は、そのリポジトリの PR を登録するか、そのリポジトリで Codex のセッションを開くまで出ません。
