@@ -29,6 +29,10 @@
   --accent-text: #3b5bdb;
   --on-ok: #000000;
   --on-danger: #ffffff;
+  --origin-claude: #d9480f;
+  --origin-codex: #4c3fe0;
+  --origin-codex-soft: #ecebfd;
+  --origin-codex-text: #4c3fe0;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -38,6 +42,7 @@
     --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
     --ok: #8cc391; --ok-soft: #233526;
+    --origin-claude: #f08c4f; --origin-codex: #9d97ff; --origin-codex-soft: #2a2747; --origin-codex-text: #b9b5ff;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
   }
 }
@@ -47,6 +52,7 @@
   --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
   --ok: #8cc391; --ok-soft: #233526;
+  --origin-claude: #f08c4f; --origin-codex: #9d97ff; --origin-codex-soft: #2a2747; --origin-codex-text: #b9b5ff;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
 }
 * { box-sizing: border-box; }
@@ -116,6 +122,8 @@ button.chip[aria-pressed="false"] { background: transparent; border: 1px dashed 
 button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
 .filter-note[hidden] { display: none; }
+.error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
+.repository-unregister { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .link-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 4px 0; font-size: 12px; text-decoration: underline; }
 
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
@@ -130,6 +138,10 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .meta { color: var(--text-2); font-size: 12px; }
 .session-group { border-left: 2px solid var(--border); padding: 8px 0 0 12px; margin-top: 8px; }
 .session-group.single { border-left: 0; padding: 0; margin-top: 0; }
+.session-group.single.origin-claude, .session-group.single.origin-codex { padding-left: 12px; border-left-width: 2px; border-left-style: solid; }
+.origin-codex { --accent: var(--origin-codex); --accent-soft: var(--origin-codex-soft); --accent-text: var(--origin-codex-text); }
+.session-group.origin-claude { border-left-color: var(--origin-claude); }
+.session-group.origin-codex { border-left-color: var(--origin-codex); }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
 .session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
 /* .session-tag の nowrap より強くするため、2 つのクラスで指定する */
@@ -153,6 +165,10 @@ h3.sub .count { font-weight: normal; }
 .now { display: grid; gap: 6px; }
 .now-row, .agent-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: start; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .now-row > .detail, .agent-row > .detail { grid-column: 1 / -1; min-width: 0; }
+.kind-session-tasks.origin-claude, .kind-session-tasks.origin-codex, .now-row.origin-claude, .now-row.origin-codex, .agent-row.origin-claude, .agent-row.origin-codex { position: relative; padding-left: 10px; }
+.kind-session-tasks.origin-claude::before, .kind-session-tasks.origin-codex::before, .now-row.origin-claude::before, .now-row.origin-codex::before, .agent-row.origin-claude::before, .agent-row.origin-codex::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.kind-session-tasks.origin-claude::before, .now-row.origin-claude::before, .agent-row.origin-claude::before { background: var(--origin-claude); }
+.kind-session-tasks.origin-codex::before, .now-row.origin-codex::before, .agent-row.origin-codex::before { background: var(--origin-codex); }
 .detail { overflow-wrap: anywhere; }
 .tool-line { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
 .tool-name { display: block; flex: none; max-width: 60%; min-height: 20px; overflow: hidden; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
@@ -252,6 +268,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
+.pr.origin-claude, .pr.origin-codex, .pr.origin-both { position: relative; padding-left: 10px; }
+.pr.origin-claude::before, .pr.origin-codex::before, .pr.origin-both::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.pr.origin-claude::before { background: var(--origin-claude); }
+.pr.origin-codex::before { background: var(--origin-codex); }
+.pr.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
 /* 文字は左の列の中で折り返し、操作は右の列に縦に積む。操作の幅で題が潰れないよう、行の中に操作を混ぜない。 */
 .pr-body { display: flex; gap: 12px; align-items: stretch; }
 .pr-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -303,6 +324,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .merge-go.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
 .merged-list { font-size: 12px; color: var(--text-2); margin-top: 6px; }
 .merged-list .badge { margin-right: 4px; }
+.merged-list .badge.origin-claude, .merged-list .badge.origin-codex, .merged-list .badge.origin-both { position: relative; padding-left: 10px; }
+.merged-list .badge.origin-claude::before, .merged-list .badge.origin-codex::before, .merged-list .badge.origin-both::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; }
+.merged-list .badge.origin-claude::before { background: var(--origin-claude); }
+.merged-list .badge.origin-codex::before { background: var(--origin-codex); }
+.merged-list .badge.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
 
 .routing { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; display: grid; gap: 8px; }
 .routing[hidden], .control-row:has(> .routing[hidden]) { display: none; }
@@ -346,9 +372,15 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .perm code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--surface-2); padding: 2px 6px; border-radius: 4px; }
 .news { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 10px 0 4px; font-size: 13px; }
 .news .nhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent-text); }
-.news ul { margin: 4px 0 0; padding-left: 20px; }
+.news ul { margin: 4px 0 0; padding: 0; list-style: none; }
+.news li { position: relative; margin-left: 10px; padding-left: 10px; }
+.news li.origin-claude::before, .news li.origin-codex::before, .news li.origin-both::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; }
+.news li.origin-claude::before { background: var(--origin-claude); }
+.news li.origin-codex::before { background: var(--origin-codex); }
+.news li.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
 .new-mark { font-size: 10px; font-weight: 700; color: var(--on-accent); background: var(--accent); border-radius: 4px; padding: 0 5px; }
 .pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
+.pr.origin-claude, .pr.origin-codex, .pr.origin-both { padding-left: 10px; }
 .conflict-btn { background: none; color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
 .conflict-btn:disabled { cursor: default; opacity: .55; }
 .merge-confirm.conflict { border-color: var(--danger); }
@@ -523,7 +555,7 @@ const DATA = {
       ],
       extraSessions: [
         {
-          id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'busy', branch: 'feat/tempo-map-test',
+          id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'busy', modelName: 'Opus 5.5', branch: 'feat/tempo-map-test',
           main: { tool: 'Bash: npm test -- tempo-map', since: '1 分前' },
           perms: [{ id: 'rs-p1', who: 'メイン', tool: 'Bash', detail: 'npm test -- tempo-map', waitMin: 1 }],
           subagents: [{ type: 'test-writer', text: 'テンポ変換の境界値を確認', since: '2 分前', state: 'busy', sinceMin: 2,
@@ -580,7 +612,7 @@ const DATA = {
       id: 'agent-cockpit', name: 'agent-cockpit', branch: 'plan/pr-stack-view', sessionTitle: 'PR スタック表示', status: 'wait',
       main: { tool: 'Bash: git push -u origin plan/pr-stack-view', since: '6 分前' },
       perms: [{ id: 'ac-p1', who: 'メイン', tool: 'Bash', detail: 'git push -u origin plan/pr-stack-view', waitMin: 6 }],
-      news: [],
+      news: [{ t: 'Codex が「Codex の状態表示」を完了した', provider: 'codex' }],
       subagents: [
         { type: 'Explore', text: 'フックの入力項目を調査', since: '完了', state: 'done',
           model: { vendor: 'claude', name: 'Haiku 4.5', effort: '—' }, route: 'default' },
@@ -598,9 +630,9 @@ const DATA = {
       decisions: [],
       repo: { name: 'ktysne/agent-cockpit', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '5 秒前' },
       prs: [
-        { number: 201, title: 'Codex セッションの受付', head: 'feat/codex-session', base: 'claude/feature-codex-support', sha: 'c01de01', ci: 'pass', review: 'none', conflict: false, draft: false,
+        { number: 201, title: 'Codex セッションの受付', head: 'feat/codex-session', base: 'claude/feature-codex-support', sha: 'c01de01', ci: 'pass', review: 'none', conflict: false, draft: false, providers: ['codex'],
           xr: { round: 1, reviewedSha: 'c01de01', dismissed: 0, triage: { round: 1, sha: 'c01de01', outcome: 'converged' } } },
-        { number: 202, title: 'Codex の状態表示', head: 'feat/codex-display', base: 'feat/codex-session', sha: 'c01de02', ci: 'pass', review: 'none', conflict: false, draft: false, xr: null },
+        { number: 202, title: 'Codex の状態表示', head: 'feat/codex-display', base: 'feat/codex-session', sha: 'c01de02', ci: 'pass', review: 'none', conflict: false, draft: false, providers: ['claude', 'codex'], xr: null },
       ],
       extraSessions: [
         {
@@ -618,6 +650,25 @@ const DATA = {
           id: 'agent-cockpit-noninteractive', title: '非対話の claude -p (クロスレビュー)', status: 'unknown', nonInteractive: true, branch: 'plan/pr-stack-view',
           main: { tool: '', since: '3 分前' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 3,
+        },
+        // 通常の ~/.codex で動く Codex のセッション。resume しても同じ thread の会話は 1 行にまとめ、再開の回数を札で示す。
+        {
+          id: 'agent-cockpit-codex', title: 'Codex のセッション', provider: 'codex', status: 'wait', branch: 'plan/pr-stack-view',
+          main: { tool: '—', since: '2 分前' },
+          codex: { model: 'gpt-6.1-sol', resumes: 2 },
+          perms: [],
+          subagents: [
+            { type: 'default', text: 'collaborationwait_agent', since: '2 分前', state: 'busy', codexModel: 'gpt-6.1-sol' },
+          ],
+          tasks: [{ title: '会話の表示の単位を調べる', state: 'doing', updatedMin: 8, criteria: [{ t: 'resume の前後で同じ行に出る', met: false }] }],
+          tasksUpdatedMin: 8, decisions: [{
+            id: 'codex-question-1', waitMin: 2,
+            title: '会話の表示をどの単位でまとめますか', kind: 'waiting', ctx: '',
+            options: [
+              { t: 'thread ごとにまとめる', why: '', rec: true },
+              { t: 'ターンごとにまとめる', why: '' },
+            ],
+          }], lastUpdatedMin: 2,
         },
       ],
     },
@@ -644,6 +695,11 @@ for (const p of DATA.products) {
   for (const key of ['branch', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions', 'lastUpdatedMin']) delete p[key];
 }
 
+DATA.products.push({
+  id: 'unreachable-repository', name: '取得できないリポジトリ', sessions: [], news: [], prs: [],
+  repo: { name: 'example/missing-project', fetched: 'たった今', error: 'GitHub から PR を取得できません', unregisterableCount: 1 },
+});
+
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
@@ -664,6 +720,7 @@ ui.mergeableCondition = ['operation', 'ci', 'cross-review'].includes(ui.mergeabl
 ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.isArray(ui.reviewSkips) ? ui.reviewSkips : {};
 let hiddenSessionsUndo = null;
 const recordDeletionConfirmations = new Map();
+const repositoryUnregisterConfirmations = new Map();
 let showIdleSessions = false;
 const answerErrors = new Map();
 const pendingClosedTasks = new Map();
@@ -931,7 +988,7 @@ function orderedProducts() {
 // セッションを外すか終えて PR もマージを終えたプロダクトは、未読の変化を既読にした時点でカードを消す。
 // PR を非表示にしている間は、PR だけで残るカードの本文が空になるので、PR を理由に残さない。
 function hasProductContent(p) {
-  return visibleSessions(p).length > 0 || (isShown('prs') && (p.repo.loading || openPrs(p).length > 0 || hasPullRequestMergeResults(p)
+  return visibleSessions(p).length > 0 || (isShown('prs') && (p.repo.error || p.repo.loading || openPrs(p).length > 0 || hasPullRequestMergeResults(p)
     || p.prs.some(pr => isMerged(p, pr) && pr.headMismatch === true))) || (sinceSeenVisible() && p.news.length > 0 && !ui.seen.includes(p.id));
 }
 
@@ -1191,14 +1248,15 @@ function renderSummary() {
   idle.hidden = idleHiddenCount === 0 && !recordDeletionConfirmations.has('idle');
 }
 
-// Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
+// Claude のモデルが分からないサブエージェントでも、Codex の札だけは出す。
 function modelLine(s, lead = '') {
+  if (s.codexModel) return `<div class="models">${lead}<span class="model gpt">Codex ${esc(s.codexModel)}</span></div>`;
   if (!s.model && !s.gpt && !lead) return '';
   const claude = s.model ? `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>` : '';
   const arrow = s.model ? '<span class="arrow">→</span>' : '';
   let gpt = '';
-  if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
-  else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
+  if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">Codex 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
+  else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">Codex ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
   return `<div class="models">${lead}${claude}${gpt}</div>`;
 }
 
@@ -1273,7 +1331,7 @@ function sessionTag(p, session, withTag, includeSession = false) {
   return `${product}${title}`;
 }
 
-function mainRow(p, session, withTag) {
+function mainRow(p, session, withTag, showOriginBands = false) {
   // 非対話の実行は、状態不明のときだけ稼働中として出す。作業中と待機中は対話と同じ文言と色にする。
   const nonInteractive = session.nonInteractive === true;
   const nonInteractiveUnknown = session.status === 'unknown' && nonInteractive;
@@ -1284,9 +1342,12 @@ function mainRow(p, session, withTag) {
   const status = nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
   const stateClass = nonInteractiveUnknown ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
-  const model = nonInteractive ? '<div class="models"><span class="model claude">Claude (API)</span></div>' : '';
+  const resumes = session.codex?.resumes ? `<span class="route-tag" title="同じ会話を再開しても 1 行にまとめて表示する">再開 ${session.codex.resumes} 回</span>` : '';
+  const model = session.codex ? `<div class="models"><span class="model gpt">Codex ${esc(session.codex.model)}</span>${resumes}</div>`
+    : session.modelName || nonInteractive ? `<div class="models"><span class="model claude">${session.modelName ? `Claude ${esc(session.modelName)}` : 'Claude (API)'}</span></div>` : '';
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}${model}`;
-  return `<div class="now-row main-row">
+  const origin = sessionOrigin(session, showOriginBands);
+  return `<div class="now-row main-row${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
       <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<strong>${status}</strong></div>
       ${unknown ? '' : `<div class="since">${esc(session.main.since || '')}</div>`}
       ${detail ? `<div class="detail">${detail}</div>` : ''}
@@ -1317,12 +1378,13 @@ function isFinishedSession(session) {
     && !session.subagents.some(agent => !isEndedAgent(session, agent));
 }
 
-function agentRow(p, session, agent, withTag) {
+function agentRow(p, session, agent, withTag, showOriginBands = false) {
   const state = isClosedByUser(session, agent) ? ['終了', 'done'] : isBusyAgent(session, agent) ? ['稼働中', 'busy'] : isUnconfirmed(session, agent) ? ['終了未確認', 'wait'] : ['終了', 'done'];
   const close = isClosable(session, agent) ? `<button type="button" class="link-btn close-agent" data-close-agent="${esc(closedAgentKey(session, agent))}">終了にする</button>` : '';
   const description = agent.text ? `<div class="agent-description">${esc(agent.text)}</div>` : agent.tool ? renderToolLine(agent.tool) : '';
   const detail = description + modelLine(agent, routeTag(agent));
-  return `<div class="agent-row">
+  const origin = sessionOrigin(session, showOriginBands);
+  return `<div class="agent-row${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
     <div class="who"><span class="dot ${state[1]}"></span>サブエージェント${sessionTag(p, session, withTag)}<span class="agent-name"><span class="badge ${state[1]}">${state[0]}</span><strong>${esc(agent.type)}</strong>${close}</span></div>
     <div class="since">${esc(agent.since)}</div>${detail ? `<div class="detail">${detail}</div>` : ''}</div>`;
 }
@@ -1415,11 +1477,36 @@ const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => 
 // 離席中の期間に起きた変化だけを常駐サーバーが返し、画面は最後に見た時刻と比べる想定。
 // 「離席中のみ」では、離席中でない間は「前回見てから」が無いものとして扱う。既読の時刻は進めない。
 const sinceSeenVisible = () => ui.sinceSeenMode !== 'never' && (ui.sinceSeenMode !== 'away' || ui.away);
-function newsBox(p, withTag) {
+function providerOrigin(providers) {
+  const values = Array.isArray(providers) ? providers : typeof providers === 'string' ? [providers] : [];
+  const hasClaude = values.includes('claude');
+  const hasCodex = values.includes('codex');
+  return hasClaude && hasCodex ? 'both' : hasClaude ? 'claude' : hasCodex ? 'codex' : '';
+}
+
+function sessionOrigin(session, showOriginBands) {
+  return showOriginBands ? session.provider === 'codex' ? 'codex' : 'claude' : '';
+}
+
+function hasCodexOrigin() {
+  const hasCodexProvider = providers => Array.isArray(providers) ? providers.includes('codex') : providers === 'codex';
+  const pullRequestHasCodex = pr => hasCodexProvider(pr.providers) || (pr.children || []).some(pullRequestHasCodex);
+  return DATA.products.some(p => [...(p.sessions || []), ...(p.extraSessions || [])].some(session => session.provider === 'codex')
+    || (p.prs || []).some(pullRequestHasCodex)
+    || (p.closedPrs || []).some(pullRequestHasCodex)
+    || (p.news || []).some(item => hasCodexProvider(item.providers ?? item.provider)));
+}
+
+function originAttributes(providers, showOriginBands = true) {
+  const origin = showOriginBands ? providerOrigin(providers) : '';
+  return origin ? ` class="origin-${origin}" data-origin="${origin}"` : '';
+}
+
+function newsBox(p, withTag, showOriginBands = true) {
   if (!sinceSeenVisible() || !p.news.length || ui.seen.includes(p.id)) return '';
   return `<div class="news"><div class="nhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}前回見てから (${p.news.length} 件)
     <button type="button" class="link-btn" data-seen="${p.id}">既読にする</button></div>
-    <ul>${p.news.map(n => `<li>${esc(n.t)}</li>`).join('')}</ul></div>`;
+    <ul>${p.news.map(n => `<li${originAttributes(n.providers ?? n.provider ?? 'claude', showOriginBands)}>${esc(n.t)}</li>`).join('')}</ul></div>`;
 }
 
 function decisionCard(p, session, d, withTag) {
@@ -1453,7 +1540,7 @@ function decisionCard(p, session, d, withTag) {
     !active && !viaDialog ? sentLine : '',
   ].filter(Boolean).join('');
   const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${viaDialog ? '' : `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>`}` : state === 'provisional' ? `<span class="wait">仮適用から ${durationLabel(Date.now() - d.waitMin * 60_000)}</span>` : '';
-  return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}" data-session-id="${esc(session.id)}">
+  return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''} ${session.provider === 'codex' ? 'origin-codex' : ''}" data-id="${d.id}" data-session-id="${esc(session.id)}">
     <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
     <div class="ctx">${esc(d.ctx)}</div>
     <ul class="options">${d.options.map((o, i) => {
@@ -1854,7 +1941,7 @@ function conflictStatus(p, pr) {
   return at ? `<div class="badges"><span class="badge accent long">${esc(absoluteTimeLabel(at, Date.now(), at))} に ${esc(pr.requestSession.name)} のセッションへ衝突の解消を依頼した</span></div>` : '';
 }
 
-function prItem(p, pr) {
+function prItem(p, pr, showOriginBands = true) {
   const k = prKey(p, pr.number);
   const confirmManual = ui.confirm?.key === k && ui.confirm.action === 'manual';
   const operationBlocker = mergeOperationBlocker(p, pr);
@@ -1870,13 +1957,16 @@ function prItem(p, pr) {
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
+  const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
+  const classes = ['pr', rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : '', origin ? `origin-${origin}` : '']
+    .filter(Boolean).join(' ');
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
     !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
       <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : '',
     conflictButton(p, pr),
   ].join('').trim();
-  return `<div class="pr ${rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : ''}">
+  return `<div class="${classes}"${origin ? ` data-origin="${origin}"` : ''}>
     <div class="pr-body"><div class="pr-text">
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
@@ -1898,9 +1988,9 @@ function prItem(p, pr) {
   </div>`;
 }
 
-function prTree(p, pr) {
+function prTree(p, pr, showOriginBands = true) {
   const kids = childPrs(p, pr);
-  return prItem(p, pr) + (kids.length ? `<div class="stack-level">${kids.map(k => prTree(p, k)).join('')}</div>` : '');
+  return prItem(p, pr, showOriginBands) + (kids.length ? `<div class="stack-level">${kids.map(k => prTree(p, k, showOriginBands)).join('')}</div>` : '');
 }
 
 function reservationNoticeRows(p) {
@@ -1915,7 +2005,7 @@ function reservationNoticeRows(p) {
 }
 
 const MERGED_VISIBLE_COUNT = 5;
-function prBlock(p, withTag) {
+function prBlock(p, withTag, showOriginBands = true) {
   const roots = openPrs(p).filter(pr => !parentPr(p, pr));
   const merged = p.prs.filter(pr => isMerged(p, pr) && !ui.dismissedMergeHistory.includes(`${p.repo.name}#${pr.number}`.toLowerCase()));
   const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
@@ -1923,23 +2013,31 @@ function prBlock(p, withTag) {
   const head = `<header class="prs-head"><${headingTag} class="pr-repo-title"><strong>${esc(p.repo.name)}</strong></${headingTag}>${tag}<span class="meta">GitHub から ${esc(p.repo.fetched)}に取得</span></header>`;
   const stacks = roots.map(r => `<div class="stack">
       <div class="stack-base"><code>${esc(effective(p, r).base)}</code>${childPrs(p, r).length ? `<span>スタック ${stackPos(p, r).total} 段</span>` : ''}</div>
-      ${prTree(p, r)}</div>`).join('');
+      ${prTree(p, r, showOriginBands)}</div>`).join('');
   const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
   const visibleMerged = ui.hideFinished ? mergedNewestFirst.filter(({ pr }) => pr.headMismatch === true) : mergedNewestFirst;
-  const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', visibleMerged.map(({ pr, m }) =>
-    `<span class="badge long ${pr.headMismatch === true ? 'warn' : 'mute'}">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`), true);
+  const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', visibleMerged.map(({ pr, m }) => {
+    const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
+    return `<span class="badge long ${pr.headMismatch === true ? 'warn' : 'mute'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`;
+  }), true);
   const closed = visibleClosedPrs(p);
-  const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr =>
-    `<a class="badge mute" href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`));
-  const empty = !roots.length
+  const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr => {
+    const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
+    return `<a class="badge mute${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''} href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`;
+  }));
+  const empty = !roots.length && !p.repo.error
     ? p.repo.loading ? `<div class="empty">GitHub から取得しています</div>`
       : `<div class="empty">オープンの PR はありません</div>`
     : '';
   const results = (pullRequestMergeResults.get(p.repo.name) || [])
     .filter(result => result.productId === p.id && pullRequestMergeResultVisible(result))
     .map(result => `<div class="merge-result" role="status"><span>PR #${result.number}: ${pullRequestMergeResultLine(result)}</span><button type="button" class="link-btn" data-close-merge-result="${esc(result.id)}">閉じる</button></div>`).join('');
-  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${reservationNoticeRows(p)}${stacks || empty}${mergedLine}${closedLine}${results}</div></section>`;
+  const error = p.repo.error ? `<div class="error-box"><div>${esc(p.repo.error)}</div>${p.repo.unregisterableCount > 0
+    ? `<div class="repository-unregister">${repositoryUnregisterConfirmations.has(p.id)
+      ? `<span>状態を確認できない ${p.repo.unregisterableCount} 件の PR の記録を削除します。元に戻せません</span><button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="confirm">削除する</button><button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="cancel">やめる</button>`
+      : `<button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="open">このリポジトリの登録を外す</button>`}</div>` : ''}</div>` : '';
+  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${error}${reservationNoticeRows(p)}${stacks || empty}${mergedLine}${closedLine}${results}</div></section>`;
 }
 
 // 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
@@ -2003,14 +2101,15 @@ function taskSessionBlock(p, session, withTag) {
   return `<h3 class="sub">タスクと完了条件 <span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}${toggle}`;
 }
 
-function kindTaskSessionBlock(p, session, expanded) {
+function kindTaskSessionBlock(p, session, expanded, showOriginBands = false) {
   const { doneCount, visible } = taskVisibility(session, ui.expandedKindTodoTasks, expanded);
   const updated = Number.isFinite(session.tasksUpdatedMin) ? `最終更新 ${session.tasksUpdatedMin} 分前` : '最終更新 時刻不明';
   const items = visible.map(task => taskItem(p, session, task, false)).join('');
   const empty = session.tasks.length ? '未完了のタスクはありません。' : 'タスクはありません。';
+  const origin = sessionOrigin(session, showOriginBands);
   return {
     doneCount,
-    html: `<section class="kind-session-tasks group-frame"><h3 class="kind-task-head">${sessionTag(p, session, true, true)}<span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}</section>`,
+    html: `<section class="kind-session-tasks group-frame${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}><h3 class="kind-task-head">${sessionTag(p, session, true, true)}<span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}</section>`,
   };
 }
 
@@ -2056,15 +2155,16 @@ function unknownSessionControls(session) {
   return `<div class="session-extra"><div class="session-actions"><button type="button" class="ended-toggle" data-estimate="${esc(session.id)}">状態を推定</button><button type="button" class="ended-toggle" data-hide-session="${esc(session.id)}">一覧から外す</button></div>${estimate}</div>`;
 }
 
-function sessionBlock(p, session) {
+function sessionBlock(p, session, showOriginBands = true) {
   const multiple = p.sessions.length > 1;
   const groupTag = multiple ? 'section' : 'div';
+  const origin = sessionOrigin(session, showOriginBands);
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
     || (!ui.hideFinished && session.decisions.some(isEndedDecision))
     || !hasHiddenJudgmentItems(session);
-  return `<${groupTag} class="session-group ${multiple ? '' : 'single'}">
+  return `<${groupTag} class="session-group ${multiple ? '' : 'single'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}</div>` : ''}
     <div class="session-body">
       ${multiple ? '' : `<div class="session-tag session-context">${esc(sessionDisplayName(session))}</div>`}
@@ -2144,7 +2244,7 @@ function productCloseButton(p, describedById) {
   return `<button type="button" class="icon-btn" data-close-product="${p.id}" aria-label="このプロダクトのセッションを一覧から外す" aria-describedby="${describedById}" title="このプロダクトのセッションを一覧から外す">×</button>`;
 }
 
-function renderProductMode() {
+function renderProductMode(showOriginBands = true) {
   const ps = orderedProducts();
   if (!ps.length) {
     const hidden = finishedHiddenCounts();
@@ -2169,14 +2269,14 @@ function renderProductMode() {
         ${productCloseButton(p, `product-heading-${i}`) ? `<div class="product-remove">${productCloseButton(p, `product-heading-${i}`)}</div>` : ''}
       </div>
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
-        ${newsBox(p, false)}
-        ${sessions.map(session => sessionBlock(p, session)).join('')}
-        ${isShown('prs') ? `<div class="product-pr-divider"></div><h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false)}` : ''}
+        ${newsBox(p, false, showOriginBands)}
+        ${sessions.map(session => sessionBlock(p, session, showOriginBands)).join('')}
+        ${isShown('prs') ? `<div class="product-pr-divider"></div><h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false, showOriginBands)}` : ''}
       </div></section>`;
   }).join('');
 }
 
-function renderKindMode() {
+function renderKindMode(showOriginBands = true) {
   const ps = orderedProducts();
   if (!ps.length) {
     const hidden = finishedHiddenCounts();
@@ -2208,13 +2308,13 @@ function renderKindMode() {
   const decisionControls = endedDecisionToggle ? `<div class="kind-section-controls">${endedDecisionToggle}</div>` : '';
   const decisions = decisionItems;
   const showJudgment = Boolean(decisionItems || endedDecisionToggle) || !hiddenJudgmentItems;
-  const news = ps.map(p => newsBox(p, true)).join('');
+  const news = ps.map(p => newsBox(p, true, showOriginBands)).join('');
   const showEndedAgents = ui.expandedKindAgents && !ui.hideFinished;
   const nowRowsByAge = sessions.flatMap(({ p, session }) => {
     const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || showEndedAgents);
     return [
-      { age: ageMinutes(session.main), html: mainRow(p, session, true) },
-      ...agents.map(agent => ({ age: ageMinutes(agent), html: agentRow(p, session, agent, true) })),
+      { age: ageMinutes(session.main), html: mainRow(p, session, true, showOriginBands) },
+      ...agents.map(agent => ({ age: ageMinutes(agent), html: agentRow(p, session, agent, true, showOriginBands) })),
     ];
   }).sort((a, b) => a.age - b.age);
   const endedAgentCount = kindEndedAgentCount(sessions);
@@ -2224,7 +2324,7 @@ function renderKindMode() {
   const now = nowRowsByAge.length ? `<div class="now">${nowRowsByAge.map(row => row.html).join('')}</div>` : '';
   const activityControls = endedAgentToggle ? `<div class="kind-section-controls">${endedAgentToggle}</div>` : '';
   const taskSessions = sessions.filter(({ session }) => session.tasks.length > 0);
-  const taskGroups = taskSessions.map(({ p, session }) => kindTaskSessionBlock(p, session, ui.expandedKindTasks));
+  const taskGroups = taskSessions.map(({ p, session }) => kindTaskSessionBlock(p, session, ui.expandedKindTasks, showOriginBands));
   const doneTaskCount = kindDoneTaskCount(sessions);
   const doneTaskToggle = doneTaskCount
     ? kindToggle('tasks', '完了したタスク', doneTaskCount, ui.expandedKindTasks)
@@ -2237,7 +2337,7 @@ function renderKindMode() {
   const taskControls = todoTaskToggle || doneTaskToggle
     ? `<div class="kind-section-controls">${todoTaskToggle}${doneTaskToggle}</div>`
     : '';
-  const prs = ps.filter(p => reservationNoticeRows(p) || (ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true)).join('');
+  const prs = ps.filter(p => reservationNoticeRows(p) || (ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true, showOriginBands)).join('');
   const sections = {
     sinceSeen: news ? section('前回見てから', news) : '',
     judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls, waits.length + endedDecisionEntries.length) : '',
@@ -2249,6 +2349,7 @@ function renderKindMode() {
 }
 
 function render() {
+  const showOriginBands = hasCodexOrigin();
   const active = document.activeElement;
   const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
   const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
@@ -2265,7 +2366,7 @@ function render() {
   renderConnectionNote();
   renderReloadNote();
   renderRouting();
-  document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
+  document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode(showOriginBands) : renderKindMode(showOriginBands);
   if (focusData?.kind === 'record-deletion') {
     focusRecordDeletion(focusData.band, focusData.action);
   } else if (focusData?.attribute) {
@@ -2293,6 +2394,20 @@ function render() {
 document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
+  if (t.dataset.unregisterRepository) {
+    const id = t.dataset.unregisterRepository;
+    if (t.dataset.unregisterAction === 'open') repositoryUnregisterConfirmations.set(id, true);
+    else {
+      repositoryUnregisterConfirmations.delete(id);
+      if (t.dataset.unregisterAction === 'confirm') {
+        const product = byId(id);
+        product.repo.error = null;
+        product.repo.unregisterableCount = 0;
+      }
+    }
+    render();
+    return;
+  }
   if (t.dataset.recordBand) {
     const band = t.dataset.recordBand;
     if (t.dataset.recordAction === 'open') {

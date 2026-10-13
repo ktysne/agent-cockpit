@@ -42,7 +42,7 @@ function descendants(node) {
 }
 
 test('状態不明の操作と推定結果は種類別・プロダクト別のメイン行内にまとまる', () => {
-  const sourceFunctions = ['mainRow', 'unknownSessionControls', 'appendUnknownSessionControls']
+  const sourceFunctions = ['sessionOrigin', 'mainRow', 'unknownSessionControls', 'appendUnknownSessionControls']
     .map((name) => functionSource(web, name));
   assert.ok(sourceFunctions.every(Boolean));
   const sourceContext = pageContext(web, {
@@ -76,7 +76,7 @@ test('状態不明の操作と推定結果は種類別・プロダクト別の�
   assert.equal((estimatedText.match(/10:00/g) || []).length, 1);
   assert.match(estimatedText, /入力待ちらしい: いいえ/);
 
-  const mockFunctions = ['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name));
+  const mockFunctions = ['sessionOrigin', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name));
   assert.ok(mockFunctions.every(Boolean));
   const mockContext = pageContext(mock, {
     ui: { estimatedSessions: ['unknown'] },
@@ -112,8 +112,8 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
   }
   const webKind = functionSource(web, 'renderKindSections');
   const mockKind = functionSource(mock, 'renderKindMode');
-  assert.match(webKind, /mainRow\(session, product, true, multipleSessions\)/);
-  assert.match(mockKind, /mainRow\(p, session, true\)/);
+  assert.match(webKind, /mainRow\(session, product, true, multipleSessions, showOriginBands\)/);
+  assert.match(mockKind, /mainRow\(p, session, true, showOriginBands\)/);
   assert.ok(webKind.indexOf('activity.append(activityList)') < webKind.indexOf("appendKindToggle(activityControls, 'agents'"));
   assert.match(mockKind, /const now = nowRowsByAge\.length \? `<div class="now">[\s\S]*?<\/div>` : '';/);
   assert.match(mockKind, /now: section\('今やっていること', now, activityControls, nowRowsByAge\.length \+ endedAgentCount\)/);
@@ -133,7 +133,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     mainRow: () => fakeElement('div', 'now-row main-row'),
     appendAgents() {},
   });
-  vm.runInContext(`${webSession}\nthis.renderSession = sessionBlock;`, webContext);
+  vm.runInContext(`${functionSource(web, 'sessionOrigin')}\n${webSession}\n${functionSource(web, 'sessionDisplayName')}\nthis.renderSession = sessionBlock;`, webContext);
   const webVisible = webContext.renderSession({ key: 'p', name: 'P' }, {
     session_id: 'active', status: '不明', title: '稼働中', decisions: [], tasks: [], permissionWaits: [], agents: [],
   }, true);
@@ -152,7 +152,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     agentSection: () => '',
     esc: (value) => String(value ?? ''),
   });
-  vm.runInContext(`${mockSession}\nthis.renderSession = sessionBlock;`, mockContext);
+  vm.runInContext(`${functionSource(mock, 'sessionOrigin')}\n${mockSession}\nthis.renderSession = sessionBlock;`, mockContext);
   const mockVisible = mockContext.renderSession({ sessions: [{}, {}] }, {
     id: 'active', status: 'unknown', title: '稼働中', decisions: [], tasks: [], perms: [], subagents: [],
   });
@@ -228,6 +228,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     MERGED_VISIBLE_COUNT: 5,
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     element: fakeElement,
+    providerOrigin: () => '',
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
     durationAgoLabel: () => '少し前',
     absoluteTimeLabel: () => '10:00',
@@ -235,7 +236,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}`,
     appendPullRequestTree(target) { target.append(fakeElement('article', 'pr', 'オープン #1')); },
   });
-  vm.runInContext(`${webResultLine}\n${webResults}\n${webBlock}`, webContext);
+  vm.runInContext(`${webResultLine}\n${webResults}\n${functionSource(web, 'appendPullRequestError')}\n${webBlock}`, webContext);
   const group = {
     owner: 'owner', repo: 'repo', product: { name: 'Product' }, fetchedAt: 'now',
     reservationNotices: [],
@@ -269,6 +270,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
   const mockReservationNotices = functionSource(mock, 'reservationNoticeRows');
   assert.ok(mockPr && mockReservationNotices);
   const mockContext = pageContext(mock, {
+    providerOrigin: () => '',
     ui: { dismissedMergeHistory: [], deletedClosedPrs: [], hideFinished: false, merged: { '2': { method: 'squash', at: '10:00', auto: false } }, expandedMerged: [], reservationNotices: {} },
     pullRequestMergeResults: new Map(),
     openPrs: () => [{ number: 1 }],
@@ -351,6 +353,9 @@ test('プロダクト別の PR 欄はセッション群の外に区切って置�
   assert.match(sessionBlock, /element\(multipleSessions \? 'section' : 'div', `session-group \$\{multipleSessions \? '' : 'single'\}`/);
   assert.match(web, /\.session-group\.single \{ margin-top: 0; padding: 0; border-left: 0; \}/);
   assert.match(mock, /\.session-group\.single \{ border-left: 0; padding: 0; margin-top: 0; \}/);
+  for (const page of [web, mock]) {
+    assert.match(page, /\.session-group\.single\.origin-claude, \.session-group\.single\.origin-codex \{ padding-left: 12px; border-left-width: 2px; border-left-style: solid; \}/);
+  }
   assert.match(web, /\.session-group:not\(\.single\) \.session-body \{ padding-left: 12px; \}/);
   assert.match(mock, /\.session-group:not\(\.single\) \.session-body \{ padding-left: 12px; \}/);
 });
@@ -365,7 +370,7 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     appendContextTags(target) { target.append(fakeElement('span', 'prod-tag', 'Product'), fakeElement('span', 'session-tag', 'Session')); },
     durationAgoLabel: () => '少し前',
   });
-  vm.runInContext(`${taskBlock}\nthis.renderTaskGroup = appendKindTaskSession;`, webContext);
+  vm.runInContext(`${functionSource(web, 'sessionOrigin')}\n${taskBlock}\nthis.renderTaskGroup = appendKindTaskSession;`, webContext);
   const taskGroup = fakeElement('div');
   webContext.renderTaskGroup(taskGroup, {
     product: { name: 'Product' }, session: { session_id: 'session', title: 'Session', tasks: [] }, multipleSessions: true,
@@ -381,7 +386,7 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     sessionTag: () => '<span class="prod-tag">Product</span><span class="session-tag">Session</span>',
     esc: (value) => String(value ?? ''),
   });
-  vm.runInContext(`${mockTaskBlock}\nthis.renderTaskGroup = kindTaskSessionBlock;`, mockContext);
+  vm.runInContext(`${functionSource(mock, 'sessionOrigin')}\n${mockTaskBlock}\nthis.renderTaskGroup = kindTaskSessionBlock;`, mockContext);
   const mockTaskGroup = mockContext.renderTaskGroup({ name: 'Product' }, { id: 'session', title: 'Session', tasks: [], tasksUpdatedMin: NaN }, false);
   assert.match(mockTaskGroup.html, /^<section class="kind-session-tasks group-frame"><h3 class="kind-task-head">/);
 
@@ -587,6 +592,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   assert.ok(webTree && webQueued);
   const webContext = pageContext(web, {
     element: fakeElement,
+    providerOrigin: () => '',
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
     pullRequestMergeKey: () => 'repo#1',
     pullRequestMergeConfirmations: new Map(),
@@ -659,6 +665,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   const mockItem = functionSource(mock, 'prItem');
   assert.ok(mockItem);
   const mockContext = pageContext(mock, {
+    providerOrigin: () => '',
     prKey: () => 'repo#1',
     mergeBlocker: () => 'GitHub のマージキュー',
     mergeOperationBlocker: () => null,
@@ -748,6 +755,7 @@ test('モックの予約チェックは PR 行にあり、確認欄は即時マ�
   const key = 'example/project#42';
   const context = pageContext(mock, {
     pullRequestMergeInFlight: new Set(),
+    providerOrigin: () => '',
     prKey: () => key,
     mergeOperationBlocker: () => null,
     mergeConditionWaits: () => ['CI 実行中'],
@@ -1000,6 +1008,7 @@ test('予約中の PR は状態チェックとマージ操作を出し、マー�
   const mergeKey = 'reservation-key';
   const context = pageContext(web, {
     displayPreferences: { mergeableCondition: 'cross-review' },
+    providerOrigin: () => '',
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     element: fakeElement,
     badge: (text, tone) => fakeElement('span', tone, text),
@@ -1399,7 +1408,7 @@ test('マージの実行中は方式とブランチ削除の変更を受け付�
 });
 
 test('PR の初回取得中は空一覧の代わりに取得中の案内を出す', () => {
-  const resultFunctions = [functionSource(web, 'pullRequestMergeResultLine'), functionSource(web, 'appendPullRequestMergeResults'), functionSource(web, 'appendPullRequestBlock')];
+  const resultFunctions = ['pullRequestMergeResultLine', 'appendPullRequestMergeResults', 'appendPullRequestError', 'appendPullRequestBlock'].map(name => functionSource(web, name));
   assert.ok(resultFunctions.every(Boolean));
   const context = pageContext(web, {
     MERGE_METHOD_LABELS: {}, MERGED_VISIBLE_COUNT: 5, displayPreferences: { hideFinished: true },
@@ -1493,7 +1502,7 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
     root,
     element: (tag, className, textContent) => ({ tag, className, textContent }),
   });
-  vm.runInContext(`${render}\nthis.render = render;`, context);
+  vm.runInContext(`${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
 
   context.render({ sessions: [{}], pullRequests: [] });
 
@@ -1533,7 +1542,7 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
       root: { replaceChildren() {} },
       element: (tag, className, textContent) => ({ tag, className, textContent }),
     });
-    vm.runInContext(`${filters}\n${functionSource(web, 'filterFocusFallback')}\n${render}\nthis.render = render;`, context);
+    vm.runInContext(`${filters}\n${functionSource(web, 'filterFocusFallback')}\n${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
     context.render({ sessions: [], pullRequests: [] });
     return { modeButton, chips };
   };
@@ -1589,7 +1598,7 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
       root,
       element: fakeElement,
     });
-    vm.runInContext(`${render}\nthis.render = render;`, context);
+    vm.runInContext(`${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
     context.render({ sessions: [{}], pullRequests: [] });
     return { modeButton, mergeResultButton, root };
   };

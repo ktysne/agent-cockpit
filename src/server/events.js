@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { isHookSessionId } = require('./session-ids');
 const { parsePullRequestUrl } = require('./pull-request-utils');
 
 const EVENT_NAMES = new Set([
@@ -13,6 +14,8 @@ const EVENT_NAMES = new Set([
   'SessionEnd',
   'UserPromptSubmit',
   'PostToolBatch',
+  'PermissionRequest',
+  'Interrupt',
 ]);
 
 const MAX_ASK_QUESTIONS = 4;
@@ -59,6 +62,34 @@ function sanitizeQuestions(value) {
     if (recommended) recommended.recommended = true;
     return [sanitized];
   });
+}
+
+function isQuestionTool(provider, toolName) {
+  return provider === 'codex'
+    ? ['request_user_input_async', 'request_user_input'].includes(toolName)
+    : toolName === 'AskUserQuestion';
+}
+
+function sanitizeCodexQuestions(toolName, value) {
+  if (!isQuestionTool('codex', toolName) || !Array.isArray(value)) return [];
+  const isAsync = toolName === 'request_user_input_async';
+  const questions = sanitizeQuestions(value.slice(0, MAX_ASK_QUESTIONS).map((question) => {
+    if (!question || typeof question !== 'object' || Array.isArray(question)) return null;
+    return {
+      question: isAsync ? question.title ?? question.question : question.question,
+      header: isAsync ? '' : question.header,
+      multiSelect: false,
+      options: isAsync && typeof question.title === 'string'
+        ? (Array.isArray(question.options) ? question.options.slice(0, MAX_ASK_OPTIONS).map((label) => ({ label })) : [])
+        : question.options,
+    };
+  }));
+  if (isAsync) {
+    for (const question of questions) {
+      question.options.forEach((option, index) => { option.recommended = index === 0; });
+    }
+  }
+  return questions;
 }
 
 function sanitizeDecisionResolution(value) {
@@ -114,6 +145,7 @@ function sanitizeEvent(input, metadata = {}) {
   const hookAt = Number.isFinite(Number(input.hookAt)) ? Number(input.hookAt) : Date.now();
   const event = {
     session_id: sessionId,
+    provider: input.provider === 'codex' ? 'codex' : 'claude',
     hook_event_name: eventName,
     hookAt,
     product: metadata.product || null,
@@ -121,11 +153,47 @@ function sanitizeEvent(input, metadata = {}) {
   };
 
   if (eventName === 'SessionStart') event.source = shortString(input.source, 100) || '';
+  if (event.provider !== 'codex' && eventName === 'SessionStart') event.model = shortString(input.model, 160) || '';
 
   const agentId = shortString(input.agent_id, 256);
   const agentType = shortString(input.agent_type, 200);
   if (agentId) event.agent_id = agentId;
   if (agentType) event.agent_type = agentType;
+  if (event.provider === 'codex') {
+    event.model = shortString(input.model, 160) || '';
+    event.cwd = shortString(input.cwd, 4096) || '';
+    if (eventName === 'SessionStart' && Number.isInteger(input.codexPid) && input.codexPid > 0) event.codexPid = input.codexPid;
+    if (isHookSessionId(input.claudeParentSessionId)) event.claudeParentSessionId = input.claudeParentSessionId;
+    if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest'].includes(eventName)) {
+      event.tool_name = shortString(input.tool_name, 100) || '';
+      if (eventName !== 'PermissionRequest') event.tool_use_id = shortString(input.tool_use_id, 256) || '';
+      if (['PreToolUse', 'PermissionRequest'].includes(eventName)) event.summary = shortString(input.summary, 80) || event.tool_name;
+      if (eventName === 'PreToolUse') {
+        if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;
+        if (input.refreshPullRequestsCommand === true) event.refreshPullRequestsCommand = true;
+      }
+      if (['PostToolUse', 'PostToolUseFailure'].includes(eventName)) {
+        if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;
+        if (input.refreshPullRequests === true) event.refreshPullRequests = true;
+      }
+      if (eventName === 'PostToolUse') {
+        if (event.tool_name === 'Bash' && typeof input.commandCwd === 'string' && input.commandCwd.length <= 4096 && path.isAbsolute(input.commandCwd)) {
+          event.commandCwd = input.commandCwd;
+        }
+        const pullRequest = parsePullRequestUrl(input.pullRequest?.url);
+        if (pullRequest && input.pullRequest.owner === pullRequest.owner && input.pullRequest.repo === pullRequest.repo &&
+          input.pullRequest.number === pullRequest.number) event.pullRequest = pullRequest;
+      }
+      if (eventName === 'PreToolUse' && isQuestionTool('codex', event.tool_name) && !agentId) {
+        event.questions = sanitizeCodexQuestions(event.tool_name, input.questions);
+      }
+    }
+    return event;
+  }
+  if (eventName === 'PermissionRequest') {
+    event.tool_name = shortString(input.tool_name, 100) || '';
+    event.summary = shortString(input.summary, 80) || event.tool_name;
+  }
   if (eventName === 'SubagentStart' && ['default', 'codex', 'claude'].includes(input.route)) event.route = input.route;
   if (metadata.agentDefinition) event.agentDefinition = metadata.agentDefinition;
 
@@ -213,6 +281,8 @@ module.exports = {
   QUESTION_TEXT_LIMIT,
   parseCodexLaunch,
   sanitizeQuestions,
+  sanitizeCodexQuestions,
+  isQuestionTool,
   sanitizeDecisionResolution,
   parseCodexAuditLine,
   parseCodexResultLine,

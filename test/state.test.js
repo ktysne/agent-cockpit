@@ -8,6 +8,37 @@ const { productFromCwd } = require('../src/server/identity');
 const { readSessionName, listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('../src/server/session-files');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
+test('Claude のモデル ID を表示名にし、読み取り結果が無いときは前の値を保つ', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'model-session', hook_event_name: 'SessionStart', model: 'claude-sonnet-5-5', hookAt: 1000 });
+  assert.equal(state.snapshot().sessions[0].modelName, 'Sonnet 5.5');
+  state.recordSessionModel('model-session', { model: 'claude-opus-5-5', at: 2000 });
+  state.recordSessionModel('model-session', null);
+  state.addEvent({ session_id: 'model-session', hook_event_name: 'Stop', hookAt: 3000 });
+  assert.equal(state.snapshot().sessions[0].modelName, 'Opus 5.5');
+});
+
+test('別のモデルで再開したセッションは、再開前の応答の記録で開始時のモデルを上書きしない', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'resumed', hook_event_name: 'SessionStart', model: 'claude-sonnet-5-5', hookAt: 1000 });
+  state.recordSessionModel('resumed', { model: 'claude-sonnet-5-5', at: 2000 });
+  state.addEvent({ session_id: 'resumed', hook_event_name: 'SessionEnd', hookAt: 3000 });
+  state.addEvent({ session_id: 'resumed', hook_event_name: 'SessionStart', source: 'resume', model: 'claude-opus-5-5', hookAt: 4000 });
+  state.recordSessionModel('resumed', { model: 'claude-sonnet-5-5', at: 2000 });
+  assert.equal(state.snapshot().sessions[0].modelName, 'Opus 5.5');
+  state.recordSessionModel('resumed', { model: 'claude-haiku-5-5', at: 5000 });
+  assert.equal(state.snapshot().sessions[0].modelName, 'Haiku 5.5');
+});
+
+test('Claude のモデルの記録は Codex のモデルの札に影響しない', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'codex-model', provider: 'codex', hook_event_name: 'SessionStart', model: 'gpt-6' });
+  state.recordSessionModel('codex-model', { model: 'claude-opus-5-5', at: 1000 });
+  const session = state.snapshot().sessions[0];
+  assert.equal(session.codex.model, 'gpt-6');
+  assert.equal(session.modelName, undefined);
+});
+
 test('Notification だけの行は不明になり Stop またはメインのツールで状態が確定する', () => {
   for (const [hook_event_name, status] of [
     ['Stop', '待機中'], ['PreToolUse', '作業中'], ['PostToolUse', '作業中'],

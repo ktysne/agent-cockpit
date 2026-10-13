@@ -132,6 +132,7 @@ async function codexAgentDefinition(agentName, claudeHome) {
 }
 
 module.exports = {
+  processIsAlive,
   readSessionName,
   listLiveSessionFiles,
   findLiveSessionIdByPid,

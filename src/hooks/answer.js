@@ -6,6 +6,7 @@ const { isHookSessionId } = require('../server/session-ids');
 
 const ANSWER_HOOK_TIMEOUT_MS = 30 * 60_000 + 30_000;
 const ANSWER_HOOK_DEADLINE_GRACE_MS = 30_000;
+const CODEX_STOP_WAIT_MS = 59 * 60_000;
 const POST_TOOL_BATCH_TIMEOUT_MS = 1_000;
 const ASK_OUTCOMES = new Set(['answered', 'timeout', 'released', 'server-lost']);
 
@@ -55,7 +56,7 @@ async function postHookRequest(body, options = {}) {
   return result.ok ? result.json : null;
 }
 
-async function runAskQuestion(input, options) {
+async function runAskQuestion(input, options = {}) {
   const sessionId = input.session_id;
   const toolUseId = input.tool_use_id;
   if (!validSessionId(sessionId) || typeof toolUseId !== 'string' || !toolUseId) return null;
@@ -66,11 +67,13 @@ async function runAskQuestion(input, options) {
     session_id: sessionId,
     id: toolUseId,
     questions: input.tool_input?.questions || [],
+    provider: options.provider || 'claude',
+    tool_name: options.toolName || 'AskUserQuestion',
     ...(typeof input.agent_id === 'string' ? { agent_id: input.agent_id } : {}),
   }, { ...options, timeoutMs: 1_000 });
   if (!register) return null;
   if (!register.awaiting) return register.hookOutput || null;
-  const fallbackOutput = register.fallbackOutput || denyAnswerOutput(register.decisionId);
+  const fallbackOutput = register.fallbackOutput || denyAnswerOutput(register.decisionId, options.provider, options.toolName);
   const serverDeadline = Number.isFinite(register.deadline)
     ? register.deadline
     : Date.parse(register.awaitingAnswerUntil || '');
@@ -80,11 +83,13 @@ async function runAskQuestion(input, options) {
   while ((options.now || Date.now)() < hookDeadline) {
     const result = await postHookRequest({
       action: 'ask-poll', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId,
+      provider: options.provider || 'claude', tool_name: options.toolName || 'AskUserQuestion',
     }, { ...options, timeoutMs: MAX_LONG_POLL_MS + 1_500 });
     if (!result) {
       const lost = await postHookRequest({
         action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, outcome: 'server-lost',
         decision_id: register.decisionId,
+        provider: options.provider || 'claude', tool_name: options.toolName || 'AskUserQuestion',
       }, { ...options, timeoutMs: 1_000 });
       const hookOutput = lost ? lost.hookOutput ?? null : fallbackOutput;
       return useOriginalToolInput(hookOutput, input.tool_input);
@@ -93,6 +98,7 @@ async function runAskQuestion(input, options) {
     const outcome = ASK_OUTCOMES.has(result.outcome) ? result.outcome : 'server-lost';
     const finished = await postHookRequest({
       action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId, outcome,
+      provider: options.provider || 'claude', tool_name: options.toolName || 'AskUserQuestion',
     }, { ...options, timeoutMs: 1_000 });
     const hookOutput = finished
       ? finished.hookOutput ?? null
@@ -101,6 +107,7 @@ async function runAskQuestion(input, options) {
   }
   const timeout = await postHookRequest({
     action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId, outcome: 'timeout',
+    provider: options.provider || 'claude', tool_name: options.toolName || 'AskUserQuestion',
   }, { ...options, timeoutMs: 1_000 });
   return timeout?.hookOutput || fallbackOutput;
 }
@@ -121,6 +128,18 @@ async function runPostToolBatch(input, options) {
   return result?.hookOutput || null;
 }
 
+async function runCodexPostToolUse(input, options) {
+  if (input.agent_id || !validSessionId(input.session_id)) return null;
+  const result = await postHookRequest({
+    action: 'post-tool-use',
+    event_name: 'PostToolUse',
+    session_id: input.session_id,
+    id: crypto.randomUUID(),
+    provider: 'codex',
+  }, { ...options, timeoutMs: POST_TOOL_BATCH_TIMEOUT_MS, attemptTimeoutMs: 750 });
+  return result?.hookOutput || null;
+}
+
 async function runUserPromptSubmit(input, options) {
   if (input.agent_id || !validSessionId(input.session_id)) return null;
   const result = await postHookRequest({
@@ -128,6 +147,50 @@ async function runUserPromptSubmit(input, options) {
     id: crypto.randomUUID(), hook_at: (options.now || Date.now)(),
   }, { ...options, timeoutMs: 1_000 });
   return result?.hookOutput || null;
+}
+
+async function runCodexStopCheck(input, options) {
+  if (input.agent_id || !validSessionId(input.session_id)) {
+    return { exitCode: 0, output: null, stderrText: null };
+  }
+  const now = options.now || Date.now;
+  const result = await postHookRequest({
+    action: 'stop-check',
+    event_name: 'Stop',
+    session_id: input.session_id,
+    id: crypto.randomUUID(),
+    hook_at: now(),
+    provider: 'codex',
+  }, { ...options, timeoutMs: 1_000 });
+  if (result?.hookOutput) return { exitCode: 0, output: result.hookOutput, stderrText: null };
+  if (result?.wait !== true || !Number.isInteger(result.generation)) {
+    return { exitCode: 0, output: null, stderrText: null };
+  }
+
+  const waitMs = Number.isFinite(options.codexStopWaitMs) ? Math.max(0, options.codexStopWaitMs) : CODEX_STOP_WAIT_MS;
+  const deadline = now() + waitMs;
+  const parentPid = options.parentPid === undefined ? process.ppid : options.parentPid;
+  const pollTimeoutMs = (Number.isFinite(options.maxLongPollMs) ? options.maxLongPollMs : MAX_LONG_POLL_MS) + 1_500;
+  // 問い合わせを途中で打ち切ると、常駐サーバーは打ち切りの後に届いたものを配信済みにして失うため、丸ごと待てるときだけ問い合わせる。
+  while (deadline - now() >= pollTimeoutMs) {
+    const parentAlive = options.isParentAlive
+      ? options.isParentAlive(parentPid)
+      : isParentAlive(parentPid, options.processApi || process);
+    if (!parentAlive) return { exitCode: 0, output: null, stderrText: null };
+    const polled = await postHookRequest({
+      action: 'stop-poll', event_name: 'Stop', session_id: input.session_id, id: crypto.randomUUID(),
+      generation: result.generation, parent_alive: parentAlive, provider: 'codex',
+    }, { ...options, timeoutMs: pollTimeoutMs });
+    if (!polled) return { exitCode: 0, output: null, stderrText: null };
+    if (polled.done === true) {
+      const output = typeof polled.stderrText === 'string' && polled.stderrText
+        ? { decision: 'block', reason: polled.stderrText }
+        : null;
+      return { exitCode: 0, output, stderrText: null };
+    }
+    if (options.once) return { exitCode: 0, output: null, stderrText: null };
+  }
+  return { exitCode: 0, output: null, stderrText: null };
 }
 
 async function runStop(input, options) {
@@ -160,6 +223,14 @@ async function runStop(input, options) {
 
 async function runAnswerHook(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { exitCode: 0, output: null, stderrText: null };
+  const provider = options.provider === 'codex' ? 'codex' : 'claude';
+  if (provider === 'codex') {
+    let output = null;
+    if (input.hook_event_name === 'PostToolUse') output = await runCodexPostToolUse(input, options);
+    else if (input.hook_event_name === 'UserPromptSubmit') output = await runUserPromptSubmit(input, options);
+    else if (input.hook_event_name === 'Stop') return runCodexStopCheck(input, options);
+    return { exitCode: 0, output, stderrText: null };
+  }
   let output = null;
   if (input.hook_event_name === 'PreToolUse' && input.tool_name === 'AskUserQuestion') output = await runAskQuestion(input, options);
   else if (input.hook_event_name === 'PostToolBatch') output = await runPostToolBatch(input, options);
@@ -177,7 +248,7 @@ async function readStdin(stream = process.stdin) {
 async function main() {
   try {
     const input = JSON.parse(await readStdin());
-    const result = await runAnswerHook(input);
+    const result = await runAnswerHook(input, { provider: process.argv[2] === 'codex' ? 'codex' : 'claude' });
     if (result.output) process.stdout.write(`${JSON.stringify(result.output)}\n`);
     if (result.stderrText) process.stderr.write(result.stderrText);
     process.exitCode = result.exitCode;

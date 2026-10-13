@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>起点の色分けの案</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f5f7; --surface: #ffffff; --surface-2: #f8f9fb; --border: #dfe2e8;
+  --text: #1d2129; --text-2: #5b6372; --ok: #2b8a3e; --ok-soft: #e3f6e8; --warn-soft: #fff1df;
+  --origin-claude: #d9480f; --origin-claude-soft: #fff1e6;
+  --origin-codex: #4c3fe0; --origin-codex-soft: #ecebfd;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
+    --text: #faf9f5; --text-2: #b7b5a9; --ok: #8cc391; --ok-soft: #233526; --warn-soft: #3d3220;
+    --origin-claude: #f08c4f; --origin-claude-soft: #3a2a20;
+    --origin-codex: #9d97ff; --origin-codex-soft: #2a2747;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
+  --text: #faf9f5; --text-2: #b7b5a9; --ok: #8cc391; --ok-soft: #233526; --warn-soft: #3d3220;
+  --origin-claude: #f08c4f; --origin-claude-soft: #3a2a20;
+  --origin-codex: #9d97ff; --origin-codex-soft: #2a2747;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font: 14px/1.6 system-ui, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 0 0 4px; }
+p.lead, p.note { color: var(--text-2); margin: 0 0 12px; }
+.toolbar { display: flex; gap: 8px; margin: 0 0 16px; flex-wrap: wrap; }
+.toolbar button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+.patterns { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.pattern { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.pattern.recommended { outline: 2px solid var(--ok); }
+.tag-rec { font-size: 12px; color: var(--ok); margin-left: 6px; }
+.label { font-size: 12px; color: var(--text-2); margin: 10px 0 4px; }
+.session-group, .pr, .seen { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin: 0 0 6px; position: relative; }
+.session-group { border-left: 2px solid var(--border); padding: 8px 0 0 10px; }
+.session-group.single { border-left: 0; padding: 0; }
+.session-head { font-weight: 600; }
+.session-body { padding: 4px 10px 8px 0; }
+.session-tag { display: inline-block; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-2); font-size: 11px; }
+.session-context { margin-bottom: 4px; }
+.pr { padding: 8px 10px; }
+.seen { padding: 8px 10px; }
+.seen ul { list-style: none; margin: 0; padding: 0; }
+.seen li { position: relative; margin-left: 10px; padding-left: 10px; }
+.title { font-weight: 600; }
+.meta { color: var(--text-2); font-size: 12px; }
+.model { display: inline-block; font-size: 12px; padding: 0 8px; border-radius: 6px; margin-top: 2px; }
+.model.claude { background: var(--warn-soft); }
+.model.gpt { background: var(--ok-soft); }
+
+/* 案 A: 実画面と同じ場所に起点の色帯を置く */
+.a .session-group:not(.single).origin-claude { border-left-color: var(--origin-claude); }
+.a .session-group:not(.single).origin-codex { border-left-color: var(--origin-codex); }
+.a .session-group.single.origin-claude .session-context { border-left: 3px solid var(--origin-claude); }
+.a .session-group.single.origin-codex .session-context { border-left: 3px solid var(--origin-codex); }
+.a .pr.origin-claude, .a .pr.origin-codex, .a .pr.origin-both { padding-left: 10px; }
+.a .pr.origin-claude::before, .a .pr.origin-codex::before, .a .pr.origin-both::before,
+.a .seen li.origin-claude::before, .a .seen li.origin-codex::before, .a .seen li.origin-both::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+}
+.a .pr.origin-claude::before, .a .seen li.origin-claude::before { background: var(--origin-claude); }
+.a .pr.origin-codex::before, .a .seen li.origin-codex::before { background: var(--origin-codex); }
+.a .pr.origin-both::before, .a .seen li.origin-both::before { background: linear-gradient(var(--origin-claude) 50%, var(--origin-codex) 50%); }
+
+/* 案 B: 起点の札 */
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 4px; margin-right: 6px; vertical-align: 1px; }
+.badge.claude { color: var(--origin-claude); border: 1px solid var(--origin-claude); }
+.badge.codex { color: var(--origin-codex); border: 1px solid var(--origin-codex); }
+
+/* 案 C: 淡い背景 */
+.c .origin-claude { background: var(--origin-claude-soft); }
+.c .origin-codex { background: var(--origin-codex-soft); }
+.c .origin-both { background: linear-gradient(90deg, var(--origin-claude-soft), var(--origin-codex-soft)); }
+
+/* 案 D: 題の前の色の点 */
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.dot.claude { background: var(--origin-claude); }
+.dot.codex { background: var(--origin-codex); }
+</style>
+</head>
+<body>
+<main>
+  <h1>起点の色分けの案</h1>
+  <p class="lead">画面に出す情報が Claude 起点か Codex 起点かを色で見分ける案である。Claude は橙、Codex は Codex のアイコンに合わせた青紫にする。同じ PR を両方が登録したときは 2 色を並べる。</p>
+  <div class="toolbar" role="group" aria-label="配色">
+    <button type="button" data-theme-choice="">端末に合わせる</button>
+    <button type="button" data-theme-choice="light">明るい</button>
+    <button type="button" data-theme-choice="dark">暗い</button>
+  </div>
+  <div class="patterns" id="patterns"></div>
+</main>
+<script>
+const PATTERNS = [
+  { key: 'a', name: '案 A: 左端の色帯', recommended: true,
+    note: '複数セッションは枠の左罫線、単独セッションは名前札の左罫線、PR と「前回見てから」は行の左端に 3px の帯を置く。両方が登録した PR と更新項目は上下で 2 色に分ける。' },
+  { key: 'b', name: '案 B: 起点の札', note: '題の前に「Claude」「Codex」の札を置く。文字で読めるので色を見分けにくい人にも伝わるが、横幅を使う。' },
+  { key: 'c', name: '案 C: 淡い背景', note: '行の背景を淡い色にする。目立つが、警告や「マージできる」の背景の色と重なりやすい。' },
+  { key: 'd', name: '案 D: 題の前の色の点', note: '題の前に色の点を置く。場所を取らないが、点が小さく流し見では気付きにくい。' },
+];
+const SAMPLES = [
+  { kind: 'session', layout: 'multiple', origin: 'claude', title: 'Claude 起点のセッション', meta: 'claude/codex-pr-notify ・ 作業中', model: '<span class="model claude">Claude Opus 5.5</span>' },
+  { kind: 'session', layout: 'single', origin: 'codex', title: 'Codex 起点のセッション', meta: 'plan/pr-stack-view ・ 待機中', model: '<span class="model gpt">Codex gpt-6.1-sol</span>' },
+  { kind: 'pr', origin: 'claude', title: '#405 Codex の行を再起動後に戻す', meta: 'CI 成功 ・ レビュー済み' },
+  { kind: 'pr', origin: 'both', title: '#406 Codex の PR の登録', meta: 'Claude と Codex が登録 ・ CI 実行中' },
+  { kind: 'seen', origin: 'codex', title: 'タスク「導入手順を書く」が完了した', meta: '14:30' },
+];
+function decorate(pattern, sample) {
+  const origins = sample.origin === 'both' ? ['claude', 'codex'] : [sample.origin];
+  const names = { claude: 'Claude', codex: 'Codex' };
+  const prefix = pattern === 'b' ? origins.map((o) => `<span class="badge ${o}">${names[o]}</span>`).join('')
+    : pattern === 'd' ? origins.map((o) => `<span class="dot ${o}" aria-label="${names[o]} 起点"></span>`).join('') : '';
+  const originClass = `origin-${sample.origin}`;
+  const title = `${prefix}${sample.title}`;
+  if (sample.kind === 'session') return sample.layout === 'multiple'
+    ? `<section class="session-group ${originClass}"><div class="session-head">${title}</div><div class="session-body"><div class="meta">${sample.meta}</div>${sample.model ? `<div>${sample.model}</div>` : ''}</div></section>`
+    : `<div class="session-group single ${originClass}"><div class="session-body"><div class="session-tag session-context" data-origin="${sample.origin}">${title}</div><div class="meta">${sample.meta}</div>${sample.model ? `<div>${sample.model}</div>` : ''}</div></div>`;
+  if (sample.kind === 'pr') return `<div class="pr ${originClass}"><div class="title">${title}</div><div class="meta">${sample.meta}</div></div>`;
+  return `<div class="seen"><ul><li class="${originClass}">${title} <span class="meta">${sample.meta}</span></li></ul></div>`;
+}
+const labels = { session: 'セッション', pr: 'プルリクエスト', seen: '前回見てから' };
+document.getElementById('patterns').innerHTML = PATTERNS.map((p) => `
+  <section class="pattern ${p.key}${p.recommended ? ' recommended' : ''}">
+    <h2>${p.name}${p.recommended ? '<span class="tag-rec">推奨</span>' : ''}</h2>
+    <p class="note">${p.note}</p>
+    ${['session', 'pr', 'seen'].map((kind) => `<div class="label">${labels[kind]}</div>${SAMPLES.filter((s) => s.kind === kind).map((s) => decorate(p.key, s)).join('')}`).join('')}
+  </section>`).join('');
+for (const button of document.querySelectorAll('[data-theme-choice]')) {
+  button.addEventListener('click', () => {
+    const choice = button.dataset.themeChoice;
+    if (choice) document.documentElement.dataset.theme = choice;
+    else delete document.documentElement.dataset.theme;
+  });
+}
+</script>
+</body>
+</html>

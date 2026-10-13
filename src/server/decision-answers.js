@@ -1,4 +1,4 @@
-const { sanitizeQuestions } = require('./events');
+const { sanitizeQuestions, sanitizeCodexQuestions } = require('./events');
 const { isStoredSessionId } = require('./session-ids');
 const { TaskNudges } = require('./task-nudges');
 
@@ -45,25 +45,38 @@ function canAnswerDecision(decision) {
   return ['waiting', 'provisional'].includes(decision.state) && !hasDuplicateQuestions(decision) && decision.questions.length > 0;
 }
 
-function denyAnswerOutput(decisionId) {
+function denyAnswerOutput(decisionId, provider = 'claude', toolName = 'AskUserQuestion', questions = []) {
+  let reason = ANSWER_HOOK_DENY_REASON.replace('AskUserQuestion', toolName);
+  if (provider === 'codex' && recommendedOptions({ questions }).some((option) => !option)) {
+    reason = reason.replace('推奨の選択肢を適用して作業を続けてください。',
+      '推奨のある質問は推奨の選択肢を適用し、推奨の無い質問は仮定を置いて自分の判断で作業を続けてください。')
+      .replace('推奨で進めたら', '推奨または仮定で進めたら')
+      .replace('選んだ選択肢を書いてください。', '選んだ選択肢と置いた仮定を書いてください。');
+  }
+  // Codex の選択肢には推奨の印が無く、先頭が推奨という約束だけなので、適用する推奨を書き添える。
+  if (provider === 'codex') {
+    const recommendations = recommendedOptions({ questions });
+    const lines = questions.flatMap((question, index) => (recommendations[index] ? [`推奨: ${question.question} → ${recommendations[index].label}`] : []));
+    if (lines.length) reason = [reason, ...lines].join('\n');
+  }
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: ANSWER_HOOK_DENY_REASON.replace('{id}', String(decisionId || '不明').slice(0, 256).replace(/[\r\n]/g, '')),
+      permissionDecisionReason: reason.replace('{id}', String(decisionId || '不明').slice(0, 256).replace(/[\r\n]/g, '')),
     },
   };
 }
 
-function askAnswerOutput(decision, answer) {
+function askAnswers(decision, answer) {
   const recommendations = recommendedOptions(decision);
   const selected = answer.choice === 'ok'
     ? recommendations
     : decision.questions.map(() => null);
-  if (answer.choice === 'pick' && !validPicks(decision, answer.picks, answer.note)) return denyAnswerOutput(decision.id);
-  if (selected.some((option) => !option) && answer.choice !== null && answer.choice !== 'pick') return denyAnswerOutput(decision.id);
+  if (answer.choice === 'pick' && !validPicks(decision, answer.picks, answer.note)) return null;
+  if (selected.some((option) => !option) && answer.choice !== null && answer.choice !== 'pick') return null;
 
-  const answers = Object.fromEntries(decision.questions.map((question, index) => [
+  return Object.fromEntries(decision.questions.map((question, index) => [
     question.question,
     answer.choice === null
       ? answer.note
@@ -71,8 +84,26 @@ function askAnswerOutput(decision, answer) {
         ? answer.picks[index].length ? answer.picks[index].join(', ') : recommendations[index]?.label || answer.note
         : selected[index].label,
   ]));
+}
+
+function askAnswerOutput(decision, answer, provider = 'claude', toolName = 'AskUserQuestion') {
+  const answers = askAnswers(decision, answer);
+  if (!answers) return denyAnswerOutput(decision.id, provider, toolName, decision.questions);
   const additionalContext = [];
   if (['ok', 'pick'].includes(answer.choice) && answer.note) additionalContext.push(`開発者の指示: ${answer.note}`);
+  if (provider === 'codex') {
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: [
+          '開発者がダッシュボードで回答しました。次の回答に沿って作業を続けてください。',
+          ...Object.entries(answers).map(([question, value]) => `${question} → ${value}`),
+          ...additionalContext,
+        ].join('\n'),
+      },
+    };
+  }
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -131,12 +162,15 @@ class DecisionAnswerDelivery {
     this.closed = false;
   }
 
-  registerAsk({ sessionId, toolUseId, questions, agentId }) {
+  registerAsk({ sessionId, toolUseId, questions, agentId, provider = 'claude', toolName = 'AskUserQuestion' }) {
+    const sanitized = provider === 'codex' ? sanitizeCodexQuestions(toolName, questions) : sanitizeQuestions(questions);
+    const deny = (id) => denyAnswerOutput(id, provider, toolName, sanitized);
     const awayEnabled = this.away.snapshot().enabled === true;
-    if (agentId) return { awaiting: false, hookOutput: awayEnabled ? denyAnswerOutput(toolUseId) : null };
+    if (agentId) return { awaiting: false, hookOutput: awayEnabled ? deny(toolUseId) : null };
+    if (provider === 'codex' && this.state.sessions.get(sessionId)?.provider !== 'codex') return { awaiting: false, hookOutput: null };
     const key = keyFor(sessionId, toolUseId);
     const existing = this.askWaits.get(key);
-    if (existing) return { awaiting: true, decisionId: existing.decisionId, deadline: existing.deadline, fallbackOutput: denyAnswerOutput(existing.decisionId) };
+    if (existing) return { awaiting: true, decisionId: existing.decisionId, deadline: existing.deadline, fallbackOutput: existing.fallbackOutput };
     if (!awayEnabled) return { awaiting: false, hookOutput: null };
 
     const createdAt = this.now();
@@ -144,9 +178,10 @@ class DecisionAnswerDelivery {
       session_id: sessionId,
       hook_event_name: 'PreToolUse',
       hookAt: createdAt,
-      tool_name: 'AskUserQuestion',
+      provider,
+      tool_name: toolName,
       tool_use_id: toolUseId,
-      questions: sanitizeQuestions(questions),
+      questions: sanitized,
     };
     if (!event.questions.length || !this.state.addEvent(event)) return { awaiting: false, hookOutput: null };
     const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
@@ -168,7 +203,7 @@ class DecisionAnswerDelivery {
     }
     const answerWaitMs = typeof this.answerWaitMs === 'function' ? this.answerWaitMs() : this.answerWaitMs;
     const deadline = createdAt + answerWaitMs;
-    const record = { sessionId, toolUseId, decisionId, deadline, timer: null, pollTimer: null, lastPollAt: createdAt };
+    const record = { sessionId, toolUseId, decisionId, provider, toolName, fallbackOutput: deny(decisionId), deadline, timer: null, pollTimer: null, lastPollAt: createdAt };
     this.askWaits.set(key, record);
     record.timer = this.setTimeout(() => this.expireAsk(record), answerWaitMs);
     this.scheduleAskPollTimeout(record);
@@ -177,7 +212,7 @@ class DecisionAnswerDelivery {
       awaitingAnswerUntil: new Date(deadline).toISOString(),
       state: null,
     }, createdAt);
-    return { awaiting: true, decisionId, deadline, fallbackOutput: denyAnswerOutput(decisionId) };
+    return { awaiting: true, decisionId, deadline, fallbackOutput: record.fallbackOutput };
   }
 
   async waitForAsk({ sessionId, toolUseId }) {
@@ -213,13 +248,13 @@ class DecisionAnswerDelivery {
     return 'waiting';
   }
 
-  finishAsk({ sessionId, toolUseId, decisionId, outcome }) {
+  finishAsk({ sessionId, toolUseId, decisionId, outcome, provider = 'claude', toolName = 'AskUserQuestion' }) {
     const record = this.askWaits.get(keyFor(sessionId, toolUseId));
     if (!record) {
       const decision = decisionId && this.state.decisionFor(sessionId, decisionId);
       if (outcome === 'server-lost' && this.away.snapshot().enabled === true) {
         if (decision) this.state.setDecisionLifecycle(sessionId, decisionId, { state: 'provisional', awaitingAnswerUntil: null }, this.now());
-        return { outcome: 'server-lost', hookOutput: denyAnswerOutput(decisionId) };
+        return { outcome: 'server-lost', hookOutput: denyAnswerOutput(decisionId, provider, toolName, decision?.questions) };
       }
       return { outcome: 'released', hookOutput: null };
     }
@@ -246,7 +281,12 @@ class DecisionAnswerDelivery {
       }, this.now());
       this.clearAskWait(record);
       const latest = this.state.decisionFor(sessionId, record.decisionId);
-      record.result = { outcome: currentOutcome, hookOutput: askAnswerOutput(latest, latest.answer) };
+      const hookOutput = askAnswerOutput(latest, latest.answer, record.provider, record.toolName);
+      if (record.provider === 'codex') {
+        this.state.updateDecision(sessionId, record.decisionId, 'resolved', Object.values(askAnswers(latest, latest.answer)), latest.answer.note, this.now());
+        this.afterDecisionUpdate(sessionId, record.decisionId);
+      }
+      record.result = { outcome: currentOutcome, hookOutput };
       return record.result;
     }
 
@@ -255,7 +295,7 @@ class DecisionAnswerDelivery {
       awaitingAnswerUntil: null,
     }, this.now());
     this.clearAskWait(record);
-    record.result = { outcome: outcome === 'server-lost' ? 'server-lost' : 'timeout', hookOutput: denyAnswerOutput(record.decisionId) };
+    record.result = { outcome: outcome === 'server-lost' ? 'server-lost' : 'timeout', hookOutput: record.fallbackOutput };
     return record.result;
   }
 
@@ -348,18 +388,31 @@ class DecisionAnswerDelivery {
     return generation;
   }
 
-  async waitForStopAnswer(sessionId, generation, parentAlive = true) {
-    if (this.stopWaitEnded(sessionId, generation, parentAlive)) return { stderrText: null, done: true };
+  checkStop(sessionId, eventId, hookAt = this.now()) {
+    const generation = this.startStop(sessionId, eventId, hookAt);
+    if (generation === null) return { hookOutput: null, generation: null, wait: false };
+    const reason = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
+    return {
+      hookOutput: reason ? { decision: 'block', reason } : null,
+      generation,
+      // セッション行の無い委譲した thread を待たせると、離席中は委譲した実行がそのたびに上限まで止まるため。
+      wait: !reason && this.away.snapshot().enabled === true && this.state.sessions.get(sessionId)?.provider === 'codex',
+    };
+  }
+
+  async waitForStopAnswer(sessionId, generation, parentAlive = true, provider = 'claude') {
+    if (this.stopWaitEnded(sessionId, generation, parentAlive, provider)) return { stderrText: null, done: true };
     const text = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     if (text) return { stderrText: text, done: true };
     await this.waitForSignal(sessionId, this.maxLongPollMs);
-    if (this.stopWaitEnded(sessionId, generation, parentAlive)) return { stderrText: null, done: true };
+    if (this.stopWaitEnded(sessionId, generation, parentAlive, provider)) return { stderrText: null, done: true };
     const nextText = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     return nextText ? { stderrText: nextText, done: true } : { stderrText: null, done: false };
   }
 
-  stopWaitEnded(sessionId, generation, parentAlive) {
-    return this.closed || !parentAlive || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation;
+  stopWaitEnded(sessionId, generation, parentAlive, provider = 'claude') {
+    return this.closed || !parentAlive || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation ||
+      (provider === 'codex' && this.away.snapshot().enabled !== true);
   }
 
   handleLifecycleEvent(sessionId, eventName, eventId, hookAt = this.now()) {

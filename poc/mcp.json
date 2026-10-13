@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "board-poc": {
-      "command": "D:/Program Files/nodejs/node.exe",
-      "args": ["D:/Desktop/Develop/agent-cockpit/poc/mcp-whoami.js"]
-    }
-  }
-}

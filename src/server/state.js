@@ -1,10 +1,12 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { recommendedOptionFor, sanitizeEvent } = require('./events');
+const { recommendedOptionFor, sanitizeEvent, isQuestionTool } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, pullRequestKey, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { cloneDisplay, defaultDisplay, normalizeDisplay } = require('./display-preferences');
+
+const CODEX_UNKNOWN_ANSWER_NOTE = '元の画面で回答済み(内容は不明)';
 const { isStoredSessionId } = require('./session-ids');
 const { isRecord } = require('./value-utils');
 
@@ -14,6 +16,8 @@ const TRANSIENT_NOTICE_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_AWAY_PERIODS = 50;
+const MAX_CODEX_RECOVERY_SESSIONS = 200;
+const CODEX_RECOVERY_ACTIVITY_STEP_MS = 60_000;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
@@ -53,6 +57,7 @@ function stableStringify(value) {
 function validStoredPlan(plan) {
   return isRecord(plan) && Array.isArray(plan.tasks) && validTimestamp(plan.tasksUpdatedAt, true) &&
     (plan.product === undefined || plan.product === null || validProduct(plan.product)) &&
+    (plan.provider === undefined || ['claude', 'codex'].includes(plan.provider)) &&
     plan.tasks.every((task) => isRecord(task) && typeof task.title === 'string' && task.title.length <= 200 &&
       ['todo', 'doing', 'done'].includes(task.state) && Array.isArray(task.criteria) &&
       task.criteria.every((item) => isRecord(item) && typeof item.text === 'string' && typeof item.met === 'boolean') &&
@@ -129,6 +134,7 @@ function validPullRequestRecord(record) {
   if (!isRecord(record) || !validStoredSessionId(record.session_id) ||
     !validRepositoryPart(record.owner) || !validRepositoryPart(record.repo) ||
     !Number.isSafeInteger(record.number) || record.number < 1 ||
+    (record.provider !== undefined && !['claude', 'codex'].includes(record.provider)) ||
     !validTimestamp(record.addedAt) ||
     (record.cwd !== null && (typeof record.cwd !== 'string' || record.cwd.length > 4096)) ||
     (record.product !== null && (!isRecord(record.product) || typeof record.product.key !== 'string' ||
@@ -150,6 +156,7 @@ function normalizePullRequestRecord(record) {
     repo: record.repo,
     number: record.number,
     url: record.url,
+    provider: record.provider || 'claude',
     addedAt: record.addedAt,
     cwd: record.cwd || null,
     product: record.product ? { key: record.product.key, name: record.product.name } : null,
@@ -240,6 +247,22 @@ function validPullRequestMergeIntent(record) {
     record.stackedPullRequests.every((item) => isRecord(item) && Number.isSafeInteger(item.number) && item.number > 0 && validBranchName(item.baseRefName));
 }
 
+function normalizeCodexRecovery(value) {
+  if (!isRecord(value)) return new Map();
+  return new Map(Object.entries(value)
+    .filter(([id, record]) => validStoredSessionId(id) && isRecord(record) &&
+      Number.isInteger(record.pid) && record.pid > 0 && typeof record.cwd === 'string' &&
+      typeof record.model === 'string' && Number.isInteger(record.resumes) && record.resumes >= 0 &&
+      validTimestamp(record.updatedAt) && (record.lockSeen === undefined || typeof record.lockSeen === 'boolean'))
+    .sort(([, left], [, right]) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .slice(0, MAX_CODEX_RECOVERY_SESSIONS)
+    .map(([id, record]) => [id, {
+      pid: record.pid, cwd: record.cwd.slice(0, 4096), model: record.model.slice(0, 160),
+      resumes: record.resumes, updatedAt: record.updatedAt,
+      ...(record.lockSeen === true ? { lockSeen: true } : {}),
+    }]));
+}
+
 function normalizeStore(value) {
   if (!isRecord(value) || !Number.isInteger(value.version)) throw new Error('Invalid store version');
   if (value.version > 1) throw Object.assign(new Error('Store version is newer'), { newerVersion: true });
@@ -262,6 +285,7 @@ function normalizeStore(value) {
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
       product: cloneProduct(plan.product),
+      ...(plan.provider ? { provider: plan.provider } : {}),
       decisions: plan.decisions.map(cloneDecision),
     });
   }
@@ -361,6 +385,7 @@ function normalizeStore(value) {
   }
   return {
     display,
+    codexRecovery: normalizeCodexRecovery(value.codexRecovery),
     plans,
     askDecisionBindings,
     decisionLifecycles,
@@ -561,7 +586,7 @@ function agentModelFromDefinition(agentType, definition) {
  * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
  * }} SessionAgent */
 
-/** @typedef {{session_id: string, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
+/** @typedef {{session_id: string, provider: 'claude'|'codex', codex?: {model: string, resumes: number}, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
 
 /** @typedef {{tools: SessionTool[], completedToolIds: Set<string>, agentToolBindings: Object<string, string|symbol|null>}} SessionTools */
 
@@ -569,18 +594,20 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>}} SessionCodex */
 
-/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>}} SessionDecisions */
+/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>}} SessionDecisions */
 
 /** @typedef {{permissionWaits: PermissionWait[]}} SessionPermissions */
 
 /** @typedef {SessionIdentity & SessionTools & SessionAgents & SessionCodex & SessionDecisions & SessionPermissions} DerivedSession */
 
-/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[]}} AskDecisionState */
+/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[], awayHandledIds?: string[]}} AskDecisionState */
 
 /** @returns {DerivedSession} */
 function newSession(event, askDecisionState = {}) {
   return {
     session_id: event.session_id,
+    provider: event.provider,
+    ...(event.provider === 'codex' ? { codex: { model: '', resumes: 0 } } : {}),
     product: event.product,
     title: event.sessionName,
     status: '不明',
@@ -592,6 +619,9 @@ function newSession(event, askDecisionState = {}) {
     permissionWaits: [],
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
+    awayHandledIds: new Set(askDecisionState.awayHandledIds || []),
+    codexQuestionTools: Object.create(null),
+    startedAskToolUseIds: new Set(),
     stopped: false,
     turnKnown: false,
     ended: false,
@@ -722,7 +752,7 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   // 再起動の前か MCP で終わった判断事項は、その終わりのイベントがメモリーに無いので、作り直すと巻き戻る。保存済みの状態を保つ。
   // 保存済みの終わりより古い終わりのイベントは、遅れて届いた別の呼び出しの終わりなので、保存済みの状態を説明しない。
   const directlyRecreatedAskDecisionIds = new Set(entries.filter(({ sequence }) => sequence < beforeSequence).flatMap(({ event }) => {
-    if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'AskUserQuestion' || event.agent_id || !event.tool_use_id) return [];
+    if (event.hook_event_name !== 'PreToolUse' || !isQuestionTool(event.provider, event.tool_name) || event.agent_id || !event.tool_use_id) return [];
     const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
     if (decisionId !== event.tool_use_id) return [];
     const stored = storedAskDecisions.get(decisionId);
@@ -735,6 +765,7 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   return {
     decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
     bindings: askDecisionState.bindings || {},
+    awayHandledIds: askDecisionState.awayHandledIds || [],
   };
 }
 
@@ -755,7 +786,7 @@ function sessionSnapshot(session) {
       return {
         ...agent,
         ...(childUnconfirmed ? { unconfirmed: true } : {}),
-        modelName: agent.isCodex ? '' : claudeModelName(agent.model),
+        modelName: session.provider === 'codex' ? agent.model : agent.isCodex ? '' : claudeModelName(agent.model),
         ...(gptAgent ? {
           gpt: {
             model: gptAgent.model,
@@ -781,6 +812,8 @@ function sessionSnapshot(session) {
 
   return {
     session_id: session.session_id,
+    provider: session.provider,
+    ...(session.codex ? { codex: { ...session.codex } } : {}),
     product: session.product,
     title: session.title,
     lastActivityAt: session.lastActivityAt,
@@ -816,7 +849,10 @@ function sessionForEvent(sessions, event, initialAskDecisionState) {
 function applyAskQuestionStart(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
-  if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
+  if (isQuestionTool(event.provider, event.tool_name) && !agentId && toolUseId && event.questions?.length) {
+    // 同じ呼び出しの開始は回答の待ちとイベントの入口の両方から届く。2 回目で待ちに戻すと、上書きで記録した解決が負けるため。
+    if (session.startedAskToolUseIds.has(toolUseId)) return;
+    session.startedAskToolUseIds.add(toolUseId);
     // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
     const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
     const existing = boundDecision || session.decisions.find((decision) => (
@@ -858,6 +894,7 @@ function applyAskQuestionStart(session, event) {
       session.decisions.push(decision);
       session.decisionBindings[toolUseId] = decision.id;
     }
+    if (event.provider === 'codex') session.codexQuestionTools[session.decisionBindings[toolUseId]] = event.tool_name;
   }
 }
 
@@ -963,16 +1000,16 @@ function applyAskQuestionCompletion(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
-  if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId) {
+  if (isQuestionTool(event.provider, event.tool_name) && !agentId && toolUseId) {
     const decisionId = session.decisionBindings[toolUseId];
     const decision = session.decisions.find((item) => item.id === decisionId);
     if (decision && ['waiting', 'provisional'].includes(decision.state)) {
       decision.state = eventName === 'PostToolUse' ? 'resolved' : 'withdrawn';
       decision.updatedAt = isoTime(event.hookAt);
       decision.resolvedAt = decision.updatedAt;
-      decision.resolution = eventName === 'PostToolUse'
-        ? event.decisionResolution || { chosen: [], note: '' }
-        : null;
+      decision.resolution = eventName !== 'PostToolUse' ? null
+        : event.provider === 'codex' ? { chosen: [], note: CODEX_UNKNOWN_ANSWER_NOTE }
+          : event.decisionResolution || { chosen: [], note: '' };
       // 最後に判断事項を終えた呼び出し。再起動の後に同じ呼び出しの開始が新しい時刻で届いても重複と分かるよう、
       // waiting に戻っても消さずに残す(開始から終わりまで進んだ呼び出しの開始が、正当に新しく届くことは無い)。
       decision.finishedByToolUseId = toolUseId;
@@ -1024,7 +1061,7 @@ function applyToolStart(session, event) {
         agent_id: agentId,
         startedAt: isoTime(event.hookAt),
       });
-      if (event.tool_name === 'Agent' && !agentId) {
+      if (session.provider !== 'codex' && event.tool_name === 'Agent' && !agentId) {
         // 未対応の呼び出しが重なった時点で、どの SubagentStart がどれに当たるかは決まらない。
         const overlapping = unboundAgentCallsOf(session).filter((tool) => tool.tool_use_id !== toolUseId);
         for (const tool of overlapping) session.agentToolBindings[tool.tool_use_id] = AMBIGUOUS_AGENT_CALL;
@@ -1039,7 +1076,9 @@ function applyToolStart(session, event) {
       }
     }
 
-    applyCodexStart(session, event);
+    if (session.provider !== 'codex') {
+      applyCodexStart(session, event);
+    }
     applyAskQuestionStart(session, event);
 
     if (!agentId) {
@@ -1104,19 +1143,25 @@ function applyToolCompletion(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
-    applyAgentToolCompletion(session, event);
+    if (session.provider !== 'codex') applyAgentToolCompletion(session, event);
     if (toolUseId) {
       session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
       session.completedToolIds.add(toolUseId);
     }
 
-    applyCodexLaunchCompletion(session, event);
-    applyCodexResult(session, event);
+    if (session.provider !== 'codex') {
+      applyCodexLaunchCompletion(session, event);
+      applyCodexResult(session, event);
+    }
 
     session.permissionWaits = session.permissionWaits.filter((wait) => !(
-      sameAgent(wait.agent_id, agentId) && wait.target_tool_use_id === toolUseId && toolUseId
+      sameAgent(wait.agent_id, agentId) && (
+        (wait.target_tool_use_id === toolUseId && toolUseId) ||
+        (session.provider === 'codex' && eventName === 'PostToolUse' && !wait.target_tool_use_id && wait.tool_name === event.tool_name)
+      )
     ));
-    applyAskQuestionCompletion(session, event);
+    // Codex の request_user_input_async はすぐ戻るので結果では閉じず、次の入力で閉じる。待つ形の request_user_input は Claude と同じく結果で閉じる。
+    if (session.provider !== 'codex' || event.tool_name === 'request_user_input') applyAskQuestionCompletion(session, event);
 
     if (!agentId) {
       session.stopped = false;
@@ -1147,18 +1192,24 @@ function applyToolBatch(session, event) {
 function applyPermissionPrompt(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
-  if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
+  if (eventName === 'PermissionRequest' || (eventName === 'Notification' && event.notification_type === 'permission_prompt')) {
     // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
     const oldestTool = session.tools
       .filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent')
       .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0];
+    // PermissionRequest には tool_use_id が無いので、同じ名前で実行中のツールが 1 つに決まるときだけ対象にする。
+    const requestedTools = eventName === 'PermissionRequest'
+      ? session.tools.filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name === event.tool_name)
+      : [];
     const wait = {
       agent_id: agentId,
-      target_tool_use_id: oldestTool?.tool_use_id || null,
-      tool_name: oldestTool?.tool_name || '',
-      summary: oldestTool?.summary || '',
-      notification_type: event.notification_type,
-      message: event.message,
+      target_tool_use_id: eventName === 'PermissionRequest'
+        ? (requestedTools.length === 1 ? requestedTools[0].tool_use_id : null)
+        : oldestTool?.tool_use_id || null,
+      tool_name: eventName === 'PermissionRequest' ? event.tool_name : oldestTool?.tool_name || '',
+      summary: eventName === 'PermissionRequest' ? event.summary : oldestTool?.summary || '',
+      notification_type: event.notification_type || 'permission_prompt',
+      message: event.message || '',
       startedAt: isoTime(event.hookAt),
     };
     session.permissionWaits = session.permissionWaits.filter((item) => !sameAgent(item.agent_id, agentId));
@@ -1167,11 +1218,26 @@ function applyPermissionPrompt(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'tools'> & SessionPermissions & Pick<SessionIdentity, 'stopped'|'turnKnown'|'ended'>} session
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions & SessionDecisions & Pick<SessionIdentity, 'provider'|'stopped'|'turnKnown'|'ended'>} session
  */
 function applySessionLifecycle(session, event) {
-  const eventName = event.hook_event_name;
+  const eventName = event.hook_event_name === 'Interrupt' ? 'Stop' : event.hook_event_name;
   const agentId = event.agent_id || null;
+  if (session.provider === 'codex' && eventName === 'UserPromptSubmit' && !agentId) {
+    // すぐ戻る質問は次の入力を元の画面での回答とみなす。待つ質問は結果が来ないまま入力が届いたら、Claude の中断と同じく取り下げにする。
+    // ツールの種類は保存しないので、再起動の前の質問はすぐ戻る質問として扱う。
+    for (const decision of session.decisions) {
+      // 離席中にフックで扱った質問は元の画面に出ないため、次の入力で閉じない。
+      if (session.awayHandledIds.has(decision.id)) continue;
+      if (decision.source !== 'ask' || decision.state !== 'waiting' || event.hookAt <= Date.parse(decision.updatedAt)) continue;
+      const tool = session.codexQuestionTools[decision.id] || 'request_user_input_async';
+      const answered = tool === 'request_user_input_async';
+      decision.state = answered ? 'resolved' : 'withdrawn';
+      decision.updatedAt = isoTime(event.hookAt);
+      decision.resolvedAt = decision.updatedAt;
+      decision.resolution = answered ? { chosen: [], note: CODEX_UNKNOWN_ANSWER_NOTE } : null;
+    }
+  }
   if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
     session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
     if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
@@ -1293,6 +1359,7 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
   });
 
   for (const { event } of ordered) {
+    if (event.delegatedFrom) continue;
     const session = sessionForEvent(sessions, event, initialAskDecisionState);
 
     if (session.ended) continue;
@@ -1300,6 +1367,15 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
 
     applyToolStart(session, event);
     applySubagentStart(session, event);
+    if (session.provider === 'codex') {
+      if (event.agent_id) {
+        const agent = agentFor(session, event.agent_id);
+        if (agent && event.model) agent.model = event.model;
+      } else {
+        if (event.model) session.codex.model = event.model;
+        if (event.hook_event_name === 'SessionStart' && event.source === 'resume') session.codex.resumes += 1;
+      }
+    }
     applySubagentStop(session, event);
     applyToolCompletion(session, event);
     applyToolBatch(session, event);
@@ -1324,6 +1400,7 @@ class DashboardState {
     this.version = 0;
     this.generatedAt = new Date().toISOString();
     this.sessions = new Map();
+    this.claudeSessionModels = new Map();
     this.endedAt = new Map();
     this.endedByAbsence = new Map();
     this.fieldNames = new Set();
@@ -1354,6 +1431,9 @@ class DashboardState {
     this.ciFailures = [];
     this.crossReviewSkips = new Map();
     this.closedAgents = new Map();
+    // イベントから再構成できない復元済みの回数と、SessionEnd で捨てた回数を保持する。
+    this.codexResumesBeforeEnd = new Map();
+    this.codexRecovery = new Map();
     this.display = null;
     this.storeWriteTimer = null;
     this.storeWritePending = false;
@@ -1398,6 +1478,8 @@ class DashboardState {
     this.restoreSessionCleanupPending = true;
     this.restoredAt = now;
     this.display = store.display;
+    this.codexRecovery = store.codexRecovery;
+    this.codexResumesBeforeEnd = new Map([...store.codexRecovery].map(([id, record]) => [id, record.resumes]));
     this.deletedSessions = store.deletedSessions;
     this.plans = store.plans;
     this.askDecisionBindings = store.askDecisionBindings;
@@ -1594,6 +1676,7 @@ class DashboardState {
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
       product: cloneProduct(plan.product),
+      ...(plan.provider ? { provider: plan.provider } : {}),
       decisions: plan.decisions.map(cloneDecision),
     }]));
     const decisionLifecycles = Object.fromEntries([...this.decisionLifecycles].flatMap(([sessionId, records]) => {
@@ -1617,6 +1700,7 @@ class DashboardState {
     }));
     return {
       version: 1,
+      codexRecovery: Object.fromEntries(this.codexRecovery),
       display: cloneDisplay(this.display),
       plans,
       askDecisionBindings,
@@ -1801,7 +1885,7 @@ class DashboardState {
       .filter((record) => !record.historyDismissedAt)
       .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
       .sort((left, right) => Date.parse(right.mergedAt) - Date.parse(left.mergedAt) || right.number - left.number)
-      .map((record) => ({ ...record }));
+      .map((record) => ({ ...record, providers: this.pullRequestProviders(record.owner, record.repo, record.number) }));
   }
 
   dismissMergedPullRequestHistory(owner, repo, number, now = Date.now()) {
@@ -1811,6 +1895,30 @@ class DashboardState {
     this.touch();
     this.requestStoreWrite();
     return true;
+  }
+
+  unregisterUnknownPullRequests(owner, repo) {
+    let deleted = 0;
+    const matches = (record) => record.owner.toLowerCase() === owner.toLowerCase()
+      && record.repo.toLowerCase() === repo.toLowerCase() && record.state === 'unknown';
+    for (const [sessionId, records] of this.pullRequests) {
+      for (const [key, record] of records) {
+        if (!matches(record)) continue;
+        records.delete(key);
+        deleted += 1;
+      }
+      if (!records.size) this.pullRequests.delete(sessionId);
+    }
+    for (const [key, record] of this.relatedPullRequests) {
+      if (!matches(record)) continue;
+      this.relatedPullRequests.delete(key);
+      deleted += 1;
+    }
+    if (deleted) {
+      this.touch();
+      this.requestStoreWrite();
+    }
+    return deleted;
   }
 
   deleteClosedPullRequest(owner, repo, number) {
@@ -2064,6 +2172,7 @@ class DashboardState {
     const next = {
       session_id: sessionId,
       ...parsedUrl,
+      provider: previous?.provider || this.providerForSession(sessionId),
       addedAt: previous?.addedAt || isoTime(now),
       cwd: typeof location.cwd === 'string' && location.cwd.length <= 4096 ? location.cwd : previous?.cwd || null,
       product,
@@ -2176,15 +2285,72 @@ class DashboardState {
     await this.waitForPersistence();
   }
 
+  recordCodexRecovery(event, session) {
+    if (session.provider !== 'codex') return;
+    const previous = this.codexRecovery.get(event.session_id);
+    const pid = (!event.agent_id && event.codexPid) || previous?.pid;
+    if (!pid) return;
+    const record = {
+      pid,
+      cwd: event.cwd || previous?.cwd || '',
+      model: session.codex.model,
+      resumes: session.codex.resumes + (this.codexResumesBeforeEnd.get(event.session_id) || 0),
+      updatedAt: previous?.updatedAt || isoTime(event.hookAt),
+      // 再開(codex exec resume など)はロックを作らないことがあり、プロセス ID の照会も失敗しうるので、本体の SessionStart では印を外す。
+      // ロックを作る画面なら、次の走査で印が付き直る。
+      ...(previous?.lockSeen && !(event.hook_event_name === 'SessionStart' && !event.agent_id) ? { lockSeen: true } : {}),
+    };
+    // updatedAt は再起動の後の行の無操作の判定にも使う。イベントのたびに保存しないよう、1 分以上進んだときだけ進める。
+    const activityAdvanced = event.hookAt - Date.parse(record.updatedAt) >= CODEX_RECOVERY_ACTIVITY_STEP_MS;
+    if (activityAdvanced) record.updatedAt = isoTime(event.hookAt);
+    this.codexRecovery.set(event.session_id, record);
+    this.sessionFileLastSeenAt.set(event.session_id, event.hookAt);
+    const changed = !previous || activityAdvanced || ['pid', 'cwd', 'model', 'resumes', 'lockSeen'].some((key) => previous[key] !== record[key]);
+    if (!changed) return;
+    const oldest = [...this.codexRecovery].sort(([, left], [, right]) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt));
+    for (const [id] of oldest.slice(0, Math.max(0, oldest.length - MAX_CODEX_RECOVERY_SESSIONS))) {
+      this.codexRecovery.delete(id);
+      this.sessionFileLastSeenAt.delete(id);
+      if (this.sessionFiles.get(id)?.provider === 'codex') this.sessionFiles.delete(id);
+    }
+    this.requestStoreWrite();
+  }
+
+  liveCodexSessionFiles(isAlive, locks = null) {
+    const files = [];
+    for (const [sessionId, record] of this.codexRecovery) {
+      if (!isAlive(record.pid)) {
+        this.codexRecovery.delete(sessionId);
+        this.requestStoreWrite();
+        continue;
+      }
+      if (locks?.has(sessionId) && !record.lockSeen) {
+        record.lockSeen = true;
+        this.requestStoreWrite();
+      }
+      // 閉じた会話も記録は残す。プロセス ID は SessionStart でしか届かないので、消すと再開した行を生存の一覧へ戻せないため。
+      if (locks !== null && record.lockSeen && !locks.has(sessionId)) continue;
+      files.push({
+        session_id: sessionId, provider: 'codex', pid: record.pid, cwd: record.cwd,
+        updatedAt: record.updatedAt, codex: { model: record.model, resumes: record.resumes },
+      });
+    }
+    return files;
+  }
+
   // フックがまだ届いていないセッションも一覧に出し、題名の変更を拾うために使う。
-  syncSessionFiles(files, now = Date.now()) {
+  syncSessionFiles(files, now = Date.now(), { codexOnly = false } = {}) {
     if (!Array.isArray(files)) return;
+    if (codexOnly) files = [...this.sessionFiles.values()].filter((file) => file.provider !== 'codex').concat(files);
     const next = new Map(files.map((file) => [file.session_id, file]));
     const previous = this.sessionFiles;
+    const shouldSyncSession = (sessionId) => !codexOnly || next.get(sessionId)?.provider === 'codex' ||
+      previous.get(sessionId)?.provider === 'codex' || this.sessions.get(sessionId)?.provider === 'codex';
     let changed = JSON.stringify([...next.entries()]) !== JSON.stringify([...previous.entries()]);
     let persistentChanged = false;
     this.sessionFiles = next;
     for (const sessionId of this.deletedSessions.keys()) {
+      if (!shouldSyncSession(sessionId)) continue;
       const file = next.get(sessionId);
       if (file && Date.parse(file.updatedAt) > Date.parse(this.deletedSessions.get(sessionId))) {
         this.acceptSessionWrite(sessionId, Date.parse(file.updatedAt));
@@ -2193,6 +2359,7 @@ class DashboardState {
     }
 
     for (const [sessionId, plan] of this.plans) {
+      if (!shouldSyncSession(sessionId)) continue;
       const product = cloneProduct(next.get(sessionId)?.product || this.sessions.get(sessionId)?.product);
       if (product && stableStringify(plan.product) !== stableStringify(product)) {
         plan.product = product;
@@ -2200,7 +2367,7 @@ class DashboardState {
       }
     }
 
-    if (this.restoreSessionCleanupPending) {
+    if (this.restoreSessionCleanupPending && !codexOnly) {
       this.restoreSessionCleanupPending = false;
       this.pruneExpiredStoreRecords(now);
       for (const sessionId of this.hiddenSessions) {
@@ -2212,14 +2379,18 @@ class DashboardState {
       }
     }
 
-    for (const sessionId of next.keys()) this.sessionFileLastSeenAt.set(sessionId, now);
+    for (const [sessionId, file] of next) {
+      if (!codexOnly || file.provider === 'codex') this.sessionFileLastSeenAt.set(sessionId, now);
+    }
     for (const sessionId of this.endedByAbsence.keys()) {
+      if (!shouldSyncSession(sessionId)) continue;
       if (next.has(sessionId)) {
         this.reopenAbsentSession(sessionId);
         changed = true;
       }
     }
     for (const sessionId of this.hiddenSessions) {
+      if (!shouldSyncSession(sessionId)) continue;
       if (!next.has(sessionId) && previous.has(sessionId) && !this.sessions.has(sessionId)) {
         this.hiddenSessions.delete(sessionId);
         this.hiddenSessionUpdatedAt.delete(sessionId);
@@ -2228,12 +2399,14 @@ class DashboardState {
       }
     }
     for (const sessionId of this.estimates.keys()) {
+      if (!shouldSyncSession(sessionId)) continue;
       if (!next.has(sessionId)) {
         this.estimates.delete(sessionId);
         changed = true;
       }
     }
     for (const [sessionId, lastSeenAt] of this.sessionFileLastSeenAt) {
+      if (!shouldSyncSession(sessionId)) continue;
       if (!next.has(sessionId) && this.sessions.has(sessionId) && !this.endedAt.has(sessionId)) {
         if (now - lastSeenAt >= SESSION_FILE_ABSENCE_END_MS) {
           this.endSessionByAbsence(sessionId, now);
@@ -2247,6 +2420,15 @@ class DashboardState {
   }
 
   endSession(sessionId, endedAt) {
+    // provider を持たない保存済みの計画は、起点の情報を消す前に補う。
+    const plan = this.plans.get(sessionId);
+    const planProviderAdded = Boolean(plan && !plan.provider);
+    if (planProviderAdded) plan.provider = this.providerForSession(sessionId);
+    const hadRecovery = this.codexRecovery.delete(sessionId);
+    if (this.sessionFiles.get(sessionId)?.provider === 'codex') this.sessionFiles.delete(sessionId);
+    const resumes = (this.entries.get(sessionId) || []).filter(({ event }) => event.provider === 'codex' && !event.agent_id &&
+      event.hook_event_name === 'SessionStart' && event.source === 'resume').length;
+    if (resumes) this.codexResumesBeforeEnd.set(sessionId, (this.codexResumesBeforeEnd.get(sessionId) || 0) + resumes);
     this.entries.delete(sessionId);
     this.sessions.delete(sessionId);
     this.endedAt.set(sessionId, endedAt);
@@ -2257,7 +2439,7 @@ class DashboardState {
     this.hiddenSessionUpdatedAt.delete(sessionId);
     this.closedAgents.delete(sessionId);
     this.sessionFileLastSeenAt.delete(sessionId);
-    if (wasHidden) this.requestStoreWrite();
+    if (wasHidden || hadRecovery || planProviderAdded) this.requestStoreWrite();
   }
 
   endSessionByAbsence(sessionId, endedAt) {
@@ -2279,12 +2461,28 @@ class DashboardState {
     this.onSessionReopened?.(sessionId);
   }
 
+  // 解決すると lifecycle の仮適用の印は消えるので、上書きと計画に残る provisionalAt も見る。
+  awayHandledDecisionIds(sessionId) {
+    const ids = new Set();
+    for (const [id, lifecycle] of this.decisionLifecycles.get(sessionId) || []) {
+      if (lifecycle.awaitingAnswerUntil || lifecycle.provisionalAt || lifecycle.state === 'provisional' || lifecycle.answer?.sentAt) ids.add(id);
+    }
+    for (const [id, override] of this.decisionOverrides.get(sessionId) || []) {
+      if (override.provisionalAt) ids.add(id);
+    }
+    for (const decision of this.plans.get(sessionId)?.decisions || []) {
+      if (decision.source === 'ask' && decision.provisionalAt) ids.add(decision.id);
+    }
+    return [...ids];
+  }
+
   askDecisionStateFor(sessionId) {
     return {
       decisions: (this.plans.get(sessionId)?.decisions || [])
         .filter((decision) => decision.source === 'ask').map(cloneDecision),
       bindings: Object.fromEntries(this.askDecisionBindings.get(sessionId) || []),
       finishedOutsideEventsIds: [...(this.finishedOutsideEventsAskDecisionIds.get(sessionId) || [])],
+      awayHandledIds: this.awayHandledDecisionIds(sessionId),
     };
   }
 
@@ -2326,6 +2524,32 @@ class DashboardState {
     return changed;
   }
 
+  // サブエージェントから委譲した Codex の行は、表示用の形では親の行の gpt にまとめられている。
+  hasRunningDelegation(sessionId) {
+    const parent = sessionId ? this.sessions.get(sessionId) : null;
+    if (parent?.provider !== 'claude') return false;
+    return parent.agents.some((agent) => (
+      (agent.isCodex === true && !agent.resultReceived && (agent.active || agent.unconfirmed)) ||
+      (agent.gpt && (agent.gpt.active || agent.gpt.unconfirmed))
+    ));
+  }
+
+  // Claude の PreToolUse は非同期のフックで、子の Codex のイベントより後に届くことがある。
+  // 起動の時刻以降に始まった独立の thread を委譲に直し、起動より前に始まった thread は直さない。
+  reclassifyDelegatedThreads(parentSessionId, launchedAt) {
+    for (const [threadId, entries] of this.entries) {
+      const first = entries[0]?.event;
+      if (first?.provider !== 'codex' || first.delegatedFrom || first.claudeParentSessionId !== parentSessionId ||
+        first.hookAt < launchedAt) continue;
+      first.delegatedFrom = parentSessionId;
+      this.entries.set(threadId, [entries[0]]);
+      this.sessions.delete(threadId);
+      if (this.codexRecovery.delete(threadId)) this.requestStoreWrite();
+      if (this.sessionFiles.get(threadId)?.provider === 'codex') this.sessionFiles.delete(threadId);
+      this.sessionFileLastSeenAt.delete(threadId);
+    }
+  }
+
   hasAgentRow(sessionId, agentId) {
     return Boolean(agentId && this.sessions.get(sessionId)?.agents.some((agent) => agent.agent_id === agentId));
   }
@@ -2336,6 +2560,17 @@ class DashboardState {
 
   sessionFileFor(sessionId) {
     return this.sessionFiles.get(sessionId) || null;
+  }
+
+  // 再開の SessionStart の後に読んだ記録の末尾は再開前の応答のことがあるので、時刻の新しいほうを残す。
+  recordSessionModel(sessionId, observation) {
+    const provider = this.sessions.get(sessionId)?.provider || this.sessionFiles.get(sessionId)?.provider;
+    if (provider === 'codex' || !observation?.model) return;
+    const at = Number.isFinite(observation.at) ? observation.at : null;
+    const current = this.claudeSessionModels.get(sessionId);
+    if (current && (at === null || (current.at !== null && at < current.at))) return;
+    this.claudeSessionModels.set(sessionId, { model: observation.model, at });
+    if (current?.model !== observation.model) this.touch();
   }
 
   captureFieldNames(input) {
@@ -2373,7 +2608,7 @@ class DashboardState {
   }
 
   withdrawFinishedDesktopAsks(event) {
-    if (event.agent_id) return false;
+    if (event.provider === 'codex' || event.agent_id) return false;
     const isNextTool = event.hook_event_name === 'PreToolUse' && event.tool_use_id;
     if (!isNextTool && !['UserPromptSubmit', 'Stop'].includes(event.hook_event_name)) return false;
     const sessionId = event.session_id;
@@ -2420,6 +2655,20 @@ class DashboardState {
   addEvent(input, metadata = {}) {
     const event = sanitizeEvent(input, metadata);
     if (!event) return false;
+    const existingProvider = this.entries.get(event.session_id)?.[0]?.event.provider
+      || this.sessions.get(event.session_id)?.provider || this.sessionFiles.get(event.session_id)?.provider
+      || (this.codexRecovery.has(event.session_id) ? 'codex' : null);
+    if (existingProvider && existingProvider !== event.provider) return false;
+    // 委譲した Codex の thread は行を作らない。分類は thread の最初のイベントで決め、そのイベントだけを保持する(docs/design/codex-delegation.md)。
+    if (event.provider === 'codex') {
+      const entries = this.entries.get(event.session_id) || [];
+      if (entries[0]?.event.delegatedFrom) return true;
+      if (!entries.length && this.hasRunningDelegation(event.claudeParentSessionId)) {
+        event.delegatedFrom = event.claudeParentSessionId;
+        this.entries.set(event.session_id, [{ event, sequence: this.sequence++ }]);
+        return true;
+      }
+    }
     if (!this.acceptSessionWrite(event.session_id, event.hookAt)) return true;
 
     const endedAt = this.endedAt.get(event.session_id);
@@ -2448,12 +2697,20 @@ class DashboardState {
     const withdrawnAsk = this.withdrawFinishedDesktopAsks(event);
     const entries = this.entries.get(event.session_id) || [];
     const eventSequence = this.sequence++;
+    if (event.provider !== 'codex' && !event.agent_id && event.hook_event_name === 'SessionStart' &&
+      event.model) {
+      this.recordSessionModel(event.session_id, { model: event.model, at: event.hookAt });
+    }
     entries.push({ event, sequence: eventSequence });
     this.entries.set(event.session_id, entries);
     const nextSessions = deriveSessions(entries, this.askDecisionStateFor(event.session_id), eventSequence);
     let askDecisionStateChanged = false;
     if (nextSessions.length > 0) {
+      if (nextSessions[0].codex && !nextSessions[0].codex.model) {
+        nextSessions[0].codex.model = this.codexRecovery.get(event.session_id)?.model || '';
+      }
       this.sessions.set(event.session_id, nextSessions[0]);
+      this.recordCodexRecovery(event, nextSessions[0]);
       askDecisionStateChanged = this.persistAskDecisionState(event.session_id, nextSessions[0]);
     }
     else this.sessions.delete(event.session_id);
@@ -2461,6 +2718,9 @@ class DashboardState {
     // 許可待ちはターンの確定を待たずに優先して出るので、許可待ちでも残す。
     const derivedStatus = nextSessions[0]?.status;
     const hadEstimate = derivedStatus !== '不明' && derivedStatus !== '許可待ち' && this.estimates.delete(event.session_id);
+    if (event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition) {
+      this.reclassifyDelegatedThreads(event.session_id, event.hookAt);
+    }
 
     if (event.hook_event_name === 'SessionEnd') {
       this.endSession(event.session_id, event.hookAt);
@@ -2725,7 +2985,10 @@ class DashboardState {
   planFor(sessionId) {
     let plan = this.plans.get(sessionId);
     if (!plan) {
-      plan = { tasks: [], tasksUpdatedAt: null, product: cloneProduct(this.productForSession(sessionId)), decisions: [] };
+      plan = {
+        tasks: [], tasksUpdatedAt: null, product: cloneProduct(this.productForSession(sessionId)),
+        provider: this.providerForSession(sessionId), decisions: [],
+      };
       this.plans.set(sessionId, plan);
     }
     return plan;
@@ -2733,6 +2996,19 @@ class DashboardState {
 
   productForSession(sessionId) {
     return this.sessions.get(sessionId)?.product || this.sessionFiles.get(sessionId)?.product || this.plans.get(sessionId)?.product || null;
+  }
+
+  providerForSession(sessionId) {
+    return this.entries.get(sessionId)?.[0]?.event.provider || this.sessions.get(sessionId)?.provider ||
+      this.sessionFiles.get(sessionId)?.provider || (this.codexRecovery.has(sessionId) ? 'codex' : null) ||
+      this.plans.get(sessionId)?.provider || 'claude';
+  }
+
+  // マージ記録の保持期間は登録より短いので、マージ済みの PR の起点も登録から求められる。
+  pullRequestProviders(owner, repo, number) {
+    return orderedProviders(this.pullRequestRegistrations().filter((record) => (
+      record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase() && record.number === number
+    )).map((record) => record.provider));
   }
 
   decisionsFor(sessionId) {
@@ -2846,6 +3122,7 @@ class DashboardState {
       const plan = this.plans.get(sessionId);
       const base = session || {
         session_id: sessionId,
+        ...(file?.provider === 'codex' ? { provider: 'codex', codex: { ...file.codex } } : {}),
         product: file?.product || null,
         title: file?.name || null,
         status: '不明',
@@ -2865,6 +3142,10 @@ class DashboardState {
       ), null) || base.lastActivityAt || null;
       const current = {
         ...visible,
+        provider: base.provider || 'claude',
+        ...(base.provider !== 'codex' && this.claudeSessionModels.has(sessionId)
+          ? { modelName: claudeModelName(this.claudeSessionModels.get(sessionId).model) } : {}),
+        ...(base.codex ? { codex: { ...base.codex, resumes: base.codex.resumes + (session ? this.codexResumesBeforeEnd.get(sessionId) || 0 : 0) } } : {}),
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,
         sessionFileUpdatedAt: file?.updatedAt || null,
@@ -2942,7 +3223,7 @@ class DashboardState {
         if (!at) continue;
         candidates.push({
           product, type: 'task', identity: `${sessionId}\0${task.title}`, at,
-          text: `タスク「${task.title}」が完了した`, pullRequest: null,
+          text: `タスク「${task.title}」が完了した`, provider: this.providerForSession(sessionId), pullRequest: null,
         });
       }
     }
@@ -2953,12 +3234,17 @@ class DashboardState {
     return registrations.map((record) => {
       const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
       const title = pullRequestTitles.get(identity);
+      const providers = orderedProviders(registrations
+        .filter((candidate) => candidate.owner.toLowerCase() === record.owner.toLowerCase() &&
+          candidate.repo.toLowerCase() === record.repo.toLowerCase() && candidate.number === record.number)
+        .map((candidate) => candidate.provider));
       return {
         product: cloneProduct(record.product) || repoProduct(record.owner, record.repo),
         type: 'pull-request',
         identity: `${record.owner}/${record.repo}#${record.number}`,
         at: record.addedAt,
         text: `${pullRequestLabel(record.number, title)}を作成した`,
+        providers,
         pullRequest: { identity, number: record.number, action: 'created', title },
       };
     });
@@ -2978,6 +3264,7 @@ class DashboardState {
           identity: `${session.session_id}\0${decision.id}`,
           at: decision.provisionalAt || decision.updatedAt,
           text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          provider: session.provider || this.providerForSession(session.session_id),
           pullRequest: null,
         });
       }
@@ -2992,6 +3279,7 @@ class DashboardState {
           identity: `${sessionId}\0${decision.id}`,
           at: decision.provisionalAt || decision.updatedAt,
           text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          provider: this.providerForSession(sessionId),
           pullRequest: null,
         });
       }
@@ -3003,12 +3291,14 @@ class DashboardState {
   ciFailureCandidates({ pullRequestTitles }) {
     return this.ciFailures.map((failure) => {
       const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
+      const providers = this.pullRequestProviders(failure.owner, failure.repo, failure.number);
       return {
         product: failure.product,
         type: 'ci-failure',
         identity: `${failure.owner}/${failure.repo}#${failure.number}`,
         at: failure.at,
         text: `PR #${failure.number} の CI が失敗した`,
+        providers,
         pullRequest: { identity, number: failure.number, action: 'ci-failure', title: pullRequestTitles.get(identity) },
       };
     });
@@ -3019,6 +3309,10 @@ class DashboardState {
     for (const merged of sources.mergedPullRequests.values()) {
       const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
       const title = sources.pullRequestTitles.get(identity);
+      const providers = orderedProviders(sources.registrations.filter((record) => (
+        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() &&
+        record.number === merged.number
+      )).map((record) => record.provider));
       for (const product of mergedPullRequestProducts(merged, sources)) {
         candidates.push({
           product,
@@ -3026,6 +3320,7 @@ class DashboardState {
           identity: `${merged.owner}/${merged.repo}#${merged.number}`,
           at: merged.mergedAt,
           text: `${pullRequestLabel(merged.number, title)}をマージした`,
+          providers,
           pullRequest: { identity, number: merged.number, action: 'merged', title },
         });
       }
@@ -3185,17 +3480,27 @@ function pullRequestLabel(number, title) {
   return `PR #${number}${title ? `(${title})` : ''}`;
 }
 
+function orderedProviders(providers) {
+  const present = new Set(providers);
+  return ['claude', 'codex'].filter((provider) => present.has(provider));
+}
+
 // 対象のプロダクトに無い候補、時刻を読めない候補、同じ内容の重複は捨てる。
 function groupSinceSeenEvents(candidates, products) {
   const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
   const eventKeys = new Set();
-  for (const { product, type, identity, at, text, pullRequest } of candidates) {
+  for (const { product, type, identity, at, text, pullRequest, provider, providers } of candidates) {
     const timestamp = Date.parse(at || '');
     if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) continue;
     const key = `${product.key}\0${type}\0${identity}\0${at}`;
     if (eventKeys.has(key)) continue;
     eventKeys.add(key);
-    eventsByProduct.get(product.key).push({ at, type, text, ...(pullRequest ? { pullRequest } : {}) });
+    eventsByProduct.get(product.key).push({
+      at, type, text,
+      ...(provider ? { provider } : {}),
+      ...(Array.isArray(providers) ? { providers: orderedProviders(providers) } : {}),
+      ...(pullRequest ? { pullRequest } : {}),
+    });
   }
   return eventsByProduct;
 }
@@ -3228,15 +3533,19 @@ function foldPullRequestEvents(events) {
     const { identity, number, action, title } = event.pullRequest;
     let summary = pullRequestSummaries.get(identity);
     if (!summary) {
-      summary = { at: event.at, number, title, actions: new Set() };
+      summary = { at: event.at, number, title, actions: new Set(), providers: new Set() };
       pullRequestSummaries.set(identity, summary);
     }
     if (Date.parse(event.at) > Date.parse(summary.at)) summary.at = event.at;
     if (!summary.title && title) summary.title = title;
     summary.actions.add(action);
+    for (const provider of event.providers || (event.provider ? [event.provider] : [])) summary.providers.add(provider);
   }
   for (const summary of pullRequestSummaries.values()) {
-    items.push({ at: summary.at, type: 'pull-request-summary', text: pullRequestSummaryText(summary) });
+    items.push({
+      at: summary.at, type: 'pull-request-summary', text: pullRequestSummaryText(summary),
+      providers: orderedProviders(summary.providers),
+    });
   }
   return items;
 }

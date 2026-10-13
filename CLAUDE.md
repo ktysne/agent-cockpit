@@ -21,6 +21,23 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 - 各機能を実装するときは、モックの該当箇所と照らし合わせて食い違いが無いかを確かめる
 - 検証の結果、実現できないことや表現を変える必要が出たら、計画書の決定済みの判断に記録したうえで、その場でモックにも反映する。モックと計画書と実装を食い違わせたままにしない
 
+## Codex 対応のブランチ運用
+
+- Codex 対応の集約先は `claude/feature-codex-support` とする。作業ブランチは最新の集約先から `claude/codex-<主題>` の名前で作り、PR の base は集約先にする
+- 進み、順序、判断待ちの正本は [docs/handover/2026-10-11-codex-rebuild.md](docs/handover/2026-10-11-codex-rebuild.md) である。PR のマージと開発者の決定のたびに、その場で更新する
+- main の変更は同期 PR で集約先へ取り込む。元の head を祖先に残す通常の merge commit を使い、squash と rebase は使わない
+- 集約先へ入れる PR は、入口のテストと実 runtime の確認が両方終わったものに限る。入口から到達しないモジュールを入れない
+- 集約先向けの PR も、「守ること」のマージの条件に従い、開発者がダッシュボードで確認したときだけマージする。集約先へのマージはマージコミットに固定され、モデルの判断ではマージしない
+- main への最終 PR は、全機能の実 runtime の確認を終えてから作る
+- `codex/feature-codex-support` は凍結した固定参照で、作業ブランチを作らず更新もしない
+
+## Codex の実機検証
+
+- Codex のフックと MCP の挙動は、`tools/codex-probe/` を使い、通常の `~/.codex` を書き換えずに確かめる。手順は [docs/development.md](docs/development.md) の「Codex の実機検証」にある
+- `--dangerously-bypass-hook-trust` で渡すフックは、`tools/codex-probe/` のものか、そのセッションで書いて中身を確かめたものに限る。このフラグは、有効なフックをすべて信頼の確認なしで動かすため。`launch.js` が信頼の記録の無い既存のフックを見つけて止まったら、開発者に知らせる
+- 記録に、会話の本文とツールの入出力を残さない
+- 通常の `~/.codex` を書き換えるのは、開発者が承認したときだけにする。書き換えるときはバックアップを取り、作業後に sha256 で照合して戻す
+
 ## AIクロスレビュー
 
 手順は [docs/cross-review.md](docs/cross-review.md) と cross-review スキルに従う。観点は [.cross-review.md](.cross-review.md)。

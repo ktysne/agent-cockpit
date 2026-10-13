@@ -10,6 +10,34 @@ const { cssDeclarations, functionSource, pageContext, sourceBetween } = require(
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
+test('PR の取得エラーに unknown の記録がある場合だけ登録解除ボタンを表示し、開くとやめるへ、やめると元のボタンへフォーカスを移す', () => {
+  const element = (tagName, className = '', textContent = '') => ({
+    tagName, className, textContent, children: [], handlers: {}, dataset: {},
+    append(...nodes) { this.children.push(...nodes); },
+    addEventListener(name, handler) { this.handlers[name] = handler; },
+  });
+  const confirmations = new Map();
+  const focused = [];
+  const context = pageContext(pageHtml, { element, repositoryUnregisterConfirmations: confirmations, render() {}, lastState: {},
+    focusRepositoryUnregister: (key, action) => focused.push(`${key}:${action}`) });
+  vm.runInContext(functionSource(pageHtml, 'appendPullRequestError'), context);
+  for (const [error, count, shown] of [['取得できません', 1, true], ['取得できません', 0, false], [null, 1, false]]) {
+    const root = element('div');
+    context.appendPullRequestError(root, { owner: 'example', repo: 'project', error, unregisterableCount: count });
+    const flatten = node => [node, ...node.children.flatMap(flatten)];
+    const button = flatten(root).find(node => node.textContent === 'このリポジトリの登録を外す');
+    assert.equal(Boolean(button), shown);
+    if (!button) continue;
+    button.handlers.click();
+    const confirmed = element('div');
+    context.appendPullRequestError(confirmed, { owner: 'example', repo: 'project', error, unregisterableCount: count });
+    assert.ok(flatten(confirmed).some(node => node.textContent.includes('元に戻せません')));
+    flatten(confirmed).find(node => node.textContent === 'やめる').handlers.click();
+    assert.equal(confirmations.size, 0);
+    assert.deepEqual(focused.splice(0), ['example/project:cancel', 'example/project:open']);
+  }
+});
+
 function mergeTargetConfirmation(pullRequest) {
   const element = (tagName, className = '', textContent = '') => ({
     tagName, className, textContent, children: [], dataset: {}, attributes: {},
@@ -266,7 +294,7 @@ function recordDeletionHarness(sessions, postUiAction = async () => ({ ok: true,
   vm.runInContext(['isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
     'renderExcludedNote', 'renderFinishedNote', 'renderIdleNote', 'finishedHiddenCounts', 'finishedDeletionTargets',
     'recordDeletionTargetKey', 'intersectRecordDeletionTargets', 'countRecordDeletionTargets', 'appendRecordDeletion',
-    'focusRecordDeletion', 'deleteNoteRecords', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+    'focusRecordDeletion', 'deleteNoteRecords', 'hasCodexOrigin', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
   context.render(context.lastState);
   return { context, notes, buttons, nodes: () => Object.values(notes).flatMap(flatten), get activeElement() { return activeElement; } };
 }
@@ -579,7 +607,8 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
   const render = functionSource(html, 'render');
   const renderDeferredState = functionSource(html, 'renderDeferredState');
   const visibleSinceSeen = functionSource(html, 'visibleSinceSeen');
-  assert.ok(render && visibleSinceSeen);
+  const hasCodexOrigin = functionSource(html, 'hasCodexOrigin');
+  assert.ok(render && visibleSinceSeen && hasCodexOrigin);
   assert.ok(renderDeferredState);
 
   let activeElement;
@@ -681,7 +710,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     },
     productSection: () => ({}),
   });
-  vm.runInContext(`${visibleSinceSeen}\n${render}\n${renderDeferredState}`, context);
+  vm.runInContext(`${visibleSinceSeen}\n${hasCodexOrigin}\n${render}\n${renderDeferredState}`, context);
   return {
     context,
     get renderCount() { return renderCount; },
@@ -993,7 +1022,7 @@ test('終了ボタンは状態と名前を含む flex 行の右端に置く', ()
 });
 
 test('作業行は先頭に名前と時刻を置き、詳細と状態不明の操作を全幅で続ける', () => {
-  const functions = ['element', 'appendToolLine', 'sessionDisplayName', 'appendContextTags', 'appendUnknownSessionControls', 'mainRow', 'appendAgents']
+  const functions = ['element', 'appendToolLine', 'sessionDisplayName', 'appendContextTags', 'appendUnknownSessionControls', 'sessionOrigin', 'mainRow', 'appendAgents']
     .map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
 
@@ -1092,7 +1121,7 @@ test('作業行は先頭に名前と時刻を置き、詳細と状態不明の�
 
 test('モックの作業行も名前と時刻の後に全幅の詳細を並べる', () => {
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
-  const functions = ['mainRow', 'agentRow'].map((name) => functionSource(mock, name));
+  const functions = ['sessionOrigin', 'mainRow', 'agentRow'].map((name) => functionSource(mock, name));
   assert.ok(functions.every(Boolean));
   const context = pageContext(mock, {
     ui: { estimatedSessions: [] },
@@ -1679,8 +1708,8 @@ test('プロダクト別と種類別に前回見てからを表示し、新し�
   assert.ok(renderKindSections);
   assert.ok(appendDecisionCard);
   assert.ok(markProductSeen);
-  assert.match(productSection, /sinceSeenBox\(product, false\)/);
-  assert.match(renderKindSections, /sinceSeenBox\(product, true\)/);
+  assert.match(productSection, /sinceSeenBox\(product, false, showOriginBands\)/);
+  assert.match(renderKindSections, /sinceSeenBox\(product, true, showOriginBands\)/);
   assert.match(source, /前回見てから \(\$\{entry\.items\.length\} 件\)/);
   assert.match(source, /seen\.dataset\.seen = product\.key/);
   assert.match(source, /postUiAction\('\/api\/seen'/);
@@ -1873,7 +1902,7 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
       append(...children) { this.children.push(...children); },
     }),
   });
-  vm.runInContext(`${visibleSinceSeen}\n${sinceSeenBox}`, boxContext);
+  vm.runInContext(`${visibleSinceSeen}\n${functionSource(harness.html, 'providerOrigin')}\n${sinceSeenBox}`, boxContext);
   assert.equal(boxContext.sinceSeenBox(product, false), null);
   boxContext.header.dataset.away = 'true';
   const box = boxContext.sinceSeenBox(product, false);
@@ -2323,7 +2352,7 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
     orderedProducts: () => [{ key: 'product-ui' }],
     productSection: () => ({}),
   });
-  vm.runInContext(render, context);
+  vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
   context.render(context.lastState);
 
   assert.equal(replacementPick.focused, true);
@@ -3184,10 +3213,10 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   assert.equal(flatten(reservedNoMethodsRoot).find((node) => node.dataset?.reservationToggle === key).disabled, false);
 });
 
-test('マージ済みかクローズ済みの PR だけがあるときもオープンの欄を空表示する', () => {
+test('マージ済み・クローズ済みだけの PR では空表示し、Claude だけなら履歴に起点帯を付けない', () => {
   const element = functionSource(pageHtml, 'element');
   const shortShaElement = functionSource(pageHtml, 'shortShaElement');
-  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && shortShaElement && appendBlock);
 
   class FakeElement {
@@ -3211,9 +3240,10 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     expandedPrLines: new Set(),
     MERGED_VISIBLE_COUNT: 5,
     durationAgoLabel: () => '1 分前',
+    absoluteTimeLabel: () => '1 分前',
     appendPullRequestMergeResults() {},
   });
-  vm.runInContext(`${element}\n${shortShaElement}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${shortShaElement}\n${functionSource(pageHtml, 'providerOrigin')}\n${appendBlock}`, context);
 
   for (const state of ['merged', 'closed']) {
     const root = new FakeElement('div');
@@ -3224,6 +3254,17 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     const content = root.children[0].children.find((node) => node.className === 'pr-repo-content');
     assert.ok(content.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'));
   }
+
+  const claudeHistory = new FakeElement('div');
+  context.appendPullRequestBlock(claudeHistory, {
+    owner: 'acme', repo: 'widget', trees: [], registeredCount: 1,
+    mergeHistory: [{ number: 41, providers: ['claude'], mergedAt: '2026-10-03T00:00:00.000Z' }],
+    merged: [{ number: 40, state: 'closed', providers: ['claude'], url: 'https://github.com/acme/widget/pull/40', title: 'Closed PR' }],
+  }, false, false);
+  const historyNodes = [];
+  const visitHistory = (node) => { historyNodes.push(node); for (const child of node.children || []) visitHistory(child); };
+  visitHistory(claudeHistory);
+  assert.equal(historyNodes.some((node) => /origin-(claude|codex|both)/.test(node.className || '') || node.dataset?.origin), false);
 
   const counted = new FakeElement('div');
   context.appendPullRequestBlock(counted, {
@@ -3490,7 +3531,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
 
 test('終わったものを隠すとマージ済みとクローズ済みの PR 行を出さない', () => {
   const element = functionSource(pageHtml, 'element');
-  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && appendBlock);
 
   class FakeElement {
@@ -3510,7 +3551,7 @@ test('終わったものを隠すとマージ済みとクローズ済みの PR �
     durationAgoLabel: () => '1 分前',
     appendPullRequestMergeResults() {},
   });
-  vm.runInContext(`${element}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${functionSource(pageHtml, 'providerOrigin')}\n${appendBlock}`, context);
   const target = new FakeElement('div');
   context.appendPullRequestBlock(target, {
     owner: 'acme', repo: 'widget', fetchedAt: new Date().toISOString(), openCount: 0, registeredCount: 2,
@@ -3530,7 +3571,7 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = functionSource(html, 'element');
   const shortShaElement = functionSource(html, 'shortShaElement');
-  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && shortShaElement);
   assert.ok(appendBlock);
 
@@ -3554,7 +3595,7 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
     MERGED_VISIBLE_COUNT: 5,
     appendPullRequestMergeResults() {},
   });
-  vm.runInContext(`${element}\n${shortShaElement}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${shortShaElement}\n${functionSource(html, 'providerOrigin')}\n${appendBlock}`, context);
   const root = new FakeElement('div');
   const reservedSha = 'a'.repeat(40);
   const mergedSha = 'b'.repeat(40);
@@ -3585,7 +3626,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = functionSource(html, 'element');
   const expandToggle = functionSource(html, 'appendExpandToggle');
-  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && expandToggle);
   assert.ok(appendBlock);
 
@@ -3631,7 +3672,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
       focusedToggle = descendants(root).find((node) => node.dataset?.olderPrLine === 'merged:acme/widget');
     },
   });
-  vm.runInContext(`${element}\n${expandToggle}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${expandToggle}\n${functionSource(html, 'providerOrigin')}\n${appendBlock}`, context);
 
   const group = {
     owner: 'Acme', repo: 'Widget', trees: [], merged: [], registeredCount: 1,
@@ -3679,7 +3720,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = functionSource(html, 'element');
   const expandToggle = functionSource(html, 'appendExpandToggle');
-  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
   assert.ok(element && expandToggle);
   assert.ok(appendBlock);
 
@@ -3737,7 +3778,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
       focusedClosedToggle = descendants(root).find((node) => node.dataset?.olderPrLine === 'closed:acme/widget');
     },
   });
-  vm.runInContext(`${element}\n${expandToggle}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${expandToggle}\n${functionSource(html, 'providerOrigin')}\n${appendBlock}`, context);
 
   const renderGroup = () => {
     root = new FakeElement('div');
@@ -3804,7 +3845,7 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
-    vm.runInContext(render, context);
+    vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
     context.render(context.lastState);
 
     const expected = dataAttribute === 'conflictCancel' ? cancel : go;
@@ -3854,7 +3895,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
-    vm.runInContext(render, context);
+    vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
     context.render(context.lastState);
 
     assert.equal(replacementButton.focused, true, kind);
@@ -3942,7 +3983,7 @@ test('レビュー不要の通信後は有効な同じPRの操作へフォーカ
       refresh: async () => context.render(context.lastState),
       showWriteError() {},
     });
-    vm.runInContext(`${render}\n${runAction}`, context);
+    vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}\n${runAction}`, context);
 
     const pending = context.runCrossReviewSkipAction(activeButton);
     if (moveFocus) activeElement = buttons.find((button) => button.dataset.filter === 'prs');
@@ -4013,7 +4054,7 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
     orderedProducts: () => [{ key: 'product-ui' }],
     productSection: () => ({}),
   });
-  vm.runInContext(render, context);
+  vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
   context.render(context.lastState);
 
   assert.equal(replacementButton.focused, true);
@@ -4062,7 +4103,7 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
 test('一部完了のセッションでは完了タスクを表示できる', () => {
   const names = [
     'element', 'activityStatus', 'isEndedAgent', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
-    'kindEndedDecisionEntries', 'kindEndedAgentCount',
+    'kindEndedDecisionEntries', 'kindEndedAgentCount', 'sessionOrigin',
   ];
   const functions = names.map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
@@ -4125,7 +4166,7 @@ test('一部完了のセッションでは完了タスクを表示できる', ()
 
 test('種類別では未着手の合計数を一つのボタンで切り替える', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['element', 'appendExpandToggle', 'taskVisibility', 'kindTodoTaskCount', 'kindDoneTaskCount', 'appendKindTaskSession', 'kindToggleLabel', 'appendKindToggle']
+  const functions = ['element', 'appendExpandToggle', 'taskVisibility', 'kindTodoTaskCount', 'kindDoneTaskCount', 'sessionOrigin', 'appendKindTaskSession', 'kindToggleLabel', 'appendKindToggle']
     .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
@@ -4262,7 +4303,7 @@ test('文や名前を差し込むバッジは折り返し、枠の外へはみ�
 });
 
 test('非対話の実行中の行は状態名と時刻と API の札を出し、状態推定と一覧からの除外を出さない', () => {
-  const functions = ['element', 'activityStatus', 'unknownSessionControls', 'appendUnknownSessionControls', 'appendToolLine',
+  const functions = ['element', 'activityStatus', 'unknownSessionControls', 'appendUnknownSessionControls', 'appendToolLine', 'sessionOrigin',
     'sessionDisplayName', 'appendContextTags', 'appendSessionModelLine', 'mainRow']
     .map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
@@ -4332,6 +4373,21 @@ test('非対話の実行中の行は状態名と時刻と API の札を出し、
   const interactive = context.mainRow({ ...session, nonInteractive: undefined, sessionFileUpdatedAt: null }, product);
   assert.deepEqual(interactive.children.map((child) => child.className), ['who', 'session-extra']);
   assert.equal(interactive.children[0].children.at(-1).textContent, '状態不明 (時刻不明)');
+  const interactiveNamed = context.mainRow({ ...session, nonInteractive: undefined, modelName: 'Opus 5.5' }, product);
+  const detail = interactiveNamed.children.find(child => child.className === 'detail');
+  assert.equal(detail.children[0].children[0].textContent, 'Claude Opus 5.5');
+});
+
+test('対話の Claude のモデルの札は名前があるときだけ出す', () => {
+  const node = (textContent = '') => ({ textContent, children: [], append(...children) { this.children.push(...children); } });
+  const context = pageContext(pageHtml, { element: (tag, className, text) => node(text) });
+  vm.runInContext(functionSource(pageHtml, 'appendSessionModelLine'), context);
+  for (const modelName of ['Opus 5.5', undefined]) {
+    const target = node();
+    context.appendSessionModelLine(target, { provider: 'claude', modelName });
+    if (modelName) assert.equal(target.children[0].children[0].textContent, 'Claude Opus 5.5');
+    else assert.equal(target.children.length, 0);
+  }
 });
 
 test('モックの非対話の行は稼働中の札で出し、状態推定と一覧からの除外を出さない', () => {
@@ -4345,7 +4401,7 @@ test('モックの非対話の行は稼働中の札で出し、状態推定と�
     absoluteTimeLabel: () => '',
     ESTIMATE_WAITING: {},
   });
-  vm.runInContext(['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), context);
+  vm.runInContext(['sessionOrigin', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), context);
 
   const nonInteractive = context.mainRow({}, {
     id: 'batch', status: 'unknown', nonInteractive: true, tasks: [], main: { tool: '', since: '3 分前' },
@@ -4359,6 +4415,12 @@ test('モックの非対話の行は稼働中の札で出し、状態推定と�
   const unknown = context.mainRow({}, { id: 'unknown', status: 'unknown', tasks: [], main: {} }, false);
   assert.match(unknown, /<strong>状態不明 \(時刻不明\)<\/strong>/);
   assert.match(unknown, /状態を推定/);
+  assert.doesNotMatch(unknown, /class="models"/);
+  const named = context.mainRow({}, { id: 'named', status: 'wait', modelName: 'Opus 5.5', tasks: [], main: {} }, false);
+  assert.match(named, /<span class="model claude">Claude Opus 5.5<\/span>/);
+  const namedNonInteractive = context.mainRow({}, { id: 'named-batch', status: 'unknown', nonInteractive: true,
+    modelName: 'Sonnet 5.5', tasks: [], main: {} }, false);
+  assert.match(namedNonInteractive, /<span class="model claude">Claude Sonnet 5.5<\/span>/);
 });
 
 test('非対話で状態が不明の行は更新時刻が古くても更新の無い帯へ隠さず、対話の不明な行は従来どおり隠す', () => {
@@ -4398,7 +4460,7 @@ test('非対話の行は作業中と待機中を対話と同じ文言と色に�
     absoluteTimeLabel: () => '',
     ESTIMATE_WAITING: {},
   });
-  vm.runInContext(['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), mockContext);
+  vm.runInContext(['sessionOrigin', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), mockContext);
 
   const cases = [
     { implSession: { status: '作業中', nonInteractive: true }, mockSession: { status: 'busy', nonInteractive: true }, label: '作業中', tone: 'busy' },
@@ -4439,4 +4501,273 @@ test('読み込み直すボタンは書きかけの回答が無ければ読み�
   assert.equal(withDraft.reloads, 0);
   assert.equal(withDraft.hidden, false);
   assert.match(withDraft.html, /data-reload-now>回答を消して読み込み直す</);
+});
+
+test('Codex が状態にあるときセッション、PR、「前回見てから」に起点帯を付ける', () => {
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.childNodes = this.children;
+      this.dataset = {};
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  class FakeText { constructor(text) { this.textContent = text; } }
+  const document = {
+    createElement: (tagName) => new FakeElement(tagName),
+    createTextNode: (text) => new FakeText(text),
+  };
+  const helpers = functionSource(pageHtml, 'element');
+  assert.ok(helpers);
+
+  const sessionContext = pageContext(pageHtml, {
+    document,
+    displayPreferences: { hideFinished: true },
+    sessionDisplayName: (session) => session.title,
+    sharedBranch: () => '',
+    shownPermissions: () => [],
+    shownActiveDecisions: () => [],
+    hasHiddenJudgmentItems: () => true,
+    isEndedDecision: () => false,
+    appendTasks() {},
+    mainRow: () => new FakeElement('div'),
+    appendAgents() {},
+    orderedSectionKeys: (keys) => keys,
+  });
+  vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'sessionOrigin')}\n${functionSource(pageHtml, 'sessionBlock')}`, sessionContext);
+  const claudeSession = sessionContext.sessionBlock({}, { title: 'Claude', decisions: [] }, true, true);
+  const codexSession = sessionContext.sessionBlock({}, { title: 'Codex', provider: 'codex', decisions: [] }, false, true);
+  assert.match(claudeSession.className, /origin-claude/);
+  assert.equal(claudeSession.dataset.origin, 'claude');
+  assert.match(codexSession.className, /origin-codex/);
+  assert.equal(codexSession.dataset.origin, 'codex');
+  assert.equal(codexSession.children[0].children[0].dataset.origin, undefined);
+  const claudeOnlySession = sessionContext.sessionBlock({}, { title: 'Claude', decisions: [] }, false, false);
+  assert.doesNotMatch(claudeOnlySession.className, /origin-(claude|codex|both)/);
+  assert.equal(claudeOnlySession.dataset.origin, undefined);
+  assert.equal(claudeOnlySession.children[0].children[0].dataset.origin, undefined);
+
+  const component = sourceBetween(pageHtml, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
+  assert.ok(component);
+  const prContext = pageContext(pageHtml, {
+    document,
+    queuedPullRequestMerge: () => null,
+    pullRequestMergeInFlight: new Set(),
+    pullRequestMergeConfirmations: new Map(),
+    pullRequestMergeMessages: new Map(),
+    pullRequestMergeConditionWaits: () => [],
+    appendPullRequestBadges() {},
+  });
+  vm.runInContext(`${helpers}\n${component}`, prContext);
+  const renderPr = (providers, showOriginBands = true) => {
+    const root = new FakeElement('div');
+    prContext.appendPullRequestTree(root, {}, { number: 1, title: 'PR', canMerge: false, providers, children: [] }, showOriginBands);
+    return root.children[0];
+  };
+  for (const [providers, origin] of [
+    [['codex'], 'codex'],
+    [['claude', 'codex'], 'both'],
+  ]) {
+    const row = renderPr(providers);
+    assert.match(row.className, new RegExp(`origin-${origin}`));
+    assert.equal(row.dataset.origin, origin);
+  }
+  const unmarkedPr = renderPr([]);
+  assert.doesNotMatch(unmarkedPr.className, /origin-/);
+  assert.equal(unmarkedPr.dataset.origin, undefined);
+  const claudeOnlyPr = renderPr(['claude'], false);
+  assert.doesNotMatch(claudeOnlyPr.className, /origin-(claude|codex|both)/);
+  assert.equal(claudeOnlyPr.dataset.origin, undefined);
+  const codexPrOnlyState = { sessions: [], pullRequests: [{ trees: [{ providers: ['codex'], children: [] }] }], sinceSeen: [] };
+  assert.equal(prContext.hasCodexOrigin(codexPrOnlyState), true);
+  const claudePrWithCodexOnlyInState = renderPr(['claude'], prContext.hasCodexOrigin(codexPrOnlyState));
+  assert.match(claudePrWithCodexOnlyInState.className, /origin-claude/);
+
+  const product = { key: 'origin-test', name: 'Origin test' };
+  const seenContext = pageContext(pageHtml, {
+    document,
+    lastState: {},
+    visibleSinceSeen: () => [{ product, items: [
+      { text: 'Claude', provider: 'claude' },
+      { text: 'Codex', provider: 'codex' },
+      { text: 'Both', providers: ['claude', 'codex'] },
+      { text: 'Unknown' },
+    ] }],
+  });
+  vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'providerOrigin')}\n${functionSource(pageHtml, 'sinceSeenBox')}`, seenContext);
+  const hiddenOrigins = seenContext.sinceSeenBox(product, false, false).children[1].children;
+  assert.equal(hiddenOrigins.some((item) => /origin-(claude|codex|both)/.test(item.className) || item.dataset?.origin), false);
+  const listItems = seenContext.sinceSeenBox(product, false, true).children[1].children;
+  for (const [item, origin] of listItems.slice(0, 3).map((item, index) => [item, ['claude', 'codex', 'both'][index]])) {
+    assert.match(item.className, new RegExp(`origin-${origin}`));
+    assert.equal(item.dataset.origin, origin);
+  }
+  assert.equal(listItems[3].className, '');
+  assert.equal(listItems[3].dataset.origin, undefined);
+});
+
+test('起点帯の判定は非表示セッション、PR の履歴、新着まで状態全体を調べる', () => {
+  const context = pageContext(pageHtml, {});
+  vm.runInContext(functionSource(pageHtml, 'hasCodexOrigin'), context);
+  const claudeOnly = { sessions: [{ provider: 'claude' }], pullRequests: [{
+    trees: [{ providers: ['claude'], children: [] }],
+    mergeHistory: [{ providers: ['claude'] }],
+    merged: [{ providers: ['claude'] }],
+  }], sinceSeen: [{ items: [{ provider: 'claude' }] }] };
+  assert.equal(context.hasCodexOrigin(claudeOnly), false);
+  for (const state of [
+    { ...claudeOnly, sessions: [{ provider: 'codex', hidden: true, finished: true }] },
+    { ...claudeOnly, pullRequests: [{ trees: [{ providers: ['codex'], children: [] }], mergeHistory: [], merged: [] }] },
+    { ...claudeOnly, pullRequests: [{ trees: [], mergeHistory: [{ providers: ['codex'] }], merged: [] }] },
+    { ...claudeOnly, pullRequests: [{ trees: [], mergeHistory: [], merged: [{ providers: ['claude', 'codex'] }] }] },
+    { ...claudeOnly, sinceSeen: [{ items: [{ providers: ['codex'] }] }] },
+  ]) assert.equal(context.hasCodexOrigin(state), true);
+
+  const mockContext = pageContext(mockHtml, { DATA: { products: [{
+    sessions: [{ provider: 'claude' }], extraSessions: [], prs: [{ providers: ['claude'] }], closedPrs: [], news: [],
+  }] } });
+  vm.runInContext(functionSource(mockHtml, 'hasCodexOrigin'), mockContext);
+  assert.equal(mockContext.hasCodexOrigin(), false);
+  vm.runInContext(`${functionSource(mockHtml, 'providerOrigin')}\n${functionSource(mockHtml, 'originAttributes')}`, mockContext);
+  assert.equal(mockContext.originAttributes(['claude'], false), '');
+  assert.equal(mockContext.originAttributes(['claude'], true), ' class="origin-claude" data-origin="claude"');
+  mockContext.DATA.products[0].prs.push({ providers: ['codex'] });
+  assert.equal(mockContext.hasCodexOrigin(), true);
+
+  const mockSessionContext = pageContext(mockHtml, {
+    ui: { hideFinished: true },
+    esc: (value) => String(value),
+    visibleDecisions: () => [], visiblePerms: () => [], hasHiddenJudgmentItems: () => true,
+    sessionDisplayName: (session) => session.title, sharedBranch: () => '', orderedSectionKeys: (keys) => keys,
+    taskSessionBlock: () => '', mainRow: () => '', agentSection: () => '',
+  });
+  vm.runInContext(`${functionSource(mockHtml, 'sessionOrigin')}\n${functionSource(mockHtml, 'sessionBlock')}`, mockSessionContext);
+  const mockSessionProduct = { sessions: [{}] };
+  const mockClaudeSession = { title: 'Claude', decisions: [] };
+  assert.doesNotMatch(mockSessionContext.sessionBlock(mockSessionProduct, mockClaudeSession, false), /origin-claude|data-origin/);
+  const markedMockSession = mockSessionContext.sessionBlock(mockSessionProduct, mockClaudeSession, true);
+  assert.match(markedMockSession, /class="session-group single origin-claude" data-origin="claude"/);
+  assert.doesNotMatch(markedMockSession, /session-context" data-origin=/);
+});
+
+function renderedKindOriginRows(provider, showOriginBands) {
+  class FakeElement {
+    constructor(tagName, className = '', textContent = '') {
+      this.tagName = tagName;
+      this.className = className;
+      this.textContent = textContent;
+      this.children = [];
+      this.childNodes = this.children;
+      this.dataset = {};
+    }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+  const element = (tagName, className = '', textContent = '') => new FakeElement(tagName, className, textContent);
+  const context = pageContext(pageHtml, {
+    document: { createTextNode: text => ({ textContent: text }) },
+    element,
+    activityStatus: () => ({ tone: 'wait', label: '待機中' }),
+    newestFirst: items => items,
+    durationAgoLabel: () => '',
+    relativeTimeElement: () => element('time'),
+    appendContextTags() {},
+    appendUnknownSessionControls() {},
+    appendSessionModelLine() {},
+    appendModelLine() {},
+    badge: () => element('span'),
+    displayPreferences: { hideFinished: true },
+    isFilterShown: () => true,
+    isEndedAgent: () => false,
+    taskVisibility: () => ({ visible: [], todoCount: 0, doneCount: 0 }),
+  });
+  const functions = ['sessionOrigin', 'mainRow', 'appendAgents', 'appendKindTaskSession']
+    .map(name => functionSource(pageHtml, name));
+  vm.runInContext(functions.join('\n'), context);
+  const session = {
+    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], agents: [{ active: true, agent_type: 'worker' }],
+  };
+  const activity = context.mainRow(session, {}, true, false, showOriginBands);
+  const agentBody = element('div');
+  context.appendAgents(agentBody, session, {}, false, false, false, false, showOriginBands);
+  const agent = agentBody.children.find(node => node.className === 'agent-list').children[0];
+  const taskBody = element('div');
+  context.appendKindTaskSession(taskBody, { product: {}, session, multipleSessions: false }, false, false, showOriginBands);
+  return [activity, agent, taskBody.children[0]];
+}
+
+function renderedMockKindOriginRows(provider, showOriginBands) {
+  const context = pageContext(mockHtml, {
+    ui: { estimatedSessions: [], closedAgents: [], expandedKindTodoTasks: false },
+    taskState: (_session, task) => task.state,
+    taskVisibility: () => ({ visible: [], doneCount: 0 }),
+    taskItem: () => '',
+    sessionTag: () => '',
+    esc: value => String(value ?? ''),
+    renderToolLine: () => '',
+    modelLine: () => '',
+    routeTag: () => '',
+    unknownSessionControls: () => '',
+    isClosedByUser: () => false,
+    isBusyAgent: () => true,
+    isUnconfirmed: () => false,
+    isClosable: () => false,
+  });
+  const functions = ['sessionOrigin', 'mainRow', 'agentRow', 'kindTaskSessionBlock']
+    .map(name => functionSource(mockHtml, name));
+  vm.runInContext(functions.join('\n'), context);
+  const session = { provider, status: 'wait', tasks: [], main: { tool: '—', since: '1 分前' } };
+  return [
+    context.mainRow({}, session, true, showOriginBands),
+    context.agentRow({}, session, { type: 'worker', state: 'busy', since: '1 分前' }, true, showOriginBands),
+    context.kindTaskSessionBlock({}, session, false, showOriginBands).html,
+  ];
+}
+
+test('種類別のタスクと作業行はセッションの起点色で帯を表示する', () => {
+  for (const [provider, origin] of [['claude', 'claude'], ['codex', 'codex']]) {
+    for (const row of renderedKindOriginRows(provider, true)) {
+      assert.match(row.className, new RegExp(`origin-${origin}`));
+      assert.equal(row.dataset.origin, origin);
+    }
+    for (const row of renderedMockKindOriginRows(provider, true)) {
+      assert.match(row, new RegExp(`origin-${origin}`));
+      assert.match(row, new RegExp(`data-origin="${origin}"`));
+    }
+  }
+});
+
+test('サブエージェントの種類別の帯は親セッションの provider を使う', () => {
+  const [, agent] = renderedKindOriginRows('codex', true);
+  assert.match(agent.className, /origin-codex/);
+  assert.equal(agent.dataset.origin, 'codex');
+});
+
+test('種類別の起点帯を表示しないときはタスクと作業行に起点属性を付けない', () => {
+  for (const row of renderedKindOriginRows('codex', false)) {
+    assert.doesNotMatch(row.className, /origin-(claude|codex|both)/);
+    assert.equal(row.dataset.origin, undefined);
+  }
+  for (const row of renderedMockKindOriginRows('codex', false)) {
+    assert.doesNotMatch(row, /origin-(claude|codex|both)|data-origin=/);
+  }
+});
+
+test('種類別のタスクと作業行の帯は画面とモックで既存の起点色を使う', () => {
+  for (const html of [pageHtml, mockHtml]) {
+    for (const origin of ['claude', 'codex']) {
+      for (const selector of [`.kind-session-tasks.origin-${origin}::before`, `.now-row.origin-${origin}::before`, `.agent-row.origin-${origin}::before`]) {
+        const style = Object.fromEntries(cssDeclarations(html, selector));
+        const rowStyle = Object.fromEntries(cssDeclarations(html, selector.replace('::before', '')));
+        assert.equal(style.position, 'absolute');
+        assert.equal(style.width, '3px');
+        assert.equal(style.background, `var(--origin-${origin})`);
+        assert.equal(rowStyle['padding-left'], '10px');
+      }
+    }
+  }
 });

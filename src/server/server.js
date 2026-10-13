@@ -2,16 +2,17 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
 const { RoutingState } = require('./routing');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers');
-const { readTaskNotifications } = require('./transcript');
+const { readTaskNotifications, readSessionModel } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { isShortSessionId } = require('./session-ids');
-const { listLiveSessionFiles, findLiveSessionIdByPid } = require('./session-files');
+const { listLiveSessionFiles, findLiveSessionIdByPid, processIsAlive } = require('./session-files');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
 const { DEFAULT_PORT, APP_NAME } = require('./server-constants');
@@ -278,10 +279,11 @@ function createRequestHandler(options) {
     openExternalUrl,
     webPath,
     scheduleTaskNotifications: (sessionId) => options.scheduleTaskNotifications?.(sessionId),
+    scheduleSessionModel: (event) => options.scheduleSessionModel?.(event),
   };
   const { handleHealth, handleState, handleContext, handleDevFields, handleIndex } = createReadRoutes(ctx);
   const { handleHookAnswers, handleEvents, handlePlan, handleSessionPullRequests } = createHookRoutes(ctx);
-  const { handleReviewSkip, handlePullRequestAction, handleMergeResultClose } = createPullRequestRoutes(ctx);
+  const { handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
   const {
     handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks,
     handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
@@ -310,6 +312,7 @@ function createRequestHandler(options) {
     { method: 'POST', path: '/api/hidden-sessions', auth: 'ui', body: 'json', handler: handleHiddenSessions },
     { method: 'POST', path: '/api/display', auth: 'ui', body: 'json', handler: handleDisplay },
     { method: 'POST', path: '/api/pull-requests/merge-result/close', auth: 'ui', body: 'json', handler: handleMergeResultClose },
+    { method: 'POST', path: '/api/pull-requests/repository/unregister', auth: 'ui', body: 'json', handler: handleRepositoryUnregister },
     { method: 'POST', path: '/api/seen', auth: 'ui', body: 'json', handler: handleSeen },
     { method: 'POST', path: '/api/closed-tasks', auth: 'ui', body: 'json', handler: handleClosedTasks },
     { method: 'POST', path: '/api/closed-agents', auth: 'ui', body: 'json', handler: handleClosedAgents },
@@ -392,12 +395,25 @@ async function hasSessionJsonFiles(claudeHome) {
   }
 }
 
+// thread-writer-locks は公開仕様ではないため、読めないときはロックで判断しない。
+// デスクトップのアーカイブでは SessionEnd が届かないため、ロックの消失で終了を判断する。
+async function listCodexThreadLocks(codexHome) {
+  try {
+    const entries = await fs.readdir(path.join(codexHome, 'thread-writer-locks'), { withFileTypes: true });
+    return new Set(entries.filter((entry) => entry.isFile() && !entry.name.startsWith('.') && entry.name.endsWith('.lock'))
+      .map((entry) => entry.name.slice(0, -5)));
+  } catch {
+    return null;
+  }
+}
+
 async function startServer(options = {}) {
   for (const key of Object.keys(process.env)) {
     if (isGithubCredentialEnvironmentVariable(key)) delete process.env[key];
   }
   const homeDir = cockpitHomeFromOptions(options);
   const claudeHome = claudeHomeFromOptions(options);
+  const codexHome = options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
   const port = options.port === undefined ? DEFAULT_PORT : Number(options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('port must be between 0 and 65535');
   const dev = Boolean(options.dev);
@@ -439,9 +455,38 @@ async function startServer(options = {}) {
   const notificationTimers = new Map();
   const notificationReads = new Map();
   const notificationReader = options.readTaskNotifications || readTaskNotifications;
+  const modelTimers = new Map();
+  const modelReads = new Map();
+  const observedModelSessions = new Map();
+  const modelReader = options.readSessionModel || readSessionModel;
+  function scheduleSessionModel(event) {
+    const sessionId = event.session_id;
+    const known = state.sessions.has(sessionId) || Boolean(state.sessionFileFor(sessionId));
+    if (closing || !known || state.providerForSession(sessionId) === 'codex' || event.agent_id) return;
+    const cwd = state.sessionFileFor(sessionId)?.cwd;
+    const firstSeen = !observedModelSessions.has(sessionId) || observedModelSessions.get(sessionId) !== cwd;
+    observedModelSessions.set(sessionId, cwd);
+    if (!firstSeen && !['Stop', 'SessionStart'].includes(event.hook_event_name)) return;
+    if (modelTimers.has(sessionId)) return;
+    const timer = setTimeout(async () => {
+      await modelReads.get(sessionId);
+      modelTimers.delete(sessionId);
+      if (closing) return;
+      const reading = (async () => {
+        try {
+          const model = await modelReader(claudeHome, state.sessionFileFor(sessionId)?.cwd, sessionId);
+          if (!closing) state.recordSessionModel(sessionId, model);
+        } catch {}
+      })().finally(() => modelReads.delete(sessionId));
+      modelReads.set(sessionId, reading);
+      await reading;
+    }, options.sessionModelDelayMs ?? 500);
+    timer.unref();
+    modelTimers.set(sessionId, timer);
+  }
   function needsTaskNotifications(sessionId) {
     const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
-    return session?.status === '待機中(サブエージェント稼働中)'
+    return session?.provider !== 'codex' && session?.status === '待機中(サブエージェント稼働中)'
       && session.agents.some((agent) => !agent.isCodex && agent.active);
   }
   function reconcileTaskNotifications(sessionId) {
@@ -490,6 +535,7 @@ async function startServer(options = {}) {
     manualDir: options.manualDir,
     dev,
     scheduleTaskNotifications,
+    scheduleSessionModel,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
   });
@@ -515,11 +561,15 @@ async function startServer(options = {}) {
   logLine(homeDir, `started on 127.0.0.1:${info.port}`);
   pullRequestTracker.start();
   pullRequestMergeManager.start?.();
-  async function refreshSessionFiles() {
-    const files = await listLiveSessionFiles(claudeHome);
-    if (files) state.syncSessionFiles(files.map((file) => ({ ...file, product: productFromCwd(file.cwd) })));
-    // 読めないときは生死を判定できないので同期せず、猶予の後の期限切れの片付けだけを進める。
-    else state.pruneExpiredStoreRecords(Date.now());
+  async function refreshSessionFiles(now = Date.now()) {
+    const files = await listLiveSessionFiles(claudeHome, { isAlive: options.isAlive || processIsAlive });
+    const locks = await listCodexThreadLocks(codexHome);
+    const codexFiles = state.liveCodexSessionFiles(options.isAlive || processIsAlive, locks);
+    state.syncSessionFiles([...(files || []), ...codexFiles]
+      .map((file) => ({ ...file, product: productFromCwd(file.cwd) })), now, { codexOnly: files === null });
+    // Claude の一覧を読めないときは生死を保留し、保存の期限切れの片付けだけを進める。
+    if (!files) state.pruneExpiredStoreRecords(now);
+    for (const session of state.snapshot().sessions) scheduleSessionModel(session);
   }
   await refreshSessionFiles().catch(() => {});
   for (const session of state.snapshot().sessions) scheduleTaskNotifications(session.session_id);
@@ -547,6 +597,9 @@ async function startServer(options = {}) {
       clearInterval(notificationTimer);
       for (const timer of notificationTimers.values()) clearTimeout(timer);
       notificationTimers.clear();
+      for (const timer of modelTimers.values()) clearTimeout(timer);
+      modelTimers.clear();
+      await Promise.all(modelReads.values());
       await Promise.all(notificationReads.values());
       answerDelivery.close();
       pullRequestMergeManager.close?.();
@@ -559,7 +612,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
+  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, info, homeDir, close, refreshSessionFiles };
 }
 
 function parseArguments(argv) {

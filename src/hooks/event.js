@@ -1,6 +1,9 @@
 const { cockpitHomeFromOptions } = require('../server/identity');
-const { sanitizeQuestions, sanitizeDecisionResolution } = require('../server/events');
+const { isHookSessionId } = require('../server/session-ids');
+const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
 const { readRouting } = require('../server/routing');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const {
   HOOK_TIMEOUT_MS,
   acquireStartLock,
@@ -20,6 +23,52 @@ const {
   shouldRefreshPullRequests,
 } = require('../server/pull-request-utils');
 
+const execFileAsync = promisify(execFile);
+// 会話の開始時は Codex 本体とほかのフックが同時に動き、照会に 3 秒を超えることがある。待つのは SessionStart だけで、超えるとプロセス ID を記録できない。
+const CODEX_PARENT_TIMEOUT_MS = 8000;
+
+async function findCodexParentPid() {
+  const deadline = Date.now() + CODEX_PARENT_TIMEOUT_MS;
+  let pid = process.ppid;
+  if (process.platform === 'win32') {
+    // Get-CimInstance は 1 回の呼び出しに 1 秒以上かかり、段ごとに呼ぶと上限を超えるため、全プロセスを 1 回で取って手元でたどる。
+    const script = '$processes = @{}; Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name | ' +
+      'ForEach-Object { $processes[[int]$_.ProcessId] = $_ }; ' +
+      `$ancestorPid = ${pid}; for ($depth = 0; $depth -lt 4 -and $ancestorPid -gt 0; $depth++) { ` +
+      '$ancestor = $processes[[int]$ancestorPid]; ' +
+      'if (!$ancestor) { break }; if ($ancestor.Name -match "^(?i:codex(?:\\.exe)?)$") { ' +
+      '$ancestor.ProcessId; break }; $ancestorPid = $ancestor.ParentProcessId }';
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      timeout: CODEX_PARENT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4096,
+    });
+    const found = Number(stdout.trim());
+    return Number.isInteger(found) && found > 0 ? found : null;
+  }
+  for (let depth = 0; depth < 4 && pid > 0; depth += 1) {
+    const timeout = deadline - Date.now();
+    if (timeout <= 0) return null;
+    const { stdout } = await execFileAsync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { timeout, maxBuffer: 4096 });
+    const match = stdout.trim().match(/^(\d+)\s+(.+)$/);
+    if (!match) return null;
+    if (/^codex(?:\.exe)?$/i.test(match[2].trim())) return pid;
+    pid = Number(match[1]);
+  }
+  return null;
+}
+
+async function codexParentPid(findParent, timeoutMs = CODEX_PARENT_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(findParent),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function pickString(value) {
   return typeof value === 'string' ? value : '';
@@ -247,7 +296,7 @@ function codexOutputLines(value) {
   return Object.keys(lines).length ? lines : null;
 }
 
-function makeHookEvent(input, now = Date.now()) {
+function makeHookEvent(input, now = Date.now(), options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const eventName = pickString(input.hook_event_name);
   if (!eventName) return null;
@@ -259,12 +308,49 @@ function makeHookEvent(input, now = Date.now()) {
     hookAt: now,
     input_fields: Object.keys(input).slice(0, 64),
   };
+  const isCodex = options.provider === 'codex';
+  if (!isCodex && eventName === 'SessionStart' && typeof input.model === 'string') {
+    event.model = pickString(input.model).slice(0, 160);
+  }
+  if (isCodex) {
+    event.provider = 'codex';
+    event.model = pickString(input.model).slice(0, 160);
+    const parentSessionId = (options.environment || process.env).CLAUDE_CODE_SESSION_ID;
+    if (isHookSessionId(parentSessionId)) event.claudeParentSessionId = parentSessionId;
+  }
   if (eventName === 'SessionStart') event.source = pickString(input.source).slice(0, 100);
   for (const key of ['agent_id', 'agent_type']) {
     if (typeof input[key] === 'string') event[key] = input[key];
   }
 
-  if (eventName === 'PreToolUse') {
+  if (eventName === 'PermissionRequest') {
+    event.tool_name = pickString(input.tool_name);
+    event.summary = inputSummary(event.tool_name, input.tool_input);
+  } else if (isCodex && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName)) {
+    event.tool_name = pickString(input.tool_name);
+    event.tool_use_id = pickString(input.tool_use_id);
+    if (eventName === 'PreToolUse') {
+      event.summary = inputSummary(event.tool_name, input.tool_input);
+      if (event.tool_name === 'Bash') {
+        const command = pickString(input.tool_input?.command);
+        if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
+        if (shouldRefreshPullRequests(command)) event.refreshPullRequestsCommand = true;
+      }
+      if (isQuestionTool('codex', event.tool_name) && !input.agent_id) {
+        event.questions = sanitizeCodexQuestions(event.tool_name, input.tool_input?.questions);
+      }
+    } else if (event.tool_name === 'Bash') {
+      const command = pickString(input.tool_input?.command);
+      if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
+      if (shouldRefreshPullRequests(command)) event.refreshPullRequests = true;
+      const pullRequest = eventName === 'PostToolUse' ? firstPullRequestUrl(input.tool_response) : null;
+      if (pullRequest) {
+        event.pullRequest = pullRequest;
+        const commandCwd = pullRequestCommandCwd(command, input.cwd);
+        if (commandCwd) event.commandCwd = commandCwd;
+      }
+    }
+  } else if (eventName === 'PreToolUse') {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
     event.summary = inputSummary(event.tool_name, input.tool_input);
@@ -347,10 +433,14 @@ async function postEvent(event, options = {}) {
 }
 
 async function runHook(input, options = {}) {
-  const event = makeHookEvent(input, options.now === undefined ? Date.now() : options.now);
+  const event = makeHookEvent(input, options.now === undefined ? Date.now() : options.now, options);
   if (!event) return { exitCode: 0, additionalContext: null };
+  if (event.provider === 'codex' && event.hook_event_name === 'SessionStart') {
+    const pid = await codexParentPid(options.findCodexParentPid || findCodexParentPid, options.codexParentTimeoutMs);
+    if (Number.isInteger(pid) && pid > 0) event.codexPid = pid;
+  }
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
-  if (event.hook_event_name === 'SubagentStart') event.route = (await readRouting(homeDir)).agents;
+  if (event.provider !== 'codex' && event.hook_event_name === 'SubagentStart') event.route = (await readRouting(homeDir)).agents;
   let dashboardUrl = null;
 
   if (event.hook_event_name === 'SessionStart') {
@@ -388,7 +478,7 @@ async function readStdin(stream = process.stdin) {
 async function main() {
   try {
     const input = JSON.parse(await readStdin());
-    const result = await runHook(input);
+    const result = await runHook(input, { provider: process.argv[2] === 'codex' ? 'codex' : 'claude' });
     if (result.additionalContext) {
       process.stdout.write(`${JSON.stringify({
         hookSpecificOutput: {

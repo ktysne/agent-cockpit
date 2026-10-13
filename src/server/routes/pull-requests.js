@@ -87,6 +87,19 @@ function createPullRequestRoutes(ctx) {
     jsonResponse(response, result.ok ? 200 : result.status, result.ok ? result : { error: result.error });
   }
 
+  async function handleRepositoryUnregister({ response, body }) {
+    if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      Object.keys(body).sort().join(',') !== 'owner,repo' ||
+      !validRepositoryPart(body.owner) || !validRepositoryPart(body.repo)) {
+      jsonResponse(response, 400, { error: 'Invalid request' });
+      return;
+    }
+    const deleted = await pullRequestTracker.unregisterUnknownRepository(body.owner, body.repo);
+    if (deleted) await state.flushStoreWrite();
+    await state.waitForPersistence();
+    jsonResponse(response, 200, { deleted });
+  }
+
   async function handleMergeResultClose({ response, body }) {
     if (!body || typeof body !== 'object' || Array.isArray(body) ||
       Object.keys(body).sort().join(',') !== 'number,owner,repo' ||
@@ -104,7 +117,7 @@ function createPullRequestRoutes(ctx) {
     jsonResponse(response, 200, { closed: true });
   }
 
-  return { handleReviewSkip, handlePullRequestAction, handleMergeResultClose };
+  return { handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister };
 }
 
 module.exports = { createPullRequestRoutes };
