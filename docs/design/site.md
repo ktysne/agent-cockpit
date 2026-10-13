@@ -67,6 +67,7 @@ Claude Code のメインは Opus 5.5(`claude-opus-5-5`)、Codex のメインは 
 配信スクリプト `tools/site-deploy.js` が、FTPS で https://ktysne.info/agent-cockpit/ へ送る。
 送る処理は agent-limit-checker の `tools/release-site.js` と同じで、`basic-ftp` を開発用の依存として使う。
 開発用の依存は配信する人だけが入れるので、利用者が `npm install` をしなくてよい方針は変わらない。
+配信には Node.js 22.15.0 以上が要る。npm のスクリプトが、OS の証明書を使う `--use-system-ca` を付けて起動するためである。
 
 ### 送る手順
 
@@ -76,6 +77,8 @@ Claude Code のメインは Opus 5.5(`claude-opus-5-5`)、Codex のメインは 
 4. `npm run site:deploy` で送る。
 
 画像を撮り直した後も、同じ手順で送る。
+通信が切れて途中で止まったときも、もう一度送れば揃う。
+置き換えの途中で止まると、配信先に `.uploading` や `.previous` の付いたファイルが残ることがあるが、公開するファイルは次の配信で置かれる。
 
 ### 送る対象
 
