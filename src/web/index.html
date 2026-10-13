@@ -724,6 +724,19 @@ const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
 const pullRequestReservationPending = new Map();
+// 操作の成功後に状態を取り直せなかった PR は、操作より後に始めた取得が反映されるまで、古い mergeIntent や操作の口を出さない。
+// 値は記録時点の取得の連番で、それ以前に始めた遅い応答では解除しない。
+const pullRequestUnconfirmedResults = new Map();
+const PULL_REQUEST_RESULT_UNCONFIRMED = '操作は完了しましたが、最新の PR の状態を取得できていません。接続が戻るまで操作を止めています。';
+let refreshSequence = 0;
+let appliedRefreshSequence = 0;
+
+function pullRequestResultUnconfirmed(key) {
+  if (!pullRequestUnconfirmedResults.has(key)) return false;
+  if (appliedRefreshSequence <= pullRequestUnconfirmedResults.get(key)) return true;
+  pullRequestUnconfirmedResults.delete(key);
+  return false;
+}
 // 常駐サーバーはキューに入れた時点でマージの意図を消し、キューの所属も取れないので、キューに入れた PR は画面で覚えておく。
 // GitHub でキューから外れても分からないため、head が変わったときと、利用者が外れたと知らせたときに忘れる。
 const queuedPullRequestMerges = new Map();
@@ -2691,7 +2704,8 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   // 常駐サーバーは gh でマージしている間だけ一覧に mergeIntent を付ける。
   // 確認欄から実行中の操作は応答で結果が分かるので、それまでは確認欄の「処理中…」を出し続ける。
   const shownInConfirmation = Boolean(confirmation) && pullRequestMergeInFlight.has(mergeKey);
-  const mergeInProgress = Boolean(pullRequest.mergeIntent) && !queued && !shownInConfirmation;
+  const unconfirmed = Boolean(mergeKey) && pullRequestResultUnconfirmed(mergeKey);
+  const mergeInProgress = Boolean(pullRequest.mergeIntent) && !queued && !shownInConfirmation && !unconfirmed;
   const mergeIntent = queued || mergeInProgress;
   const waiting = pullRequest.canMerge ? pullRequestMergeConditionWaits(pullRequest) : [];
   const conditionMet = pullRequest.canMerge === true && waiting.length === 0;
@@ -2724,7 +2738,7 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
       left.title = 'GitHub でキューから外れたときに押すと、マージの操作に戻る';
       actions.append(left);
     }
-  } else if (mergeKey && !shownInConfirmation && (reservation || pullRequest.canMerge)) {
+  } else if (mergeKey && !shownInConfirmation && !unconfirmed && (reservation || pullRequest.canMerge)) {
     if (conditionMet) actions.append(element('span', 'merge-state ok', 'マージできます'));
     else if (pullRequest.canMerge) actions.append(element('span', 'merge-state', 'マージ操作は可能'));
     const merge = element('button', `merge-btn ${conditionMet ? '' : 'outline'}`.trim(), 'マージする');
@@ -2776,6 +2790,11 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   const mergeMessage = mergeKey ? pullRequestMergeMessages.get(mergeKey) : null;
   if (mergeMessage && !pullRequestTransientNoticeExpired(mergeMessage.shownAt)) {
     const message = element('div', 'merge-error', mergeMessage.message);
+    message.setAttribute('role', 'status');
+    item.append(message);
+  }
+  if (unconfirmed) {
+    const message = element('div', 'merge-error', PULL_REQUEST_RESULT_UNCONFIRMED);
     message.setAttribute('role', 'status');
     item.append(message);
   }
@@ -4502,8 +4521,11 @@ async function runPullRequestAction({ button, key, inFlight, messages, startedMe
     }
     await onSuccess(result);
     messages.delete(key);
-    await refresh();
-    liveStatus.textContent = successMessage(result);
+    const sequenceBeforeRefresh = refreshSequence;
+    const refreshed = await refresh();
+    const unconfirmed = refreshed === false && inFlight === pullRequestMergeInFlight;
+    if (unconfirmed) pullRequestUnconfirmedResults.set(key, sequenceBeforeRefresh);
+    liveStatus.textContent = unconfirmed ? PULL_REQUEST_RESULT_UNCONFIRMED : successMessage(result);
   } catch {
     const message = '操作結果を取得できませんでした。PR の状態を取り直してください。';
     recordPullRequestTransientMessage(messages, key, message);
@@ -5068,16 +5090,22 @@ function reloadNow(event) {
 reloadNote.addEventListener('click', reloadNow);
 
 async function refresh() {
+  const sequence = ++refreshSequence;
   try {
     const response = await fetchUi('/api/state', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const state = await response.json();
     if (checkUiVersion(state)) return;
+    // 後に始めた取得の応答を反映済みなら、遅れて届いた古い応答で表示を戻さない。
+    if (sequence < appliedRefreshSequence) return true;
     await syncDisplayPreferences(state.display);
+    if (sequence < appliedRefreshSequence) return true;
     lastStateAt = new Date();
     connectionLost = false;
     updateConnectionNote();
     lastState = state;
+    appliedRefreshSequence = Math.max(appliedRefreshSequence, sequence);
+    const hadUnconfirmedResults = pullRequestUnconfirmedResults.size > 0;
     if (refreshConfirmPending && !hasUnsentAnswerDraft(state)) setRefreshConfirmPending(false);
     const awayBefore = header.dataset.away;
     applyAwayState(state.away);
@@ -5087,7 +5115,7 @@ async function refresh() {
     const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
     const pullRequestExpiry = pullRequestExpirySignature(state.pullRequests);
     const pullRequestExpiryChanged = pullRequestExpiry !== renderedPullRequestExpirySignature;
-    if (state.version === lastVersion && (sinceSeenVisibilityChanged || pullRequestExpiryChanged)) {
+    if (state.version === lastVersion && (sinceSeenVisibilityChanged || pullRequestExpiryChanged || hadUnconfirmedResults)) {
       render(state);
       renderedPullRequestExpirySignature = pullRequestExpiry;
     }
@@ -5100,11 +5128,13 @@ async function refresh() {
       const judgmentCounts = countJudgments(visibleSessions);
       liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${judgmentCounts.permission} 件)、判断待ち (${judgmentCounts.decisions} 件)。`;
     }
+    return true;
   } catch {
     connectionLost = true;
     updateConnectionNote();
     liveStatus.textContent = '常駐サーバーに接続できません。';
     if (!hasRenderedState) root.replaceChildren(element('div', 'error-box', '状態を取得できません。常駐サーバーが起動しているか確認してください。'));
+    return false;
   }
 }
 

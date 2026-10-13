@@ -47,7 +47,7 @@ function mergeTargetConfirmation(pullRequest) {
   const context = pageContext(pageHtml, {
     element, document: { createTextNode: text => element('text', '', text) },
     pullRequestMergeKey: () => 'pr-key', pullRequestMergeOptions: new Map([['pr-key', { method: 'squash', deleteBranch: true }]]),
-    pullRequestMergeInFlight: new Set(), pullRequestMergeConditionWaits: () => [], crossReviewState: () => ({}),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestMergeConditionWaits: () => [], crossReviewState: () => ({}),
     shortShaElement: () => element('code', '', 'a'.repeat(7)),
     MERGE_METHOD_LABELS: { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' },
   });
@@ -1458,7 +1458,7 @@ test('マージと予約の確認欄は警告と照合用 SHA を表示する', 
     },
     displayPreferences: {},
     pullRequestMergeOptions: new Map(),
-    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
   });
   vm.runInContext(`${helpers}\n${component}`, context);
 
@@ -1609,7 +1609,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
     pullRequestMergeMessages: new Map(),
     queuedPullRequestMerges: new Map(),
     queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestReviewSkipInFlight: new Set(),
     pullRequestConflictConfirmations: new Set(),
     pullRequestConflictMessages: new Map(),
@@ -2825,7 +2825,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     pullRequestMergeConfirmations: new Map([[key, 'merge']]),
     pullRequestMergeOptions: new Map([[key, { method: 'rebase', deleteBranch: false }]]),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     displayPreferences: {},
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
@@ -2944,7 +2944,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
       createTextNode: (text) => new FakeText(text),
       addEventListener: (name, handler) => { if (name === 'click') documentClickHandler = handler; },
     },
-    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
+    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestConflictConfirmations: conflictConfirmations, pullRequestConflictMessages: conflictMessages, pullRequestConflictInFlight: conflictInFlight,
     lastState: { sessions: [{ session_id: 'session-pr', title: 'Feature session' }, { session_id: 'session-codex', provider: 'codex' }], pullRequests: [group] },
     appendPullRequestBadges() {},
@@ -3093,7 +3093,7 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
     pullRequestMergeOptions: new Map([[key, { method: 'merge', deleteBranch: true }]]),
     pullRequestMergeConfirmations: new Map(),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestMergeResults: new Map(),
     nextPullRequestMergeResultId: 0,
     CI_LABELS: { pass: { wait: 'CI 成功' }, unknown: { wait: 'CI 状態不明' } },
@@ -3498,7 +3498,7 @@ test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操�
     pullRequestMergeMessages: new Map([[mergeKey, { message: 'PR の状態が変わりました。表示を確認してください。', shownAt: startedAt }]]),
     queuedPullRequestMerges: new Map(),
     queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestReviewSkipInFlight: new Set(),
     pullRequestConflictConfirmations: new Set(),
     pullRequestConflictMessages: new Map([[conflictKey, { message: '操作結果を取得できませんでした。PR の状態を取り直してください。', shownAt: startedAt }]]),
@@ -3565,7 +3565,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
   let renders = 0;
   let signature = 'reservation:visible';
   const context = pageContext(pageHtml, {
-    fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], pullRequests: [], away: { enabled: false } }) }),
+    refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], pullRequests: [], away: { enabled: false } }) }),
     checkUiVersion: () => false,
     syncDisplayPreferences: async () => {},
     pullRequestExpirySignature: () => signature,
@@ -4311,7 +4311,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
     let renders = 0;
     let index = 0;
     const context = pageContext(pageHtml, {
-      fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
+      refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
       checkUiVersion: () => false,
       syncDisplayPreferences: async () => {},
       pullRequestExpirySignature: () => '',
@@ -4656,7 +4656,7 @@ test('Codex が状態にあるときセッション、PR、「前回見てから
   const prContext = pageContext(pageHtml, {
     document,
     queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(),
+    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0,
     pullRequestMergeConfirmations: new Map(),
     pullRequestMergeMessages: new Map(),
     pullRequestMergeConditionWaits: () => [],
