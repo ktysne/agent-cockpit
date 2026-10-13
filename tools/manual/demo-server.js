@@ -160,6 +160,12 @@ async function startDemoServer(options = {}) {
       codexAgentScriptExists: async () => integrations.codexAgent,
       crossReviewToolExists: async () => integrations.crossReview,
       openExternalUrl: async () => {},
+      // Claude のメインのモデルは transcript から読む。デモには transcript が無いので、シナリオのセッションの model を返す。
+      readSessionModel: async (_claudeHome, _cwd, sessionId) => {
+        const model = scenario.sessions.find((session) => session.id === sessionId)?.model;
+        return model ? { model, at: null } : null;
+      },
+      sessionModelDelayMs: 0,
       // デモには回答を待つフックが無く生存確認が届かないので、預かった質問を生存確認の途絶で解除しない。
       answerDeliveryOptions: { maxAskPollGapMs: DEMO_ASK_POLL_GAP_MS },
     });
@@ -244,6 +250,8 @@ async function startDemoServer(options = {}) {
     };
 
     await scenario.play(demo);
+    // モデルの読み取りは実時間のタイマーで後から走るので、流し込みの後に終わるのを待つ。
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
     clock.set(baseTime);
     // Codex のスレッド名は定期の走査で読むので、撮影の前に 1 回走査して題に反映する。
     await runtime.refreshSessionFiles(clock.now());

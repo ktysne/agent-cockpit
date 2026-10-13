@@ -35,18 +35,6 @@ function siteHelpers(demo) {
         `codex-agent: run=${runId}`,
       ].join('\n'));
     },
-    /** 画面が持つ PR のマージ用の鍵を、状態の中から番号で探す。 */
-    async mergeRecordKeyOf(number) {
-      const found = [];
-      const visit = (value) => {
-        if (!value || typeof value !== 'object') return;
-        if (value.number === number && typeof value.mergeRecordKey === 'string') found.push(value);
-        for (const child of Object.values(value)) visit(child);
-      };
-      visit(await demo.getState());
-      if (!found.length) throw new Error(`#${number} のマージ用の鍵が状態にありません`);
-      return found[0];
-    },
   };
 }
 

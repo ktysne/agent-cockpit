@@ -152,15 +152,15 @@
   <section id="screens">
     <div class="wrap">
       <h2>画面</h2>
-      <p class="lead">プロダクトごとに、セッション、判断待ち、タスク、今やっていること、PR をまとめて表示します。画像を押すと原寸で開きます。</p>
+      <p class="lead">判断待ち、PR、タスク、今やっていることを、すべてのセッションから集めて種類ごとに並べます。画像を押すと原寸で開きます。</p>
       <div class="shots">
         <figure class="shot">
-          <figcaption><b>判断待ちと PR のスタック</b><span>Claude Code が選択肢を添えて判断を待ち、隣で Codex が作業しています。積み上げた PR は、下の段がレビューを終えてマージ済み、上の段がクロスレビュー中です。</span></figcaption>
-          <a href="img/review/review.png"><img src="img/review/review.png" alt="Agent Cockpit の画面。room-booking のカードに、選択肢を 3 つ添えて判断を待つ Claude Code のセッションと、作業中の Codex のセッションが並ぶ。下のプルリクエストの欄では、#58 がクロスレビューの 2 往復目で、下の段の #57 はマージ済みとして表示されている。" width="820" height="1947" loading="lazy"></a>
+          <figcaption><b>判断待ちと PR のスタック</b><span>Claude Code が選択肢を添えて判断を待ち、隣で Codex が作業しています。積み上げた PR は、下の段がクロスレビュー中で、上の段はレビューを終えて下の段のマージを待っています。</span></figcaption>
+          <a href="img/review/review.png"><img src="img/review/review.png" alt="Agent Cockpit の種類別の画面。あなたの判断が必要なことに、選択肢を 3 つ添えた Claude Code の判断事項がある。プルリクエストの欄には 2 段のスタックがあり、1 段目の #57 はクロスレビューの 2 往復目の結論待ち、2 段目の #58 はレビュー済みで #57 のマージ待ち。今やっていることには、待機中の Claude Opus 5.5 のメインと、作業中の Codex gpt-6.1-sol のメインが並ぶ。" width="820" height="1812" loading="lazy"></a>
         </figure>
         <figure class="shot">
           <figcaption><b>タスクとサブエージェント</b><span>Claude Code と Codex のセッションが、それぞれタスクと完了条件を持って作業しています。Claude Code は、Claude で動く担当と Codex に任せた担当のサブエージェントを並行して使っています。</span></figcaption>
-          <a href="img/work/work.png"><img src="img/work/work.png" alt="Agent Cockpit の画面。expense-app のカードに、作業中の Claude Code と Codex のセッションが並び、それぞれにタスクと完了条件がある。Claude Code のサブエージェントの欄には、Claude Sonnet 5.5 で動く担当と、Codex gpt-6-luna に委譲した担当が稼働中として表示されている。" width="820" height="1835" loading="lazy"></a>
+          <a href="img/work/work.png"><img src="img/work/work.png" alt="Agent Cockpit の種類別の画面。タスクと完了条件の欄に、Claude Code と Codex のセッションのタスクが完了条件つきで並ぶ。今やっていることには、作業中の Claude Opus 5.5 と Codex gpt-6.1-sol のメインと、Claude Sonnet 5.5 で動く担当と Codex gpt-6-luna に委譲した担当のサブエージェントが稼働中として並ぶ。" width="820" height="1543" loading="lazy"></a>
         </figure>
       </div>
     </div>

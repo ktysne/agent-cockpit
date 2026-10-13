@@ -8,7 +8,7 @@ const headOf = (number) => sha(`${REPOSITORY}#${number}`);
 const pullRequestUrl = (number) => `https://github.com/${REPOSITORY}/pull/${number}`;
 
 // 配布ページの 1 枚目。Claude Code と Codex が同じプロダクトで動き、判断事項が選択肢つきで待っていて、
-// 積み上げた 2 段の PR のうち下の段はレビューを終えてマージ済み、上の段はクロスレビュー中である。
+// 積み上げた 2 段の PR のうち、下の段はクロスレビュー中で、上の段はレビューを終えて下の段のマージを待っている。
 module.exports = function siteReview({ baseTime }) {
   const iso = (minutesAgo) => new Date(baseTime - minutesAgo * 60_000).toISOString();
 
@@ -23,10 +23,10 @@ module.exports = function siteReview({ baseTime }) {
         tool: true,
         state: {
           'feature/booking-conflict': {
-            round: 2, dismissed: [], lastReviewedSha: headOf(57), lastTriage: { round: 2, sha: headOf(57), outcome: 'converged' },
+            round: 2, dismissed: ['エラー文言の言い回し'], lastReviewedSha: headOf(57), lastTriage: { round: 1, sha: headOf(57), outcome: 'fixing' },
           },
           'feature/alt-room-suggest': {
-            round: 2, dismissed: ['候補の並び順の命名'], lastReviewedSha: headOf(58), lastTriage: { round: 1, sha: headOf(58), outcome: 'fixing' },
+            round: 1, dismissed: [], lastReviewedSha: headOf(58), lastTriage: { round: 1, sha: headOf(58), outcome: 'converged' },
           },
         },
       },
@@ -34,7 +34,7 @@ module.exports = function siteReview({ baseTime }) {
     }],
 
     sessions: [
-      { key: 'claude', id: 'demo-site-review-claude', product: 'room-booking', title: '空き部屋の提案' },
+      { key: 'claude', id: 'demo-site-review-claude', product: 'room-booking', model: 'claude-opus-5-5', title: '空き部屋の提案' },
       {
         key: 'codex', id: '019a2f6e-4c1d-7b80-9e53-2d8f1a6c0b47', product: 'room-booking', worktree: 'calendar-export',
         provider: 'codex', model: 'gpt-6.1-sol', title: '予約を iCal で書き出す',
@@ -64,11 +64,10 @@ module.exports = function siteReview({ baseTime }) {
 
     async play(demo) {
       const { at, hook, plan, prs } = demo;
-      const { tool, toolStart, taskList, mergeRecordKeyOf } = siteHelpers(demo);
+      const { tool, toolStart, taskList } = siteHelpers(demo);
 
       at(240);
-      // マージ済みの PR を、隠さずに札で見せる。
-      await demo.ui('/api/display', { mode: 'product', hideFinished: false });
+      await demo.ui('/api/display', { mode: 'kind' });
       for (const key of ['claude', 'codex']) {
         await hook(key, { hook_event_name: 'SessionStart', source: 'startup' });
         await hook(key, { hook_event_name: 'UserPromptSubmit' });
@@ -96,14 +95,6 @@ module.exports = function siteReview({ baseTime }) {
         ['提案の範囲を決める', 'todo', ['空き部屋が無いときの扱いを決める', false]],
       ));
       await prs('claude', { kind: 'add_pr', url: pullRequestUrl(58) });
-      await demo.refreshPullRequests();
-
-      // 下の段はクロスレビューが収束したので、画面からマージした。上の段の base は main に付け替わる。
-      at(42);
-      const target = await mergeRecordKeyOf(57);
-      await demo.ui('/api/pull-requests/merge', {
-        number: 57, registration_key: target.mergeRecordKey, headRefOid: target.headRefOid, method: 'squash', deleteBranch: true,
-      });
       await demo.refreshPullRequests();
 
       at(30);

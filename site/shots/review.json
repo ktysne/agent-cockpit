@@ -14,11 +14,11 @@
   "steps": [
     {
       "do": "click",
-      "selector": "[data-action=\"mode\"][data-mode=\"product\"]"
+      "selector": "[data-action=\"mode\"][data-mode=\"kind\"]"
     },
     {
       "do": "wait",
-      "selector": "[data-action=\"mode\"][data-mode=\"product\"][aria-pressed=\"true\"]"
+      "selector": "[data-action=\"mode\"][data-mode=\"kind\"][aria-pressed=\"true\"]"
     },
     {
       "do": "screenshot",

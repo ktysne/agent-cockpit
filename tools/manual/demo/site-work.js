@@ -22,7 +22,7 @@ module.exports = function siteWork({ baseTime }) {
     }],
 
     sessions: [
-      { key: 'claude', id: 'demo-site-work-claude', product: 'expense-app', title: '領収書の読み取り' },
+      { key: 'claude', id: 'demo-site-work-claude', product: 'expense-app', model: 'claude-opus-5-5', title: '領収書の読み取り' },
       {
         key: 'codex', id: '019a3b71-8e2c-7d14-a6f0-5c9e2b7d3a18', product: 'expense-app', worktree: 'approval-notify',
         provider: 'codex', model: 'gpt-6.1-sol', title: '承認待ちの通知',
@@ -49,7 +49,7 @@ module.exports = function siteWork({ baseTime }) {
       const { tool, toolStart, taskList, subagentStart, codexLaunch } = siteHelpers(demo);
 
       at(180);
-      await demo.ui('/api/display', { mode: 'product' });
+      await demo.ui('/api/display', { mode: 'kind' });
       for (const key of ['claude', 'codex']) {
         await hook(key, { hook_event_name: 'SessionStart', source: 'startup' });
         await hook(key, { hook_event_name: 'UserPromptSubmit' });

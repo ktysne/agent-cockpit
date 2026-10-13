@@ -207,6 +207,7 @@ rec-studio の `build.js` と `guide-map.js` を写し、置き場とナビの�
 | `pullRequestOptions.execFileImpl` | 偽の `gh`(「偽の gh」)。マージの処理も `PullRequestTracker` を通して `gh` を呼ぶので、この 1 つで足りる |
 | `codexAgentScriptExists`、`crossReviewToolExists` | 連携の有無。撮る画面ごとに切り替える |
 | `openExternalUrl` | 何もしない関数。撮影中に外部のブラウザを開かないためである |
+| `readSessionModel`、`sessionModelDelayMs` | シナリオのセッションの `model` を返す関数と 0。Claude のメインのモデルは transcript から読むが、デモには transcript が無いためである |
 
 ### 時計の固定
 
