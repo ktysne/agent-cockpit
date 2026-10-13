@@ -133,7 +133,7 @@ test('0.0.0 からの通知リンクは新しいタグの tree を指す', async
 test('サーバーは明示した時計で版を確認し、close で次の確認を止める', async t => {
   const clock = fakeClock();
   let calls = 0;
-  const { runtime, info } = await startTestServer(t, { updateCheck: { ...clock, execFileImpl(_file, _args, _options, callback) {
+  const { runtime, info } = await startTestServer(t, { updateCheck: { ...clock, current: '0.0.0', execFileImpl(_file, _args, _options, callback) {
     calls += 1;
     callback(null, tags('1.0.0'));
   } } });
