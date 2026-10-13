@@ -5093,7 +5093,10 @@ async function refresh() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const state = await response.json();
     if (checkUiVersion(state)) return;
+    // 後に始めた取得の応答を反映済みなら、遅れて届いた古い応答で表示を戻さない。
+    if (sequence < appliedRefreshSequence) return true;
     await syncDisplayPreferences(state.display);
+    if (sequence < appliedRefreshSequence) return true;
     lastStateAt = new Date();
     connectionLost = false;
     updateConnectionNote();

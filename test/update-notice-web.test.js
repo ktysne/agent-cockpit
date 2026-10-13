@@ -80,6 +80,29 @@ test('版があれば見出しとウィンドウのタイトルに付け、無�
     { text: '', hidden: true, title: 'Agent Cockpit' });
 });
 
+test('refresh は後に始めた取得を反映した後に届いた古い応答で状態を戻さない', async () => {
+  const responses = [];
+  const context = vm.createContext({
+    fetchUi: () => new Promise((resolve) => responses.push(resolve)), checkUiVersion: () => false,
+    syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
+    applyAwayState() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
+    refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
+    sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
+    lastVersion: 0, lastState: null, liveStatus: {}, render() {}, countJudgments: () => ({ permission: 0, decisions: 0 }),
+    isIdleHiddenSession: () => false,
+  });
+  vm.runInContext(functionSource(html, 'refresh'), context);
+  const older = context.refresh();
+  const newer = context.refresh();
+  const newerState = { version: 2, sessions: [], away: {}, update, pullRequests: [] };
+  responses[1]({ ok: true, json: async () => newerState });
+  await newer;
+  responses[0]({ ok: true, json: async () => ({ version: 1, sessions: [], away: {}, update, pullRequests: [] }) });
+  assert.equal(await older, true);
+  assert.equal(context.lastState, newerState);
+  assert.equal(context.appliedRefreshSequence, 2);
+});
+
 test('refresh は状態の version が同じでも新しい通知を描き直す', async () => {
   const notices = [];
   const state = { version: 1, sessions: [], away: {}, update, pullRequests: [] };
