@@ -78,6 +78,48 @@ test('Claude と Codex の開始以外のフックは親を問い合わせない
   assert.equal(queries, 0);
 });
 
+test('session_index.jsonl の最新のスレッド名を Codex 行の title に表示する', async (t) => {
+  const c = await cockpit(t);
+  await fs.mkdir(c.codexHome, { recursive: true });
+  await fs.writeFile(path.join(c.codexHome, 'session_index.jsonl'), [
+    JSON.stringify({ id: 'thread', thread_name: '古い名前', updated_at: '2026-10-13T10:00:00Z' }),
+    JSON.stringify({ id: 'thread', thread_name: 'Issue 713 以降と PR 765 を確認', updated_at: '2026-10-13T10:19:19.669Z' }),
+  ].join('\n'));
+  await c.event('SessionStart', { codexPid: 1234 });
+  await c.runtime.refreshSessionFiles();
+  assert.equal((await c.rows())[0].title, 'Issue 713 以降と PR 765 を確認');
+});
+
+test('session_index.jsonl に同じ ID の行が追記されると次の更新で title が変わる', async (t) => {
+  const c = await cockpit(t);
+  await fs.mkdir(c.codexHome, { recursive: true });
+  const indexPath = path.join(c.codexHome, 'session_index.jsonl');
+  await fs.writeFile(indexPath, `${JSON.stringify({ id: 'thread', thread_name: '最初の名前', updated_at: '2026-10-13T10:00:00Z' })}\n`);
+  await c.event('SessionStart', { codexPid: 1234 });
+  await c.runtime.refreshSessionFiles();
+  assert.equal((await c.rows())[0].title, '最初の名前');
+
+  await fs.appendFile(indexPath, `${JSON.stringify({ id: 'thread', thread_name: '更新後の名前', updated_at: '2026-10-13T10:20:00Z' })}\n`);
+  await c.runtime.refreshSessionFiles();
+  assert.equal((await c.rows())[0].title, '更新後の名前');
+});
+
+test('session_index.jsonl が無い Codex 行の title は null のまま', async (t) => {
+  const c = await cockpit(t);
+  await c.event('SessionStart', { codexPid: 1234 });
+  await c.runtime.refreshSessionFiles();
+  assert.equal((await c.rows())[0].title, null);
+});
+
+test('壊れた行だけの session_index.jsonl では Codex 行の title は null のまま', async (t) => {
+  const c = await cockpit(t);
+  await fs.mkdir(c.codexHome, { recursive: true });
+  await fs.writeFile(path.join(c.codexHome, 'session_index.jsonl'), '{broken json}\n{"id":4,"thread_name":"無効"}\n');
+  await c.event('SessionStart', { codexPid: 1234 });
+  await c.runtime.refreshSessionFiles();
+  assert.equal((await c.rows())[0].title, null);
+});
+
 for (const claudeFilesReadable of [true, false]) {
   test(`再起動後は生きている Codex のモデルと再開回数を不明の行に戻す（Claude の一覧${claudeFilesReadable ? 'あり' : 'なし'}）`, async (t) => {
     const c = await cockpit(t, { claudeFilesReadable });
