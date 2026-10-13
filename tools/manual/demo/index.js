@@ -2,6 +2,7 @@
 
 const scenarios = Object.freeze({
   basic: () => require('./basic'),
+  codex: () => require('./codex'),
   decisions: () => require('./decisions'),
   empty: () => require('./empty'),
   'no-gh': () => require('./no-gh'),

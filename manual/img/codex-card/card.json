@@ -1,0 +1,58 @@
+{
+  "name": "card",
+  "target": "section.section:has(.session-group.origin-codex)",
+  "width": 1636,
+  "height": 3582,
+  "parts": [
+    {
+      "key": "card.claude-session",
+      "bounds": {
+        "x": 30,
+        "y": 144,
+        "width": 1576,
+        "height": 1069
+      },
+      "visible": true
+    },
+    {
+      "key": "card.codex-session",
+      "bounds": {
+        "x": 30,
+        "y": 1229,
+        "width": 1576,
+        "height": 1777
+      },
+      "visible": true
+    },
+    {
+      "key": "card.codex-name",
+      "bounds": {
+        "x": 58,
+        "y": 1253,
+        "width": 276,
+        "height": 48
+      },
+      "visible": true
+    },
+    {
+      "key": "card.codex-recommended",
+      "bounds": {
+        "x": 134,
+        "y": 1625,
+        "width": 1426,
+        "height": 108
+      },
+      "visible": true
+    },
+    {
+      "key": "card.pull-request",
+      "bounds": {
+        "x": 44,
+        "y": 3247,
+        "width": 1548,
+        "height": 245
+      },
+      "visible": true
+    }
+  ]
+}

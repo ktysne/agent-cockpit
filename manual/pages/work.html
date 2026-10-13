@@ -157,6 +157,13 @@
   <p>Codex が自分で起動したサブエージェントも、この欄に出ます。
   名前は子の種類で、種類の指定が無いときは <span class="ui">default</span> です。
   モデルの札は <span class="ui">Codex</span> にモデル名が続く形だけで、effort と経路の札は付きません。</p>
+  <figure class="guide-map" id="work-codex-rows-map" data-shot="codex-rows/rows" data-alt="Codex のセッションの今やっていること。メインの行に、Codex とモデル名の札と、再開 1 回の札が並び、その下のサブエージェントの行に、名前の explorer と、Codex とモデル名の札が並ぶ">
+    <ol class="guide-list">
+      <li data-part="rows.resumes" data-place="right"><b>メインの行の札</b>：<span class="ui">Codex</span> にモデル名が続く札と、再開の札です。再開の札の数は、同じ会話を再開するたびに 1 増えます。</li>
+      <li data-part="rows.agent-name" data-place="right"><b>サブエージェントの名前</b>：Codex が起動した子の種類です。</li>
+      <li data-part="rows.agent-model" data-place="right"><b>サブエージェントのモデルの札</b>：<span class="ui">Codex</span> にモデル名が続きます。</li>
+    </ol>
+  </figure>
   <p>稼働中のサブエージェントの数は、画面上部の <span class="ui">稼働中のサブエージェント</span> の札に出ます(<a href="screen.html#screen-summary">件数の札</a>)。</p>
   <p>終了した行は、設定の <span class="ui">終わったものを非表示にする</span> がオフのときだけ、<span class="ui">終了済みを表示</span> から開けます。
   オン(既定)のときは、終了した行を出しません。

@@ -1,0 +1,36 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "Claude と Codex が同じプロダクトで動いているカード",
+  "scenario": "codex",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
+  "steps": [
+    {
+      "do": "wait",
+      "selector": ".session-group.origin-codex .decision-option.recommended"
+    },
+    {
+      "do": "screenshot",
+      "name": "card",
+      "target": "section.section:has(.session-group.origin-codex)",
+      "parts": {
+        "card.claude-session": ".session-group.origin-claude",
+        "card.codex-session": ".session-group.origin-codex",
+        "card.codex-name": ".session-group.origin-codex .session-head h3",
+        "card.codex-recommended": ".session-group.origin-codex .decision-option.recommended",
+        "card.pull-request": ".pr.origin-both"
+      }
+    }
+  ]
+}

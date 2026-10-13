@@ -1,0 +1,37 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "Codex のセッションの今やっていること",
+  "scenario": "codex",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
+  "steps": [
+    {
+      "do": "wait",
+      "selector": ".session-group.origin-codex .agent-list > .agent-row"
+    },
+    {
+      "do": "screenshot",
+      "name": "rows",
+      "target": [
+        ".session-group.origin-codex .session-body > h3.sub:has(+ .now)",
+        ".session-group.origin-codex .session-body .agent-list"
+      ],
+      "parts": {
+        "rows.resumes": ".session-group.origin-codex .session-body .main-row .models .route-tag",
+        "rows.agent-name": ".session-group.origin-codex .session-body .agent-list > .agent-row:nth-child(1) .agent-name strong",
+        "rows.agent-model": ".session-group.origin-codex .session-body .agent-list > .agent-row:nth-child(1) .models .model"
+      }
+    }
+  ]
+}
