@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { sanitizeClientEntry, recordClientEntries } = require('./diagnostic-events');
+const { sanitizeClientEntry, clientEntryLevel, recordClientEntries } = require('./diagnostic-events');
 const MAX_HOOK_PENDING_BYTES = 256 * 1024;
 const PENDING_LOCK_TIMEOUT_MS = 50;
 const EMPTY_LOCK_STALE_MS = 10_000;
@@ -31,9 +31,22 @@ async function withPendingLock(homeDir, operation, recoverStale = false) {
   }
 }
 
+const LEVELS = ['silent', 'error', 'warn', 'info', 'debug'];
+
+// 記録しない設定の端末に退避のファイルを残さないため、常駐サーバーが保存したレベルを退避の前に見る。
+function configuredLevel(homeDir) {
+  try {
+    const level = JSON.parse(fs.readFileSync(path.join(homeDir, 'store.json'), 'utf8'))?.display?.diagnosticsLevel;
+    return LEVELS.includes(level) ? level : 'info';
+  } catch { return 'info'; }
+}
+
 async function appendPendingHook(homeDir, entry) {
   const clean = sanitizeClientEntry(entry, 'hook');
   if (!clean) return;
+  const configured = configuredLevel(homeDir);
+  const level = clientEntryLevel(clean);
+  if (configured === 'silent' || (level !== 'error' && LEVELS.indexOf(level) > LEVELS.indexOf(configured))) return;
   await withPendingLock(homeDir, file => {
     let size = 0;
     try { size = fs.statSync(file).size; } catch (error) { if (error.code !== 'ENOENT') return; }

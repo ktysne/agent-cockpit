@@ -29,16 +29,19 @@ function sanitizeClientEntry(entry, tag) {
   return { msg: entry.msg, data };
 }
 
+function clientEntryLevel(clean) {
+  return clean.msg === 'mcp.write' && clean.data.ok === false ? 'error'
+    : ['hook.input', 'hook.pid'].includes(clean.msg) && ['invalid', 'failed', 'timeout'].includes(clean.data.result) ? 'warn'
+    : CLIENT_EVENTS[clean.msg].level;
+}
+
 function recordClientEntries(diagnostics, entries, tag) {
   if (!Array.isArray(entries)) return;
   for (const entry of entries.slice(0, MAX_DIAGNOSTICS_PER_EVENT)) {
     const clean = sanitizeClientEntry(entry, tag);
     if (!clean) continue;
-    const level = clean.msg === 'mcp.write' && clean.data.ok === false ? 'error'
-      : ['hook.input', 'hook.pid'].includes(clean.msg) && ['invalid', 'failed', 'timeout'].includes(clean.data.result) ? 'warn'
-      : CLIENT_EVENTS[clean.msg].level;
-    diagnostics?.record(level, tag, clean.msg, clean.data);
+    diagnostics?.record(clientEntryLevel(clean), tag, clean.msg, clean.data);
   }
 }
 
-module.exports = { CLIENT_EVENTS, MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYTES, sanitizeClientEntry, recordClientEntries };
+module.exports = { CLIENT_EVENTS, MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYTES, sanitizeClientEntry, clientEntryLevel, recordClientEntries };

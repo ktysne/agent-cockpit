@@ -126,6 +126,19 @@ test('退避が上限を超えていると届かないフックは追記せず�
   assert.equal((await fs.stat(file)).size, MAX_HOOK_PENDING_BYTES + 1);
 });
 
+test('記録しない設定とエラーのみの設定では、届かないフックを退避しない', async t => {
+  const { runtime } = await startTestServer(t);
+  const file = path.join(runtime.homeDir, 'diagnostics/hooks-pending.jsonl');
+  for (const diagnosticsLevel of ['silent', 'error']) {
+    runtime.state.patchDisplayPreferences({ diagnosticsLevel });
+    await runtime.state.flushStoreWrite();
+    await runHook({ session_id: `pending-${diagnosticsLevel}`, hook_event_name: 'Stop' }, {
+      homeDir: runtime.homeDir, ensureServerRunning: async () => null,
+    });
+    await assert.rejects(fs.stat(file), { code: 'ENOENT' });
+  }
+});
+
 test('MCP の入口は書き込みの試行と HTTP の結果を記録し、引数の本文を含めない', async t => {
   const { runtime, info } = await startTestServer(t);
   const pending = [];
