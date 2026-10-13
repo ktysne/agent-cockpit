@@ -9,6 +9,7 @@
     "test:inprocess": "node --test --test-isolation=none \"test/**/*.test.js\"",
     "manual:build": "node tools/manual/build.js",
     "manual:capture": "node tools/manual/capture.js",
+    "site:capture": "node tools/manual/capture.js --root site",
     "manual:demo": "node tools/manual/demo-server.js",
     "lint:manual": "node tools/manual/lint.js",
     "review:codex": "node tools/cross-review.js codex",

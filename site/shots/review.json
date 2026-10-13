@@ -1,0 +1,28 @@
+{
+  "title": "配布ページ: 判断事項と PR のスタック",
+  "scenario": "site-review",
+  "window": {
+    "width": 820,
+    "height": 900
+  },
+  "scale": 1,
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "click",
+      "selector": "[data-action=\"mode\"][data-mode=\"product\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "[data-action=\"mode\"][data-mode=\"product\"][aria-pressed=\"true\"]"
+    },
+    {
+      "do": "screenshot",
+      "name": "review"
+    }
+  ]
+}
