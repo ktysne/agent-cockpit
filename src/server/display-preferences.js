@@ -9,6 +9,7 @@ const DISPLAY_FILTERS = Object.freeze(['permission', 'blocking', 'provisional', 
 const LEGACY_DISPLAY_FILTERS = Object.freeze(['held']);
 
 const DISPLAY_SCHEMA = Object.freeze({
+  diagnosticsLevel: Object.freeze({ type: 'enum', default: 'info', values: Object.freeze(['silent', 'error', 'warn', 'info', 'debug']) }),
   mode: Object.freeze({ type: 'enum', default: 'kind', values: Object.freeze(['product', 'kind']) }),
   order: Object.freeze({ type: 'string-array', default: Object.freeze([]), maxItems: 200, maxItemLength: 500 }),
   pinned: Object.freeze({ type: 'string-array', default: Object.freeze([]), maxItems: 200, maxItemLength: 500 }),
@@ -82,7 +83,7 @@ function normalizeDisplay(value) {
       result[key] = hidden;
     } else if (key === 'sectionOrder') {
       result[key] = normalizeSectionOrder(field);
-    } else if (key === 'mergeableCondition') {
+    } else if (key === 'mergeableCondition' || key === 'diagnosticsLevel') {
       result[key] = definition.values.includes(field) ? field : definition.default;
     } else if (Array.isArray(definition.default)) {
       result[key] = [...field];

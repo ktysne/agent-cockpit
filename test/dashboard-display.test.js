@@ -437,6 +437,7 @@ test('画面は未設定や不正なサーバー値を表示設定の既定値�
     awayAnswerWaitMinutes: 3,
     idleHideMinutes: 10,
     hideFinished: true,
+    diagnosticsLevel: 'info',
     mergeableCondition: 'cross-review',
   });
   const initial = context.normalizeDisplay({});

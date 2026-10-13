@@ -17,7 +17,8 @@
 |---|---|
 | `server.json` | `{pid, port, secret, uiSecret, startedAt}` |
 | `away.json` | `{enabled, since, periods}` |
-| `server.log` | 起動、停止、エラー。起動ごとに切り詰める。ツールの入力の要約は書かない |
+| `server.log` | 起動、停止、エラー。追記し、起動時に 1 MB を超えていたら `server.log.1` に移す。ツールの入力の要約は書かない |
+| `diagnostics/<起動時刻>-<pid>.<区分番号>.jsonl` | 診断ログ。1 区分 2000 行、直近 10 起動、全体 30 区分まで |
 | `start.lock` | 再起動の排他。10 秒で失効する |
 | `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、削除済みセッションの時刻、PR の記録、Codex のセッションの復旧の記録 |
 | `routing.json` | 経路の設定 |
@@ -530,3 +531,23 @@ finish も常駐サーバーに届かなかった場合、フックは離席状�
 追記する内容は [導入手順](../setup.md) に書き、開発者の確認を取ってから登録する。
 登録は exec 形式(`command` と `args` を分ける)で書く。Windows ではフックのコマンドが PowerShell で解釈され、引用符付きの実行ファイルのパスが失敗するためである。
 MCP サーバーは `claude mcp add --scope user` で登録し、スキルは `~/.claude/skills/agent-cockpit/` にコピーする。手順は [導入手順](../setup.md) に記載し、自動登録やコピーはしない。
+
+## 診断ログの経路
+
+記録と画面の仕様は [診断ログ](diagnostics.md) にある。
+レベルは表示設定の `diagnosticsLevel` に保存し、`POST /api/display` で変える。
+
+| 経路 | 認証 | 応答または本文 |
+|---|---|---|
+| `GET /api/diagnostics` | なし | `{runs: [{id, startedAt, count, current}], version}`。現在の起動を先頭に返す |
+| `GET /api/diagnostics?run=<起動>` | なし | `{entries, version}`。区分を古い順に連結する |
+| `POST /api/diagnostics/delete` | uiSecret と同一 Origin | 本文は `{run}` または `{all: true}`。応答は `{ok: true}` |
+
+起動識別子の形式が違うと `400` を返す。
+削除と追記は同じキューで処理し、現在の起動を削除した後は新しい区分に追記する。
+この段階では、外から記録を受ける `POST /api/diagnostics` は設けない。
+
+`src/server/diagnostics.js` は `Diagnostics` と起動識別子の `RUN_PATTERN` を公開する。
+常駐サーバーが使う操作は `record(level, tag, msg, data)`、`listRuns()`、`readRun(run)`、`deleteRuns({run, all})`、`flush()` である。
+`record` は許可した識別子と鍵だけを保存し、書き込みに失敗しても呼び出し元へ例外を返さない。
+未知の要求経路は `unknown`、セッションと判断の ID は `:id`、マニュアルの相対パスは `:path` として残し、クエリーは残さない。

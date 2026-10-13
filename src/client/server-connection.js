@@ -37,7 +37,12 @@ function childEnvironment(environment) {
 async function launchServer({ homeDir, environment = process.env, spawnProcess = spawn }) {
   await fsp.mkdir(homeDir, { recursive: true });
   const logPath = path.join(homeDir, 'server.log');
-  const logFd = fs.openSync(logPath, 'w');
+  try {
+    if ((await fsp.stat(logPath)).size > 1024 * 1024 && !await serverIsHealthy(await readServerInfo(homeDir))) {
+      await fsp.rename(logPath, `${logPath}.1`);
+    }
+  } catch {}
+  const logFd = fs.openSync(logPath, 'a');
   try {
     const child = spawnProcess(process.execPath, [SERVER_SCRIPT, '--port', String(SERVER_PORT)], {
       cwd: homeDir,

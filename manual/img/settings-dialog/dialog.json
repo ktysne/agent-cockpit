@@ -8,7 +8,7 @@
       "key": "settings.theme",
       "bounds": {
         "x": 474,
-        "y": 327,
+        "y": 308,
         "width": 752,
         "height": 72
       },
@@ -18,7 +18,7 @@
       "key": "settings.since-seen",
       "bounds": {
         "x": 474,
-        "y": 399,
+        "y": 380,
         "width": 752,
         "height": 72
       },
@@ -28,7 +28,7 @@
       "key": "settings.mergeable",
       "bounds": {
         "x": 474,
-        "y": 562,
+        "y": 543,
         "width": 752,
         "height": 524
       },
@@ -38,7 +38,7 @@
       "key": "settings.hide-finished",
       "bounds": {
         "x": 474,
-        "y": 1172,
+        "y": 1153,
         "width": 752,
         "height": 45
       },
@@ -48,7 +48,7 @@
       "key": "settings.long-wait",
       "bounds": {
         "x": 474,
-        "y": 1217,
+        "y": 1198,
         "width": 752,
         "height": 72
       },
@@ -58,7 +58,7 @@
       "key": "settings.idle",
       "bounds": {
         "x": 474,
-        "y": 1289,
+        "y": 1270,
         "width": 752,
         "height": 72
       },
@@ -68,7 +68,7 @@
       "key": "settings.away-wait",
       "bounds": {
         "x": 474,
-        "y": 1361,
+        "y": 1342,
         "width": 752,
         "height": 72
       },
@@ -78,9 +78,9 @@
       "key": "settings.order",
       "bounds": {
         "x": 474,
-        "y": 1461,
+        "y": 1442,
         "width": 752,
-        "height": 662
+        "height": 701
       },
       "visible": true
     },
@@ -88,7 +88,7 @@
       "key": "settings.manual",
       "bounds": {
         "x": 448,
-        "y": 2181,
+        "y": 2200,
         "width": 90,
         "height": 72
       },
@@ -98,7 +98,7 @@
       "key": "settings.close",
       "bounds": {
         "x": 1131,
-        "y": 2181,
+        "y": 2200,
         "width": 121,
         "height": 72
       },

@@ -77,7 +77,7 @@ function createReadRoutes(ctx) {
     jsonResponse(response, 200, state.devFields());
   }
 
-  async function handleIndex({ response, info }) {
+  async function handleIndex({ request, response, info }) {
     try {
       let beforeStat = null;
       try {
@@ -100,7 +100,8 @@ function createReadRoutes(ctx) {
         `<meta name="cockpit-ui-version" content="${uiVersion}">`,
       );
       textResponse(response, 200, html, 'text/html; charset=utf-8');
-    } catch {
+    } catch (error) {
+      request?.setDiagnosticError?.(error);
       textResponse(response, 500, 'Dashboard unavailable');
     }
   }

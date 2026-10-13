@@ -5,7 +5,7 @@ const { applyReviewSkip, pullRequestStateUnavailable } = require('./review-skip'
 function createPullRequestRoutes(ctx) {
   const { state, pullRequestTracker, pullRequestMergeManager } = ctx;
 
-  async function handleReviewSkip({ response, body }) {
+  async function handleReviewSkip({ request, response, body }) {
     if (!body || typeof body !== 'object' || Array.isArray(body) ||
       Object.keys(body).sort().join(',') !== 'action,headRefOid,registration_key' ||
       !['set', 'clear'].includes(body.action) || !isSha256Digest(body.registration_key) ||
@@ -55,7 +55,8 @@ function createPullRequestRoutes(ctx) {
       await state.waitForPersistence();
       await pullRequestTracker.refreshReviewGroups(registration.owner, registration.repo);
       jsonResponse(response, 200, { action: body.action, number: registration.number });
-    } catch {
+    } catch (error) {
+      request?.setDiagnosticError?.(error);
       jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
     }
   }

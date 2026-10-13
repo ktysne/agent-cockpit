@@ -103,7 +103,7 @@ function createHookRoutes(ctx) {
     },
   ];
 
-  async function handleHookAnswers({ response, body }) {
+  async function handleHookAnswers({ request, response, body }) {
     if (!body || typeof body !== 'object' || Array.isArray(body) || !validSessionId(body.session_id) || !validText(body.id, 256)) {
       jsonResponse(response, 400, { error: 'Invalid request' });
       return;
@@ -122,7 +122,8 @@ function createHookRoutes(ctx) {
       }
       await state.waitForPersistence();
       jsonResponse(response, 200, result);
-    } catch {
+    } catch (error) {
+      request?.setDiagnosticError?.(error);
       jsonResponse(response, 500, { error: 'Internal Server Error' });
     }
   }
@@ -241,7 +242,7 @@ function createHookRoutes(ctx) {
     jsonResponse(response, 200, { decision: { id: decision.id, title: decision.title, state: decision.state }, decisions });
   }
 
-  async function handleSessionPullRequests({ response, params, body }) {
+  async function handleSessionPullRequests({ request, response, params, body }) {
     const routeSessionId = params[1];
     const isAddPullRequest = body?.kind === 'add_pr';
     const isSkipReview = body?.kind === 'skip_review';
@@ -288,7 +289,8 @@ function createHookRoutes(ctx) {
           return;
         }
         jsonResponse(response, 200, { ...result.saved });
-      } catch {
+      } catch (error) {
+        request?.setDiagnosticError?.(error);
         jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
       }
       return;
