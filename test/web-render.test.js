@@ -406,6 +406,42 @@ test('設定画面から設定のマニュアルを新しいウィンドウで�
   assert.match(settingsDialog, /<a\b(?=[^>]*\bhref="\/manual\/#help-settings")(?=[^>]*\btarget="_blank")(?=[^>]*\brel="noopener")[^>]*>マニュアル<\/a>/);
 });
 
+test('モックの設定画面で診断ログがマニュアルの右にある', () => {
+  const settingsActions = mockHtml.match(/<div class="settings-actions">([\s\S]*?)<\/div>/)?.[1];
+  assert.ok(settingsActions);
+  const manualIndex = settingsActions.indexOf('>マニュアル</a>');
+  const diagnosticsIndex = settingsActions.indexOf('>診断ログ</a>');
+  assert.ok(manualIndex >= 0 && diagnosticsIndex > manualIndex);
+  assert.match(settingsActions, /id="diagnostics-open"[^>]*href="#diagnostics-dialog"[^>]*>診断ログ<\/a>/);
+});
+
+test('モックの診断ログとポリシーに必要な操作がある', () => {
+  const diagnosticsDialog = mockHtml.match(/<dialog class="diagnostics-dialog" id="diagnostics-dialog"[\s\S]*?<\/dialog>/)?.[0];
+  const policyDialog = mockHtml.match(/<dialog class="diagnostics-policy-dialog" id="diagnostics-policy-dialog"[\s\S]*?<\/dialog>/)?.[0];
+  assert.ok(diagnosticsDialog && policyDialog);
+  for (const id of [
+    'diagnostics-level', 'diagnostics-run', 'diagnostics-source', 'diagnostics-refresh',
+    'diagnostics-copy', 'diagnostics-export-run', 'diagnostics-export-all',
+    'diagnostics-delete-run', 'diagnostics-delete-all', 'diagnostics-delete-confirm',
+    'diagnostics-delete-cancel', 'diagnostics-policy-open',
+  ]) assert.match(diagnosticsDialog, new RegExp(`id="${id}"`));
+  assert.match(diagnosticsDialog, /選んだ起動を書き出す/);
+  assert.match(diagnosticsDialog, /すべての起動を書き出す/);
+  assert.match(diagnosticsDialog, /\(記録はまだありません\)/);
+  assert.match(policyDialog, /あなたの操作なしに記録が外に出ることはありません/);
+  assert.match(policyDialog, /2000 行まで/);
+  assert.match(policyDialog, /記録しない情報/);
+  assert.match(policyDialog, /記録する情報/);
+});
+
+test('診断ログのモック記録にパスや認証値の情報を含めない', () => {
+  const sample = mockHtml.match(/const DIAGNOSTIC_RUN_SEED = \[([\s\S]*?)\n\];/)?.[1];
+  assert.ok(sample);
+  assert.doesNotMatch(sample, /[\\/]/);
+  assert.doesNotMatch(sample, /secret/i);
+  assert.doesNotMatch(sample, /token/i);
+});
+
 test('判断事項は待ち時間を表示し、回答のない長い待ちだけを強調する', () => {
   const elapsed = functionSource(pageHtml, 'decisionElapsedLabel');
   const isLongWait = functionSource(pageHtml, 'isLongWait');
