@@ -8,6 +8,7 @@ const {
   loadConfig,
   main,
   parseArgs,
+  isFtpConnectionLost,
   remoteRootOf,
   siteItems,
   uploadSite,
@@ -273,6 +274,13 @@ test('uploadSite は同じファイルで接続が 4 回切れたら止める', 
   await assert.rejects(uploadSite(items, FTP_CONFIG, server.dependencies), /license\.html の送信中に FTP の接続が 4 回切れた/);
   assert.equal(server.clientCount(), 4);
   assert.equal(server.remoteFiles.has(path.posix.join(FTP_CONFIG.remoteRoot, 'index.html')), false);
+});
+
+test('isFtpConnectionLost は通信の切断と、接続を閉じる 421 の応答を接続の切断として扱う', () => {
+  assert.equal(isFtpConnectionLost({ closed: false }, { code: 'ECONNRESET' }), true);
+  assert.equal(isFtpConnectionLost({ closed: false }, { code: 421 }), true);
+  assert.equal(isFtpConnectionLost({ closed: true }, new Error('closed')), true);
+  assert.equal(isFtpConnectionLost({ closed: false }, { code: 550 }), false);
 });
 
 test('uploadSite は接続が切れたのではない失敗を送り直さない', async t => {

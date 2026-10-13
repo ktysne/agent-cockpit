@@ -10,6 +10,7 @@ const FTP_PREFIX = 'AGENT_COCKPIT_FTP_';
 const UPLOAD_ATTEMPTS_PER_ITEM = 4;
 const UPLOAD_RECONNECT_DELAY_MS = 3000;
 const FTP_CONNECTION_LOST_CODES = new Set(['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNABORTED', 'ECONNREFUSED']);
+const FTP_CLOSING_REPLY_CODE = 421;
 
 function compareNames(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -191,8 +192,9 @@ async function uploadRemoteItem(client, item) {
   await replaceRemoteFile(client, temporaryName, item.remoteName, entries.has(item.remoteName));
 }
 
+// 421 は FTP サーバーが制御接続を閉じる前に返す応答で、ソケットの終了より先に届くことがある。
 function isFtpConnectionLost(client, error) {
-  return client.closed === true || FTP_CONNECTION_LOST_CODES.has(error?.code);
+  return client.closed === true || FTP_CONNECTION_LOST_CODES.has(error?.code) || error?.code === FTP_CLOSING_REPLY_CODE;
 }
 
 // 置き換えの途中で切れると公開名が退避名のまま残るので、送り直す前に公開名へ戻す。
