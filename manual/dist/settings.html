@@ -169,8 +169,8 @@
 
   <h3 id="settings-since-seen">前回見てから</h3>
   <p><span class="ui">前回見てから</span> は、「前回見てから」の欄を出す場面を選びます。
-  <span class="ui">常に</span> が選ばれている状態が最初の設定です。
-  <span class="ui">離席中のみ</span> は離席中にしている間だけ、<span class="ui">出さない</span> は出しません。
+  <span class="ui">離席中のみ</span> が選ばれている状態が最初の設定です。
+  <span class="ui">常に</span> は離席中でないときも、<span class="ui">出さない</span> はどのときも出しません。
   変化の記録は、どの設定でも続きます(<a href="away.html#away-display">前回見てからの表示の設定</a>)。</p>
 
   <h3 id="settings-mergeable">「マージできます」と出す条件</h3>
@@ -205,13 +205,13 @@
 
   <h3 id="settings-idle">更新の無いセッションを隠すまで</h3>
   <p><span class="ui">更新の無いセッションを隠すまで (分)</span> は、更新が無いセッションを一覧から隠すまでの時間です。
-  5 から 1440 までの整数の分で、最初の設定は 30 分です。
+  5 から 1440 までの整数の分で、最初の設定は 10 分です。
   外したセッションは、更新と外した時刻の遅い方からこの時間を過ぎると、更新の無いセッションの帯に移ります。
   隠す条件は、セッションのページにあります(<a href="work.html#work-idle">更新の無いセッションを隠す</a>)。</p>
 
   <h3 id="settings-away-wait">離席中に質問の回答を待つ時間</h3>
   <p><span class="ui">離席中に質問の回答を待つ時間 (1〜30 分)</span> は、離席中にセッションが質問したとき、ダッシュボードの回答を待つ時間です。
-  1 から 30 までの整数の分で、最初の設定は 5 分です。
+  1 から 30 までの整数の分で、最初の設定は 3 分です。
   待っても回答が無い質問は、推奨案で進みます(<a href="away.html#away-questions">離席中の質問</a>)。
   変えた時間は、すでに預かっている質問には効かず、次に出る質問から効きます。</p>
 
@@ -222,9 +222,9 @@
   <ol>
     <li><span class="ui">前回見てから</span></li>
     <li><span class="ui">あなたの判断が必要なこと</span></li>
+    <li><span class="ui">プルリクエスト</span></li>
     <li><span class="ui">タスクと完了条件</span></li>
     <li><span class="ui">今やっていること</span></li>
-    <li><span class="ui">プルリクエスト</span></li>
   </ol>
   <p>並びが効く範囲は、表示モードで変わります。</p>
   <ul>

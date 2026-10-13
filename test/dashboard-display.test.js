@@ -408,7 +408,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
   assert.equal(syncCalls.length, 2);
 });
 
-test('画面は未設定や不正なサーバー値を表示時間の既定値で補う', () => {
+test('画面は未設定や不正なサーバー値を表示設定の既定値で補う', () => {
   const normalizeOrder = functionSource(web, 'normalizeSectionOrder');
   const normalizeMinutes = functionSource(web, 'normalizeDisplayMinutes');
   const normalizeDisplay = functionSource(web, 'normalizeDisplayPreferences');
@@ -420,10 +420,11 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
   };
   const context = pageContext(web, {
     ...minuteInputs,
-    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    SECTION_ORDER_KEYS: new Set(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']),
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
     DEFAULT_LONG_WAIT_MINUTES: 15,
-    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
-    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
+    DEFAULT_IDLE_HIDE_MINUTES: 10,
     FILTERS: ['permission', 'blocking', 'provisional', 'agents', 'prs'].map((key) => ({ key })),
   });
   vm.runInContext(`${settings}\n${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
@@ -431,18 +432,24 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
 
   assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeDisplay(base))), {
     ...base,
-    sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    sectionOrder: ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
     longWaitMinutes: 15,
-    awayAnswerWaitMinutes: 5,
-    idleHideMinutes: 30,
+    awayAnswerWaitMinutes: 3,
+    idleHideMinutes: 10,
     hideFinished: true,
     mergeableCondition: 'cross-review',
   });
+  const initial = context.normalizeDisplay({});
+  assert.equal(initial.mode, 'kind');
+  assert.deepEqual(JSON.parse(JSON.stringify(initial.sectionOrder)), ['sinceSeen', 'judgment', 'prs', 'tasks', 'now']);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeDisplay({ ...base, sectionOrder: ['tasks'] }).sectionOrder)), [
+    'tasks', 'sinceSeen', 'judgment', 'prs', 'now',
+  ]);
   assert.equal(context.normalizeDisplay({ ...base, hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).longWaitMinutes, 15);
-  assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).awayAnswerWaitMinutes, 5);
+  assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).awayAnswerWaitMinutes, 3);
   for (const idleHideMinutes of [4, 1441, 30.5]) {
-    assert.equal(context.normalizeDisplay({ ...base, idleHideMinutes }).idleHideMinutes, 30);
+    assert.equal(context.normalizeDisplay({ ...base, idleHideMinutes }).idleHideMinutes, 10);
   }
   for (const idleHideMinutes of [5, 1440]) {
     assert.equal(context.normalizeDisplay({ ...base, idleHideMinutes }).idleHideMinutes, idleHideMinutes);
@@ -498,8 +505,8 @@ test('表示時間の保存に失敗した数値設定を元に戻す', async ()
   const context = pageContext(web, {
     displayPreferences: { longWaitMinutes: 15 },
     DEFAULT_LONG_WAIT_MINUTES: 15,
-    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
-    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
+    DEFAULT_IDLE_HIDE_MINUTES: 10,
     displayPreferencesReady: true,
     displayPreferenceSaveStates: new Map(),
     pendingDisplayChanges: {},
@@ -561,12 +568,13 @@ test('モックの待ち時間設定を localStorage の UI 状態へ保存す�
 
 test('セクションの並び順を保存し、端のボタンを無効化してフォーカスを維持する', () => {
   const sectionKinds = web.match(/const SECTION_KINDS = \[[\s\S]*?\n\];/)?.[0];
+  const sectionOrderKeys = web.match(/const SECTION_ORDER_KEYS = [^\n]+/)?.[0];
   const defaultOrder = web.match(/const DEFAULT_SECTION_ORDER = [^\n]+/)?.[0];
   const normalize = functionSource(web, 'normalizeSectionOrder');
   const renderOrder = functionSource(web, 'renderSectionOrder');
   const moveHandler = web.match(/sectionOrderList\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
   const resetHandler = web.match(/document\.getElementById\('settings-section-order-reset'\)\.addEventListener\('click', \(\) => \{[\s\S]*?\n\}\);/)?.[0];
-  assert.ok(sectionKinds && defaultOrder && normalize && renderOrder && moveHandler && resetHandler);
+  assert.ok(sectionKinds && sectionOrderKeys && defaultOrder && normalize && renderOrder && moveHandler && resetHandler);
   assert.match(web, /id="settings-section-order" aria-labelledby="settings-section-order-title" aria-describedby="settings-section-order-note"/);
   assert.deepEqual(Object.fromEntries(cssDeclarations(web, '.settings-section-order')), { 'margin-top': '14px' });
   assert.deepEqual(Object.fromEntries(cssDeclarations(web, '.section-order-list button')), {
@@ -611,7 +619,7 @@ test('セクションの並び順を保存し、端のボタンを無効化し�
     lastState: {},
     render: () => { renderCount += 1; },
   });
-  vm.runInContext([sectionKinds, defaultOrder, elementSource, normalize, renderOrder, moveHandler, resetHandler].join('\n'), context);
+  vm.runInContext([sectionKinds, sectionOrderKeys, defaultOrder, elementSource, normalize, renderOrder, moveHandler, resetHandler].join('\n'), context);
   context.renderSectionOrder();
   const buttonOf = (key, direction) => sectionOrderList.children.flatMap((item) => item.children)
     .find((node) => node.dataset.sectionMove === key && node.dataset.dir === direction);
@@ -632,7 +640,7 @@ test('セクションの並び順を保存し、端のボタンを無効化し�
   move('tasks', '-1');
   assert.deepEqual(focused, { key: 'tasks', direction: '-1' });
   resetClick();
-  assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.sectionOrder)), ['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.sectionOrder)), ['sinceSeen', 'judgment', 'prs', 'tasks', 'now']);
   assert.equal(renderCount, 3);
 
   // 別の画面で順が変わり、同期で一覧を作り直しても、フォーカスは同じ種類と向きのボタンに戻る。
@@ -656,8 +664,9 @@ test('種類別のセクションは設定順に並べる', () => {
   assert.match(webKind, /return orderedSectionKeys\(DEFAULT_SECTION_ORDER\)\.map\(\(key\) => sections\[key\]\)\.filter\(Boolean\)/);
 });
 
-test('種類別とプロダクト別のセクションは設定順に並び、既定順では従来の順を保つ', () => {
+test('種類別とプロダクト別のセクションは既定の欄順に従う', () => {
   const constants = web.match(/const SECTION_KINDS = \[[\s\S]*?\n\];/)?.[0];
+  const sectionOrderKeys = web.match(/const SECTION_ORDER_KEYS = [^\n]+/)?.[0];
   const defaultOrder = web.match(/const DEFAULT_SECTION_ORDER = [^\n]+/)?.[0];
   const normalize = functionSource(web, 'normalizeSectionOrder');
   const ordered = functionSource(web, 'orderedSectionKeys');
@@ -665,7 +674,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
   const renderKinds = functionSource(web, 'renderKindSections');
   const renderSession = functionSource(web, 'sessionBlock');
   const endedDecision = functionSource(web, 'isEndedDecision');
-  assert.ok(constants && defaultOrder && normalize && ordered && visiblePullRequests && renderKinds && renderSession && endedDecision);
+  assert.ok(constants && sectionOrderKeys && defaultOrder && normalize && ordered && visiblePullRequests && renderKinds && renderSession && endedDecision);
 
   function renderWithOrder(sectionOrder) {
     const element = (tag, className = '', textContent = '') => ({
@@ -696,7 +705,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       appendAgents(target) { target.append({ marker: 'agent' }); },
       mainRow: () => ({ marker: 'main' }),
     });
-    vm.runInContext([constants, defaultOrder, normalize, ordered, visiblePullRequests, endedDecision,
+    vm.runInContext([constants, sectionOrderKeys, defaultOrder, normalize, ordered, visiblePullRequests, endedDecision,
       functionSource(web, 'sessionOrigin'), renderKinds, renderSession].join('\n'), context);
     const kindSections = JSON.parse(JSON.stringify(
       context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label),
@@ -708,9 +717,9 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
     return { kindSections, sessionParts };
   }
 
-  const defaultResult = renderWithOrder(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
+  const defaultResult = renderWithOrder(['sinceSeen', 'judgment', 'prs', 'tasks', 'now']);
   assert.deepEqual(defaultResult.kindSections, [
-    '前回見てから', 'あなたの判断が必要なこと', 'タスクと完了条件', '今やっていること', 'プルリクエスト',
+    '前回見てから', 'あなたの判断が必要なこと', 'プルリクエスト', 'タスクと完了条件', '今やっていること',
   ]);
   assert.deepEqual(defaultResult.sessionParts, ['session-1', 'あなたの判断が必要なこと', 'permission', 'decision', 'task', '今やっていること', 'now-content', 'agent']);
 
@@ -1122,8 +1131,8 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     idleHideMinutesInput,
     ...errors,
     DEFAULT_LONG_WAIT_MINUTES: 15,
-    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
-    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
+    DEFAULT_IDLE_HIDE_MINUTES: 10,
     hideFinishedInput,
     mergeableConditionInputs,
     displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: false, mergeableCondition: 'ci' },
@@ -1161,8 +1170,8 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
     displayPreferencesReady: true,
     DISPLAY_MINUTE_SETTINGS: [
       { key: 'longWaitMinutes', input: longWaitMinutesInput, error: null, min: 1, max: 120, default: 15 },
-      { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: null, min: 1, max: 30, default: 5 },
-      { key: 'idleHideMinutes', input: idleHideMinutesInput, error: null, min: 5, max: 1440, default: 30 },
+      { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: null, min: 1, max: 30, default: 3 },
+      { key: 'idleHideMinutes', input: idleHideMinutesInput, error: null, min: 5, max: 1440, default: 10 },
     ],
     mergeableConditionInputs,
     lastState: null,

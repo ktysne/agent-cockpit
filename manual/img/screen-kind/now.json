@@ -11,7 +11,7 @@
       "key": "kind.now-head",
       "bounds": {
         "x": 28,
-        "y": 26,
+        "y": 24,
         "width": 190,
         "height": 48
       },
@@ -21,7 +21,7 @@
       "key": "kind.row-tags",
       "bounds": {
         "x": 148,
-        "y": 124,
+        "y": 122,
         "width": 372,
         "height": 43
       },
@@ -31,7 +31,7 @@
       "key": "kind.row-time",
       "bounds": {
         "x": 1516,
-        "y": 124,
+        "y": 122,
         "width": 68,
         "height": 38
       },

@@ -1444,8 +1444,8 @@ test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲�
     idleHideMinutesInput: { type: 'number', valueAsNumber: 4, value: '4' },
     displayPreferences: { longWaitMinutes: 15, idleHideMinutes: 30 },
     DEFAULT_LONG_WAIT_MINUTES: 15,
-    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
-    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
+    DEFAULT_IDLE_HIDE_MINUTES: 10,
   });
   vm.runInContext(`${settings}\n${inputSource}\n${errorSource}\n${changeSource}\nthis.changeSetting = changeDisplaySetting;`, context);
   assert.equal(await context.changeSetting('longWaitMinutes', input), false);

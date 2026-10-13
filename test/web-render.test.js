@@ -467,10 +467,11 @@ test('ブラウザーに残った旧形式の表示設定を読んでも、サ�
     localStorage: { getItem: (key) => storage.get(key) ?? null },
     DISPLAY_STORAGE_KEY: 'agent-cockpit.display',
     FILTERS: [],
-    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    SECTION_ORDER_KEYS: new Set(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']),
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
     DEFAULT_LONG_WAIT_MINUTES: 15,
-    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
-    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
+    DEFAULT_IDLE_HIDE_MINUTES: 10,
   });
   vm.runInContext(`${settings}\n${sources.join('\n')}`, context);
   const expectedKeys = Object.keys(context.normalizeDisplayPreferences(null)).sort();
@@ -561,7 +562,7 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
   }
   const context = pageContext(pageHtml, {
     document: { createElement: (tagName) => new FakeElement(tagName) },
-    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
     expandedKindSections: new Set(),
     sessionReferences: () => [],
     kindEndedDecisionEntries: () => [],
@@ -1717,7 +1718,7 @@ test('プロダクト別と種類別に前回見てからを表示し、新し�
   assert.match(appendDecisionCard, /if \(decision\.isNew\) header\.append\(badge\('新着', 'new-mark'\)\)/);
 });
 
-test('前回見てからの設定は常にを既定にし、保存値と不正な値を読み分ける', () => {
+test('前回見てからの設定は離席中のみを既定にし、有効な保存値を保つ', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const names = ['applySinceSeenMode', 'storedSinceSeenMode', 'setSinceSeenMode', 'visibleSinceSeen'];
   const functions = names.map((name) => functionSource(source, name));
@@ -1741,8 +1742,13 @@ test('前回見てからの設定は常にを既定にし、保存値と不正�
     lastState: { sinceSeen: [] },
     render: () => { renderCount += 1; },
   });
-  vm.runInContext(`let sinceSeenMode = 'always';\n${functions.join('\n')}`, context);
+  vm.runInContext(`let sinceSeenMode = 'away';\n${functions.join('\n')}`, context);
 
+  assert.equal(context.storedSinceSeenMode(), 'away');
+  context.applySinceSeenMode(context.storedSinceSeenMode());
+  assert.equal(sinceSeenSelect.value, 'away');
+
+  storage.set('agent-cockpit.since-seen', 'always');
   assert.equal(context.storedSinceSeenMode(), 'always');
   context.applySinceSeenMode(context.storedSinceSeenMode());
   assert.equal(sinceSeenSelect.value, 'always');
@@ -1753,7 +1759,7 @@ test('前回見てからの設定は常にを既定にし、保存値と不正�
   assert.equal(sinceSeenSelect.value, 'away');
 
   storage.set('agent-cockpit.since-seen', 'sometimes');
-  assert.equal(context.storedSinceSeenMode(), 'always');
+  assert.equal(context.storedSinceSeenMode(), 'away');
   context.setSinceSeenMode('away');
   assert.equal(storage.get('agent-cockpit.since-seen'), 'away');
   assert.equal(renderCount, 1);
@@ -1766,12 +1772,12 @@ test('前回見てからの設定は常にを既定にし、保存値と不正�
   assert.deepEqual(JSON.parse(JSON.stringify(context.visibleSinceSeen({ sinceSeen: [{ items: [{ text: '履歴' }] }] }))), []);
   assert.equal(renderCount, 2);
   context.setSinceSeenMode('invalid');
-  assert.equal(storage.get('agent-cockpit.since-seen'), 'always');
-  assert.equal(sinceSeenSelect.value, 'always');
+  assert.equal(storage.get('agent-cockpit.since-seen'), 'away');
+  assert.equal(sinceSeenSelect.value, 'away');
   assert.equal(renderCount, 3);
 
   localStorage.getItem = () => { throw new Error('storage unavailable'); };
-  assert.equal(context.storedSinceSeenMode(), 'always');
+  assert.equal(context.storedSinceSeenMode(), 'away');
 });
 
 test('終わったもののチェックは表示設定として保存し、失敗時に戻してフォーカス中は同期しない', async () => {
@@ -1796,10 +1802,11 @@ test('終わったもののチェックは表示設定として保存し、失�
   const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeableCondition: 'cross-review' };
   const context = pageContext(pageHtml, {
     displayPreferences,
-    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    SECTION_ORDER_KEYS: new Set(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']),
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'],
     DEFAULT_LONG_WAIT_MINUTES: 15,
-    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
-    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
+    DEFAULT_IDLE_HIDE_MINUTES: 10,
     FILTERS: [],
     displayPreferencesReady: true,
     pendingDisplayChanges: {},
@@ -1824,7 +1831,7 @@ test('終わったもののチェックは表示設定として保存し、失�
   vm.runInContext(`${settings}\n${functions.join('\n')}\n${saveFunctions.join('\n')}`, context);
 
   assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
-  assert.equal(context.normalizeDisplayPreferences(null).idleHideMinutes, 30);
+  assert.equal(context.normalizeDisplayPreferences(null).idleHideMinutes, 10);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: true }).hideFinished, true);
   assert.equal(context.normalizeDisplayPreferences({}).mergeableCondition, 'cross-review');

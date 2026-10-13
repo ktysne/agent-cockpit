@@ -3,20 +3,21 @@
 const { isRecord } = require('./value-utils');
 
 const SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
+const DEFAULT_SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'prs', 'tasks', 'now']);
 const DISPLAY_FILTERS = Object.freeze(['permission', 'blocking', 'provisional', 'agents', 'prs']);
 // 有効な表示フィルターではない held は保存値から除き、更新要求でも拒否する。
 const LEGACY_DISPLAY_FILTERS = Object.freeze(['held']);
 
 const DISPLAY_SCHEMA = Object.freeze({
-  mode: Object.freeze({ type: 'enum', default: 'product', values: Object.freeze(['product', 'kind']) }),
+  mode: Object.freeze({ type: 'enum', default: 'kind', values: Object.freeze(['product', 'kind']) }),
   order: Object.freeze({ type: 'string-array', default: Object.freeze([]), maxItems: 200, maxItemLength: 500 }),
   pinned: Object.freeze({ type: 'string-array', default: Object.freeze([]), maxItems: 200, maxItemLength: 500 }),
   collapsed: Object.freeze({ type: 'string-array', default: Object.freeze([]), maxItems: 200, maxItemLength: 500 }),
   hidden: Object.freeze({ type: 'filter-array', default: Object.freeze([]), maxItems: 200, maxPatchItems: DISPLAY_FILTERS.length, maxItemLength: 500 }),
-  sectionOrder: Object.freeze({ type: 'section-array', default: SECTION_ORDER, maxPatchItems: SECTION_ORDER.length }),
+  sectionOrder: Object.freeze({ type: 'section-array', default: DEFAULT_SECTION_ORDER, maxPatchItems: SECTION_ORDER.length }),
   longWaitMinutes: Object.freeze({ type: 'integer', default: 15, minimum: 1, maximum: 120 }),
-  awayAnswerWaitMinutes: Object.freeze({ type: 'integer', default: 5, minimum: 1, maximum: 30 }),
-  idleHideMinutes: Object.freeze({ type: 'integer', default: 30, minimum: 5, maximum: 1440 }),
+  awayAnswerWaitMinutes: Object.freeze({ type: 'integer', default: 3, minimum: 1, maximum: 30 }),
+  idleHideMinutes: Object.freeze({ type: 'integer', default: 10, minimum: 5, maximum: 1440 }),
   hideFinished: Object.freeze({ type: 'boolean', default: true }),
   mergeableCondition: Object.freeze({ type: 'enum', default: 'cross-review', values: Object.freeze(['operation', 'ci', 'cross-review']) }),
 });
@@ -46,7 +47,7 @@ function normalizeSectionOrder(order) {
   for (const key of Array.isArray(order) ? order : []) {
     if (SECTION_ORDER_KEYS.has(key) && !known.includes(key)) known.push(key);
   }
-  return [...known, ...SECTION_ORDER.filter((key) => !known.includes(key))];
+  return [...known, ...DEFAULT_SECTION_ORDER.filter((key) => !known.includes(key))];
 }
 
 function normalizeDisplay(value) {
@@ -120,6 +121,7 @@ function validStringArray(value, maximumItems, maximumItemLength, requireUnique 
 
 module.exports = {
   DEFAULT_DISPLAY,
+  DEFAULT_SECTION_ORDER,
   DISPLAY_FILTERS,
   DISPLAY_SCHEMA,
   SECTION_ORDER,

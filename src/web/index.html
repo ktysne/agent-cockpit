@@ -489,8 +489,8 @@ h3.sub .count { font-weight: normal; }
 <main>
   <div class="mode-row">
     <div class="seg" role="group" aria-label="表示モード">
-      <button type="button" data-action="mode" data-mode="product" aria-pressed="true">プロダクト別</button>
-      <button type="button" data-action="mode" data-mode="kind" aria-pressed="false">種類別</button>
+      <button type="button" data-action="mode" data-mode="product" aria-pressed="false">プロダクト別</button>
+      <button type="button" data-action="mode" data-mode="kind" aria-pressed="true">種類別</button>
     </div>
   </div>
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -508,8 +508,8 @@ h3.sub .count { font-weight: normal; }
 const POLL_INTERVAL_MS = 2000;
 const WAIT_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_LONG_WAIT_MINUTES = 15;
-const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
-const DEFAULT_IDLE_HIDE_MINUTES = 30;
+const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 3;
+const DEFAULT_IDLE_HIDE_MINUTES = 10;
 const summary = document.getElementById('summary');
 const root = document.getElementById('root');
 const liveStatus = document.getElementById('live-status');
@@ -560,7 +560,7 @@ const ROUTE = {
 const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
 let lastVersion = null;
 let lastState = null;
-let sinceSeenMode = 'always';
+let sinceSeenMode = 'away';
 let showIdleSessions = false;
 let hasRenderedState = false;
 let answerNoteComposing = false;
@@ -626,11 +626,12 @@ const SECTION_KINDS = [
   { key: 'now', label: '今やっていること' },
   { key: 'prs', label: 'プルリクエスト' },
 ];
-const DEFAULT_SECTION_ORDER = SECTION_KINDS.map(({ key }) => key);
+const SECTION_ORDER_KEYS = new Set(SECTION_KINDS.map(({ key }) => key));
+const DEFAULT_SECTION_ORDER = ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'];
 
 function normalizeSectionOrder(order) {
   const known = (Array.isArray(order) ? order : []).filter((key, index, list) => (
-    DEFAULT_SECTION_ORDER.includes(key) && list.indexOf(key) === index
+    SECTION_ORDER_KEYS.has(key) && list.indexOf(key) === index
   ));
   return [...known, ...DEFAULT_SECTION_ORDER.filter((key) => !known.includes(key))];
 }
@@ -685,7 +686,7 @@ function readDisplayPreferences() {
 function normalizeDisplayPreferences(value) {
   const uniqueStrings = (items) => [...new Set(Array.isArray(items) ? items.filter((item) => typeof item === 'string').slice(0, 200) : [])];
   return {
-    mode: value?.mode === 'kind' ? 'kind' : 'product',
+    mode: value?.mode === 'product' ? 'product' : 'kind',
     order: uniqueStrings(value?.order),
     pinned: uniqueStrings(value?.pinned),
     collapsed: uniqueStrings(value?.collapsed),
@@ -902,7 +903,7 @@ themeSelect.addEventListener('change', () => {
 });
 
 function applySinceSeenMode(mode) {
-  sinceSeenMode = ['always', 'away', 'never'].includes(mode) ? mode : 'always';
+  sinceSeenMode = ['always', 'away', 'never'].includes(mode) ? mode : 'away';
   sinceSeenSelect.value = sinceSeenMode;
 }
 
@@ -912,7 +913,7 @@ function storedSinceSeenMode() {
     if (mode === 'always' || mode === 'away' || mode === 'never') return mode;
   } catch {
   }
-  return 'always';
+  return 'away';
 }
 
 function visibleSinceSeen(state) {

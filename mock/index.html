@@ -471,8 +471,8 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 <main class="wrap">
   <div class="mode-row">
     <div class="seg" role="group" aria-label="表示モード">
-      <button type="button" data-mode="product" aria-pressed="true">プロダクト別</button>
-      <button type="button" data-mode="kind" aria-pressed="false">種類別</button>
+      <button type="button" data-mode="product" aria-pressed="false">プロダクト別</button>
+      <button type="button" data-mode="kind" aria-pressed="true">種類別</button>
     </div>
   </div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
@@ -705,7 +705,7 @@ const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) ||
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
 // 読み込み直すと消える案内なので、保存する ui には置かない。
 let refreshConfirmPending = false;
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+const ui = Object.assign({ mode: 'kind', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 3, idleHideMinutes: 10, hideFinished: true, mergeableCondition: 'cross-review' }, load());
 const TRANSIENT_NOTICE_MS = 60_000;
 ui.reservationNotices = ui.reservationNotices && typeof ui.reservationNotices === 'object' && !Array.isArray(ui.reservationNotices) ? ui.reservationNotices : {};
 ui.mergeErrors = ui.mergeErrors && typeof ui.mergeErrors === 'object' && !Array.isArray(ui.mergeErrors) ? ui.mergeErrors : {};
@@ -846,7 +846,7 @@ function applyAway(away) {
 
 const sinceSeenSelect = document.getElementById('settings-since-seen-select');
 function applySinceSeenMode(mode) {
-  ui.sinceSeenMode = ['always', 'away', 'never'].includes(mode) ? mode : 'always';
+  ui.sinceSeenMode = ['always', 'away', 'never'].includes(mode) ? mode : 'away';
   sinceSeenSelect.value = ui.sinceSeenMode;
 }
 
@@ -907,10 +907,11 @@ const SECTION_KINDS = [
   { key: 'now', label: '今やっていること' },
   { key: 'prs', label: 'プルリクエスト' },
 ];
-const DEFAULT_SECTION_ORDER = SECTION_KINDS.map(kind => kind.key);
+const SECTION_ORDER_KEYS = new Set(SECTION_KINDS.map(kind => kind.key));
+const DEFAULT_SECTION_ORDER = ['sinceSeen', 'judgment', 'prs', 'tasks', 'now'];
 // 保存した順に知らない種類や欠けた種類があっても、既定の順で補って 5 つすべてを並べる。
 function normalizeSectionOrder(order) {
-  const known = (Array.isArray(order) ? order : []).filter((key, index, list) => DEFAULT_SECTION_ORDER.includes(key) && list.indexOf(key) === index);
+  const known = (Array.isArray(order) ? order : []).filter((key, index, list) => SECTION_ORDER_KEYS.has(key) && list.indexOf(key) === index);
   return [...known, ...DEFAULT_SECTION_ORDER.filter(key => !known.includes(key))];
 }
 const sectionOrderList = document.getElementById('settings-section-order');
