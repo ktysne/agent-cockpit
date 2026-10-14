@@ -4,7 +4,7 @@ const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecis
 const { readRouting } = require('../server/routing');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
-const { codexOutputLines, taskOutputPath, readTaskOutputFile } = require('../shared/task-output');
+const { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, readTaskOutputFile } = require('../shared/task-output');
 const path = require('node:path');
 const { appendPendingHook } = require('../client/hooks-pending');
 const { promisify } = require('node:util');
@@ -321,13 +321,18 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
       if (!TASK_END_STATUSES.has(status)) continue;
       const end = { taskId, status };
       const outputFile = taskNotificationValue(block, 'output-file');
-      if (inspected < 8 && taskOutputPath(taskId, outputFile)) {
+      if (taskOutputPath(taskId, outputFile)) {
+        // 出力を読めなかった通知は送らず、記録ファイルを読み直すサーバーの照合に任せる。出力に waiting があれば行を閉じてはならないため。
+        if (inspected >= 8) continue;
         inspected += 1;
-        try {
-          const output = (options.readTaskOutput || readTaskOutputFile)(outputFile);
+        let output = null;
+        try { output = (options.readTaskOutput || readTaskOutputFile)(outputFile); } catch {}
+        if (output === null) continue;
+        if (output === TASK_OUTPUT_MISSING) end.outputMissing = true;
+        else {
           const codexOutput = codexOutputLines(output);
           if (codexOutput) end.codexOutput = codexOutput;
-        } catch {}
+        }
       }
       backgroundTaskEnds.push(end);
     }

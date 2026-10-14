@@ -51,8 +51,8 @@ function readTaskOutputFile(filePath) {
     const head = readChunk(TASK_OUTPUT_CHUNK_BYTES, 0);
     const tail = readChunk(TASK_OUTPUT_CHUNK_BYTES, size - TASK_OUTPUT_CHUNK_BYTES);
     return joinOutputChunks(head, tail);
-  } catch {
-    return '';
+  } catch (error) {
+    return error?.code === 'ENOENT' ? TASK_OUTPUT_MISSING : null;
   } finally {
     if (fileDescriptor !== undefined) {
       try { fs.closeSync(fileDescriptor); } catch {}
