@@ -2624,17 +2624,22 @@ class DashboardState {
   // Claude の PreToolUse は非同期のフックで、子の Codex のイベントより後に届くことがある。
   // 起動の時刻以降に始まった独立の thread を委譲に直し、起動より前に始まった thread は直さない。
   reclassifyDelegatedThreads(parentSessionId, launchedAt) {
+    let changed = false;
     for (const [threadId, entries] of this.entries) {
       const first = entries[0]?.event;
       if (first?.provider !== 'codex' || first.delegatedFrom || first.claudeParentSessionId !== parentSessionId ||
         first.hookAt < launchedAt) continue;
       first.delegatedFrom = parentSessionId;
       this.entries.set(threadId, [entries[0]]);
-      this.sessions.delete(threadId);
+      changed = this.sessions.delete(threadId) || changed;
       if (this.codexRecovery.delete(threadId)) this.requestStoreWrite();
-      if (this.sessionFiles.get(threadId)?.provider === 'codex') this.sessionFiles.delete(threadId);
+      if (this.sessionFiles.get(threadId)?.provider === 'codex') {
+        this.sessionFiles.delete(threadId);
+        changed = true;
+      }
       this.sessionFileLastSeenAt.delete(threadId);
     }
+    return changed;
   }
 
   hasAgentRow(sessionId, agentId) {
@@ -2772,6 +2777,9 @@ class DashboardState {
     }
     if (!this.acceptSessionWrite(event.session_id, event.hookAt)) return rejected('deleted', true);
 
+    // ファイルだけで出している行は this.sessions に無いので、終了で消えることを比較では拾えない。
+    const endedFileOnlySession = event.hook_event_name === 'SessionEnd' && !this.sessions.has(event.session_id) &&
+      this.sessionFiles.has(event.session_id);
     const endedAt = this.endedAt.get(event.session_id);
     if (endedAt !== undefined && event.hook_event_name !== 'SessionStart') return rejected('ended', true);
     if (endedAt !== undefined && event.hookAt <= endedAt) return rejected('stale', true);
@@ -2779,7 +2787,7 @@ class DashboardState {
     const endedByAbsenceAt = this.endedByAbsence.get(event.session_id);
     if (endedByAbsenceAt !== undefined && event.hookAt <= endedByAbsenceAt) return rejected('absent-stale', true);
 
-    const before = JSON.stringify([...this.sessions.values()]);
+    const before = stableStringify(this.sessions.get(event.session_id) ?? null);
     const wasHidden = this.hiddenSessions.delete(event.session_id);
     if (wasHidden) this.hiddenSessionUpdatedAt.delete(event.session_id);
     if (endedAt !== undefined) {
@@ -2819,9 +2827,8 @@ class DashboardState {
     // 許可待ちはターンの確定を待たずに優先して出るので、許可待ちでも残す。
     const derivedStatus = nextSessions[0]?.status;
     const hadEstimate = derivedStatus !== '不明' && derivedStatus !== '許可待ち' && this.estimates.delete(event.session_id);
-    if (event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition) {
-      this.reclassifyDelegatedThreads(event.session_id, event.hookAt);
-    }
+    const reclassifiedDelegatedThread = event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition
+      ? this.reclassifyDelegatedThreads(event.session_id, event.hookAt) : false;
 
     if (event.hook_event_name === 'SessionEnd') {
       this.diagnostics?.record('info', event.provider === 'codex' ? 'codex' : 'server', 'session.ended',
@@ -2832,7 +2839,8 @@ class DashboardState {
     const reopenedClosedAgent = event.agent_id && event.hook_event_name !== 'SubagentStop'
       ? this.closedAgents.get(event.session_id)?.delete(event.agent_id) : false;
     const clearedClosedAgent = this.reconcileClosedAgents(event.session_id) || reopenedClosedAgent;
-    if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden || clearedClosedAgent) this.touch();
+    if (stableStringify(this.sessions.get(event.session_id) ?? null) !== before || hadEstimate || wasHidden ||
+      clearedClosedAgent || reclassifiedDelegatedThread || correctedAsk || withdrawnAsk || endedFileOnlySession) this.touch();
     if (wasHidden) this.requestStoreWrite();
     if (askDecisionStateChanged || withdrawnAsk || correctedAsk) this.requestStoreWrite();
     return true;
