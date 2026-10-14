@@ -2402,6 +2402,17 @@ test('読み取りの上限で照合できなかった通知は次の照合で�
   assert.equal(state.backgroundCodexAgents('many-run').length, 0);
 });
 
+test('背景タスク ID の無い行も、--wait が Codex の終了を示して返った完了通知では終了にする', async (t) => {
+  for (const status of ['vanished', 'not-found']) {
+    const { state } = await backgroundNotificationCockpit(t, { byRun: true,
+      output: `codex-agent: run=codex-review-20261004-100000-1
+codex-agent: ${status} run=codex-review-20261004-100000-1` });
+    const gpt = state.snapshot().sessions[0].agents.find(agent => agent.agent_id === 'parent').gpt;
+    assert.equal(gpt.active, false);
+    assert.equal(gpt.unconfirmed, false);
+  }
+});
+
 test('外部から送られた内部イベントで状態や背景 Codex の行を変えない', async (t) => {
   const state = new DashboardState();
   state.addEvent({ session_id: 'internal', hook_event_name: 'UserPromptSubmit', hookAt: 1 });
@@ -2419,27 +2430,55 @@ test('外部から送られた内部イベントで状態や背景 Codex の行�
   }
 });
 
-test('記録ファイルの通知が 9 件あっても全行を終了し、出力ファイルは 8 件まで読む', async (t) => {
+test('記録ファイルの通知が 9 件あれば 8 件まで読んで終了し、残りは次の照合で読んでから終了する', async (t) => {
   const state = new DashboardState();
   const ids = Array.from({ length: 9 }, (_, index) => `task-${index}`);
   const notifications = new Map();
+  state.addEvent({ session_id: 'many-bg', hook_event_name: 'UserPromptSubmit', hookAt: 0 });
   for (const [index, taskId] of ids.entries()) {
-    state.addEvent({ session_id: 'many-bg', hook_event_name: 'PreToolUse', hookAt: index * 2,
+    state.addEvent({ session_id: 'many-bg', hook_event_name: 'PreToolUse', hookAt: index * 2 + 1,
       tool_name: 'Bash', tool_use_id: taskId, codexReviewDefinition: 'codex-review' });
-    state.addEvent({ session_id: 'many-bg', hook_event_name: 'PostToolUse', hookAt: index * 2 + 1,
+    state.addEvent({ session_id: 'many-bg', hook_event_name: 'PostToolUse', hookAt: index * 2 + 2,
       tool_name: 'Bash', tool_use_id: taskId, backgroundTaskId: taskId });
     notifications.set(taskId, { status: 'completed', recordedAt: null, outputFile: path.resolve(taskId + '.output') });
   }
   const outputReads = [];
-  await runningServer(t, { state, taskNotificationDelayMs: 1,
+  const runtime = await runningServer(t, { state, taskNotificationDelayMs: 1,
     readTaskNotifications: async () => notifications,
-    readTaskOutput: async file => { outputReads.push(file); return 'codex-agent: result=ok'; },
+    readTaskOutput: async file => {
+      outputReads.push(path.basename(file));
+      return file.endsWith('task-8.output') ? 'codex-agent: waiting run=codex-review-1' : 'codex-agent: result=ok';
+    },
   });
   await new Promise(resolve => setTimeout(resolve, 40));
-  assert.deepEqual(outputReads, ids.slice(0, 8).map(id => path.resolve(id + '.output')));
-  const agents = state.snapshot().sessions[0].agents;
-  assert.ok(agents.every(agent => !agent.active && !agent.unconfirmed));
-  assert.equal(agents[8].resultReceived, undefined);
+  assert.deepEqual(outputReads, ids.slice(0, 8).map(id => id + '.output'));
+  assert.deepEqual(state.backgroundCodexAgents('many-bg').map(agent => agent.backgroundTaskId), ['task-8']);
+  await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({ session_id: 'many-bg', hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read' }) });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(outputReads, ids.map(id => id + '.output'));
+  assert.equal(state.snapshot().sessions[0].agents.find(agent => agent.backgroundTaskId === 'task-8').active, true);
+});
+
+test('出力ファイルを読めなかった通知は行を変えず、次の照合で読み直す', async (t) => {
+  const state = new DashboardState();
+  const runId = 'codex-review-20261004-100000-1';
+  state.addEvent({ session_id: 'read-fail', hook_event_name: 'UserPromptSubmit', hookAt: 1 });
+  state.addEvent({ session_id: 'read-fail', hook_event_name: 'PreToolUse', hookAt: 2, tool_name: 'Bash',
+    tool_use_id: 'wait', summary: `bash codex-agent.sh --wait ${runId}`, codexWaitRunId: runId, agent_id: 'parent' });
+  let reads = 0;
+  const runtime = await runningServer(t, { state, taskNotificationDelayMs: 1,
+    readTaskNotifications: async () => new Map([['task-a', { status: 'completed', recordedAt: null, outputFile: path.resolve('task-a.output') }]]),
+    readTaskOutput: async () => (++reads === 1 ? null : `codex-agent: run=${runId}
+codex-agent: result=ok`),
+  });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(state.backgroundCodexAgents('read-fail').length, 1);
+  await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({ session_id: 'read-fail', hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read' }) });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(reads, 2);
+  assert.equal(state.backgroundCodexAgents('read-fail').length, 0);
 });
 
 test('記録ファイルの run ID が違うか得られなければ背景タスク ID の無い行を終了しない', async (t) => {

@@ -490,8 +490,8 @@ async function startServer(options = {}) {
       (['待機中(サブエージェント稼働中)', '中断'].includes(session.status) &&
         session.agents.some((agent) => !agent.isCodex && agent.active));
   }
-  // 出力を読んで照合できなかった完了通知は、次からは読まない。読み取りの上限で先頭ばかりを読み直さないため。
-  const examinedTaskOutputs = new Map();
+  // 読めた出力は task-id ごとに使い回す。読み取りの上限を先頭の通知の読み直しで使い切らないため。
+  const taskOutputCache = new Map();
   function reconcileTaskNotifications(sessionId) {
     if (closing || !needsTaskNotifications(sessionId)) return Promise.resolve();
     if (notificationReads.has(sessionId)) return notificationReads.get(sessionId);
@@ -504,21 +504,25 @@ async function startServer(options = {}) {
           state.applyTaskNotifications(sessionId, notifications);
         }
         let outputReads = 0;
-        const examined = examinedTaskOutputs.get(sessionId) || new Set();
-        examinedTaskOutputs.set(sessionId, examined);
+        const cache = taskOutputCache.get(sessionId) || new Map();
+        taskOutputCache.set(sessionId, cache);
         for (const [taskId, notification] of notifications) {
           if (!['completed', 'failed', 'killed', 'stopped'].includes(notification.status)) continue;
           const candidates = () => state.backgroundCodexAgents(sessionId).filter(agent =>
             (!agent.backgroundTaskId || agent.backgroundTaskId === taskId) &&
             !(Date.parse(notification.recordedAt) < Date.parse(agent.startedAt)));
           if (!candidates().length) continue;
-          const matchedByTask = candidates().some((agent) => agent.backgroundTaskId === taskId);
-          if (!matchedByTask && examined.has(taskId)) continue;
           const end = { taskId, status: notification.status };
-          if (notification.outputFile && outputReads < 8) {
-            outputReads += 1;
-            examined.add(taskId);
-            end.codexOutput = codexOutputLines(await (options.readTaskOutput || readTaskOutputFileAsync)(notification.outputFile));
+          if (notification.outputFile) {
+            if (!cache.has(taskId)) {
+              // 出力を読めない通知は記録せず、次の照合へ繰り越す。出力に waiting があれば行を閉じてはならないため。
+              if (outputReads >= 8) continue;
+              outputReads += 1;
+              const output = await (options.readTaskOutput || readTaskOutputFileAsync)(notification.outputFile);
+              if (output === null) continue;
+              cache.set(taskId, codexOutputLines(output));
+            }
+            end.codexOutput = cache.get(taskId);
           }
           if (closing) return;
           const runId = parseCodexRunLine(end.codexOutput?.runLine);
@@ -526,7 +530,7 @@ async function startServer(options = {}) {
             state.recordBackgroundTaskEnd(sessionId, end);
           }
         }
-        if (!state.backgroundCodexAgents(sessionId).length) examinedTaskOutputs.delete(sessionId);
+        if (!state.backgroundCodexAgents(sessionId).length) taskOutputCache.delete(sessionId);
       } catch {}
     })().finally(() => notificationReads.delete(sessionId));
     notificationReads.set(sessionId, reading);

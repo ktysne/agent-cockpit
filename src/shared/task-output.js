@@ -84,7 +84,8 @@ async function readTaskOutputFileAsync(filePath) {
     const tail = await readChunk(TASK_OUTPUT_CHUNK_BYTES, size - TASK_OUTPUT_CHUNK_BYTES);
     return joinOutputChunks(head, tail);
   } catch {
-    return '';
+    // 空の出力と区別し、呼び出し側が次の照合で読み直せるようにする。
+    return null;
   } finally {
     if (file) await file.close().catch(() => {});
   }

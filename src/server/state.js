@@ -1028,8 +1028,10 @@ function applyBackgroundTaskEnds(session, event) {
     if (end.codexWaitStatus === 'waiting') continue;
     applyCodexAudit(agent, end);
     agent.active = false;
-    // 終わったのが Codex 本体だと確かめられないときは、終了未確認にする。
-    const unconfirmed = ['orphaned', 'unverified'].includes(end.codexWaitStatus) || !agent.backgroundTaskId;
+    // 終わったのが Codex 本体だと確かめられないときは、終了未確認にする。待機状態の行があればそれに従う。
+    const unconfirmed = end.codexWaitStatus
+      ? ['orphaned', 'unverified'].includes(end.codexWaitStatus)
+      : !agent.backgroundTaskId;
     agent.unconfirmed = unconfirmed;
     if (unconfirmed) agent.waitEnded = true;
   }
