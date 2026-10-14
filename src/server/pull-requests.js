@@ -1127,7 +1127,8 @@ class PullRequestTracker {
       this.deferredRefreshes.delete(key);
       if (!this.state.pullRequestRegistrationsForRepo(owner, repo).length
         && !this.state.relatedPullRequestRegistrationsForRepo(owner, repo).length) return;
-      void this.refreshRepo(owner, repo).catch(() => {});
+      // 先に動いている取得はコマンドの前の状態かもしれないので、合流せず終わるのを待ってから取り直す。
+      void this.refreshRepoFresh(owner, repo).catch(() => {});
     }, Math.max(0, delayMs));
     timeout.unref?.();
     this.deferredRefreshes.set(key, timeout);
