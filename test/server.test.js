@@ -2359,6 +2359,49 @@ test('結果行が無い記録ファイルの完了通知も背景 Codex の稼�
   assert.equal(agent.model, 'gpt-6');
 });
 
+test('--wait が待機の上限で返った完了通知では背景 Codex の行を稼働中のまま残す', async (t) => {
+  const { state } = await backgroundNotificationCockpit(t, {
+    output: 'codex-agent: waiting run=codex-review-20261004-100000-1 elapsed=600s' });
+  const agent = state.snapshot().sessions[0].agents[0];
+  assert.equal(agent.active, true);
+  assert.equal(state.backgroundCodexAgents('background-recovery').length, 1);
+});
+
+test('--wait が Codex 本体の終了を確かめられずに返った完了通知では行を終了未確認にし、照合から外す', async (t) => {
+  const { state } = await backgroundNotificationCockpit(t, {
+    output: 'codex-agent: orphaned run=codex-review-20261004-100000-1' });
+  const agent = state.snapshot().sessions[0].agents[0];
+  assert.equal(agent.active, false);
+  assert.equal(agent.unconfirmed, true);
+  assert.equal(state.backgroundCodexAgents('background-recovery').length, 0);
+});
+
+test('読み取りの上限で照合できなかった通知は次の照合で読まず、未読の通知の run ID で行を終了する', async (t) => {
+  const state = new DashboardState();
+  const runId = 'codex-review-20261004-100000-1';
+  state.addEvent({ session_id: 'many-run', hook_event_name: 'UserPromptSubmit', hookAt: 1 });
+  state.addEvent({ session_id: 'many-run', hook_event_name: 'PreToolUse', hookAt: 2, tool_name: 'Bash',
+    tool_use_id: 'wait', summary: `bash codex-agent.sh --wait ${runId}`, codexWaitRunId: runId, agent_id: 'parent' });
+  const ids = Array.from({ length: 9 }, (_, index) => `task-${index}`);
+  const notifications = new Map(ids.map(taskId =>
+    [taskId, { status: 'completed', recordedAt: null, outputFile: path.resolve(taskId + '.output') }]));
+  const outputReads = [];
+  const runtime = await runningServer(t, { state, taskNotificationDelayMs: 1,
+    readTaskNotifications: async () => notifications,
+    readTaskOutput: async file => {
+      outputReads.push(path.basename(file));
+      return file.endsWith('task-8.output') ? `codex-agent: run=${runId}\ncodex-agent: result=ok` : 'codex-agent: run=other\ncodex-agent: result=ok';
+    },
+  });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(state.backgroundCodexAgents('many-run').length, 1);
+  await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({ session_id: 'many-run', hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read' }) });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(outputReads, ids.map(id => id + '.output'));
+  assert.equal(state.backgroundCodexAgents('many-run').length, 0);
+});
+
 test('外部から送られた内部イベントで状態や背景 Codex の行を変えない', async (t) => {
   const state = new DashboardState();
   state.addEvent({ session_id: 'internal', hook_event_name: 'UserPromptSubmit', hookAt: 1 });

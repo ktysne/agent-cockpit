@@ -286,6 +286,9 @@ function sanitizeEvent(input, metadata = {}) {
         if (audit) end.codexAudit = audit;
         if (result) end.codexResult = result;
         if (runId) end.codexRunId = runId;
+        const waitStatus = typeof item.codexOutput.waitStatusLine === 'string'
+          && item.codexOutput.waitStatusLine.slice(0, 1024).trim().match(/^codex-agent:\s*(waiting|vanished|orphaned|unverified|not-found)\s+run=/);
+        if (waitStatus) end.codexWaitStatus = waitStatus[1];
       }
       return [end];
     });

@@ -838,7 +838,7 @@ function sessionSnapshot(session) {
   // 完了通知の照合だけに使う。親の行にまとめた Codex も含むので表示の形に出さず、画面へ送らないよう列挙しない。
   Object.defineProperty(snapshot, 'backgroundCodex', {
     value: session.agents
-      .filter((agent) => agent.isCodex && agent.backgrounded && (agent.active || agent.unconfirmed) && !agent.resultReceived)
+      .filter((agent) => agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) && !agent.resultReceived)
       .map(({ agent_id, backgroundTaskId, runId, startedAt }) => ({ agent_id, backgroundTaskId, runId, startedAt })),
   });
   return snapshot;
@@ -1022,11 +1022,16 @@ function applyBackgroundTaskEnds(session, event) {
     if (!agent.runId && end.codexRunId) agent.runId = end.codexRunId;
     if (end.codexResult) {
       completeCodexAgent(agent, end);
-    } else {
-      applyCodexAudit(agent, end);
-      agent.active = false;
-      agent.unconfirmed = false;
+      continue;
     }
+    // --wait が待機の上限で返っただけなら、Codex は背景で動き続けている。
+    if (end.codexWaitStatus === 'waiting') continue;
+    applyCodexAudit(agent, end);
+    agent.active = false;
+    // 終わったのが Codex 本体だと確かめられないときは、終了未確認にする。
+    const unconfirmed = ['orphaned', 'unverified'].includes(end.codexWaitStatus) || !agent.backgroundTaskId;
+    agent.unconfirmed = unconfirmed;
+    if (unconfirmed) agent.waitEnded = true;
   }
 }
 
