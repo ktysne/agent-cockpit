@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const net = require('node:net');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isGithubCredentialEnvironmentVariable } = require('../server/credential-environment');
 const { DEFAULT_PORT } = require('../server/server-constants');
@@ -128,24 +129,62 @@ async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeo
   }
 }
 
-async function serverIsHealthy(info, { fetchImpl = fetch, deadline = Date.now() + 250, now = Date.now } = {}) {
-  if (!info) return false;
+async function canConnectToPort(port, { deadline = Date.now() + 200, now = Date.now } = {}) {
+  const timeoutMs = Math.min(200, deadline - now());
+  if (timeoutMs <= 0) return false;
+
+  return new Promise((resolve) => {
+    let socket;
+    let settled = false;
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    const finish = (connected) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket?.destroy();
+      resolve(connected);
+    };
+
+    try {
+      socket = net.createConnection({ host: '127.0.0.1', port });
+      socket.once('connect', () => finish(true));
+      socket.once('error', () => finish(false));
+      socket.once('timeout', () => finish(false));
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+// 'healthy'、応答が何も届かないまま期限を過ぎた 'timeout'、それ以外(接続できない、別のアプリ、別の起動)の 'unhealthy' を返す。
+// 応答が届いてから本文が期限に間に合わない相手は、本文を返し切らない別のアプリかもしれないので 'timeout' にしない。
+async function serverHealth(info, { fetchImpl = fetch, deadline = Date.now() + 250, now = Date.now } = {}) {
+  if (!info) return 'unhealthy';
+  let responseReceived = false;
   try {
     const result = await fetchWithDeadline(
       fetchImpl,
       `http://127.0.0.1:${info.port}/health`,
       { method: 'GET' },
       deadline,
-      120,
+      Math.min(500, deadline - now()),
       now,
-      async (response) => ({ ok: response.ok, json: response.ok ? await response.json() : null }),
+      async (response) => {
+        responseReceived = true;
+        return { ok: response.ok, json: response.ok ? await response.json() : null };
+      },
     );
-    if (!result.ok) return false;
+    if (!result.ok) return 'unhealthy';
     const health = result.json;
-    return health.app === 'agent-cockpit' && health.pid === info.pid && health.startedAt === info.startedAt;
-  } catch {
-    return false;
+    return health.app === 'agent-cockpit' && health.pid === info.pid && health.startedAt === info.startedAt ? 'healthy' : 'unhealthy';
+  } catch (error) {
+    const timedOut = error?.code === 'ATTEMPT_TIMEOUT' || error?.code === 'DEADLINE_TIMEOUT';
+    return timedOut && !responseReceived ? 'timeout' : 'unhealthy';
   }
+}
+
+async function serverIsHealthy(info, options) {
+  return await serverHealth(info, options) === 'healthy';
 }
 
 async function waitForHealthyServer(homeDir, { fetchImpl = fetch, deadline, intervalMs = 35, readInfo = readServerInfo, fileSystem, now = Date.now } = {}) {
@@ -165,17 +204,28 @@ async function ensureServerRunning({
   deadline = Date.now() + HOOK_TIMEOUT_MS,
   readInfo = readServerInfo,
   fileSystem = fsp,
+  canConnectToPort: checkPort = canConnectToPort,
   now = Date.now,
 } = {}) {
+  // 応答が遅いだけで番号が埋まっていれば、起動しても EADDRINUSE で終わるので起動しない。
+  // 応答はあるが識別が合わないときは別のアプリなので、秘密値を送らないよう server.json の情報を返さない。
+  const reusableInfo = async (current) => {
+    const health = await serverHealth(current, { fetchImpl, deadline, now });
+    if (health === 'healthy') return current;
+    if (health === 'timeout' && await checkPort(current.port ?? DEFAULT_PORT, { deadline, now })) return current;
+    return null;
+  };
   let info = await readInfo(homeDir, fileSystem);
-  if (await serverIsHealthy(info, { fetchImpl, deadline, now })) return info;
+  const reused = await reusableInfo(info);
+  if (reused) return reused;
 
   const token = await acquireStartLock(homeDir, now(), fileSystem);
   if (!token) return waitForHealthyServer(homeDir, { fetchImpl, deadline, readInfo, fileSystem, now });
 
   try {
     info = await readInfo(homeDir, fileSystem);
-    if (await serverIsHealthy(info, { fetchImpl, deadline, now })) return info;
+    const reusedAfterLock = await reusableInfo(info);
+    if (reusedAfterLock) return reusedAfterLock;
     await startServer({ homeDir, environment });
     return await waitForHealthyServer(homeDir, { fetchImpl, deadline, readInfo, fileSystem, now });
   } catch {
@@ -233,6 +283,7 @@ async function postToServer(requestPath, body, options = {}) {
     environment,
     deadline,
     startServer: options.startServer || ((args) => launchServer(args)),
+    canConnectToPort: options.canConnectToPort,
     readInfo,
     fileSystem,
     now,
@@ -299,6 +350,7 @@ module.exports = {
   DEFAULT_PORT,
   HOOK_TIMEOUT_MS,
   acquireStartLock,
+  canConnectToPort,
   childEnvironment,
   ensureServerRunning,
   fetchWithDeadline,

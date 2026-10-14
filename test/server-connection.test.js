@@ -2,7 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { postToServer } = require('../src/client/server-connection');
+const { postToServer, serverIsHealthy, ensureServerRunning } = require('../src/client/server-connection');
+const { temporaryDirectory } = require('./support/temp');
 
 function serverInfo(port, secret) {
   return { port, secret, pid: 1234, startedAt: '2026-10-05T00:00:00.000Z' };
@@ -11,6 +12,113 @@ function serverInfo(port, secret) {
 function successResponse() {
   return { ok: true, status: 200, json: async () => ({ accepted: true }) };
 }
+
+function healthResponse(info) {
+  return { ok: true, json: async () => ({ app: 'agent-cockpit', pid: info.pid, startedAt: info.startedAt }) };
+}
+
+function waitForAbort(_url, { signal }) {
+  return new Promise((_, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  });
+}
+
+test('/health が 120ms より遅く 500ms 以内に返れば健全と判定する', async () => {
+  const info = serverInfo(41001, 'secret');
+  const healthy = await serverIsHealthy(info, {
+    deadline: Date.now() + 1000,
+    fetchImpl: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 160));
+      return healthResponse(info);
+    },
+  });
+
+  assert.equal(healthy, true);
+});
+
+test('/health が期限内に返らず番号へ接続できるときは起動せず server.json の情報を返す', async (t) => {
+  const temporary = temporaryDirectory(t, 'agent-cockpit-connection-test-');
+  const info = serverInfo(41001, 'secret');
+  let starts = 0;
+  let portChecks = 0;
+  const result = await ensureServerRunning({
+    homeDir: temporary.directory,
+    deadline: Date.now() + 1400,
+    readInfo: async () => info,
+    fetchImpl: waitForAbort,
+    canConnectToPort: async (port) => {
+      assert.equal(port, info.port);
+      portChecks += 1;
+      return portChecks === 2;
+    },
+    startServer: async () => { starts += 1; },
+  });
+
+  assert.equal(result, info);
+  assert.equal(portChecks, 2);
+  assert.equal(starts, 0);
+});
+
+test('/health の識別が合わない相手には、番号へ接続できても server.json の情報を返さない', async (t) => {
+  const temporary = temporaryDirectory(t, 'agent-cockpit-connection-test-');
+  const info = serverInfo(41001, 'secret');
+  let portChecks = 0;
+  const result = await ensureServerRunning({
+    homeDir: temporary.directory,
+    deadline: Date.now() + 300,
+    readInfo: async () => info,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'other-app' }) }),
+    canConnectToPort: async () => { portChecks += 1; return true; },
+    startServer: async () => {},
+  });
+
+  assert.equal(result, null);
+  assert.equal(portChecks, 0);
+});
+
+test('/health が応答した後に本文を返し切らない相手には、番号へ接続できても server.json の情報を返さない', async (t) => {
+  const temporary = temporaryDirectory(t, 'agent-cockpit-connection-test-');
+  const info = serverInfo(41001, 'secret');
+  let portChecks = 0;
+  const result = await ensureServerRunning({
+    homeDir: temporary.directory,
+    deadline: Date.now() + 700,
+    readInfo: async () => info,
+    fetchImpl: async () => ({ ok: true, json: () => new Promise(() => {}) }),
+    canConnectToPort: async () => { portChecks += 1; return true; },
+    startServer: async () => {},
+  });
+
+  assert.equal(result, null);
+  assert.equal(portChecks, 0);
+});
+
+test('/health が期限内に返らず番号へ接続できないときはサーバーを起動する', async (t) => {
+  const temporary = temporaryDirectory(t, 'agent-cockpit-connection-test-');
+  const info = serverInfo(41001, 'secret');
+  let starts = 0;
+  let portChecks = 0;
+  let started = false;
+  const result = await ensureServerRunning({
+    homeDir: temporary.directory,
+    deadline: Date.now() + 1400,
+    readInfo: async () => info,
+    fetchImpl: async (url, options) => {
+      if (started) return healthResponse(info);
+      return waitForAbort(url, options);
+    },
+    canConnectToPort: async (port) => {
+      assert.equal(port, info.port);
+      portChecks += 1;
+      return false;
+    },
+    startServer: async () => { starts += 1; started = true; },
+  });
+
+  assert.equal(result, info);
+  assert.equal(portChecks, 2);
+  assert.equal(starts, 1);
+});
 
 test('401 の後に server.json を読み直して新しい secret で再送する', async () => {
   const previousInfo = serverInfo(41001, 'old-secret');
