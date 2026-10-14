@@ -131,6 +131,10 @@ function createHookRoutes(ctx) {
   }
 
   async function handleEvents({ response, body }) {
+    if (body?.hook_event_name === 'BackgroundTaskEnd' || (body?.hook_event_name === 'Interrupt' && body.provider !== 'codex')) {
+      jsonResponse(response, 202, { accepted: true });
+      return;
+    }
     recordClientEntries(ctx.diagnostics, body?.diagnostics, 'hook');
     const receivedAt = Date.now();
     state.captureFieldNames(body);

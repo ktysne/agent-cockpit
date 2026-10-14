@@ -13,6 +13,8 @@ const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers');
 const { readTaskNotifications, readSessionModel, readTranscriptInterruption } = require('./transcript');
+const { codexOutputLines, readTaskOutputFileAsync } = require('../shared/task-output');
+const { parseCodexRunLine } = require('./events');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { isShortSessionId } = require('./session-ids');
 const { listLiveSessionFiles, readCodexSessionNames, findLiveSessionIdByPid, processIsAlive } = require('./session-files');
@@ -483,9 +485,10 @@ async function startServer(options = {}) {
   }
   function needsTaskNotifications(sessionId) {
     const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
-    // メインが止まっているのは、Stop の後と、利用者が中断した後。どちらも背景のタスクの完了通知を取り込む。
-    return session?.provider !== 'codex' && (session?.status === '待機中(サブエージェント稼働中)' || session?.status === '中断')
-      && session.agents.some((agent) => !agent.isCodex && agent.active);
+    if (!session || session.provider === 'codex') return false;
+    return state.backgroundCodexAgents(sessionId).length > 0 ||
+      (['待機中(サブエージェント稼働中)', '中断'].includes(session.status) &&
+        session.agents.some((agent) => !agent.isCodex && agent.active));
   }
   function reconcileTaskNotifications(sessionId) {
     if (closing || !needsTaskNotifications(sessionId)) return Promise.resolve();
@@ -494,7 +497,28 @@ async function startServer(options = {}) {
       try {
         const file = state.sessionFileFor(sessionId);
         const notifications = await notificationReader(claudeHome, file?.cwd, sessionId);
-        if (!closing && needsTaskNotifications(sessionId)) state.applyTaskNotifications(sessionId, notifications);
+        if (closing || !needsTaskNotifications(sessionId)) return;
+        if (['待機中(サブエージェント稼働中)', '中断'].includes(state.sessions.get(sessionId)?.status)) {
+          state.applyTaskNotifications(sessionId, notifications);
+        }
+        let outputReads = 0;
+        for (const [taskId, notification] of notifications) {
+          if (!['completed', 'failed', 'killed', 'stopped'].includes(notification.status)) continue;
+          const candidates = () => state.backgroundCodexAgents(sessionId).filter(agent =>
+            (!agent.backgroundTaskId || agent.backgroundTaskId === taskId) &&
+            !(Date.parse(notification.recordedAt) < Date.parse(agent.startedAt)));
+          if (!candidates().length) continue;
+          const end = { taskId, status: notification.status };
+          if (notification.outputFile && outputReads < 8) {
+            outputReads += 1;
+            end.codexOutput = codexOutputLines(await (options.readTaskOutput || readTaskOutputFileAsync)(notification.outputFile));
+          }
+          if (closing) return;
+          const runId = parseCodexRunLine(end.codexOutput?.runLine);
+          if (candidates().some(agent => agent.backgroundTaskId === taskId || (!agent.backgroundTaskId && runId && agent.runId === runId))) {
+            state.recordBackgroundTaskEnd(sessionId, end);
+          }
+        }
       } catch {}
     })().finally(() => notificationReads.delete(sessionId));
     notificationReads.set(sessionId, reading);

@@ -78,7 +78,7 @@ test('モデルの読み取り中の Stop は同じセッションの読み取�
   assert.equal(maxActive, 1);
 });
 
-test('待機中で稼働中の Claude サブエージェントがあるセッションだけ、メインのイベントの後に記録を読む', async (t) => {
+test('待機中の Claude サブエージェントと背景 Codex があるセッションはメインのイベントの後に記録を読む', async (t) => {
   const state = new DashboardState();
   const reads = [];
   const runtime = await runningServer(t, {
@@ -108,7 +108,7 @@ test('待機中で稼働中の Claude サブエージェントがあるセッシ
   await send('agent-event-only', { hook_event_name: 'Stop' });
   await send('agent-event-only', { hook_event_name: 'SubagentStart', agent_id: 'claude-task' });
   await new Promise(resolve => setTimeout(resolve, 80));
-  assert.deepEqual(reads, [{ cwd: runtime.homeDir, id: 'waiting-claude' }]);
+  assert.deepEqual(reads, ['waiting-codex', 'waiting-claude'].map(id => ({ cwd: runtime.homeDir, id })));
   assert.equal(state.snapshot().sessions.find(session => session.session_id === 'waiting-claude').status, '待機中');
 });
 
@@ -2297,4 +2297,111 @@ test('Claude のセッションのフォルダーを読めないときは、セ�
   await fs.mkdir(claudeHome, { recursive: true });
   await fs.writeFile(path.join(claudeHome, 'sessions'), 'not a directory');
   assert.equal(await hasSessionJsonFiles(claudeHome), true);
+});
+
+
+async function backgroundNotificationCockpit(t, { byRun = false, output = 'codex-agent: result=ok' } = {}) {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const state = new DashboardState();
+  const sessionId = 'background-recovery';
+  const runId = 'codex-review-20261004-100000-1';
+  state.syncSessionFiles([{ session_id: sessionId, cwd: homeDir }]);
+  state.addEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: 1 });
+  state.addEvent({ session_id: sessionId, hook_event_name: 'PreToolUse', hookAt: 2,
+    tool_name: 'Bash', tool_use_id: 'launch', summary: byRun ? `bash codex-agent.sh --wait ${runId}` : 'npm run review:codex',
+    ...(byRun ? { codexWaitRunId: runId, agent_id: 'parent' } : { codexReviewDefinition: 'codex-review' }),
+  });
+  if (!byRun) state.addEvent({ session_id: sessionId, hook_event_name: 'PostToolUse', hookAt: 3,
+    tool_name: 'Bash', tool_use_id: 'launch', backgroundTaskId: 'task-a' });
+  const outputFile = path.join(homeDir, 'task-a.output');
+  await fs.writeFile(outputFile, output);
+  const directory = path.join(claudeHome, 'projects', homeDir.replace(/[^A-Za-z0-9]/g, '-'));
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, sessionId + '.jsonl'), JSON.stringify({
+    type: 'queue-operation', operation: 'enqueue', timestamp: new Date(10).toISOString(),
+    content: `<task-notification><task-id>task-a</task-id><output-file>${outputFile}</output-file><status>completed</status></task-notification>`,
+  }));
+  const before = state.snapshot().sessions[0];
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, state, taskNotificationDelayMs: 1 });
+  t.after(() => runtime.close());
+  await new Promise(resolve => setTimeout(resolve, 40));
+  return { state, before, runtime, sessionId };
+}
+
+test('フックの通知が無くても記録ファイルの task-id で背景 Codex を終了し結果を反映する', async (t) => {
+  const { state, before } = await backgroundNotificationCockpit(t, {
+    output: 'codex-agent: agent=codex-review model=gpt-6 effort=high codex_home=C:/codex\n' + 'x'.repeat(160 * 1024) + '\ncodex-agent: result=ok',
+  });
+  const after = state.snapshot().sessions[0];
+  assert.equal(after.agents[0].active, false);
+  assert.equal(after.agents[0].resultReceived, true);
+  assert.equal(after.agents[0].model, 'gpt-6');
+  assert.equal(after.status, '作業中');
+  assert.equal(after.status, before.status);
+  assert.equal(after.lastActivityAt, before.lastActivityAt);
+});
+
+test('PostToolUse が無く背景タスク ID を持たない待ちの行を、記録ファイルの run ID で終了する', async (t) => {
+  const { state } = await backgroundNotificationCockpit(t, { byRun: true,
+    output: 'codex-agent: run=codex-review-20261004-100000-1\ncodex-agent: result=ok' });
+  assert.equal(state.backgroundCodexAgents('background-recovery').length, 0);
+  const parent = state.snapshot().sessions[0].agents.find(agent => agent.agent_id === 'parent');
+  assert.equal(parent.gpt.active, false);
+});
+
+test('結果行が無い記録ファイルの完了通知も背景 Codex の稼働と終了未確認を外す', async (t) => {
+  const { state } = await backgroundNotificationCockpit(t, {
+    output: 'codex-agent: agent=codex-review model=gpt-6 effort=high codex_home=C:/codex' });
+  const agent = state.snapshot().sessions[0].agents[0];
+  assert.equal(agent.active, false);
+  assert.equal(agent.unconfirmed, false);
+  assert.equal(agent.resultReceived, undefined);
+  assert.equal(agent.model, 'gpt-6');
+});
+
+test('外部から送られた内部イベントで状態や背景 Codex の行を変えない', async (t) => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'internal', hook_event_name: 'UserPromptSubmit', hookAt: 1 });
+  state.addEvent({ session_id: 'internal', hook_event_name: 'PreToolUse', hookAt: 2,
+    tool_name: 'Bash', tool_use_id: 'launch', codexReviewDefinition: 'codex-review' });
+  state.addEvent({ session_id: 'internal', hook_event_name: 'PostToolUse', hookAt: 3,
+    tool_name: 'Bash', tool_use_id: 'launch', backgroundTaskId: 'task-a' });
+  const runtime = await runningServer(t, { state, readTaskNotifications: async () => new Map() });
+  const before = state.snapshot().sessions[0];
+  for (const hook_event_name of ['Interrupt', 'BackgroundTaskEnd']) {
+    await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+      body: JSON.stringify({ session_id: 'internal', hook_event_name,
+        backgroundTaskEnds: [{ taskId: 'task-a', status: 'completed' }] }) });
+    assert.deepEqual(state.snapshot().sessions[0], before);
+  }
+});
+
+test('記録ファイルの通知が 9 件あっても全行を終了し、出力ファイルは 8 件まで読む', async (t) => {
+  const state = new DashboardState();
+  const ids = Array.from({ length: 9 }, (_, index) => `task-${index}`);
+  const notifications = new Map();
+  for (const [index, taskId] of ids.entries()) {
+    state.addEvent({ session_id: 'many-bg', hook_event_name: 'PreToolUse', hookAt: index * 2,
+      tool_name: 'Bash', tool_use_id: taskId, codexReviewDefinition: 'codex-review' });
+    state.addEvent({ session_id: 'many-bg', hook_event_name: 'PostToolUse', hookAt: index * 2 + 1,
+      tool_name: 'Bash', tool_use_id: taskId, backgroundTaskId: taskId });
+    notifications.set(taskId, { status: 'completed', recordedAt: null, outputFile: path.resolve(taskId + '.output') });
+  }
+  const outputReads = [];
+  await runningServer(t, { state, taskNotificationDelayMs: 1,
+    readTaskNotifications: async () => notifications,
+    readTaskOutput: async file => { outputReads.push(file); return 'codex-agent: result=ok'; },
+  });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(outputReads, ids.slice(0, 8).map(id => path.resolve(id + '.output')));
+  const agents = state.snapshot().sessions[0].agents;
+  assert.ok(agents.every(agent => !agent.active && !agent.unconfirmed));
+  assert.equal(agents[8].resultReceived, undefined);
+});
+
+test('記録ファイルの run ID が違うか得られなければ背景タスク ID の無い行を終了しない', async (t) => {
+  for (const output of ['codex-agent: run=codex-review-20261004-100000-2\ncodex-agent: result=ok', 'codex-agent: result=ok']) {
+    const { state } = await backgroundNotificationCockpit(t, { byRun: true, output });
+    assert.equal(state.snapshot().sessions[0].agents.find(agent => agent.agent_id === 'parent').gpt.active, true);
+  }
 });

@@ -635,3 +635,24 @@ test('形に合わない背景タスク ID はフックもサーバーの正規�
   assert.equal(dropped.backgroundTaskId, undefined);
   assert.equal(dropped.backgroundOutputTaskId, undefined);
 });
+
+
+test('完了通知が 9 件あっても全 ID を送り、出力ファイルは 8 件まで読む', () => {
+  const readPaths = [];
+  const ids = Array.from({ length: 9 }, (_, index) => `task-${index}`);
+  const prompt = ids.map(id => `<task-notification><task-id>${id}</task-id><output-file>${path.resolve(id + '.output')}</output-file><status>completed</status></task-notification>`).join('\n');
+  const event = makeHookEvent({ session_id: 'many-notifications', hook_event_name: 'UserPromptSubmit', prompt }, 1, {
+    readTaskOutput(file) { readPaths.push(file); return 'codex-agent: result=ok'; },
+  });
+  assert.deepEqual(event.backgroundTaskEnds.map(end => end.taskId), ids);
+  assert.deepEqual(sanitizeEvent(event).backgroundTaskEnds.map(end => end.taskId), ids);
+  assert.deepEqual(readPaths, ids.slice(0, 8).map(id => path.resolve(id + '.output')));
+  assert.equal(event.backgroundTaskEnds[8].codexOutput, undefined);
+});
+
+test('フックは BackgroundTaskEnd と Claude の内部 Interrupt を送らない', () => {
+  for (const hook_event_name of ['Interrupt', 'BackgroundTaskEnd']) {
+    assert.equal(makeHookEvent({ session_id: 'internal', hook_event_name }), null);
+    if (hook_event_name === 'BackgroundTaskEnd') assert.equal(makeHookEvent({ session_id: 'internal', hook_event_name }, 1, { provider: 'codex' }), null);
+  }
+});

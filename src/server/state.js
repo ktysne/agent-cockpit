@@ -821,7 +821,7 @@ function sessionSnapshot(session) {
             ? '待機中'
             : '作業中';
 
-  return {
+  const snapshot = {
     session_id: session.session_id,
     provider: session.provider,
     ...(session.codex ? { codex: { ...session.codex } } : {}),
@@ -835,6 +835,13 @@ function sessionSnapshot(session) {
     decisions: session.decisions.map(cloneDecision),
     decisionBindings: { ...session.decisionBindings },
   };
+  // 完了通知の照合だけに使う。親の行にまとめた Codex も含むので表示の形に出さず、画面へ送らないよう列挙しない。
+  Object.defineProperty(snapshot, 'backgroundCodex', {
+    value: session.agents
+      .filter((agent) => agent.isCodex && agent.backgrounded && (agent.active || agent.unconfirmed) && !agent.resultReceived)
+      .map(({ agent_id, backgroundTaskId, runId, startedAt }) => ({ agent_id, backgroundTaskId, runId, startedAt })),
+  });
+  return snapshot;
 }
 
 /** @param {Map<string, DerivedSession>} sessions
@@ -1005,9 +1012,12 @@ function applyCodexResult(session, event) {
 }
 
 function applyBackgroundTaskEnds(session, event) {
-  if (session.provider === 'codex' || event.hook_event_name !== 'UserPromptSubmit' || !Array.isArray(event.backgroundTaskEnds)) return;
+  if (session.provider === 'codex' || !['UserPromptSubmit', 'BackgroundTaskEnd'].includes(event.hook_event_name) || !Array.isArray(event.backgroundTaskEnds)) return;
   for (const end of event.backgroundTaskEnds) {
-    const agent = session.agents.find((item) => item.isCodex && item.backgroundTaskId === end.taskId && !item.resultReceived);
+    if (!['completed', 'failed', 'killed', 'stopped'].includes(end.status)) continue;
+    const agent = session.agents.find((item) => item.isCodex && item.backgrounded &&
+      (item.active || item.unconfirmed) && !item.resultReceived &&
+      (item.backgroundTaskId ? item.backgroundTaskId === end.taskId : Boolean(end.codexRunId && item.runId === end.codexRunId)));
     if (!agent) continue;
     if (!agent.runId && end.codexRunId) agent.runId = end.codexRunId;
     if (end.codexResult) {
@@ -1393,6 +1403,10 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     const session = sessionForEvent(sessions, event, initialAskDecisionState);
 
     if (session.ended) continue;
+    if (event.hook_event_name === 'BackgroundTaskEnd') {
+      applyBackgroundTaskEnds(session, event);
+      continue;
+    }
     applyCommonEventStart(session, event);
 
     applyToolStart(session, event);
@@ -2868,6 +2882,14 @@ class DashboardState {
     const { lastLifecycleAt, lastPromptAt } = this.entries.lifecycle(sessionId);
     if (statusAt <= lastLifecycleAt) return null;
     return { cwd: file.cwd, statusUpdatedAt: file.statusUpdatedAt, lastPromptAt };
+  }
+
+  backgroundCodexAgents(sessionId) {
+    return this.sessions.get(sessionId)?.backgroundCodex || [];
+  }
+
+  recordBackgroundTaskEnd(sessionId, end, hookAt = Date.now()) {
+    return this.addEvent({ session_id: sessionId, hook_event_name: 'BackgroundTaskEnd', backgroundTaskEnds: [end], hookAt });
   }
 
   recordInterruption(sessionId, hookAt) {

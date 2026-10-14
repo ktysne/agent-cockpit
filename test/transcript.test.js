@@ -250,3 +250,19 @@ test('会話の記録が無い場合は null を返す', async (t) => {
   const fixture = await transcriptFixture(t);
   assert.equal(await estimateTranscript(fixture.claudeHome, fixture.cwd, fixture.sessionId), null);
 });
+
+
+test('完了通知の出力ファイルは絶対パスで task-id とファイル名が一致する場合だけ返す', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const paths = [path.join(fixture.cwd, 'good.output'), 'relative.output', path.join(fixture.cwd, 'other.output')];
+  const ids = ['good', 'relative', 'mismatch'];
+  await fs.writeFile(fixture.filePath, ids.map((id, index) => JSON.stringify({
+    type: 'queue-operation', operation: 'enqueue',
+    content: `<task-notification><task-id>${id}</task-id><output-file>${paths[index]}</output-file><status>completed</status></task-notification>`,
+  })).join('\n'));
+  assert.deepEqual(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId), new Map([
+    ['good', { status: 'completed', recordedAt: null, outputFile: paths[0] }],
+    ['relative', { status: 'completed', recordedAt: null }],
+    ['mismatch', { status: 'completed', recordedAt: null }],
+  ]));
+});

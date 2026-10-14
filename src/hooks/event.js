@@ -4,6 +4,7 @@ const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecis
 const { readRouting } = require('../server/routing');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
+const { codexOutputLines, taskOutputPath, readTaskOutputFile } = require('../shared/task-output');
 const path = require('node:path');
 const { appendPendingHook } = require('../client/hooks-pending');
 const { promisify } = require('node:util');
@@ -252,7 +253,6 @@ function extractAskUserQuestionResolution(toolResponse) {
 }
 
 const BACKGROUND_TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const TASK_OUTPUT_CHUNK_BYTES = 64 * 1024;
 const TASK_END_STATUSES = new Set(['completed', 'failed', 'killed', 'stopped']);
 
 // 背景タスクの出力ファイルは <ID>.output という名前で書かれる。公開仕様ではないので、形に合わなければ何も返さない。
@@ -274,65 +274,6 @@ function backgroundOutputTaskIdOf(toolName, toolInput) {
   return '';
 }
 
-function codexOutputLines(value) {
-  const lines = {};
-  const visit = (item, depth = 0) => {
-    if (depth > 6) return;
-    if (typeof item === 'string') {
-      for (const line of item.match(/^[\t ]*codex-agent:[\t ]*(?:agent=|result=|run=|(?:waiting|vanished|orphaned|unverified|not-found)[\t ]+run=)[^\r\n]*/gm) || []) {
-        const normalized = line.trimStart();
-        if (!lines.auditLine && normalized.startsWith('codex-agent: agent=')) lines.auditLine = normalized.slice(0, 1024);
-        else if (!lines.resultLine && normalized.startsWith('codex-agent: result=')) lines.resultLine = normalized.slice(0, 1024);
-        else if (!lines.runLine && normalized.startsWith('codex-agent: run=')) lines.runLine = normalized.slice(0, 1024);
-        // codex-agent.sh は --wait の状態を最後の行で示すので、後の行で上書きする。
-        else if (!normalized.startsWith('codex-agent: agent=') && !normalized.startsWith('codex-agent: result=') && !normalized.startsWith('codex-agent: run=')) {
-          lines.waitStatusLine = normalized.slice(0, 1024);
-        }
-      }
-      return;
-    }
-    if (Array.isArray(item)) {
-      for (const child of item) visit(child, depth + 1);
-      return;
-    }
-    if (!item || typeof item !== 'object') return;
-    for (const key of ['stdout', 'output', 'text', 'content', 'file']) visit(item[key], depth + 1);
-  };
-  visit(value);
-  return Object.keys(lines).length ? lines : null;
-}
-
-function readTaskOutputFile(filePath) {
-  let fileDescriptor;
-  try {
-    fileDescriptor = fs.openSync(filePath, 'r');
-    const size = fs.fstatSync(fileDescriptor).size;
-    const readChunk = (length, position) => {
-      const buffer = Buffer.alloc(length);
-      let offset = 0;
-      while (offset < length) {
-        const bytesRead = fs.readSync(fileDescriptor, buffer, offset, length - offset, position + offset);
-        if (bytesRead === 0) break;
-        offset += bytesRead;
-      }
-      return buffer.subarray(0, offset).toString('utf8');
-    };
-    if (size <= TASK_OUTPUT_CHUNK_BYTES * 2) return readChunk(size, 0);
-
-    const head = readChunk(TASK_OUTPUT_CHUNK_BYTES, 0);
-    const tail = readChunk(TASK_OUTPUT_CHUNK_BYTES, size - TASK_OUTPUT_CHUNK_BYTES);
-    const headBoundary = Math.max(head.lastIndexOf('\n'), head.lastIndexOf('\r'));
-    const tailBoundary = tail.search(/[\r\n]/);
-    return `${head.slice(0, headBoundary + 1)}\n${tailBoundary < 0 ? '' : tail.slice(tailBoundary + 1)}`;
-  } catch {
-    return '';
-  } finally {
-    if (fileDescriptor !== undefined) {
-      try { fs.closeSync(fileDescriptor); } catch {}
-    }
-  }
-}
-
 function taskNotificationValue(block, tagName) {
   return block.match(new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`))?.[1]?.trim() || '';
 }
@@ -340,7 +281,7 @@ function taskNotificationValue(block, tagName) {
 function makeHookEvent(input, now = Date.now(), options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const eventName = pickString(input.hook_event_name);
-  if (!eventName) return null;
+  if (!eventName || eventName === 'BackgroundTaskEnd' || (eventName === 'Interrupt' && options.provider !== 'codex')) return null;
 
   const event = {
     session_id: pickString(input.session_id),
@@ -373,8 +314,6 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     const backgroundTaskEnds = [];
     let inspected = 0;
     for (const match of input.prompt.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)) {
-      if (inspected >= 8) break;
-      inspected += 1;
       const block = match[1];
       const taskId = taskNotificationValue(block, 'task-id');
       if (!BACKGROUND_TASK_ID.test(taskId)) continue;
@@ -382,7 +321,8 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
       if (!TASK_END_STATUSES.has(status)) continue;
       const end = { taskId, status };
       const outputFile = taskNotificationValue(block, 'output-file');
-      if (path.isAbsolute(outputFile) && path.basename(outputFile) === `${taskId}.output`) {
+      if (inspected < 8 && taskOutputPath(taskId, outputFile)) {
+        inspected += 1;
         try {
           const output = (options.readTaskOutput || readTaskOutputFile)(outputFile);
           const codexOutput = codexOutputLines(output);
