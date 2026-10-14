@@ -478,6 +478,21 @@ test('受付件数はイベント名ごとに集計し、close 後は集計し�
   assert.deepEqual(await runtime.diagnostics.readRun(runtime.diagnostics.run), before);
 });
 
+test('常駐サーバーの処理時間は間隔ごとに件数を残し、close 後は残さない', async t => {
+  const { runtime } = await startTestServer(t, { perfSummaryIntervalMs: 30 });
+  await eventPost(runtime, { session_id: 'perf-session', hook_event_name: 'SessionStart' });
+  await request(runtime.info.port, { path: '/api/state' });
+  await new Promise(resolve => setTimeout(resolve, 70));
+  const entries = (await read(runtime)).filter(entry => entry.msg === 'server.perf');
+  const total = key => entries.reduce((sum, entry) => sum + (entry.data[key] || 0), 0);
+  assert.ok(total('stateCount') >= 1);
+  assert.ok(total('eventCount') >= 1);
+  await runtime.close();
+  const before = await runtime.diagnostics.readRun(runtime.diagnostics.run);
+  await new Promise(resolve => setTimeout(resolve, 70));
+  assert.deepEqual(await runtime.diagnostics.readRun(runtime.diagnostics.run), before);
+});
+
 test('Codex のプロセス終了とロック消失は分類だけを残し、ロック消失は走査を重ねても 1 回だけ残す', async t => {
   let alive = true;
   const codexHome = require('./support/temp').temporaryDirectory(t, 'diagnostic-codex-').directory;
