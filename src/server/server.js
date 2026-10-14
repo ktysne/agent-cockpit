@@ -490,7 +490,8 @@ async function startServer(options = {}) {
       (['待機中(サブエージェント稼働中)', '中断'].includes(session.status) &&
         session.agents.some((agent) => !agent.isCodex && agent.active));
   }
-  // 読めた出力は task-id ごとに使い回す。読み取りの上限を先頭の通知の読み直しで使い切らないため。
+  // 読めた出力は task-id ごとに使い回し、読めなかった通知は次の照合で未試行の通知の後に読む。
+  // 読み取りの上限を、同じ通知の読み直しで使い切らないため。
   const taskOutputCache = new Map();
   function reconcileTaskNotifications(sessionId) {
     if (closing || !needsTaskNotifications(sessionId)) return Promise.resolve();
@@ -504,9 +505,10 @@ async function startServer(options = {}) {
           state.applyTaskNotifications(sessionId, notifications);
         }
         let outputReads = 0;
-        const cache = taskOutputCache.get(sessionId) || new Map();
+        const cache = taskOutputCache.get(sessionId) || { outputs: new Map(), failed: new Set() };
         taskOutputCache.set(sessionId, cache);
-        for (const [taskId, notification] of notifications) {
+        const ordered = [...notifications].sort(([a], [b]) => cache.failed.has(a) - cache.failed.has(b));
+        for (const [taskId, notification] of ordered) {
           if (!['completed', 'failed', 'killed', 'stopped'].includes(notification.status)) continue;
           const candidates = () => state.backgroundCodexAgents(sessionId).filter(agent =>
             (!agent.backgroundTaskId || agent.backgroundTaskId === taskId) &&
@@ -514,15 +516,19 @@ async function startServer(options = {}) {
           if (!candidates().length) continue;
           const end = { taskId, status: notification.status };
           if (notification.outputFile) {
-            if (!cache.has(taskId)) {
+            if (!cache.outputs.has(taskId)) {
               // 出力を読めない通知は記録せず、次の照合へ繰り越す。出力に waiting があれば行を閉じてはならないため。
               if (outputReads >= 8) continue;
               outputReads += 1;
               const output = await (options.readTaskOutput || readTaskOutputFileAsync)(notification.outputFile);
-              if (output === null) continue;
-              cache.set(taskId, codexOutputLines(output));
+              if (output === null) {
+                cache.failed.add(taskId);
+                continue;
+              }
+              cache.failed.delete(taskId);
+              cache.outputs.set(taskId, codexOutputLines(output));
             }
-            end.codexOutput = cache.get(taskId);
+            end.codexOutput = cache.outputs.get(taskId);
           }
           if (closing) return;
           const runId = parseCodexRunLine(end.codexOutput?.runLine);

@@ -2413,6 +2413,47 @@ codex-agent: ${status} run=codex-review-20261004-100000-1` });
   }
 });
 
+function backgroundRows(state, sessionId, ids) {
+  state.addEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: 0 });
+  for (const [index, taskId] of ids.entries()) {
+    state.addEvent({ session_id: sessionId, hook_event_name: 'PreToolUse', hookAt: index * 2 + 1,
+      tool_name: 'Bash', tool_use_id: taskId, codexReviewDefinition: 'codex-review' });
+    state.addEvent({ session_id: sessionId, hook_event_name: 'PostToolUse', hookAt: index * 2 + 2,
+      tool_name: 'Bash', tool_use_id: taskId, backgroundTaskId: taskId });
+  }
+}
+
+test('読めない出力が 8 件並んでいても、次の照合では未試行の通知を先に読む', async (t) => {
+  const state = new DashboardState();
+  const ids = Array.from({ length: 9 }, (_, index) => `task-${index}`);
+  backgroundRows(state, 'unreadable', ids);
+  const notifications = new Map(ids.map(taskId =>
+    [taskId, { status: 'completed', recordedAt: null, outputFile: path.resolve(taskId + '.output') }]));
+  const runtime = await runningServer(t, { state, taskNotificationDelayMs: 1,
+    readTaskNotifications: async () => notifications,
+    readTaskOutput: async file => (file.endsWith('task-8.output') ? 'codex-agent: result=ok' : null),
+  });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(state.backgroundCodexAgents('unreadable').length, 9);
+  await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({ session_id: 'unreadable', hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read' }) });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(state.backgroundCodexAgents('unreadable').map(agent => agent.backgroundTaskId), ids.slice(0, 8));
+});
+
+test('出力ファイルが消えた完了通知では背景 Codex の行を終了する', async (t) => {
+  const state = new DashboardState();
+  backgroundRows(state, 'missing-output', ['task-a']);
+  const { homeDir } = await temporaryHome(t);
+  await runningServer(t, { state, taskNotificationDelayMs: 1,
+    readTaskNotifications: async () => new Map([['task-a',
+      { status: 'completed', recordedAt: null, outputFile: path.join(homeDir, 'task-a.output') }]]),
+  });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(state.backgroundCodexAgents('missing-output').length, 0);
+  assert.equal(state.snapshot().sessions[0].agents[0].active, false);
+});
+
 test('外部から送られた内部イベントで状態や背景 Codex の行を変えない', async (t) => {
   const state = new DashboardState();
   state.addEvent({ session_id: 'internal', hook_event_name: 'UserPromptSubmit', hookAt: 1 });

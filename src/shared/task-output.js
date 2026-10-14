@@ -83,9 +83,9 @@ async function readTaskOutputFileAsync(filePath) {
     const head = await readChunk(TASK_OUTPUT_CHUNK_BYTES, 0);
     const tail = await readChunk(TASK_OUTPUT_CHUNK_BYTES, size - TASK_OUTPUT_CHUNK_BYTES);
     return joinOutputChunks(head, tail);
-  } catch {
-    // 空の出力と区別し、呼び出し側が次の照合で読み直せるようにする。
-    return null;
+  } catch (error) {
+    // 消えたファイルは読み直しても戻らないので空の出力とし、それ以外の失敗は呼び出し側が読み直せるように区別する。
+    return error?.code === 'ENOENT' ? '' : null;
   } finally {
     if (file) await file.close().catch(() => {});
   }
