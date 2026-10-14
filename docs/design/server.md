@@ -34,11 +34,18 @@
 
 ## 起動と寿命
 
-- SessionStart フックが常駐サーバーの生存を確かめ、動いていなければ起動する。生存は `GET /health` の応答が `{app: "agent-cockpit", pid, startedAt}` で、`server.json` と一致することで判定する。Windows は pid の再利用が速いので、pid だけで判定しない。
+- フックと MCP サーバーは、`GET /health` の応答が `{app: "agent-cockpit", pid, startedAt}` で `server.json` と一致するとき、常駐サーバーが動いていると判定する。
+  `/health` の試行期限は全体の期限の残りか 500ms の短いほうにする。
+  健全と判定できず `server.json` を読めた場合は、記録されたポート（無ければ既定ポート）へ `127.0.0.1` で TCP 接続する。
+  TCP 接続の試行期限は全体の期限の残りか 200ms の短いほうにする。
+  接続できた場合は起動せず、読んだ情報を使う。
+  接続できない場合は `start.lock` を取って状態を再確認し、同じ TCP 接続の判定を経てから起動する。
+  `server.json` が無いか読めない場合は、従来どおり起動する。
+  Windows は pid の再利用が速いため、pid だけでは判定しない。
 - 起動は `detached`、`windowsHide: true`、`stdio` は `server.log` の fd、`unref()` で行う。`cwd` は常駐サーバーの置き場にする。worktree を `cwd` にすると Windows がそのディレクトリをロックし、worktree を消せなくなるためである。
 - 起動するときの環境から `CLAUDE_CODE_` で始まる変数と `GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN` を除く。受付トークンと GitHub の環境変数トークンを常駐サーバーへ渡さないためである。
 - `server.json` は待ち受けに成功した後にだけ書き、一時ファイルへ書いてから名前を変えて置く。同時に起動して `EADDRINUSE` で負けた側は、このファイルに触れずに終わる。終了時は、ファイルの pid が自分のときだけ消す。
-- SessionStart 以外のフックで接続が拒否され、`server.json` の常駐サーバーが生きていないときは、`start.lock` を排他作成できた 1 本だけが起動し直す。
+- SessionStart 以外のフックで接続が拒否され、`server.json` の情報とポートの待ち受けが確認できないときは、`start.lock` を排他作成できた 1 本だけが起動し直す。
 - 終了するのは、生きているセッションがその時点で 0 件で、かつ直近 30 分に要求(フック、画面、`/health`)が 1 つも無いときだけにする。`~/.claude/sessions` が無いときは、Claude Code を使わない環境としてセッションのファイルが無いものと扱う。それ以外の理由で読めないときは終了しない。画面を開いている間はポーリングが要求になるので終了しない。
 
 ## 更新の確認

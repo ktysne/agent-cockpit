@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const net = require('node:net');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isGithubCredentialEnvironmentVariable } = require('../server/credential-environment');
 const { DEFAULT_PORT } = require('../server/server-constants');
@@ -128,6 +129,33 @@ async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeo
   }
 }
 
+async function canConnectToPort(port, { deadline = Date.now() + 200, now = Date.now } = {}) {
+  const timeoutMs = Math.min(200, deadline - now());
+  if (timeoutMs <= 0) return false;
+
+  return new Promise((resolve) => {
+    let socket;
+    let settled = false;
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    const finish = (connected) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket?.destroy();
+      resolve(connected);
+    };
+
+    try {
+      socket = net.createConnection({ host: '127.0.0.1', port });
+      socket.once('connect', () => finish(true));
+      socket.once('error', () => finish(false));
+      socket.once('timeout', () => finish(false));
+    } catch {
+      finish(false);
+    }
+  });
+}
+
 async function serverIsHealthy(info, { fetchImpl = fetch, deadline = Date.now() + 250, now = Date.now } = {}) {
   if (!info) return false;
   try {
@@ -136,7 +164,7 @@ async function serverIsHealthy(info, { fetchImpl = fetch, deadline = Date.now() 
       `http://127.0.0.1:${info.port}/health`,
       { method: 'GET' },
       deadline,
-      120,
+      Math.min(500, deadline - now()),
       now,
       async (response) => ({ ok: response.ok, json: response.ok ? await response.json() : null }),
     );
@@ -165,10 +193,12 @@ async function ensureServerRunning({
   deadline = Date.now() + HOOK_TIMEOUT_MS,
   readInfo = readServerInfo,
   fileSystem = fsp,
+  canConnectToPort: checkPort = canConnectToPort,
   now = Date.now,
 } = {}) {
   let info = await readInfo(homeDir, fileSystem);
   if (await serverIsHealthy(info, { fetchImpl, deadline, now })) return info;
+  if (info && await checkPort(info.port ?? DEFAULT_PORT, { deadline, now })) return info;
 
   const token = await acquireStartLock(homeDir, now(), fileSystem);
   if (!token) return waitForHealthyServer(homeDir, { fetchImpl, deadline, readInfo, fileSystem, now });
@@ -176,6 +206,7 @@ async function ensureServerRunning({
   try {
     info = await readInfo(homeDir, fileSystem);
     if (await serverIsHealthy(info, { fetchImpl, deadline, now })) return info;
+    if (info && await checkPort(info.port ?? DEFAULT_PORT, { deadline, now })) return info;
     await startServer({ homeDir, environment });
     return await waitForHealthyServer(homeDir, { fetchImpl, deadline, readInfo, fileSystem, now });
   } catch {
@@ -233,6 +264,7 @@ async function postToServer(requestPath, body, options = {}) {
     environment,
     deadline,
     startServer: options.startServer || ((args) => launchServer(args)),
+    canConnectToPort: options.canConnectToPort,
     readInfo,
     fileSystem,
     now,
@@ -299,6 +331,7 @@ module.exports = {
   DEFAULT_PORT,
   HOOK_TIMEOUT_MS,
   acquireStartLock,
+  canConnectToPort,
   childEnvironment,
   ensureServerRunning,
   fetchWithDeadline,
