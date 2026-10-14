@@ -1013,6 +1013,7 @@ function applyBackgroundTaskEnds(session, event) {
     } else {
       applyCodexAudit(agent, end);
       agent.active = false;
+      agent.unconfirmed = false;
     }
   }
 }
@@ -1946,8 +1947,9 @@ class DashboardState {
   mergedPullRequestHistoryForRepo(owner, repo, now = Date.now()) {
     if (!Number.isFinite(this.lastStorePruneAt) || now < this.lastStorePruneAt ||
       now - this.lastStorePruneAt >= STORE_PRUNE_MIN_INTERVAL_MS) this.pruneExpiredStoreRecords(now);
+    // 整理は間引くので、間引いた間に期限を過ぎた記録もここで除く。
     return [...this.mergedPullRequests.values()]
-      .filter((record) => !record.historyDismissedAt)
+      .filter((record) => !record.historyDismissedAt && now - Date.parse(record.mergedAt) < MERGED_PULL_REQUEST_RETENTION_MS)
       .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
       .sort((left, right) => Date.parse(right.mergedAt) - Date.parse(left.mergedAt) || right.number - left.number)
       .map((record) => ({ ...record, providers: this.pullRequestProviders(record.owner, record.repo, record.number) }));

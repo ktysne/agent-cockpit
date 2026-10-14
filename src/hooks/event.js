@@ -253,6 +253,7 @@ function extractAskUserQuestionResolution(toolResponse) {
 
 const BACKGROUND_TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const TASK_OUTPUT_CHUNK_BYTES = 64 * 1024;
+const TASK_END_STATUSES = new Set(['completed', 'failed', 'killed', 'stopped']);
 
 // 背景タスクの出力ファイルは <ID>.output という名前で書かれる。公開仕様ではないので、形に合わなければ何も返さない。
 function backgroundOutputTaskIdOf(toolName, toolInput) {
@@ -366,7 +367,9 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
   if (eventName === 'PermissionRequest') {
     event.tool_name = pickString(input.tool_name);
     event.summary = inputSummary(event.tool_name, input.tool_input);
-  } else if (!isCodex && eventName === 'UserPromptSubmit' && typeof input.prompt === 'string') {
+  } else if (!isCodex && eventName === 'UserPromptSubmit' && typeof input.prompt === 'string'
+    && input.prompt.trimStart().startsWith('<task-notification>')) {
+    // 完了通知だけで始まる入力に限る。開発者が入力に引用した通知で、動いている行を終わらせないため。
     const backgroundTaskEnds = [];
     let inspected = 0;
     for (const match of input.prompt.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)) {
@@ -375,8 +378,9 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
       const block = match[1];
       const taskId = taskNotificationValue(block, 'task-id');
       if (!BACKGROUND_TASK_ID.test(taskId)) continue;
-      const rawStatus = taskNotificationValue(block, 'status');
-      const end = { taskId, status: /^[a-z_-]{1,32}$/.test(rawStatus) ? rawStatus : '' };
+      const status = taskNotificationValue(block, 'status');
+      if (!TASK_END_STATUSES.has(status)) continue;
+      const end = { taskId, status };
       const outputFile = taskNotificationValue(block, 'output-file');
       if (path.isAbsolute(outputFile) && path.basename(outputFile) === `${taskId}.output`) {
         try {

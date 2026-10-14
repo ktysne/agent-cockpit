@@ -546,7 +546,7 @@ test('背景タスクの出力を読む呼び出しと、背景へ移った Bash
 
 test('UserPromptSubmit は完了通知から Codex の行だけを送り、プロンプト本文を送らない', () => {
   const outputFile = path.resolve('task-a.output');
-  const prompt = `入力本文は送らない\n<task-notification>\n<task-id>task-a</task-id>\n<output-file>${outputFile}</output-file>\n<status>completed</status>\n<summary>要約も送らない</summary>\n</task-notification>`;
+  const prompt = `<task-notification>\n<task-id>task-a</task-id>\n<output-file>${outputFile}</output-file>\n<status>completed</status>\n<summary>要約も送らない</summary>\n</task-notification>\n入力本文は送らない`;
   const readPaths = [];
   const event = makeHookEvent({
     session_id: 'bg-notify', hook_event_name: 'UserPromptSubmit', prompt,
@@ -594,6 +594,20 @@ test('完了通知の出力ファイル名が task ID と合わないか相対�
     { taskId: 'task-a', status: 'completed' },
     { taskId: 'task-b', status: 'completed' },
   ]);
+});
+
+test('開発者の入力に引用した完了通知と、終わりを示さない状態の通知は送らない', () => {
+  const notification = (taskId, status) => `<task-notification><task-id>${taskId}</task-id><status>${status}</status></task-notification>`;
+  const quoted = makeHookEvent({
+    session_id: 'bg-notify', hook_event_name: 'UserPromptSubmit', prompt: `この通知の形を説明して\n${notification('task-a', 'completed')}`,
+  }, 1, { readTaskOutput() { throw new Error('読まない'); } });
+  const running = makeHookEvent({
+    session_id: 'bg-notify', hook_event_name: 'UserPromptSubmit',
+    prompt: `${notification('task-a', 'running')}\n${notification('task-b', 'killed')}`,
+  }, 1, { readTaskOutput() { return ''; } });
+
+  assert.equal(Object.hasOwn(quoted, 'backgroundTaskEnds'), false);
+  assert.deepEqual(running.backgroundTaskEnds, [{ taskId: 'task-b', status: 'killed' }]);
 });
 
 test('形に合わない背景タスク ID はフックもサーバーの正規化も捨てる', () => {
