@@ -212,7 +212,7 @@ state が `merged` の登録は残す。
 | PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。PostToolUse の Codex は結果行を受けたときに終了と判定し、監査行だけなら背景で動いているものとして扱う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash の PostToolUse では、コマンド先頭の `cd <パス> &&` から解決した絶対パスを `commandCwd` として送る(変数展開、`~`、引用符なしの `\`、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない) |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
-| Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。UserPromptSubmit では `prompt` の `<task-notification>` を最大 8 件読み、`backgroundTaskEnds` に `task-id` と `status` を載せる。`output-file` が絶対パスで、ファイル名が `<task-id>.output` と一致する場合は、先頭と末尾の各 64KB から Codex の監査行、結果行、実行 ID の行だけを `codexOutput` に載せる。128KB 以下のファイルは全体を読む。プロンプト本文と `summary` は送らない |
+| Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。UserPromptSubmit では、`prompt` が `<task-notification>` で始まるときだけ通知を最大 8 件読み、`status` が終わり(`completed`、`failed`、`killed`、`stopped`)のものの `task-id` と `status` を `backgroundTaskEnds` に載せる。開発者が入力に引用した通知を、終了と取り違えないためである。`output-file` が絶対パスで、ファイル名が `<task-id>.output` と一致する場合は、先頭と末尾の各 64KB から Codex の監査行、結果行、実行 ID の行だけを `codexOutput` に載せる。128KB 以下のファイルは全体を読む。プロンプト本文と `summary` は送らない |
 
 `answer.js` から届く `PostToolBatch` は、常駐サーバーの受信時刻を使う状態イベントとして記録する。
 サブエージェントの `PostToolBatch` は `agent_id` 付きで送り、状態イベントとしてだけ記録する。回答、知らせ、催促はメインにだけ渡すので、この要求には何も返さない。
@@ -335,7 +335,7 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - 結果行が `rate-limited` なら「GPT 不使用(利用上限)」、`unavailable` なら「GPT 不使用(使用不能)」を表示する。
 - GPT 側の情報を取得できない場合は、モデルの札を表示しない。
 - 背景で起動した Codex は、同じ親の後続ツールの PostToolUse 出力に結果行が現れたとき、まず一致する実行 ID の行を終了にする。無ければ、出力を読んだ背景タスク ID が起動時に記録した背景タスク ID と一致する Codex の行(親は問わない)を終了にする。どちらも無い場合は、実行 ID を持たないか結果行の実行 ID と一致する候補が一つだけならその行を終了にする。結果行に実行 ID が無い場合は、実行 ID を持つ行を候補に含めない。候補が複数なら行を終了にせず、終了未確認のまま残す。`--wait` の状態の行(`orphaned`、`unverified`)で終了未確認にした行は、ラッパーが既に消えていて結果行が届かないので、この候補にしない。
-- 背景タスクの完了通知が UserPromptSubmit で届いたら、同じセッションの背景タスク ID が一致する Codex の行を終了にする。出力に結果行があれば既存の結果処理を適用し、結果行が無ければ監査行と実行 ID を反映して稼働中から外す。
+- 背景タスクの完了通知が UserPromptSubmit で届いたら、同じセッションの背景タスク ID が一致する Codex の行を終了にする。出力に結果行があれば既存の結果処理を適用し、結果行が無ければ監査行と実行 ID を反映して稼働中から外し、終了未確認の印も外す。
 - 結果行が現れないままサブエージェントが `SubagentStop` を迎えたときは、背景 Codex を終了未確認にする。
 - メインの `Stop` では、メイン直下の背景 Codex を稼働中のまま残す。
 - 「終了にする」は、終了未確認の行、メイン直下で稼働中の背景 Codex の行、背景で起動した稼働中の Claude のサブエージェントの行に表示する。

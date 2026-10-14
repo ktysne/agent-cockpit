@@ -1013,6 +1013,7 @@ function applyBackgroundTaskEnds(session, event) {
     } else {
       applyCodexAudit(agent, end);
       agent.active = false;
+      agent.unconfirmed = false;
     }
   }
 }
