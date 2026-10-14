@@ -233,6 +233,16 @@ PostToolUse の出力全文は送らない。
 
 ## 状態
 
+セッションのイベントは `SessionEntries` に集め、2,000 件を超えたときに畳み込む。
+次の畳み込みは、保持件数が 2,000 件または直前の畳み込み後の件数から 1,000 件増えた値の、大きい方を超えたときに行う。
+削除するのは、開始と完了がそろい、メインなら最新の `Stop` または `UserPromptSubmit`、サブエージェントなら自身の最新の `SubagentStop` より両方の時刻が古いツール呼び出しだけである。
+先頭、状態の区切り、質問、許可待ち、委譲、背景タスク、モデルの情報、各サブエージェントの最初のイベントと最新のツール開始、最新の表示名とプロダクト、許可待ちの通知をまたぐ呼び出しは残す。
+保持必須のイベントと区切りの無い実行中ターンは削除しないため、2,000 件は厳密な最大保持件数ではない。
+
+質問の副リスト、PR コマンドの呼び出し ID の集合、メインの最新の区切りと入力の時刻は受信時に更新する。
+`DashboardState` の `verifyEntries: true` または `AGENT_COCKPIT_VERIFY_ENTRIES=1` で、全イベントからの再構築と表示および索引を照合する。
+`npm test` と `npm run test:inprocess` はこの照合を有効にし、常駐サーバーでは既定で無効にする。
+
 - タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
 - イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、離席中の `AskUserQuestion` から作る判断事項、それらへの回答記録、完了タスク、外したセッション、削除時刻の `deletedSessions`、表示設定、クロスレビュー不要記録は `store.json` に保存する。判断事項の質問、状態、作成・更新・解決時刻、解決内容は `plans.decisions` に、回答と配信時刻は `decisionLifecycles` に置く。離席中の質問の `tool_use_id` と判断事項 ID の対応は `askDecisionBindings` に置く。この項目が無い旧形式の `store.json` は、結び付きが無いものとして読み込む。`crossReviewSkips` が無い旧形式は空として読み込む。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。`display.mode` は `product` または `kind` で、初期値は `kind` とする。`display.sectionOrder` は 5 種類のセクションを表示する順で、未知の値や重複を除いて `sinceSeen`、`judgment`、`prs`、`tasks`、`now` の順で不足分を補う。`display.hideFinished` は完了済みの情報を隠す設定で、既定は `true` で、古い保存ファイルでも `true` として補う。`display.mergeableCondition` は `operation`、`ci`、`cross-review` のいずれかで、旧形式では既定の `cross-review` として補う。テーマと「前回見てから」の表示モードはブラウザーごとの `localStorage` に残す。「前回見てから」の初期値は「離席中のみ」とする。離席状態と期間は `{enabled, since, periods}` として `away.json` に保存し、起動時に読む。期間は `{start, end}` の数値ミリ秒で、離席中の期間の `end` は `null` にする。旧形式の `{enabled, since}` は、離席中なら `since` から現在まで、離席中でなければ期間なしとして読む。既読済みの期間、14 日の保持期限を過ぎた期間、50 件を超える古い期間を整理する。期間の記録だけが壊れているか食い違うときは、旧形式と同じく `enabled` と `since` から期間を作り直す。`enabled` と `since` が壊れているときは離席中ではない状態として扱う。
 - 旧 `store.json` に残る `display.mergeAfterReviewDefault` は読み込み時に無視する。`mergeReservations` は登録セッション、リポジトリ、PR、方式、ブランチ削除の有無、予約時刻を `store.json` に保存する。旧 GitHub 自動マージ形式は予約として復元せず、そのまま捨てる。

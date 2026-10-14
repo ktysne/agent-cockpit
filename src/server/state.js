@@ -1,4 +1,6 @@
 const crypto = require('node:crypto');
+const assert = require('node:assert/strict');
+const { SessionEntries } = require('./session-entries');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { recommendedOptionFor, sanitizeEvent, isQuestionTool } = require('./events');
@@ -1378,9 +1380,9 @@ function applyCodexStart(session, event) {
   }
 }
 
-function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
+function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity, questionEntries = entries) {
   const sessions = new Map();
-  const initialAskDecisionState = initialAskDecisionsFor(entries, askDecisionState, beforeSequence);
+  const initialAskDecisionState = initialAskDecisionsFor(questionEntries, askDecisionState, beforeSequence);
   const ordered = [...entries].sort((left, right) => {
     const difference = left.event.hookAt - right.event.hookAt;
     return difference || left.sequence - right.sequence;
@@ -1425,7 +1427,8 @@ class DashboardState {
     this.fileSystem = options.fileSystem || fs;
     this.storeWriter = options.writer || (this.homeDir ? new AtomicJsonWriter(this.homeDir, { fileSystem: this.fileSystem }) : null);
     this.perf = options.perf || null;
-    this.entries = new Map();
+    this.verifyEntries = options.verifyEntries ?? process.env.AGENT_COCKPIT_VERIFY_ENTRIES === '1';
+    this.entries = new SessionEntries(this.verifyEntries);
     this.sequence = 0;
     this.version = 0;
     this.generatedAt = new Date().toISOString();
@@ -2309,19 +2312,11 @@ class DashboardState {
   }
 
   wasPullRequestCreate(sessionId, toolUseId) {
-    if (!toolUseId) return false;
-    return (this.entries.get(sessionId) || []).some(({ event }) => (
-      event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash' &&
-      event.tool_use_id === toolUseId && event.ghPrCreateCommand === true
-    ));
+    return this.entries.wasCommand(sessionId, toolUseId, 'creates');
   }
 
   wasPullRequestRefreshCommand(sessionId, toolUseId) {
-    if (!toolUseId) return false;
-    return (this.entries.get(sessionId) || []).some(({ event }) => (
-      event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash' &&
-      event.tool_use_id === toolUseId && event.refreshPullRequestsCommand === true
-    ));
+    return this.entries.wasCommand(sessionId, toolUseId, 'refreshes');
   }
 
   attachWriter(writer) {
@@ -2543,7 +2538,7 @@ class DashboardState {
   reopenAbsentSession(sessionId) {
     this.endedByAbsence.delete(sessionId);
     const entries = this.entries.get(sessionId) || [];
-    const [session] = deriveSessions(entries, this.askDecisionStateFor(sessionId));
+    const [session] = deriveSessions(entries, this.askDecisionStateFor(sessionId), Infinity, this.entries.questions(sessionId));
     if (session) this.sessions.set(sessionId, session);
     this.onSessionReopened?.(sessionId);
   }
@@ -2629,8 +2624,7 @@ class DashboardState {
       const first = entries[0]?.event;
       if (first?.provider !== 'codex' || first.delegatedFrom || first.claudeParentSessionId !== parentSessionId ||
         first.hookAt < launchedAt) continue;
-      first.delegatedFrom = parentSessionId;
-      this.entries.set(threadId, [entries[0]]);
+      this.entries.delegate(threadId, parentSessionId);
       changed = this.sessions.delete(threadId) || changed;
       if (this.codexRecovery.delete(threadId)) this.requestStoreWrite();
       if (this.sessionFiles.get(threadId)?.provider === 'codex') {
@@ -2705,7 +2699,7 @@ class DashboardState {
     if (!isNextTool && !['UserPromptSubmit', 'Stop', 'Interrupt'].includes(event.hook_event_name)) return false;
     const sessionId = event.session_id;
     const bindings = this.askDecisionBindings.get(sessionId) || new Map();
-    const entries = this.entries.get(sessionId) || [];
+    const entries = this.entries.questions(sessionId);
     let changed = false;
     for (const decision of this.decisionsFor(sessionId)) {
       if (decision.source !== 'ask' || decision.state !== 'waiting') continue;
@@ -2771,7 +2765,7 @@ class DashboardState {
       if (entries[0]?.event.delegatedFrom) return rejected('delegated', true);
       if (!entries.length && this.hasRunningDelegation(event.claudeParentSessionId)) {
         event.delegatedFrom = event.claudeParentSessionId;
-        this.entries.set(event.session_id, [{ event, sequence: this.sequence++ }]);
+        this.entries.replace(event.session_id, [{ event, sequence: this.sequence++ }]);
         return true;
       }
     }
@@ -2804,15 +2798,17 @@ class DashboardState {
 
     const correctedAsk = this.correctInferredAskWithdrawal(event);
     const withdrawnAsk = this.withdrawFinishedDesktopAsks(event);
-    const entries = this.entries.get(event.session_id) || [];
     const eventSequence = this.sequence++;
     if (event.provider !== 'codex' && !event.agent_id && event.hook_event_name === 'SessionStart' &&
       event.model) {
       this.recordSessionModel(event.session_id, { model: event.model, at: event.hookAt });
     }
-    entries.push({ event, sequence: eventSequence });
-    this.entries.set(event.session_id, entries);
-    const nextSessions = deriveSessions(entries, this.askDecisionStateFor(event.session_id), eventSequence);
+    const entries = this.entries.push(event.session_id, { event, sequence: eventSequence });
+    const askState = this.askDecisionStateFor(event.session_id);
+    const nextSessions = deriveSessions(entries, askState, eventSequence, this.entries.questions(event.session_id));
+    if (this.verifyEntries) {
+      assert.deepStrictEqual(nextSessions, deriveSessions(this.entries.full(event.session_id), askState, eventSequence));
+    }
     let askDecisionStateChanged = false;
     if (nextSessions.length > 0) {
       if (nextSessions[0].codex && !nextSessions[0].codex.model) {
@@ -2869,16 +2865,7 @@ class DashboardState {
     if (session.status !== '作業中' && session.status !== '許可待ち') return null;
     const statusAt = Date.parse(file.statusUpdatedAt || '');
     if (!Number.isFinite(statusAt)) return null;
-    let lastLifecycleAt = -Infinity;
-    let lastPromptAt = -Infinity;
-    for (const { event } of this.entries.get(sessionId) || []) {
-      if (event.agent_id) continue;
-      const name = event.hook_event_name;
-      if (name === 'UserPromptSubmit') lastPromptAt = Math.max(lastPromptAt, event.hookAt);
-      if (name === 'SessionStart' || name === 'UserPromptSubmit' || name === 'Stop') {
-        lastLifecycleAt = Math.max(lastLifecycleAt, event.hookAt);
-      }
-    }
+    const { lastLifecycleAt, lastPromptAt } = this.entries.lifecycle(sessionId);
     if (statusAt <= lastLifecycleAt) return null;
     return { cwd: file.cwd, statusUpdatedAt: file.statusUpdatedAt, lastPromptAt };
   }

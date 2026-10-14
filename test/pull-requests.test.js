@@ -37,7 +37,7 @@ const { ghPullRequest, pullRequest, pullRequestRegistration } = require('./suppo
 test('PR 登録の追加、更新、削除をキャッシュ後の一覧と provider に反映する', () => {
   const state = new DashboardState();
   const url = 'https://github.com/example/project/pull/31';
-  state.entries.set('cache-codex', [{ event: { provider: 'codex' } }]);
+  state.addEvent({ session_id: 'cache-codex', provider: 'codex', hook_event_name: 'SessionStart', hookAt: 1000 });
 
   assert.deepEqual(state.pullRequestRegistrations(), []);
   assert.deepEqual(state.pullRequestProviders('example', 'project', 31), []);
