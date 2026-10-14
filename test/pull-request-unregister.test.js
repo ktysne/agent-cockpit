@@ -44,6 +44,8 @@ test('取得できないリポジトリの登録を外すと保存記録と PR �
   const history = runtime.state.mergedPullRequestHistoryForRepo('example', 'project');
   assert.equal(jsonBody(await send()).deleted, 1);
   assert.deepEqual(await groups(), []);
+  assert.deepEqual(runtime.state.pullRequestRegistrations(), []);
+  assert.deepEqual(runtime.state.pullRequestProviders('example', 'project', 1), []);
   assert.deepEqual(runtime.state.pullRequestMergeReservations(), reservations);
   assert.deepEqual(runtime.state.mergedPullRequestHistoryForRepo('example', 'project'), history);
   const stored = JSON.parse(await fs.readFile(path.join(runtime.homeDir, 'store.json'), 'utf8'));
