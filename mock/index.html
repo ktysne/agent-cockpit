@@ -108,6 +108,9 @@ header.top {
 .settings-resource-links { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
 .settings-dialog .settings-manual-link { display: inline-flex; align-items: center; min-height: 36px; }
 .settings-dialog button { padding: 4px 12px; cursor: pointer; }
+.settings-dialog button.settings-manual-link { padding: 0; border: 0; border-radius: 0; background: none; color: var(--accent); font-size: 12px; text-decoration: underline; }
+.settings-dialog button.settings-manual-link:disabled { color: var(--text-2); text-decoration: none; cursor: progress; }
+.settings-resource-links #update-check-status { color: var(--text-2); font-size: 12px; }
 .diagnostics-dialog, .diagnostics-policy-dialog { width: min(900px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: min(88dvh, 900px); overflow-y: auto; overscroll-behavior: contain; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
 .diagnostics-dialog::backdrop, .diagnostics-policy-dialog::backdrop { background: rgb(0 0 0 / 55%); }
 .diagnostics-policy-dialog { width: min(720px, calc(100vw - 32px)); }
@@ -508,7 +511,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
     </div>
   </section>
   <div class="settings-save-error" id="settings-save-error" role="alert" hidden></div>
-  <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="https://ktysne.info/agent-cockpit/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
+  <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="https://ktysne.info/agent-cockpit/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a><button type="button" class="link-btn settings-manual-link" id="update-check">更新を確認</button><span id="update-check-status" role="status" aria-live="polite"></span></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
 <dialog class="diagnostics-dialog" id="diagnostics-dialog" aria-labelledby="diagnostics-title">
   <h2 id="diagnostics-title">診断ログ</h2>
@@ -944,6 +947,8 @@ const settingsDialog = document.getElementById('settings-dialog');
 const awayToggle = document.getElementById('away-toggle');
 const topBar = document.querySelector('header.top');
 const settingsSaveError = document.getElementById('settings-save-error');
+const updateCheckButton = document.getElementById('update-check');
+const updateCheckStatus = document.getElementById('update-check-status');
 
 function captureDisplayPreferences() {
   return {
@@ -1115,6 +1120,17 @@ document.getElementById('refresh-button').addEventListener('click', () => {
 settingsButton.addEventListener('click', () => {
   settingsDialog.showModal();
   settingsSaveError.hidden = !settingsSaveError.textContent;
+  updateCheckStatus.textContent = '';
+});
+updateCheckButton.addEventListener('click', () => {
+  updateCheckButton.disabled = true;
+  updateCheckButton.textContent = '確認中…';
+  updateCheckStatus.textContent = '';
+  setTimeout(() => {
+    updateCheckButton.disabled = false;
+    updateCheckButton.textContent = '更新を確認';
+    updateCheckStatus.textContent = '最新の版です (v1.0.1)。';
+  }, 600);
 });
 settingsClose.addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', event => {

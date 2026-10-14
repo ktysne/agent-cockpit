@@ -127,6 +127,9 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .settings-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
 .settings-dialog .settings-manual-link { display: inline-flex; align-items: center; min-height: 36px; }
 .settings-dialog button { padding: 4px 12px; cursor: pointer; }
+.settings-dialog button.settings-manual-link { padding: 0; border: 0; border-radius: 0; background: none; color: var(--accent); font-size: 12px; text-decoration: underline; }
+.settings-dialog button.settings-manual-link:disabled { color: var(--text-2); text-decoration: none; cursor: progress; }
+.settings-resource-links #update-check-status { color: var(--text-2); font-size: 12px; }
 .settings-save-error, .settings-input-error { color: var(--danger); font-size: 12px; }
 .settings-save-error { margin-top: 12px; }
 .settings-input-error { flex: 1 1 100%; }
@@ -527,7 +530,7 @@ h3.sub .count { font-weight: normal; }
     </div>
   </section>
   <div class="settings-save-error" id="settings-save-error" role="alert" hidden></div>
-  <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="https://ktysne.info/agent-cockpit/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
+  <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="https://ktysne.info/agent-cockpit/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a><button type="button" class="link-btn settings-manual-link" id="update-check">更新を確認</button><span id="update-check-status" role="status" aria-live="polite"></span></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
 <main>
   <div class="mode-row">
@@ -670,6 +673,8 @@ const header = document.querySelector('header.top');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsClose = document.getElementById('settings-close');
 const settingsSaveError = document.getElementById('settings-save-error');
+const updateCheckButton = document.getElementById('update-check');
+const updateCheckStatus = document.getElementById('update-check-status');
 const THEME_STORAGE_KEY = 'agent-cockpit.theme';
 const SINCE_SEEN_STORAGE_KEY = 'agent-cockpit.since-seen';
 const DISPLAY_STORAGE_KEY = 'agent-cockpit.display';
@@ -1131,6 +1136,7 @@ settingsButton.addEventListener('click', () => {
   settingsDialog.showModal();
   settingsSaveError.textContent = Date.now() < writeErrorUntil ? writeErrorMessage : '';
   settingsSaveError.hidden = !settingsSaveError.textContent;
+  updateCheckStatus.textContent = '';
 });
 settingsClose.addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', (event) => {
@@ -5045,6 +5051,37 @@ async function copyUpdatePrompt() {
 }
 
 document.getElementById('update-copy').addEventListener('click', copyUpdatePrompt);
+
+// 今すぐ確かめる。定期の確認の時機は変えず、サーバーで実行中の確認があればその結果を受け取る。
+async function checkForUpdate() {
+  updateCheckButton.disabled = true;
+  updateCheckButton.textContent = '確認中…';
+  updateCheckStatus.textContent = '';
+  let message = '確認できませんでした。時間をおいてやり直してください。';
+  try {
+    const response = await postUiAction('/api/update/check', {});
+    if (response.status === 409) {
+      message = 'この常駐サーバーでは更新を確認できません。';
+    } else if (response.ok) {
+      const update = await response.json();
+      if (update.error) {
+        message = '確認できませんでした。時間をおいてやり直してください。';
+      } else if (update.available) {
+        applyUpdateState(update);
+        message = `新しい版 v${update.latest} があります。`;
+      } else {
+        message = `最新の版です (v${update.current})。`;
+      }
+    }
+  } catch {
+    // 通信の失敗は既定の文で伝える。
+  }
+  updateCheckButton.disabled = false;
+  updateCheckButton.textContent = '更新を確認';
+  updateCheckStatus.textContent = message;
+}
+
+updateCheckButton.addEventListener('click', checkForUpdate);
 
 function setRefreshConfirmPending(pending) {
   refreshConfirmPending = pending;

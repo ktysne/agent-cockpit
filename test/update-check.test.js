@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const childProcess = require('node:child_process');
 const { UpdateChecker, compareVersions, latestVersionFromTags } = require('../src/server/update-check');
-const { startTestServer, request, jsonBody } = require('./support/server');
+const { startTestServer, request, jsonBody, uiHeaders } = require('./support/server');
 
 function fakeClock() {
   let now = 0;
@@ -158,4 +158,57 @@ test('版確認の成功と失敗は診断 API から結果と分類だけを読
   assert.equal(entries[0].data.available, true);
   assert.deepEqual(entries[1].data, { failure: 'ENOENT' });
   assert.doesNotMatch(JSON.stringify(entries), /private|stderr|prompt|compareUrl/);
+});
+
+function checkRequest(info) {
+  return request(info.port, {
+    method: 'POST', path: '/api/update/check', body: '{}',
+    headers: { 'content-type': 'application/json', ...uiHeaders(info, `http://127.0.0.1:${info.port}`) },
+  });
+}
+
+test('版確認のオプションが無いサーバーは、手動の確認も 409 を返し git を起動しない', async t => {
+  const calls = [];
+  t.mock.method(childProcess, 'execFile', (...args) => calls.push(args));
+  const { info } = await startTestServer(t);
+  const response = await checkRequest(info);
+  assert.equal(response.status, 409);
+  assert.deepEqual(jsonBody(response), { error: 'update-check-disabled' });
+  assert.equal(calls.length, 0);
+});
+
+test('手動の確認は確認の結果を返し、/api/state の update にも反映する', async t => {
+  const { info } = await startTestServer(t, { updateCheck: { current: '1.2.3', execFileImpl: gitResult(tags('1.3.0')) } });
+  const response = await checkRequest(info);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers['content-type'], 'application/json; charset=utf-8');
+  const result = jsonBody(response);
+  assert.equal(result.available, true);
+  assert.equal(result.latest, '1.3.0');
+  assert.equal(result.compareUrl, 'https://github.com/ktysne/agent-cockpit/compare/v1.2.3...v1.3.0');
+  assert.deepEqual(jsonBody(await request(info.port, { path: '/api/state' })).update, result);
+});
+
+test('確認の実行中に来た手動の確認は、新しい git を起動せず同じ確認の結果を受け取る', async t => {
+  let gitCalls = 0;
+  let checks = 0;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const { runtime, info } = await startTestServer(t, { updateCheck: { current: '0.0.0', execFileImpl(_file, _args, _options, callback) {
+    gitCalls += 1;
+    gate.then(() => callback(null, tags('1.0.0')));
+  } } });
+  const check = runtime.updateChecker.check.bind(runtime.updateChecker);
+  t.mock.method(runtime.updateChecker, 'check', () => { checks += 1; return check(); });
+
+  const first = checkRequest(info);
+  const second = checkRequest(info);
+  while (checks < 2) await new Promise(resolve => setImmediate(resolve));
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  assert.deepEqual(jsonBody(a), jsonBody(b));
+  assert.equal(jsonBody(a).latest, '1.0.0');
+  assert.equal(gitCalls, 1);
 });

@@ -1070,6 +1070,7 @@ test('すべての POST 口で秘密値、Origin、Sec-Fetch-Site を照合す�
     { path: '/api/away', secret: 'ui', originRequired: false },
     { path: '/api/routing', secret: 'ui', originRequired: true },
     { path: '/api/open-url', secret: 'ui', originRequired: true },
+    { path: '/api/update/check', secret: 'ui', originRequired: true },
     { path: '/api/events', secret: 'hook', originRequired: false },
     { path: '/api/sessions/session-a/plan', secret: 'hook', originRequired: false },
     { path: '/api/sessions/session-a/prs', secret: 'hook', originRequired: false },

@@ -62,6 +62,13 @@ git は対話を無効にし、15 秒の期限と 1MB の出力上限を設け�
 画面は版番号による描き直しの判定の外で、毎回通知を更新する。
 依頼文とリンクは新しい版がある場合だけサーバーが組み立て、依頼文の手順書の場所はサーバーのファイルの位置から求める。
 
+画面の設定の「更新を確認」は `POST /api/update/check` で、定期の確認を待たずに今すぐ確かめる。
+本文は JSON のオブジェクトだけを受け付け、画面用の秘密値と Origin を照合する。
+応答は `/api/state` の `update` と同じ形で、確認の結果を返す。
+確認の実行中に来た要求は、新しい git を起動せず同じ確認の結果を待つ。
+確認を有効にしていないサーバー(`updateCheck` を渡していない場合)は `409` と `{"error":"update-check-disabled"}` を返す。
+定期の確認の時機は変えない。
+
 手元の版は `/api/state` の `appVersion` で渡し、画面はウィンドウのタイトルにだけ「Agent Cockpit v1.0.0」の形で出し、見出しは名前だけにする。
 デモの常駐サーバーは `appVersion` を `null` にして版を出さない。マニュアルと紹介ページの画像が、版を上げるたびに変わらないためである。
 
@@ -224,6 +231,7 @@ PostToolUse の出力全文は送らない。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 10 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 10 分へ戻し、書き込み時は拒む。
 - 表示設定 `display.awayAnswerWaitMinutes` は離席中の質問への回答を待つ時間で、既定は 3 分、範囲は 1〜30 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 3 分へ戻し、書き込み時は拒む。
 - `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, routing, integrations, uiVersion}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
+`POST /api/update/check` は今すぐの版の確認で、「更新の確認」の節に記す。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
 ## 保存

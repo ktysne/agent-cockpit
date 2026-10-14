@@ -208,7 +208,7 @@ function createRequestHandler(options) {
     handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks,
     handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
   } = createUiSessionRoutes(ctx);
-  const { handleAwayState, handleAway, handleRouting, handleOpenUrl } = createSettingsRoutes(ctx);
+  const { handleAwayState, handleAway, handleRouting, handleOpenUrl, handleUpdateCheck } = createSettingsRoutes(ctx);
 
   const invalidSessionId = { valid: (params) => validSessionId(params[1]), status: 400, error: 'Invalid session id' };
   const unknownSessionId = { valid: (params) => isShortSessionId(params[1]), status: 404, error: 'Session not found' };
@@ -273,6 +273,7 @@ function createRequestHandler(options) {
     { method: 'POST', path: '/api/away', auth: 'ui-optional-origin', body: 'json', handler: handleAway },
     { method: 'POST', path: '/api/routing', auth: 'ui', body: 'json', handler: handleRouting },
     { method: 'POST', path: '/api/open-url', auth: 'ui', body: 'json', handler: handleOpenUrl },
+    { method: 'POST', path: '/api/update/check', auth: 'ui', body: 'json', handler: handleUpdateCheck },
     { method: 'POST', path: '/api/events', auth: 'hook', body: 'json', handler: handleEvents },
     { method: 'POST', path: /^\/api\/sessions\/([^/]+)\/plan$/, auth: 'hook', body: 'json', idCheck: invalidSessionId, handler: handlePlan },
     { method: 'POST', path: /^\/api\/sessions\/([^/]+)\/prs$/, auth: 'hook', body: 'json', idCheck: invalidSessionId, handler: handleSessionPullRequests },
