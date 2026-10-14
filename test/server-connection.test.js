@@ -76,6 +76,23 @@ test('/health の識別が合わない相手には、番号へ接続できても
   assert.equal(portChecks, 0);
 });
 
+test('/health が応答した後に本文を返し切らない相手には、番号へ接続できても server.json の情報を返さない', async (t) => {
+  const temporary = temporaryDirectory(t, 'agent-cockpit-connection-test-');
+  const info = serverInfo(41001, 'secret');
+  let portChecks = 0;
+  const result = await ensureServerRunning({
+    homeDir: temporary.directory,
+    deadline: Date.now() + 700,
+    readInfo: async () => info,
+    fetchImpl: async () => ({ ok: true, json: () => new Promise(() => {}) }),
+    canConnectToPort: async () => { portChecks += 1; return true; },
+    startServer: async () => {},
+  });
+
+  assert.equal(result, null);
+  assert.equal(portChecks, 0);
+});
+
 test('/health が期限内に返らず番号へ接続できないときはサーバーを起動する', async (t) => {
   const temporary = temporaryDirectory(t, 'agent-cockpit-connection-test-');
   const info = serverInfo(41001, 'secret');

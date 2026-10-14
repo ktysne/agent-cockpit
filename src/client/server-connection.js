@@ -156,9 +156,11 @@ async function canConnectToPort(port, { deadline = Date.now() + 200, now = Date.
   });
 }
 
-// 'healthy'、応答が期限に間に合わない 'timeout'、それ以外(接続できない、別のアプリ、別の起動)の 'unhealthy' を返す。
+// 'healthy'、応答が何も届かないまま期限を過ぎた 'timeout'、それ以外(接続できない、別のアプリ、別の起動)の 'unhealthy' を返す。
+// 応答が届いてから本文が期限に間に合わない相手は、本文を返し切らない別のアプリかもしれないので 'timeout' にしない。
 async function serverHealth(info, { fetchImpl = fetch, deadline = Date.now() + 250, now = Date.now } = {}) {
   if (!info) return 'unhealthy';
+  let responseReceived = false;
   try {
     const result = await fetchWithDeadline(
       fetchImpl,
@@ -167,13 +169,17 @@ async function serverHealth(info, { fetchImpl = fetch, deadline = Date.now() + 2
       deadline,
       Math.min(500, deadline - now()),
       now,
-      async (response) => ({ ok: response.ok, json: response.ok ? await response.json() : null }),
+      async (response) => {
+        responseReceived = true;
+        return { ok: response.ok, json: response.ok ? await response.json() : null };
+      },
     );
     if (!result.ok) return 'unhealthy';
     const health = result.json;
     return health.app === 'agent-cockpit' && health.pid === info.pid && health.startedAt === info.startedAt ? 'healthy' : 'unhealthy';
   } catch (error) {
-    return error?.code === 'ATTEMPT_TIMEOUT' || error?.code === 'DEADLINE_TIMEOUT' ? 'timeout' : 'unhealthy';
+    const timedOut = error?.code === 'ATTEMPT_TIMEOUT' || error?.code === 'DEADLINE_TIMEOUT';
+    return timedOut && !responseReceived ? 'timeout' : 'unhealthy';
   }
 }
 
