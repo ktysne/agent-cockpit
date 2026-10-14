@@ -1042,9 +1042,10 @@ test('HTML 属性値のエスケープは一般の文字列に対応する', () 
 });
 
 test('画面の版は配信した HTML と状態 API で一致し、ファイル更新後に変わる', async (t) => {
+  let now = Date.now();
   const { homeDir, claudeHome } = await temporaryHome(t);
   const webPath = path.join(homeDir, 'dashboard.html');
-  const runtime = await startServer({ homeDir, claudeHome, port: 0, webPath });
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, webPath, stateCacheNow: () => now });
   t.after(() => runtime.close());
 
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).uiVersion, null);
@@ -1058,6 +1059,7 @@ test('画面の版は配信した HTML と状態 API で一致し、ファイル
 
   const updatedHtml = `${initialHtml}\n<!-- updated -->`;
   await fs.writeFile(webPath, updatedHtml);
+  now += 5_000;
   const updatedVersion = crypto.createHash('sha256').update(updatedHtml).digest('hex').slice(0, 16);
   assert.notEqual(updatedVersion, firstVersion);
   const updatedState = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
@@ -1212,12 +1214,14 @@ test('不在終了と再開を注入された回答配信へ通知する', async
 });
 
 test('/api/state は Claude のホームにある codex-agent.sh の有無を返す', async (t) => {
+  let now = Date.now();
   const { homeDir, claudeHome } = await temporaryHome(t);
   const scriptPath = path.join(claudeHome, 'tools', 'codex-agent.sh');
   const runtime = await startServer({
     homeDir,
     claudeHome,
     userHome: homeDir,
+    stateCacheNow: () => now,
     port: 0,
     codexAgentScriptExists: async (filePath) => {
       assert.equal(filePath, scriptPath);
@@ -1234,6 +1238,7 @@ test('/api/state は Claude のホームにある codex-agent.sh の有無を返
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: false, crossReview: false });
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   await fs.writeFile(scriptPath, '');
+  now += 10_000;
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: true, crossReview: false });
 });
 
@@ -1260,7 +1265,8 @@ test('/api/state は CLAUDE_CONFIG_DIR が別の場所でも ~/.claude にある
 });
 
 test('/api/state は稼働中と PR 登録の worktree にあるクロスレビューの道具を検出する', async (t) => {
-  const runtime = await runningServer(t);
+  let now = Date.now();
+  const runtime = await runningServer(t, { stateCacheNow: () => now });
   const activeRoot = path.join(runtime.homeDir, 'active-worktree');
   const registeredRoot = path.join(runtime.homeDir, 'registered-worktree');
   const activeTool = path.join(activeRoot, 'tools', 'cross-review.js');
@@ -1287,6 +1293,7 @@ test('/api/state は稼働中と PR 登録の worktree にあるクロスレビ�
   assert.deepEqual(await integrations(), { codexAgent: false, crossReview: true });
 
   await fs.unlink(registeredTool);
+  now += 10_000;
   assert.deepEqual(await integrations(), { codexAgent: false, crossReview: false });
 });
 
@@ -2274,14 +2281,23 @@ test('離席状態の切り替えを続けて呼ぶと、呼んだ順に保存�
   assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8')).enabled, true);
 });
 
-test('/api/state は版と時刻を、離席期間の整理を待つ前に中身と同じ時点で確定する', async () => {
-  const source = (await fs.readFile(path.join(__dirname, '../src/server/routes/read.js'), 'utf8')).replace(/\r\n/g, '\n');
-  const start = source.indexOf('async function handleState(');
-  const handler = source.slice(start, source.indexOf('jsonResponse(response, 200', start));
-  const versionAt = handler.indexOf('snapshot.version = state.version;');
-  const pruneAt = handler.indexOf('away.prune?.(');
-  assert.ok(versionAt > 0 && pruneAt > versionAt);
-  assert.doesNotMatch(handler, /await away\.prune/);
+test('/api/state は外部確認中に届いた更新を本文と同じ版で返す', async (t) => {
+  let release;
+  let started;
+  const checking = new Promise(resolve => { started = resolve; });
+  const { runtime, info } = await startTestServer(t, { codexAgentScriptExists: async () => {
+    if (!release) { started(); await new Promise(resolve => { release = resolve; }); }
+    return false;
+  } });
+  const reading = request(info.port, { path: '/api/state' });
+  await checking;
+  await request(info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(info.secret),
+    body: JSON.stringify({ session_id: 'during-check', hook_event_name: 'SessionStart' }) });
+  release();
+  const snapshot = jsonBody(await reading);
+  assert.equal(snapshot.version, runtime.state.version);
+  assert.equal(snapshot.generatedAt, runtime.state.generatedAt);
+  assert.equal(snapshot.sessions[0].session_id, 'during-check');
 });
 
 test('Claude のセッションのフォルダーが無いときは、セッションのファイルが無いと判定して自動終了を妨げない', async (t) => {

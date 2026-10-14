@@ -3565,7 +3565,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
   let renders = 0;
   let signature = 'reservation:visible';
   const context = pageContext(pageHtml, {
-    refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], pullRequests: [], away: { enabled: false } }) }),
+    refreshSequence: 0, appliedRefreshSequence: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], pullRequests: [], away: { enabled: false } }) }),
     checkUiVersion: () => false,
     syncDisplayPreferences: async () => {},
     pullRequestExpirySignature: () => signature,
@@ -4311,7 +4311,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
     let renders = 0;
     let index = 0;
     const context = pageContext(pageHtml, {
-      refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
+      refreshSequence: 0, appliedRefreshSequence: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
       checkUiVersion: () => false,
       syncDisplayPreferences: async () => {},
       pullRequestExpirySignature: () => '',

@@ -1,1 +1,2 @@
 process.env.AGENT_COCKPIT_VERIFY_ENTRIES = '1';
+process.env.AGENT_COCKPIT_VERIFY_STATE_CACHE = '1';

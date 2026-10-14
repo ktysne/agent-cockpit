@@ -131,7 +131,8 @@ MCP と画面は診断の応答を本来の処理で待たず、250 ms で打ち
 | `event.rejected` | `server` | 検査、provider の不一致、委譲済み、削除済み、終了済み、古い時刻による不採用。`info` で残す |
 | `event.delayed` / `event.lifecycle` | `server` | 5000 ms を超える遅れ、セッションの開始と終了。`info` で残す |
 | `event.summary` | `server` | イベント名ごとの採用件数を浅いオブジェクトにまとめ、10 分ごとに `info` で残す。集計後に件数をリセットする |
-| `server.perf` | `server` | 状態の取得(`/api/state`)、イベントの受付、store の同期保存、snapshot の処理ごとの件数、合計 ms、最大 ms と、イベントループ遅れの p99 と最大 ms を、1 分ごとに `info` で残す。集計後にリセットする。1 回も呼ばれなかった処理の項目は出さない |
+| `server.perf` | `server` | 状態の取得(`/api/state`)、イベントの受付、store の同期保存、snapshot の処理ごとの件数、合計 ms、最大 ms と、イベントループ遅れの p99 と最大 ms を、1 分ごとに `info` で残す。状態の使い回しは `stateCacheHitCount` に数え、`stateCount` に対する割合を命中率とする。集計後にリセットする。1 回も呼ばれなかった処理の項目は出さない |
+| `state.cache.mismatch` | `server` | 状態キャッシュの照合時に本文が食い違った場合、使い回す予定だった ETag と現在の版を `warn` で残す。本文は記録しない |
 | `gh.failed` | `gh` | 操作、リポジトリ、PR 番号、登録セッション ID の先頭、失敗分類、code、signal、終了コード、連続失敗回数。`error` で残す |
 | `merge.check` | `merge` | 予約と実行で満たさなかった条件の分類と、head の `match` / `mismatch` / `missing`。`info` で残す |
 | `merge.reserved` / `merge.cancelled` | `merge` | 保存した予約と取り消しのリポジトリ、PR 番号。`info` で残す |

@@ -1663,7 +1663,11 @@ class PullRequestTracker {
     removeStaleProductViews(this.productViews, key, createdIdentities);
   }
 
-  snapshot() {
+  inFlightSignature() {
+    return JSON.stringify([...this.inFlight.keys()].sort());
+  }
+
+  snapshot(deadline) {
     const groups = [...this.productViews.values()].map((group) => {
       const condition = this.state.getDisplayPreferences?.().mergeableCondition || 'cross-review';
       const trees = group.trees.map((tree) => applyMergeCondition(
@@ -1678,8 +1682,8 @@ class PullRequestTracker {
         merged: group.merged.map((pullRequest) => ({
           ...structuredClone(pullRequest), providers: this.state.pullRequestProviders(group.owner, group.repo, pullRequest.number),
         })),
-        mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
-        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(group.owner, group.repo, this.now()),
+        mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now(), deadline),
+        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(group.owner, group.repo, this.now(), deadline),
         reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
         lastMethod: this.state.lastPullRequestMethod(group.owner, group.repo),
         loading: this.inFlight.has(repoKey(group.owner, group.repo)) && !this.initialFetchCompleted.has(repoKey(group.owner, group.repo)),
@@ -1701,8 +1705,8 @@ class PullRequestTracker {
           product: { ...product }, owner: registration.owner, repo: registration.repo,
           defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, checkedAt: null, fetchedAt: null, error: null,
           openStateUnknown: true, registeredCount: 0, openCount: 0, mergeableCount: 0, trees: [], merged: [],
-          mergeHistory: this.state.mergedPullRequestHistoryForRepo(registration.owner, registration.repo, this.now()),
-          reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(registration.owner, registration.repo, this.now()),
+          mergeHistory: this.state.mergedPullRequestHistoryForRepo(registration.owner, registration.repo, this.now(), deadline),
+          reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(registration.owner, registration.repo, this.now(), deadline),
           reservations: this.state.pullRequestMergeReservationsForRepo(registration.owner, registration.repo),
           lastMethod: this.state.lastPullRequestMethod(registration.owner, registration.repo), loading: true,
         };
