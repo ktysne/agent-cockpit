@@ -63,21 +63,18 @@ test('クリップボードが使えなければ依頼文を選択表示し、�
   }
 });
 
-test('版があれば見出しとウィンドウのタイトルに付け、無ければ名前だけにする', () => {
-  assert.match(html, /alt="">Agent Cockpit<span class="app-version" id="app-version" hidden><\/span><\/h1>/);
-  const label = { hidden: true, textContent: '' };
-  const context = vm.createContext({ appVersionLabel: label, appVersion: '', document: { title: '' },
+test('版はウィンドウのタイトルにだけ付け、見出しは名前だけにする', () => {
+  assert.match(html, /alt="">Agent Cockpit<\/h1>/);
+  const context = vm.createContext({ appVersion: '', document: { title: '' },
     countJudgments: () => ({ permission: 1, blocking: 1 }) });
   vm.runInContext(['applyAppVersion', 'updateTitle'].map(name => functionSource(html, name)).join('\n'), context);
   context.applyAppVersion('1.0.0');
   context.updateTitle([]);
-  assert.deepEqual({ text: label.textContent, hidden: label.hidden, title: context.document.title },
-    { text: 'v1.0.0', hidden: false, title: '(2) Agent Cockpit v1.0.0' });
+  assert.equal(context.document.title, '(2) Agent Cockpit v1.0.0');
   context.applyAppVersion(null);
   context.countJudgments = () => ({ permission: 0, blocking: 0 });
   context.updateTitle([]);
-  assert.deepEqual({ text: label.textContent, hidden: label.hidden, title: context.document.title },
-    { text: '', hidden: true, title: 'Agent Cockpit' });
+  assert.equal(context.document.title, 'Agent Cockpit');
 });
 
 test('refresh は後に始めた取得を反映した後に届いた古い応答で状態を戻さない', async () => {
