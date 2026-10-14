@@ -225,18 +225,18 @@ function ghRepositoryOption(words) {
 /**
  * 取り直しの対象のコマンドが指すリポジトリを返す。
  * repository は gh の --repo の指定、cwd はコマンドを始めた作業ディレクトリのリポジトリを指す。
- * 途中の cd、git -C、複数の対象を含むなど、1 つに決められないときは unknown を返す。
+ * 移動先を決められない cd、git -C、複数の対象を含むなど、1 つに決められないときは unknown を返す。
  */
-function pullRequestRefreshScope(command) {
+function pullRequestRefreshScope(command, cwd) {
   const targets = new Set();
   let repository = null;
   for (const [index, segment] of commandSegments(command).entries()) {
     const words = commandWords(segment);
-    if (index > 0 && ['cd', 'pushd', 'popd'].includes(words[0])) return { unknown: true };
+    if (['cd', 'pushd', 'popd'].includes(words[0]) && (index > 0 || !pullRequestCommandCwd(command, cwd))) return { unknown: true };
     if (words[0] === 'git') {
       const subcommand = subcommandIndex(words, 'git');
       if (words[subcommand] !== 'push') continue;
-      if (words.slice(1, subcommand).some((word) => ['-C', '--git-dir', '--work-tree'].includes(word.split('=')[0]))) {
+      if (words.slice(1, subcommand).some((word) => word.startsWith('-C') || ['--git-dir', '--work-tree'].includes(word.split('=')[0]))) {
         return { unknown: true };
       }
       targets.add('cwd');

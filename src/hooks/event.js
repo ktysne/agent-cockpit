@@ -341,7 +341,7 @@ function taskNotificationValue(block, tagName) {
 function addPullRequestRefreshScope(event, command, cwd) {
   const commandCwd = pullRequestCommandCwd(command, cwd);
   if (commandCwd) event.commandCwd = commandCwd;
-  const scope = pullRequestRefreshScope(command);
+  const scope = pullRequestRefreshScope(command, cwd);
   if (scope.repository) event.refreshRepository = scope.repository;
   if (scope.unknown) event.refreshScopeUnknown = true;
 }

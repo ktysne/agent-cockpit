@@ -98,6 +98,7 @@ test('PR 作成コマンドの cd を確定できない形式では cwd を推�
 });
 
 test('取り直しの対象のコマンドから、指すリポジトリを 1 つに決める', () => {
+  const hookCwd = path.resolve(os.tmpdir(), 'session-repo');
   for (const command of [
     'gh pr view 1 --repo o/r',
     'gh pr view 1 -R o/r',
@@ -105,20 +106,24 @@ test('取り直しの対象のコマンドから、指すリポジトリを 1 �
     'gh --repo=o/r pr view 1',
     'gh pr view 1 -R o/r && gh pr checks 1 --repo O/R',
   ]) {
-    assert.deepEqual(pullRequestRefreshScope(command), { repository: 'o/r' }, command);
+    assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { repository: 'o/r' }, command);
   }
-  for (const command of ['git push', 'cd /work/a && git push && gh pr view 1', 'echo "gh pr view 1 --repo o/r" && git push']) {
-    assert.deepEqual(pullRequestRefreshScope(command), { cwd: true }, command);
+  const targetCwd = path.resolve(os.tmpdir(), 'target-repo').replaceAll('\\', '/');
+  for (const command of ['git push', `cd "${targetCwd}" && git push && gh pr view 1`, 'echo "gh pr view 1 --repo o/r" && git push']) {
+    assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { cwd: true }, command);
   }
   for (const command of [
     'git -C /work/b push',
+    'git -C../other push',
+    'cd ../other; git push',
+    'pushd ../other && git push',
     'git --git-dir=/work/b/.git push',
     'gh pr view 1 -R o/a && gh pr view 1 -R o/b',
     'git push && gh pr view 1 -R o/b',
     'git push && cd /work/b && git push',
     'gh pr view 1 --repo o/r/extra',
   ]) {
-    assert.deepEqual(pullRequestRefreshScope(command), { unknown: true }, command);
+    assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { unknown: true }, command);
   }
 });
 
