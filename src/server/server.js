@@ -13,7 +13,7 @@ const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers');
 const { readTaskNotifications, readSessionModel, readTranscriptInterruption } = require('./transcript');
-const { codexOutputLines, readTaskOutputFileAsync } = require('../shared/task-output');
+const { TASK_OUTPUT_MISSING, codexOutputLines, readTaskOutputFileAsync } = require('../shared/task-output');
 const { parseCodexRunLine } = require('./events');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { isShortSessionId } = require('./session-ids');
@@ -526,9 +526,11 @@ async function startServer(options = {}) {
                 continue;
               }
               cache.failed.delete(taskId);
-              cache.outputs.set(taskId, codexOutputLines(output));
+              cache.outputs.set(taskId, output === TASK_OUTPUT_MISSING ? output : codexOutputLines(output));
             }
-            end.codexOutput = cache.outputs.get(taskId);
+            const cached = cache.outputs.get(taskId);
+            if (cached === TASK_OUTPUT_MISSING) end.outputMissing = true;
+            else end.codexOutput = cached;
           }
           if (closing) return;
           const runId = parseCodexRunLine(end.codexOutput?.runLine);

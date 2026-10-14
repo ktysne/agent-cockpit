@@ -2441,7 +2441,7 @@ test('読めない出力が 8 件並んでいても、次の照合では未試�
   assert.deepEqual(state.backgroundCodexAgents('unreadable').map(agent => agent.backgroundTaskId), ids.slice(0, 8));
 });
 
-test('出力ファイルが消えた完了通知では背景 Codex の行を終了する', async (t) => {
+test('出力ファイルが消えた完了通知では背景 Codex の行を終了未確認にし、照合から外す', async (t) => {
   const state = new DashboardState();
   backgroundRows(state, 'missing-output', ['task-a']);
   const { homeDir } = await temporaryHome(t);
@@ -2451,7 +2451,9 @@ test('出力ファイルが消えた完了通知では背景 Codex の行を終�
   });
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.equal(state.backgroundCodexAgents('missing-output').length, 0);
-  assert.equal(state.snapshot().sessions[0].agents[0].active, false);
+  const agent = state.snapshot().sessions[0].agents[0];
+  assert.equal(agent.active, false);
+  assert.equal(agent.unconfirmed, true);
 });
 
 test('外部から送られた内部イベントで状態や背景 Codex の行を変えない', async (t) => {

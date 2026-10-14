@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const TASK_OUTPUT_CHUNK_BYTES = 64 * 1024;
+const TASK_OUTPUT_MISSING = Symbol('task output missing');
 
 function codexOutputLines(value) {
   const lines = {};
@@ -84,8 +85,8 @@ async function readTaskOutputFileAsync(filePath) {
     const tail = await readChunk(TASK_OUTPUT_CHUNK_BYTES, size - TASK_OUTPUT_CHUNK_BYTES);
     return joinOutputChunks(head, tail);
   } catch (error) {
-    // 消えたファイルは読み直しても戻らないので空の出力とし、それ以外の失敗は呼び出し側が読み直せるように区別する。
-    return error?.code === 'ENOENT' ? '' : null;
+    // 消えたファイルは読み直しても戻らないので印を返し、それ以外の失敗は呼び出し側が読み直せるように null を返す。
+    return error?.code === 'ENOENT' ? TASK_OUTPUT_MISSING : null;
   } finally {
     if (file) await file.close().catch(() => {});
   }
@@ -97,4 +98,4 @@ function joinOutputChunks(head, tail) {
   return `${head.slice(0, headBoundary + 1)}\n${tailBoundary < 0 ? '' : tail.slice(tailBoundary + 1)}`;
 }
 
-module.exports = { codexOutputLines, taskOutputPath, readTaskOutputFile, readTaskOutputFileAsync };
+module.exports = { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, readTaskOutputFile, readTaskOutputFileAsync };

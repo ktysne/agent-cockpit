@@ -290,6 +290,7 @@ function sanitizeEvent(input, metadata = {}) {
           && item.codexOutput.waitStatusLine.slice(0, 1024).trim().match(/^codex-agent:\s*(waiting|vanished|orphaned|unverified|not-found)\s+run=/);
         if (waitStatus) end.codexWaitStatus = waitStatus[1];
       }
+      if (item.outputMissing === true) end.outputMissing = true;
       return [end];
     });
     if (event.backgroundTaskEnds.length === 0) delete event.backgroundTaskEnds;
