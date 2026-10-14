@@ -130,11 +130,26 @@ function runNpmTest() {
   if (result.status !== 0) throw new Error('npm test が失敗しました (終了コード ' + result.status + ')。');
 }
 
+function withoutVersion(text) {
+  const json = JSON.parse(text);
+  delete json.version;
+  if (json.packages?.['']) delete json.packages[''].version;
+  return JSON.stringify(json);
+}
+
+// 未 push のコミットは、版の項目だけを変えたときに限って受け付ける。scripts や依存の変更が混ざったコミットを版の更新として push しないため。
 function isVersionCommit(git, originMain) {
   const parents = git(['rev-list', '--parents', '-n', '1', 'HEAD']).trim().split(/\s+/).slice(1);
   if (parents.length !== 1 || parents[0] !== originMain) return false;
   const files = git(['diff', '--name-only', originMain, 'HEAD']).split(/\r?\n/).filter(Boolean);
-  return files.length > 0 && files.every(file => VERSION_FILES.includes(file));
+  if (files.length === 0 || !files.every(file => VERSION_FILES.includes(file))) return false;
+  return files.every(file => {
+    try {
+      return withoutVersion(git(['show', originMain + ':' + file])) === withoutVersion(git(['show', 'HEAD:' + file]));
+    } catch {
+      return false;
+    }
+  });
 }
 
 // plan と run が同じ判定で、今の状態から残りの手順を求める。済んだ手順は状態から読み取り、記録は持たない。
@@ -193,10 +208,9 @@ function inspectRelease(input, dependencies = {}) {
     throw new Error('ローカルの ' + tag + ' は HEAD 以外を指しています。git tag -d ' + tag + ' で消してから実行してください。');
   }
 
-  // 版のコミットが未 push のときは、そのコミットを作った実行が test を済ませている。
-  const handMade = !versionCommitPending && !localTag && !remoteAtHead;
+  // 未 push のコミットを誰が作ったかは git の状態から分からないので、タグを作る前は常に test を流す。
   const steps = [];
-  if (handMade) steps.push('test');
+  if (!remoteAtHead && !localTag) steps.push('test');
   if (versionCommitPending) steps.push('push-commit');
   if (!remoteAtHead && !localTag) steps.push('tag');
   if (!remoteAtHead) steps.push('push-tag');
@@ -221,9 +235,20 @@ function executeStep(step, { version, tag }, dependencies) {
       (dependencies.runNpmTest ?? runNpmTest)();
       return;
     case 'bump':
-      updateVersionFiles(version, dependencies);
-      git(['add', ...VERSION_FILES]);
-      git(['commit', '-m', 'chore(release): 版を ' + version + ' に上げる']);
+      // コミットまで済まなければ版のファイルを戻す。書き換えたまま残すと、再実行が未コミットの変更で止まるため。
+      try {
+        updateVersionFiles(version, dependencies);
+        git(['add', ...VERSION_FILES]);
+        git(['commit', '-m', 'chore(release): 版を ' + version + ' に上げる']);
+      } catch (error) {
+        try {
+          git(['reset', '--quiet', 'HEAD', '--', ...VERSION_FILES]);
+          git(['checkout', '--', ...VERSION_FILES]);
+        } catch (restoreError) {
+          throw new Error(error.message + ' 版のファイルも戻せませんでした: ' + restoreError.message);
+        }
+        throw error;
+      }
       return;
     case 'push-commit':
       git(['push', 'origin', RELEASE_BRANCH]);

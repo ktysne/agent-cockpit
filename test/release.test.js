@@ -19,7 +19,8 @@ const PACKAGE_JSON = '{\r\n  "name": "demo",\r\n  "version": "1.0.1",\r\n  "priv
 const PACKAGE_LOCK = '{\r\n  "name": "demo",\r\n  "version": "1.0.1",\r\n  "lockfileVersion": 3,\r\n'
   + '  "packages": {\r\n    "": {\r\n      "name": "demo",\r\n      "version": "1.0.1"\r\n    },\r\n'
   + '    "node_modules/dep": {\r\n      "version": "1.0.1"\r\n    }\r\n  }\r\n}\r\n';
-const UPDATE_DOC = '## 版ごとの追加作業\n\n今はありません。\n';
+const BUMPED_LOCK = rewriteVersion(PACKAGE_LOCK, '1.0.2', true);
+const UPDATE_DOC ='## 版ごとの追加作業\n\n今はありません。\n';
 
 // git、npm、ファイルを偽物に差し替えた作業ツリー。呼び出しを記録し、状態を実際の git と同じように進める。
 function fakeRepository(overrides = {}) {
@@ -38,10 +39,13 @@ function fakeRepository(overrides = {}) {
       'package-lock.json': PACKAGE_LOCK,
       'update.md': UPDATE_DOC,
     },
+    originFiles: { 'package.json': PACKAGE_JSON, 'package-lock.json': PACKAGE_LOCK },
     calls: [],
     testFails: false,
+    commitFails: false,
     ...overrides,
   };
+  const committed = { ...repo.files };
   const log = [];
   const execFileSync = (file, args) => {
     const key = args.join(' ');
@@ -61,8 +65,17 @@ function fakeRepository(overrides = {}) {
         if (args[1] === '--parents') return [repo.head, ...repo.parents].join(' ') + '\n';
         return repo.localTags[args[3]] + '\n';
       case 'diff': return repo.changedFiles.join('\n') + '\n';
+      case 'show': {
+        const [ref, file] = args[1].split(':');
+        return (ref === 'HEAD' ? repo.files : repo.originFiles)[file];
+      }
       case 'add': return '';
+      case 'reset': return '';
+      case 'checkout':
+        for (const file of args.slice(2)) repo.files[file] = committed[file];
+        return '';
       case 'commit':
+        if (repo.commitFails) throw Object.assign(new Error('commit failed'), { stderr: 'hook failed' });
         repo.parents = [repo.head];
         repo.head = RELEASE_COMMIT;
         return '';
@@ -94,7 +107,7 @@ function handBumped() {
   return fakeRepository({
     files: {
       'package.json': PACKAGE_JSON.replace('1.0.1', '1.0.2'),
-      'package-lock.json': PACKAGE_LOCK.replaceAll('1.0.1', '1.0.2'),
+      'package-lock.json': BUMPED_LOCK,
       'update.md': UPDATE_DOC,
     },
   });
@@ -191,20 +204,31 @@ test('LF の package.json は LF のまま、末尾の改行が無ければ無�
   assert.equal(rewriteVersion('{\n  "version": "1.0.1"\n}', '1.0.2', false), '{\n  "version": "1.0.2"\n}');
 });
 
-test('版のコミットだけが未 push の再実行では、push-commit 以降だけが残る', () => {
+test('コミットが失敗したら、版のファイルを元に戻して止まる', () => {
+  const { repo, dependencies } = fakeRepository({ commitFails: true });
+
+  assert.throws(() => runRelease('1.0.2', dependencies), /git commit .*が失敗しました: hook failed/);
+
+  assert.equal(repo.files['package.json'], PACKAGE_JSON);
+  assert.equal(repo.files['package-lock.json'], PACKAGE_LOCK);
+  assert.equal(repo.calls.some(call => call.startsWith('push')), false);
+});
+
+test('版のコミットだけが未 push の再実行では、test を流してから push-commit 以降へ進む', () => {
   const { repo, dependencies } = fakeRepository({
     head: RELEASE_COMMIT,
     originMain: HEAD,
     parents: [HEAD],
     files: {
       'package.json': PACKAGE_JSON.replace('1.0.1', '1.0.2'),
-      'package-lock.json': PACKAGE_LOCK.replaceAll('1.0.1', '1.0.2'),
+      'package-lock.json': BUMPED_LOCK,
       'update.md': UPDATE_DOC,
     },
   });
 
-  assert.deepEqual(inspectRelease('1.0.2', dependencies).steps, ['push-commit', 'tag', 'push-tag']);
+  assert.deepEqual(inspectRelease('1.0.2', dependencies).steps, ['test', 'push-commit', 'tag', 'push-tag']);
   runRelease('1.0.2', dependencies);
+  assert.equal(repo.calls.includes('npm test'), true);
   assert.equal(repo.originMain, RELEASE_COMMIT);
   assert.equal(repo.remoteTags['v1.0.2'], RELEASE_COMMIT);
 });
@@ -215,6 +239,17 @@ test('未 push のコミットが版の更新以外のファイルを含めば�
     parents: [HEAD],
     changedFiles: ['package.json', 'src/server.js'],
     files: { 'package.json': PACKAGE_JSON.replace('1.0.1', '1.0.2'), 'update.md': UPDATE_DOC },
+  });
+  assert.throws(() => inspectRelease('1.0.2', dependencies), /版を上げるコミットでもありません/);
+});
+
+test('未 push のコミットが package.json の版以外の項目も変えていれば拒否する', () => {
+  const bumped = PACKAGE_JSON.replace('1.0.1', '1.0.2');
+  const { dependencies } = fakeRepository({
+    head: RELEASE_COMMIT,
+    parents: [HEAD],
+    changedFiles: ['package.json'],
+    files: { 'package.json': bumped.replace('"private": true', '"private": false'), 'update.md': UPDATE_DOC },
   });
   assert.throws(() => inspectRelease('1.0.2', dependencies), /版を上げるコミットでもありません/);
 });
