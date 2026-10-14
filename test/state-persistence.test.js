@@ -609,6 +609,17 @@ test('通常の保存は500msでまとめ、回答記録の変更は待たずに
   assert.equal(writes, 2);
 });
 
+test('DashboardState の保存は整形済み JSON と末尾改行を書き出す', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = new DashboardState();
+  state.attachWriter(new AtomicJsonWriter(homeDir));
+  state.setTasks('formatted-store', [task('保存形式を確かめる')]);
+  await state.flushPersistence();
+
+  const contents = await fs.readFile(path.join(homeDir, 'store.json'), 'utf8');
+  assert.equal(contents, `${JSON.stringify(state.serializeStore(), null, 2)}\n`);
+});
+
 test('壊れた store と新しい version の store を退避して空で始める', async (t) => {
   for (const [name, contents] of [
     ['broken-json', '{'],

@@ -383,6 +383,50 @@ test('削除時刻以前のフックは回答待ちの再登録にも渡さな�
   assert.equal(delivered[0].hookAt, deletedAt + 1);
 });
 
+test('store.json の書き込み中でもイベント受付は 202 を返す', async (t) => {
+  const state = new DashboardState();
+  let releaseWrite;
+  let writeStartedResolve;
+  const writeStarted = new Promise(resolve => { writeStartedResolve = resolve; });
+  let writeFinished = false;
+  state.attachWriter = writer => {
+    DashboardState.prototype.attachWriter.call(state, writer);
+    writer.fileSystem = {
+      writeFile: async (...args) => {
+        writeStartedResolve();
+        await new Promise(resolve => { releaseWrite = resolve; });
+        const result = await fs.writeFile(...args);
+        writeFinished = true;
+        return result;
+      },
+      rename: (...args) => fs.rename(...args),
+      rm: (...args) => fs.rm(...args),
+    };
+  };
+  const runtime = await runningServer(t, { state });
+  state.setTasks('pending-store-write', [{ title: '保存を保留する', state: 'doing', criteria: [{ text: '応答を確かめる', met: false }] }]);
+  const persistence = state.flushPersistence();
+  await writeStarted;
+
+  let timeout;
+  try {
+    const response = await Promise.race([
+      request(runtime.info.port, {
+        method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+        body: JSON.stringify({ session_id: 'event-during-store-write', hook_event_name: 'Stop' }),
+      }),
+      new Promise(resolve => { timeout = setTimeout(() => resolve(null), 500); }),
+    ]);
+    assert.ok(response, '/api/events は保存の完了を待たずに応答する');
+    assert.equal(response.status, 202);
+    assert.equal(writeFinished, false);
+  } finally {
+    clearTimeout(timeout);
+    releaseWrite();
+  }
+  await persistence;
+});
+
 test('離席中の切り替えは秘密値と Origin を照合し、状態を軽い応答で返す', async (t) => {
   const runtime = await runningServer(t);
   const body = JSON.stringify({ enabled: true });

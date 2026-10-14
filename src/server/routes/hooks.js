@@ -195,7 +195,6 @@ function createHookRoutes(ctx) {
       event.refreshPullRequests || state.wasPullRequestRefreshCommand(event.session_id, event.tool_use_id)
     )) void pullRequestTracker?.refreshAfterCommand().catch(() => {});
     if (event) answerDelivery.afterEvent(event);
-    await state.waitForPersistence();
     jsonResponse(response, 202, { accepted: true });
   }
 
