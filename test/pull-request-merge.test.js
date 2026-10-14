@@ -185,6 +185,31 @@ function mergeInput(number = 1, changes = {}) {
   };
 }
 
+test('確定操作のブランチ削除は待機中の定期取得より先にghを起動する', async (t) => {
+  const { tracker, manager } = await mergeFixture(t);
+  const started = [];
+  const running = [];
+  tracker.execFileImpl = (_file, args, options, callback) => {
+    started.push([...args]);
+    assert.equal(options.timeout, 20_000);
+    running.push(callback);
+    assert.ok(running.length <= 4);
+  };
+  const background = Array.from({ length: 6 }, (_, index) => tracker.execute(['api', `repos/example/project/${index}`]));
+  await new Promise(setImmediate);
+  assert.equal(started.length, 4);
+  const deletion = manager.deleteRemoteBranch('example', 'project', 'feature/one');
+  running.shift()(null, '{}');
+  await new Promise(setImmediate);
+  assert.deepEqual(started[4], ['api', '-X', 'DELETE', 'repos/example/project/git/refs/heads/feature/one']);
+  while (running.length) {
+    running.shift()(null, '{}');
+    await new Promise(setImmediate);
+  }
+  await Promise.all([...background, deletion]);
+  assert.deepEqual(started.slice(5).map(args => args[1]), ['repos/example/project/4', 'repos/example/project/5']);
+});
+
 for (const automatic of [false, true]) {
   test(`集約ブランチへの${automatic ? '予約' : '即時'}マージは子の base を集約先に付け替える`, async (t) => {
     const fixture = await mergeFixture(t, [

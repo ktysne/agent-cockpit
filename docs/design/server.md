@@ -266,7 +266,13 @@ PostToolUse の出力全文は送らない。
 ## PR の表示
 
 PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツール `cockpit_add_pr` から登録し、`store.json` に保存する。
-常駐サーバーは `gh` の保存済み認証を使い、60 秒ごとと `git push` または `gh pr` の後にリポジトリの状態を取得する。
+常駐サーバーは `gh` の保存済み認証を使い、60 秒ごとにリポジトリの状態を取得する。
+登録と関連 PR のどちらにも、開いているか未確定の記録(`state` が `open`、`unknown`、`null`)が無いリポジトリは、最後に取得を始めてから 15 分経つまで定期取得を飛ばす。
+初回の取得、登録の追加、`git push` または `gh pr` の後の個別の取得(`refreshRepoFresh` など)は間引かない。
+間引いたリポジトリの登録と表示は残し、登録と関連 PR が無くなったリポジトリの表示は従来どおり消す。
+`PullRequestTracker.execute` を通る `gh` は同時に 4 本までとし、残りは待ち行列に入れる。
+開発者が画面で確定したマージ、base の付け替え、ブランチの削除とその結果の確認は、定期取得より待ち行列で優先する。
+`gh` の 20 秒の期限は、待ち時間を含めず、起動してからの時間に掛ける。
 base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha`、`triage` を設定する。`triage` は状態ファイルの `lastTriage` を `{round, sha, outcome}` に検証したもので、`sha` は 40 桁か 64 桁の小文字、`outcome` は `fixing`、`converged`、`halted` のいずれか。無いか形が合わなければ `null` とする。表示の規則は計画書の決定「クロスレビューの結論の表示」を正本とする。セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は「レビュー不要」とする。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。
 状態ファイルは、登録の `cwd` の worktree に加えて、同じリポジトリのほかの worktree からも探す。PR の head のブランチをチェックアウトしている worktree は記録の有無を問わず候補にし、それ以外の worktree はそのブランチの記録を持つときだけ候補にする。スタックを 1 つの worktree で積むと、下の段のブランチはどこにもチェックアウトされないためである。
 登録の `cwd` と製品は、`commandCwd` があればそこから決める。`cockpit_add_pr` で登録し直しても、登録済みの `cwd` と製品は変えない。

@@ -19,6 +19,8 @@ const MERGED_PULL_REQUEST_LIMIT = 1000;
 const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
+const GH_CONCURRENCY_LIMIT = 4;
+const INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
 function asText(value, maximum = 500) {
   return typeof value === 'string' ? value.slice(0, maximum) : '';
@@ -1023,6 +1025,10 @@ class PullRequestTracker {
     this.productViews = new Map();
     this.crossReviewByRepository = new Map();
     this.inFlight = new Map();
+    this.lastFetchStartedAt = new Map();
+    this.activeGhCount = 0;
+    this.ghQueue = [];
+    this.priorityGhQueue = [];
     this.initialFetchCompleted = new Set();
     this.mergedHeadBackfillAttempts = new Set();
     this.mergedHeadBackfillRetries = new Set();
@@ -1049,9 +1055,15 @@ class PullRequestTracker {
     const repositories = new Map();
     for (const record of [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]) {
       const key = repoKey(record.owner, record.repo);
-      repositories.set(key, { owner: record.owner, repo: record.repo });
+      const previous = repositories.get(key);
+      const active = record.state == null || ['open', 'unknown'].includes(record.state);
+      repositories.set(key, { owner: record.owner, repo: record.repo, active: previous?.active || active });
     }
-    const refreshes = [...repositories.values()].map(({ owner, repo }) => this.refreshRepo(owner, repo));
+    const now = this.now();
+    const refreshes = [...repositories.entries()]
+      .filter(([key, { active }]) => active || !this.lastFetchStartedAt.has(key)
+        || now - this.lastFetchStartedAt.get(key) >= INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS)
+      .map(([, { owner, repo }]) => this.refreshRepo(owner, repo));
     return Promise.all(refreshes).then((results) => {
       // 取り直しの間に登録されたリポジトリを消さないため、登録は待った後に数え直す。
       const registeredKeys = new Set([...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
@@ -1060,6 +1072,7 @@ class PullRequestTracker {
       for (const key of this.repositories.keys()) {
         if (!registeredKeys.has(key)) {
           this.repositories.delete(key);
+          this.lastFetchStartedAt.delete(key);
           removed = true;
         }
       }
@@ -1099,6 +1112,7 @@ class PullRequestTracker {
     const repository = safeRepo(owner, repo);
     const key = repoKey(owner, repo);
     if (this.inFlight.has(key)) return this.inFlight.get(key);
+    this.lastFetchStartedAt.set(key, this.now());
     const operation = this.fetchRepository(owner, repo, repository)
       .then(async (result) => {
         this.initialFetchCompleted.add(key);
@@ -1166,7 +1180,23 @@ class PullRequestTracker {
     return this.repositories.get(repositoryKey(owner, repo)) || null;
   }
 
-  async execute(args) {
+  acquireGhSlot(priority) {
+    if (this.activeGhCount < GH_CONCURRENCY_LIMIT) {
+      this.activeGhCount += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      (priority ? this.priorityGhQueue : this.ghQueue).push(resolve);
+    });
+  }
+
+  releaseGhSlot() {
+    const next = this.priorityGhQueue.shift() || this.ghQueue.shift();
+    if (next) next();
+    else this.activeGhCount -= 1;
+  }
+
+  async execute(args, { priority = false } = {}) {
     const apiPath = args.find(arg => arg.startsWith('repos/'));
     const operation = args[0] === 'pr' ? `pr.${args[1]}`
       : apiPath?.includes('/compare/') ? 'api.compare'
@@ -1176,6 +1206,7 @@ class PullRequestTracker {
     const repository = args.includes('-R') ? args[args.indexOf('-R') + 1] : args.find(arg => /^repos\/[^/]+\/[^/]+/.test(arg))?.split('/').slice(1, 3).join('/');
     const number = args[0] === 'pr' && /^\d+$/.test(args[2]) ? Number(args[2]) : undefined;
     const key = `${operation}:${repository || ''}:${number || ''}`;
+    await this.acquireGhSlot(priority);
     try {
       const output = await runGh(args, { execFileImpl: this.execFileImpl, ghPath: this.ghPath });
       this.diagnosticFailures.delete(key);
@@ -1192,13 +1223,15 @@ class PullRequestTracker {
           : error.signal ? 'signal' : typeof error.code === 'number' ? 'exit' : 'execution',
         code: error.code, signal: error.signal, exitCode: typeof error.code === 'number' ? error.code : undefined });
       throw error;
+    } finally {
+      this.releaseGhSlot();
     }
   }
 
-  async readPullRequestView(owner, repo, number) {
+  async readPullRequestView(owner, repo, number, options) {
     const output = await this.execute([
       'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt`,
-    ]);
+    ], options);
     const value = JSON.parse(output);
     const state = String(value?.state || '').toUpperCase();
     const pullRequest = normalizeOpenPullRequest(value);
