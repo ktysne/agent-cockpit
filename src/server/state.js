@@ -1424,6 +1424,7 @@ class DashboardState {
     this.homeDir = options.homeDir || null;
     this.fileSystem = options.fileSystem || fs;
     this.storeWriter = options.writer || (this.homeDir ? new AtomicJsonWriter(this.homeDir, { fileSystem: this.fileSystem }) : null);
+    this.perf = options.perf || null;
     this.entries = new Map();
     this.sequence = 0;
     this.version = 0;
@@ -2344,7 +2345,7 @@ class DashboardState {
     this.storeWriteTimer = null;
     if (!this.storeWritePending || !this.storeWriter) return Promise.resolve();
     this.storeWritePending = false;
-    return this.storeWriter.write('store.json', this.serializeStore());
+    return this.measure('store', () => this.storeWriter.write('store.json', this.serializeStore()));
   }
 
   async waitForPersistence() {
@@ -2738,7 +2739,15 @@ class DashboardState {
     return changed;
   }
 
+  measure(name, fn) {
+    return this.perf ? this.perf.measure(name, fn) : fn();
+  }
+
   addEvent(input, metadata = {}) {
+    return this.measure('event', () => this.applyEvent(input, metadata));
+  }
+
+  applyEvent(input, metadata = {}) {
     const event = sanitizeEvent(input, metadata);
     const rejected = (reason, result) => {
       metadata.onRejected?.(reason);
@@ -3215,6 +3224,10 @@ class DashboardState {
   }
 
   snapshot() {
+    return this.measure('snapshot', () => this.buildSnapshot());
+  }
+
+  buildSnapshot() {
     const fileOnlySessions = [...this.sessionFiles.values()]
       .filter((file) => (
         !this.sessions.has(file.session_id) && !this.endedAt.has(file.session_id) && !this.endedByAbsence.has(file.session_id)

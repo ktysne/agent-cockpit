@@ -5,7 +5,7 @@ const { APP_NAME } = require('../server-constants');
 const { codexAgentScriptPaths } = require('../identity');
 
 function createReadRoutes(ctx) {
-  const { state, away, routing, dev, claudeHome, userHome, pullRequestTracker, codexAgentScriptExists, crossReviewToolExists, webPath } = ctx;
+  const { state, away, routing, dev, claudeHome, userHome, pullRequestTracker, codexAgentScriptExists, crossReviewToolExists, webPath, perf } = ctx;
   let cachedUiFileStamp = null;
   let uiVersion = null;
 
@@ -106,7 +106,8 @@ function createReadRoutes(ctx) {
     }
   }
 
-  return { handleHealth, handleState, handleContext, handleDevFields, handleIndex };
+  const measuredHandleState = perf ? (request) => perf.measureAsync('state', () => handleState(request)) : handleState;
+  return { handleHealth, handleState: measuredHandleState, handleContext, handleDevFields, handleIndex };
 }
 
 module.exports = { createReadRoutes };

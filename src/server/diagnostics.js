@@ -24,6 +24,7 @@ const ALLOWED_DATA = Object.freeze({
   'event.delayed': ['event', 'provider', 'tool', 'session', 'product', 'delayMs'],
   'event.lifecycle': ['event', 'provider', 'session', 'product'],
   'event.summary': ['SessionStart', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop', 'Stop', 'SessionEnd', 'UserPromptSubmit', 'PostToolBatch', 'PermissionRequest', 'Interrupt'],
+  'server.perf': ['stateCount', 'stateTotalMs', 'stateMaxMs', 'eventCount', 'eventTotalMs', 'eventMaxMs', 'storeCount', 'storeTotalMs', 'storeMaxMs', 'snapshotCount', 'snapshotTotalMs', 'snapshotMaxMs', 'loopP99Ms', 'loopMaxMs'],
   'gh.failed': ['operation', 'repository', 'number', 'session', 'failure', 'code', 'signal', 'exitCode', 'consecutive'],
   'merge.check': ['operation', 'repository', 'number', 'head', 'condition', 'status'],
   'merge.reserved': ['repository', 'number'],

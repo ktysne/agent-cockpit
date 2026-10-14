@@ -1,4 +1,5 @@
 const EVENT_SUMMARY_INTERVAL_MS = 10 * 60_000;
+const PERF_SUMMARY_INTERVAL_MS = 60_000;
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
@@ -7,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
 const { RoutingState } = require('./routing');
+const { PerfMetrics } = require('./perf-metrics');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers');
@@ -183,6 +185,7 @@ function createRequestHandler(options) {
     appVersion: options.appVersion,
     diagnostics: options.diagnostics,
     eventCounts: options.eventCounts,
+    perf: options.perf,
     homeDir,
     claudeHome,
     userHome,
@@ -410,7 +413,8 @@ async function startServer(options = {}) {
   const storageWriter = new AtomicJsonWriter(homeDir, {
     onFailure: (fileName) => logLine(homeDir, `${fileName} write failed`),
   });
-  const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter });
+  const perf = new PerfMetrics();
+  const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter, perf });
   const diagnostics = new Diagnostics({ ...options.diagnosticsOptions, homeDir, userHome: options.userHome,
     getLevel: () => state.getDisplayPreferences?.()?.diagnosticsLevel || 'info' });
   state.diagnostics = diagnostics;
@@ -545,10 +549,15 @@ async function startServer(options = {}) {
     for (const event of Object.keys(eventCounts)) delete eventCounts[event];
   }, options.eventSummaryIntervalMs ?? EVENT_SUMMARY_INTERVAL_MS);
   eventSummaryTimer.unref();
+  const perfSummaryTimer = setInterval(() => {
+    diagnostics.record('info', 'server', 'server.perf', perf.summary());
+  }, options.perfSummaryIntervalMs ?? PERF_SUMMARY_INTERVAL_MS);
+  perfSummaryTimer.unref();
   const handler = createRequestHandler({
     updateChecker,
     appVersion: options.appVersion === undefined ? version : options.appVersion,
     eventCounts,
+    perf,
     diagnostics,
     homeDir,
     claudeHome,
@@ -642,6 +651,8 @@ async function startServer(options = {}) {
     if (closing) return closing;
     closing = (async () => {
       clearInterval(eventSummaryTimer);
+      clearInterval(perfSummaryTimer);
+      perf.close();
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
       clearInterval(notificationTimer);
