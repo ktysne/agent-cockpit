@@ -20,6 +20,7 @@ const MAX_CODEX_RECOVERY_SESSIONS = 200;
 const CODEX_RECOVERY_ACTIVITY_STEP_MS = 60_000;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
+const STORE_PRUNE_MIN_INTERVAL_MS = 60_000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
 const pullRequestRecordKey = pullRequestKey;
 const relatedPullRequestRecordKey = pullRequestKey;
@@ -1448,6 +1449,8 @@ class DashboardState {
     this.deletedSessions = new Map();
     this.closedTasks = new Map();
     this.pullRequests = new Map();
+    this.pullRequestRegistrationCache = null;
+    this.lastStorePruneAt = null;
     this.relatedPullRequests = new Map();
     this.pullRequestConflictRequests = new Map();
     this.pullRequestRetargets = [];
@@ -1546,6 +1549,7 @@ class DashboardState {
       }
       records.set(pullRequestRecordKey(record.owner, record.repo, record.number), record);
     }
+    this.invalidatePullRequestRegistrationCache();
     this.relatedPullRequests = new Map(store.relatedPrs.map((record) => [
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
@@ -1587,6 +1591,7 @@ class DashboardState {
   }
 
   pruneExpiredStoreRecords(now) {
+    this.lastStorePruneAt = now;
     let mergeHistoryChanged = false;
     let sessionRecordsChanged = false;
     for (const [sessionId, deletedAt] of this.deletedSessions) {
@@ -1668,7 +1673,7 @@ class DashboardState {
     this.finishedOutsideEventsAskDecisionIds.delete(sessionId);
     this.decisionLifecycles.delete(sessionId);
     this.closedTasks.delete(sessionId);
-    if (!keepPullRequests) this.pullRequests.delete(sessionId);
+    if (!keepPullRequests && this.pullRequests.delete(sessionId)) this.invalidatePullRequestRegistrationCache();
   }
 
   deleteSession(sessionId, now = Date.now()) {
@@ -1754,7 +1759,40 @@ class DashboardState {
   }
 
   pullRequestRegistrations() {
-    return [...this.pullRequests.values()].flatMap((records) => [...records.values()].map(normalizePullRequestRecord));
+    return structuredClone(this.pullRequestRegistrationSnapshot().registrations);
+  }
+
+  pullRequestRegistrationSnapshot() {
+    if (this.pullRequestRegistrationCache) return this.pullRequestRegistrationCache;
+    const registrations = [...this.pullRequests.values()].flatMap((records) => [...records.values()].map(normalizePullRequestRecord));
+    const registrationsByRepo = new Map();
+    const providersByPullRequest = new Map();
+    for (const record of registrations) {
+      const repository = pullRequestRepositoryKey(record.owner, record.repo);
+      let repositoryRegistrations = registrationsByRepo.get(repository);
+      if (!repositoryRegistrations) {
+        repositoryRegistrations = [];
+        registrationsByRepo.set(repository, repositoryRegistrations);
+      }
+      repositoryRegistrations.push(record);
+      const key = pullRequestRecordKey(record.owner, record.repo, record.number);
+      let providers = providersByPullRequest.get(key);
+      if (!providers) {
+        providers = new Set();
+        providersByPullRequest.set(key, providers);
+      }
+      providers.add(record.provider);
+    }
+    this.pullRequestRegistrationCache = {
+      registrations,
+      registrationsByRepo,
+      providersByPullRequest: new Map([...providersByPullRequest].map(([key, providers]) => [key, orderedProviders(providers)])),
+    };
+    return this.pullRequestRegistrationCache;
+  }
+
+  invalidatePullRequestRegistrationCache() {
+    this.pullRequestRegistrationCache = null;
   }
 
   pullRequestRegistrationForSession(sessionId, owner, repo, number) {
@@ -1818,9 +1856,7 @@ class DashboardState {
   }
 
   pullRequestRegistrationsForRepo(owner, repo) {
-    return this.pullRequestRegistrations().filter((record) => (
-      record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase()
-    ));
+    return structuredClone(this.pullRequestRegistrationSnapshot().registrationsByRepo.get(pullRequestRepositoryKey(owner, repo)) || []);
   }
 
   pullRequestRegistration(number, registrationKey) {
@@ -1909,9 +1945,11 @@ class DashboardState {
   }
 
   mergedPullRequestHistoryForRepo(owner, repo, now = Date.now()) {
-    this.pruneExpiredStoreRecords(now);
+    if (!Number.isFinite(this.lastStorePruneAt) || now < this.lastStorePruneAt ||
+      now - this.lastStorePruneAt >= STORE_PRUNE_MIN_INTERVAL_MS) this.pruneExpiredStoreRecords(now);
+    // 整理は間引くので、間引いた間に期限を過ぎた記録もここで除く。
     return [...this.mergedPullRequests.values()]
-      .filter((record) => !record.historyDismissedAt)
+      .filter((record) => !record.historyDismissedAt && now - Date.parse(record.mergedAt) < MERGED_PULL_REQUEST_RETENTION_MS)
       .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
       .sort((left, right) => Date.parse(right.mergedAt) - Date.parse(left.mergedAt) || right.number - left.number)
       .map((record) => ({ ...record, providers: this.pullRequestProviders(record.owner, record.repo, record.number) }));
@@ -1934,6 +1972,7 @@ class DashboardState {
       for (const [key, record] of records) {
         if (!matches(record)) continue;
         records.delete(key);
+        this.invalidatePullRequestRegistrationCache();
         deleted += 1;
       }
       if (!records.size) this.pullRequests.delete(sessionId);
@@ -1956,6 +1995,7 @@ class DashboardState {
     for (const [sessionId, records] of this.pullRequests) {
       if (records.get(key)?.state !== 'closed') continue;
       records.delete(key);
+      this.invalidatePullRequestRegistrationCache();
       if (!records.size) this.pullRequests.delete(sessionId);
       deleted = true;
     }
@@ -2220,6 +2260,7 @@ class DashboardState {
       return normalizePullRequestRecord(previous);
     }
     records.set(key, next);
+    this.invalidatePullRequestRegistrationCache();
     this.relatedPullRequests.delete(relatedKey);
     this.touch();
     this.requestStoreWrite();
@@ -2243,6 +2284,7 @@ class DashboardState {
     }
     if (stableStringify(current) === stableStringify(next)) return false;
     records.set(key, next);
+    this.invalidatePullRequestRegistrationCache();
     this.touch();
     this.requestStoreWrite();
     return true;
@@ -3085,9 +3127,7 @@ class DashboardState {
 
   // マージ記録の保持期間は登録より短いので、マージ済みの PR の起点も登録から求められる。
   pullRequestProviders(owner, repo, number) {
-    return orderedProviders(this.pullRequestRegistrations().filter((record) => (
-      record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase() && record.number === number
-    )).map((record) => record.provider));
+    return [...(this.pullRequestRegistrationSnapshot().providersByPullRequest.get(pullRequestRecordKey(owner, repo, number)) || [])];
   }
 
   decisionsFor(sessionId) {
