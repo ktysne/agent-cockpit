@@ -134,11 +134,11 @@ function updateCheckContext(send) {
 
 const jsonResponse = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
 
-test('更新を確認は、結果ごとに一行の文言を出し、新しい版では通知欄も更新する', async () => {
+test('更新を確認は、最新なら何も出さず、それ以外は結果を一行で出し、新しい版では通知欄も更新する', async () => {
   const latest = { ...update, current: '0.0.0', checkedAt: 'x', error: null };
   const cases = [
     { body: { current: '1.0.1', latest: '1.0.1', available: false, checkedAt: 'x', error: null }, status: 200,
-      message: '最新の版です (v1.0.1)。', applied: [] },
+      message: '', applied: [] },
     { body: latest, status: 200, message: '新しい版 v1.0.0 があります。', applied: [latest] },
     { body: { current: '1.0.1', latest: null, available: false, checkedAt: 'x', error: 'TIMEOUT' }, status: 200,
       message: '確認できませんでした。時間をおいてやり直してください。', applied: [] },

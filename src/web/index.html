@@ -5070,7 +5070,7 @@ async function checkForUpdate() {
         applyUpdateState(update);
         message = `新しい版 v${update.latest} があります。`;
       } else {
-        message = `最新の版です (v${update.current})。`;
+        message = '';
       }
     }
   } catch {
