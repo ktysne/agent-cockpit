@@ -1141,6 +1141,28 @@ test('ファイル不在から24時間以内の再開では、前のツール表
   assert.ok(session.tools.some((tool) => tool.tool_use_id === 'read-before-absence'));
 });
 
+test('先頭がサブエージェントの開始だった不在セッションは、整理の後に再開しても終わったサブエージェントを稼働中に戻さない', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'absent-aged-subagent';
+  const base = Date.now();
+  const send = async (event) => {
+    const response = await request(runtime.info.port, {
+      method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event),
+    });
+    assert.equal(response.status, 202);
+  };
+  runtime.state.syncSessionFiles([{ session_id: sessionId, cwd: runtime.homeDir }], base);
+  await send({ session_id: sessionId, hook_event_name: 'SubagentStart', agent_id: 'worker', agent_type: 'general-purpose', hookAt: base + 1 });
+  await send({ session_id: sessionId, hook_event_name: 'SubagentStop', agent_id: 'worker', hookAt: base + 2 });
+  runtime.state.syncSessionFiles([], base + 60_001);
+  runtime.state.endedByAbsence.set(sessionId, base - 24 * 60 * 60_000 - 1);
+  runtime.state.pruneExpiredStoreRecords(Date.now());
+
+  runtime.state.syncSessionFiles([{ session_id: sessionId, cwd: runtime.homeDir }], base + 60_002);
+  const session = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((item) => item.session_id === sessionId);
+  assert.equal((session?.agents || []).some((agent) => agent.active), false);
+});
+
 test('24時間を過ぎた不在セッションの整理後も、Codex の再開回数を保ち行を再表示しない', async (t) => {
   const runtime = await runningServer(t);
   const sessionId = 'absent-aged-codex';

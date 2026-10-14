@@ -1382,6 +1382,20 @@ function applyCodexStart(session, event) {
   }
 }
 
+// 整理後の先頭に残す開始イベント。サブエージェントやツールの開始を残すと、再開で終わった作業が稼働中に戻るため、識別に要る項目だけを写す。
+function sessionStartFor(entry) {
+  const { event } = entry;
+  if (event.hook_event_name === 'SessionStart' && !event.agent_id) return entry;
+  const start = {
+    session_id: event.session_id, provider: event.provider, hook_event_name: 'SessionStart', hookAt: event.hookAt,
+    product: event.product, sessionName: event.sessionName, source: '',
+  };
+  for (const key of ['delegatedFrom', 'claudeParentSessionId', 'cwd']) {
+    if (event[key] !== undefined) start[key] = event[key];
+  }
+  return { event: start, sequence: entry.sequence };
+}
+
 function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity, questionEntries = entries) {
   const sessions = new Map();
   const initialAskDecisionState = initialAskDecisionsFor(questionEntries, askDecisionState, beforeSequence);
@@ -1602,10 +1616,10 @@ class DashboardState {
       if (now - endedAt <= ABSENT_SESSION_ENTRIES_RETENTION_MS) continue;
       const entries = this.entries.get(sessionId);
       if (!entries?.length) continue;
-      const retained = entries.filter(({ event }, index) => index === 0 || (
+      const retained = [sessionStartFor(entries[0]), ...entries.slice(1).filter(({ event }) => (
         event.provider === 'codex' && !event.agent_id && event.hook_event_name === 'SessionStart' && event.source === 'resume'
-      ));
-      if (retained.length !== entries.length) this.entries.replace(sessionId, retained);
+      ))];
+      if (retained.length !== entries.length || retained[0] !== entries[0]) this.entries.replace(sessionId, retained);
     }
     let mergeHistoryChanged = false;
     let sessionRecordsChanged = false;
