@@ -1001,6 +1001,21 @@ function applyCodexResult(session, event) {
   }
 }
 
+function applyBackgroundTaskEnds(session, event) {
+  if (session.provider === 'codex' || event.hook_event_name !== 'UserPromptSubmit' || !Array.isArray(event.backgroundTaskEnds)) return;
+  for (const end of event.backgroundTaskEnds) {
+    const agent = session.agents.find((item) => item.isCodex && item.backgroundTaskId === end.taskId && !item.resultReceived);
+    if (!agent) continue;
+    if (!agent.runId && end.codexRunId) agent.runId = end.codexRunId;
+    if (end.codexResult) {
+      completeCodexAgent(agent, end);
+    } else {
+      applyCodexAudit(agent, end);
+      agent.active = false;
+    }
+  }
+}
+
 /**
  * @param {SessionDecisions} session
  */
@@ -1389,6 +1404,7 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     }
     applySubagentStop(session, event);
     applyToolCompletion(session, event);
+    applyBackgroundTaskEnds(session, event);
     applyToolBatch(session, event);
     applyPermissionPrompt(session, event);
     applySessionLifecycle(session, event);

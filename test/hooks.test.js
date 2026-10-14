@@ -544,6 +544,58 @@ test('背景タスクの出力を読む呼び出しと、背景へ移った Bash
   assert.equal(taskOutput.backgroundOutputTaskId, 'c3');
 });
 
+test('UserPromptSubmit は完了通知から Codex の行だけを送り、プロンプト本文を送らない', () => {
+  const outputFile = path.resolve('task-a.output');
+  const prompt = `入力本文は送らない\n<task-notification>\n<task-id>task-a</task-id>\n<output-file>${outputFile}</output-file>\n<status>completed</status>\n<summary>要約も送らない</summary>\n</task-notification>`;
+  const readPaths = [];
+  const event = makeHookEvent({
+    session_id: 'bg-notify', hook_event_name: 'UserPromptSubmit', prompt,
+  }, 1, {
+    readTaskOutput(filePath) {
+      readPaths.push(filePath);
+      return 'ordinary output\ncodex-agent: agent=codex-review model=gpt-6 effort=high codex_home=C:/codex\ncodex-agent: run=codex-review-20261004-100000-1\ncodex-agent: result=ok';
+    },
+  });
+  const sanitized = sanitizeEvent(event);
+
+  assert.deepEqual(readPaths, [outputFile]);
+  assert.deepEqual(event.backgroundTaskEnds, [{
+    taskId: 'task-a', status: 'completed', codexOutput: {
+      auditLine: 'codex-agent: agent=codex-review model=gpt-6 effort=high codex_home=C:/codex',
+      resultLine: 'codex-agent: result=ok',
+      runLine: 'codex-agent: run=codex-review-20261004-100000-1',
+    },
+  }]);
+  assert.deepEqual(sanitized.backgroundTaskEnds, [{
+    taskId: 'task-a', status: 'completed',
+    codexAudit: { model: 'gpt-6', effort: 'high', codex_home: 'C:/codex' },
+    codexResult: { status: 'ok', exitCode: null },
+    codexRunId: 'codex-review-20261004-100000-1',
+  }]);
+  assert.equal(Object.hasOwn(event, 'prompt'), false);
+  assert.equal(Object.hasOwn(sanitized, 'prompt'), false);
+  assert.equal(JSON.stringify({ event, sanitized }).includes('要約も送らない'), false);
+  assert.equal(JSON.stringify({ event, sanitized }).includes('入力本文は送らない'), false);
+});
+
+test('完了通知の出力ファイル名が task ID と合わないか相対パスなら読まない', () => {
+  let reads = 0;
+  const prompt = [
+    ['task-a', path.resolve('another.output')],
+    ['task-b', 'tasks/task-b.output'],
+  ].map(([taskId, outputFile]) => `<task-notification><task-id>${taskId}</task-id><output-file>${outputFile}</output-file><status>completed</status></task-notification>`).join('\n');
+
+  const event = makeHookEvent({ session_id: 'bg-notify', hook_event_name: 'UserPromptSubmit', prompt }, 1, {
+    readTaskOutput() { reads += 1; return 'codex-agent: result=ok'; },
+  });
+
+  assert.equal(reads, 0);
+  assert.deepEqual(event.backgroundTaskEnds, [
+    { taskId: 'task-a', status: 'completed' },
+    { taskId: 'task-b', status: 'completed' },
+  ]);
+});
+
 test('形に合わない背景タスク ID はフックもサーバーの正規化も捨てる', () => {
   const bad = makeHookEvent({
     session_id: 'bgid', hook_event_name: 'PostToolUse', tool_use_id: 't1', tool_name: 'Bash',

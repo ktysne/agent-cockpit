@@ -3,6 +3,8 @@ const { isHookSessionId } = require('../server/session-ids');
 const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
 const { readRouting } = require('../server/routing');
 const { execFile } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 const { appendPendingHook } = require('../client/hooks-pending');
 const { promisify } = require('node:util');
 const {
@@ -250,6 +252,7 @@ function extractAskUserQuestionResolution(toolResponse) {
 }
 
 const BACKGROUND_TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const TASK_OUTPUT_CHUNK_BYTES = 64 * 1024;
 
 // 背景タスクの出力ファイルは <ID>.output という名前で書かれる。公開仕様ではないので、形に合わなければ何も返さない。
 function backgroundOutputTaskIdOf(toolName, toolInput) {
@@ -298,6 +301,41 @@ function codexOutputLines(value) {
   return Object.keys(lines).length ? lines : null;
 }
 
+function readTaskOutputFile(filePath) {
+  let fileDescriptor;
+  try {
+    fileDescriptor = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(fileDescriptor).size;
+    const readChunk = (length, position) => {
+      const buffer = Buffer.alloc(length);
+      let offset = 0;
+      while (offset < length) {
+        const bytesRead = fs.readSync(fileDescriptor, buffer, offset, length - offset, position + offset);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      return buffer.subarray(0, offset).toString('utf8');
+    };
+    if (size <= TASK_OUTPUT_CHUNK_BYTES * 2) return readChunk(size, 0);
+
+    const head = readChunk(TASK_OUTPUT_CHUNK_BYTES, 0);
+    const tail = readChunk(TASK_OUTPUT_CHUNK_BYTES, size - TASK_OUTPUT_CHUNK_BYTES);
+    const headBoundary = Math.max(head.lastIndexOf('\n'), head.lastIndexOf('\r'));
+    const tailBoundary = tail.search(/[\r\n]/);
+    return `${head.slice(0, headBoundary + 1)}\n${tailBoundary < 0 ? '' : tail.slice(tailBoundary + 1)}`;
+  } catch {
+    return '';
+  } finally {
+    if (fileDescriptor !== undefined) {
+      try { fs.closeSync(fileDescriptor); } catch {}
+    }
+  }
+}
+
+function taskNotificationValue(block, tagName) {
+  return block.match(new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`))?.[1]?.trim() || '';
+}
+
 function makeHookEvent(input, now = Date.now(), options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const eventName = pickString(input.hook_event_name);
@@ -328,6 +366,28 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
   if (eventName === 'PermissionRequest') {
     event.tool_name = pickString(input.tool_name);
     event.summary = inputSummary(event.tool_name, input.tool_input);
+  } else if (!isCodex && eventName === 'UserPromptSubmit' && typeof input.prompt === 'string') {
+    const backgroundTaskEnds = [];
+    let inspected = 0;
+    for (const match of input.prompt.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)) {
+      if (inspected >= 8) break;
+      inspected += 1;
+      const block = match[1];
+      const taskId = taskNotificationValue(block, 'task-id');
+      if (!BACKGROUND_TASK_ID.test(taskId)) continue;
+      const rawStatus = taskNotificationValue(block, 'status');
+      const end = { taskId, status: /^[a-z_-]{1,32}$/.test(rawStatus) ? rawStatus : '' };
+      const outputFile = taskNotificationValue(block, 'output-file');
+      if (path.isAbsolute(outputFile) && path.basename(outputFile) === `${taskId}.output`) {
+        try {
+          const output = (options.readTaskOutput || readTaskOutputFile)(outputFile);
+          const codexOutput = codexOutputLines(output);
+          if (codexOutput) end.codexOutput = codexOutput;
+        } catch {}
+      }
+      backgroundTaskEnds.push(end);
+    }
+    if (backgroundTaskEnds.length) event.backgroundTaskEnds = backgroundTaskEnds;
   } else if (isCodex && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName)) {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
