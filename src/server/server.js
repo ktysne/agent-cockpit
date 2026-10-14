@@ -498,8 +498,7 @@ async function startServer(options = {}) {
     if (notificationReads.has(sessionId)) return notificationReads.get(sessionId);
     const reading = (async () => {
       try {
-        const file = state.sessionFileFor(sessionId);
-        const notifications = await notificationReader(claudeHome, file?.cwd, sessionId);
+        const notifications = await notificationReader(claudeHome, state.transcriptCwdFor(sessionId), sessionId);
         if (closing || !needsTaskNotifications(sessionId)) return;
         if (['待機中(サブエージェント稼働中)', '中断'].includes(state.sessions.get(sessionId)?.status)) {
           state.applyTaskNotifications(sessionId, notifications);

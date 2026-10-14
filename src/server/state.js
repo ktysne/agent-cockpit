@@ -1451,6 +1451,7 @@ class DashboardState {
     this.perf = options.perf || null;
     this.verifyEntries = options.verifyEntries ?? process.env.AGENT_COCKPIT_VERIFY_ENTRIES === '1';
     this.entries = new SessionEntries(this.verifyEntries);
+    this.hookCwds = new Map();
     this.sequence = 0;
     this.version = 0;
     this.generatedAt = new Date().toISOString();
@@ -1706,7 +1707,7 @@ class DashboardState {
     if (!this.snapshot().sessions.some((session) => session.session_id === sessionId)) return false;
     for (const records of [this.entries, this.sessions, this.endedAt, this.endedByAbsence,
       this.decisionOverrides, this.estimates, this.hiddenSessions, this.hiddenSessionUpdatedAt,
-      this.closedAgents, this.sessionFileLastSeenAt]) records.delete(sessionId);
+      this.closedAgents, this.sessionFileLastSeenAt, this.hookCwds]) records.delete(sessionId);
     this.deleteStoredSession(sessionId, { keepPullRequests: true });
     this.deletedSessions.set(sessionId, isoTime(now));
     this.onSessionEndedByAbsence?.(sessionId, now);
@@ -2668,6 +2669,16 @@ class DashboardState {
 
   sessionFileFor(sessionId) {
     return this.sessionFiles.get(sessionId) || null;
+  }
+
+  // 記録ファイルはセッションを始めた場所で決まるので、後で cd した先の cwd では上書きしない。
+  noteHookCwd(sessionId, cwd) {
+    if (typeof cwd === 'string' && cwd && cwd.length <= 4096 && !this.hookCwds.has(sessionId)) this.hookCwds.set(sessionId, cwd);
+  }
+
+  // セッションの一覧は公開仕様ではないので、読めないときはフックが最初に送った cwd で記録ファイルを探す。
+  transcriptCwdFor(sessionId) {
+    return this.sessionFiles.get(sessionId)?.cwd || this.hookCwds.get(sessionId) || null;
   }
 
   // 再開の SessionStart の後に読んだ記録の末尾は再開前の応答のことがあるので、時刻の新しいほうを残す。

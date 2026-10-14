@@ -2300,12 +2300,12 @@ test('Claude のセッションのフォルダーを読めないときは、セ�
 });
 
 
-async function backgroundNotificationCockpit(t, { byRun = false, output = 'codex-agent: result=ok' } = {}) {
+async function backgroundNotificationCockpit(t, { byRun = false, output = 'codex-agent: result=ok', sessionFile = true } = {}) {
   const { homeDir, claudeHome } = await temporaryHome(t);
   const state = new DashboardState();
   const sessionId = 'background-recovery';
   const runId = 'codex-review-20261004-100000-1';
-  state.syncSessionFiles([{ session_id: sessionId, cwd: homeDir }]);
+  if (sessionFile) state.syncSessionFiles([{ session_id: sessionId, cwd: homeDir }]);
   state.addEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: 1 });
   state.addEvent({ session_id: sessionId, hook_event_name: 'PreToolUse', hookAt: 2,
     tool_name: 'Bash', tool_use_id: 'launch', summary: byRun ? `bash codex-agent.sh --wait ${runId}` : 'npm run review:codex',
@@ -2325,7 +2325,7 @@ async function backgroundNotificationCockpit(t, { byRun = false, output = 'codex
   const runtime = await startServer({ homeDir, claudeHome, port: 0, state, taskNotificationDelayMs: 1 });
   t.after(() => runtime.close());
   await new Promise(resolve => setTimeout(resolve, 40));
-  return { state, before, runtime, sessionId };
+  return { state, before, runtime, sessionId, homeDir };
 }
 
 test('フックの通知が無くても記録ファイルの task-id で背景 Codex を終了し結果を反映する', async (t) => {
@@ -2347,6 +2347,17 @@ test('PostToolUse が無く背景タスク ID を持たない待ちの行を、�
   assert.equal(state.backgroundCodexAgents('background-recovery').length, 0);
   const parent = state.snapshot().sessions[0].agents.find(agent => agent.agent_id === 'parent');
   assert.equal(parent.gpt.active, false);
+});
+
+test('セッションの一覧が読めなくても、フックが送った cwd で記録ファイルを読み背景 Codex を終了する', async (t) => {
+  const { state, runtime, sessionId, homeDir } = await backgroundNotificationCockpit(t, { sessionFile: false });
+  assert.equal(state.snapshot().sessions[0].agents[0].active, true);
+  await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read', cwd: homeDir }) });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  const agent = state.snapshot().sessions[0].agents[0];
+  assert.equal(agent.active, false);
+  assert.equal(agent.resultReceived, true);
 });
 
 test('結果行が無い記録ファイルの完了通知も背景 Codex の稼働と終了未確認を外す', async (t) => {
