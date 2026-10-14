@@ -361,21 +361,32 @@ function Get-DashboardState([object]$ServerInfo) {
     return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
   try {
-    $state = Invoke-RestMethod -Uri "http://127.0.0.1:$($ServerInfo.Port)/api/state" -Method Get -TimeoutSec 2 -UseBasicParsing
-    $keys = @()
-    foreach ($session in @($state.sessions)) {
-      foreach ($wait in @($session.permissionWaits)) {
-        if ($null -ne $wait) { $keys += '{0}|{1}|{2}' -f $session.session_id, $wait.agent_id, $wait.startedAt }
+    try {
+      $state = Invoke-RestMethod -Uri "http://127.0.0.1:$($ServerInfo.Port)/api/tray" -Method Get -TimeoutSec 2 -UseBasicParsing
+      $permissionKeys = @($state.permissionKeys)
+      $decisionKeys = @($state.decisionKeys)
+      $awayEnabled = ($state.awayEnabled -eq $true)
+    } catch {
+      $response = $_.Exception.Response
+      # /api/tray を持たない古い常駐サーバーは、知らない GET に 405 を返す。
+      if ($null -eq $response -or @(404, 405) -notcontains [int]$response.StatusCode) { throw }
+      $state = Invoke-RestMethod -Uri "http://127.0.0.1:$($ServerInfo.Port)/api/state" -Method Get -TimeoutSec 2 -UseBasicParsing
+      $permissionKeys = @()
+      foreach ($session in @($state.sessions)) {
+        foreach ($wait in @($session.permissionWaits)) {
+          if ($null -ne $wait) { $permissionKeys += '{0}|{1}|{2}' -f $session.session_id, $wait.agent_id, $wait.startedAt }
+        }
       }
-    }
-    $decisionKeys = @()
-    foreach ($session in @($state.sessions)) {
-      foreach ($decision in @($session.decisions)) {
-        $hasEffectiveAnswer = $decision.answer -and $decision.answer.sentAt -and -not $decision.answer.ignoredAt
-        if ($decision -and $decision.state -eq 'waiting' -and -not $hasEffectiveAnswer) { $decisionKeys += '{0}|{1}' -f $session.session_id, $decision.id }
+      $decisionKeys = @()
+      foreach ($session in @($state.sessions)) {
+        foreach ($decision in @($session.decisions)) {
+          $hasEffectiveAnswer = $decision.answer -and $decision.answer.sentAt -and -not $decision.answer.ignoredAt
+          if ($decision -and $decision.state -eq 'waiting' -and -not $hasEffectiveAnswer) { $decisionKeys += '{0}|{1}' -f $session.session_id, $decision.id }
+        }
       }
+      $awayEnabled = ($state.away.enabled -eq $true)
     }
-    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; DecisionCount = $decisionKeys.Count; DecisionKeys = $decisionKeys; AwayEnabled = ($state.away.enabled -eq $true) }
+    return [pscustomobject]@{ Connected = $true; PermissionCount = $permissionKeys.Count; PermissionKeys = $permissionKeys; DecisionCount = $decisionKeys.Count; DecisionKeys = $decisionKeys; AwayEnabled = $awayEnabled }
   } catch {
     return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
