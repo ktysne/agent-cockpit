@@ -2822,3 +2822,16 @@ test('壊れたクロスレビュー状態は失敗分類だけを残し、同�
   assert.equal(entries[0].level, 'warn');
   assert.doesNotMatch(JSON.stringify(entries), /private|invalid-json|message/);
 });
+
+test('期限の整理を間引いている間に 24 時間を過ぎたマージ履歴は返さない', () => {
+  const state = new DashboardState();
+  const mergedAt = Date.parse('2026-10-01T00:00:00.000Z');
+  state.recordMergedPullRequest({
+    owner: 'example', repo: 'project', number: 7, title: '期限の境目', url: 'https://github.com/example/project/pull/7',
+    mergedAt: new Date(mergedAt).toISOString(), method: 'merge', automatic: false,
+  }, mergedAt);
+  const retentionMs = 24 * 60 * 60 * 1000;
+
+  assert.equal(state.mergedPullRequestHistoryForRepo('example', 'project', mergedAt + retentionMs - 1000).length, 1);
+  assert.deepEqual(state.mergedPullRequestHistoryForRepo('example', 'project', mergedAt + retentionMs + 1000), []);
+});
