@@ -2576,7 +2576,7 @@ function pullRequestConflictUiKey(group, pullRequest) {
   return `${group.owner.toLowerCase()}/${group.repo.toLowerCase()}#${pullRequest.number}`;
 }
 
-// Codex にはセッション名が無く、thread ID は利用者に意味を持たないので題に使わない。
+// 名前の無い Codex のセッションでは、thread ID が利用者に意味を持たないので題に使わない。
 function sessionDisplayName(session) {
   return session.title || (session.provider === 'codex' ? 'Codex のセッション' : session.session_id);
 }
