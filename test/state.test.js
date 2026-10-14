@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { DashboardState, claudeModelName } = require('../src/server/state');
+const { DashboardState, claudeModelName, deriveSessions } = require('../src/server/state');
 const { productFromCwd } = require('../src/server/identity');
 const { readSessionName, listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('../src/server/session-files');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
@@ -2223,6 +2223,62 @@ test('メインが背景で起動した複数の Codex は、背景タスク ID 
     codexOutput: { resultLine: 'codex-agent: result=ok' },
   });
   assert.ok(gpt().every((item) => item.active === false && item.unconfirmed === false));
+});
+
+test('完了通知の結果行は同じ親の背景 Codex のうち task ID が一致する行だけを終了する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const sessionId = 'bg-notify-result';
+  launchBackgroundCodexInMain(state, sessionId, 'bash-a', 'taska', 1);
+  launchBackgroundCodexInMain(state, sessionId, 'bash-b', 'taskb', 3);
+  state.addEvent({
+    session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: 5,
+    backgroundTaskEnds: [{ taskId: 'taskb', status: 'completed', codexOutput: {
+      auditLine: 'codex-agent: agent=codex-review model=gpt-6 effort=high codex_home=C:/codex',
+      runLine: 'codex-agent: run=codex-review-20261004-100000-2',
+      resultLine: 'codex-agent: result=ok',
+    } }],
+  });
+
+  const agents = state.snapshot().sessions[0].agents.filter((agent) => agent.isCodex);
+  const byTask = Object.fromEntries(agents.map((agent) => [agent.backgroundTaskId, agent]));
+  assert.equal(byTask.taska.active, true);
+  assert.equal(byTask.taska.resultReceived, undefined);
+  assert.equal(byTask.taskb.active, false);
+  assert.equal(byTask.taskb.resultReceived, true);
+  assert.equal(byTask.taskb.runId, 'codex-review-20261004-100000-2');
+  assert.equal(byTask.taskb.model, 'gpt-6');
+
+  const replayed = deriveSessions(state.entries.get(sessionId))[0].agents.filter((agent) => agent.isCodex);
+  assert.deepEqual(replayed.map((agent) => [agent.backgroundTaskId, agent.active, agent.resultReceived]), [
+    ['taska', true, undefined], ['taskb', false, true],
+  ]);
+});
+
+test('結果行のない完了通知は背景 Codex を稼働中から外し、状態再生でも保つ', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const sessionId = 'bg-notify-no-result';
+  launchBackgroundCodexInMain(state, sessionId, 'bash-a', 'taska', 1);
+  state.addEvent({
+    session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: 3,
+    backgroundTaskEnds: [{ taskId: 'taska', status: 'completed', codexOutput: {
+      auditLine: 'codex-agent: agent=codex-review model=gpt-6 effort=high codex_home=C:/codex',
+      runLine: 'codex-agent: run=codex-review-20261004-100000-1',
+    } }],
+  });
+
+  const agent = state.snapshot().sessions[0].agents.find((item) => item.isCodex);
+  assert.equal(agent.active, false);
+  assert.equal(agent.unconfirmed, false);
+  assert.equal(agent.resultReceived, undefined);
+  assert.equal(agent.runId, 'codex-review-20261004-100000-1');
+  assert.equal(agent.model, 'gpt-6');
+
+  const replayed = deriveSessions(state.entries.get(sessionId))[0].agents.find((item) => item.isCodex);
+  assert.deepEqual([replayed.active, replayed.unconfirmed, replayed.resultReceived, replayed.runId], [
+    false, false, undefined, 'codex-review-20261004-100000-1',
+  ]);
 });
 
 test('Codex を起動した呼び出しの引数に別の背景タスクの出力ファイルがあっても、完了が重複して届いても、その行に結び付けない', async (t) => {

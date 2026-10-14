@@ -270,6 +270,27 @@ function sanitizeEvent(input, metadata = {}) {
     event.message = shortString(input.message, 200) || '';
   }
 
+  if (event.provider === 'claude' && eventName === 'UserPromptSubmit' && Array.isArray(input.backgroundTaskEnds)) {
+    event.backgroundTaskEnds = input.backgroundTaskEnds.slice(0, 8).flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        typeof item.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(item.taskId)) return [];
+      const end = {
+        taskId: item.taskId,
+        status: typeof item.status === 'string' && /^[a-z_-]{1,32}$/.test(item.status) ? item.status : '',
+      };
+      if (item.codexOutput && typeof item.codexOutput === 'object' && !Array.isArray(item.codexOutput)) {
+        const audit = parseCodexAuditLine(item.codexOutput.auditLine);
+        const result = parseCodexResultLine(item.codexOutput.resultLine);
+        const runId = parseCodexRunLine(item.codexOutput.runLine);
+        if (audit) end.codexAudit = audit;
+        if (result) end.codexResult = result;
+        if (runId) end.codexRunId = runId;
+      }
+      return [end];
+    });
+    if (event.backgroundTaskEnds.length === 0) delete event.backgroundTaskEnds;
+  }
+
   return event;
 }
 
