@@ -3061,3 +3061,29 @@ test('同じリポジトリの取得が動いている間の確定操作は、�
   }
   await Promise.allSettled([...background, ...laterBackground, running, fresh]);
 });
+
+test('予約した取り直しの時刻に同じリポジトリの取得が動いていれば、終わるのを待ってから取り直す', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { tracker, github, calls } = await trackerFixture(t);
+  let now = Date.parse('2026-10-03T12:00:00.000Z');
+  tracker.now = () => now;
+  github.views.set(31, { ...ghPullRequest(31, 'feature/31', 'main', '1'.repeat(40)), state: 'CLOSED', mergedAt: null });
+  await tracker.refreshAll();
+
+  now += 10_000;
+  await tracker.refreshAfterCommand();
+  let finishRunning;
+  tracker.inFlight.set('example/project', new Promise((resolve) => { finishRunning = resolve; }));
+  const callCount = calls.length;
+  now += 50_000;
+  t.mock.timers.tick(50_000);
+  for (let index = 0; index < 20; index += 1) await new Promise(setImmediate);
+  assert.equal(calls.length, callCount);
+
+  tracker.inFlight.delete('example/project');
+  finishRunning();
+  for (let index = 0; index < 20; index += 1) await new Promise(setImmediate);
+  assert.ok(calls.length > callCount);
+  tracker.close();
+  t.mock.timers.reset();
+});
