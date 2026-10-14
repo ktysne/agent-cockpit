@@ -253,6 +253,30 @@ test('gh pr create と GitHub MCP の応答から PR の URL だけを送る', a
   assert.equal(Object.hasOwn(noUrl, 'commandCwd'), false);
 });
 
+test('PR 取り直しコマンドの cwd と --repo を Claude と Codex のイベントに載せる', () => {
+  const hookCwd = path.resolve(os.tmpdir(), 'session-repo', 'worktree');
+  const commandCwd = path.resolve(os.tmpdir(), 'target-repo', 'worktree');
+  const pushCommand = `cd "${commandCwd.replaceAll('\\', '/')}" && git push`;
+  const makeBashEvent = (provider, hook_event_name, command) => makeHookEvent({
+    session_id: 'refresh-scope', hook_event_name, cwd: hookCwd,
+    tool_name: 'Bash', tool_use_id: 'refresh-command', tool_input: { command },
+  }, Date.now(), { provider });
+
+  for (const provider of ['claude', 'codex']) {
+    for (const hook_event_name of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure']) {
+      const push = makeBashEvent(provider, hook_event_name, pushCommand);
+      assert.equal(push.commandCwd, commandCwd, `${provider} ${hook_event_name} commandCwd`);
+      assert.equal(sanitizeEvent(push).commandCwd, commandCwd, `${provider} ${hook_event_name} sanitized commandCwd`);
+      assert.equal(hook_event_name === 'PreToolUse' ? push.refreshPullRequestsCommand : push.refreshPullRequests, true);
+
+      const view = makeBashEvent(provider, hook_event_name, 'gh pr view 1 --repo o/r');
+      assert.equal(view.refreshRepository, 'o/r', `${provider} ${hook_event_name} refreshRepository`);
+      assert.equal(sanitizeEvent(view).refreshRepository, 'o/r', `${provider} ${hook_event_name} sanitized refreshRepository`);
+      assert.equal(Object.hasOwn(sanitizeEvent({ ...view, refreshRepository: 'o/r/extra' }), 'refreshRepository'), false);
+    }
+  }
+});
+
 test('PostToolUse は絶対 commandCwd を 4096 文字まで受け付ける', () => {
   const base = { session_id: 'command-cwd', hook_event_name: 'PostToolUse', tool_name: 'Bash' };
   const cwd = path.resolve(os.tmpdir(), 'command-repo');

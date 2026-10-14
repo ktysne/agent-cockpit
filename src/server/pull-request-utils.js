@@ -213,6 +213,28 @@ function shouldRefreshPullRequests(command) {
   });
 }
 
+function pullRequestCommandRepository(command) {
+  for (const segment of commandSegments(command)) {
+    const words = commandWords(segment);
+    if (words[0] !== 'gh' || words[subcommandIndex(words, 'gh')] !== 'pr') continue;
+    for (let index = 1; index < words.length; index += 1) {
+      let value;
+      if (words[index] === '--repo' || words[index] === '-R') {
+        value = words[index + 1];
+        index += 1;
+      } else if (words[index].startsWith('--repo=')) {
+        value = words[index].slice('--repo='.length);
+      }
+      if (typeof value !== 'string') continue;
+      const parts = value.split('/');
+      if (parts.length === 2 && validRepositoryPart(parts[0]) && validRepositoryPart(parts[1])) {
+        return `${parts[0]}/${parts[1]}`;
+      }
+    }
+  }
+  return null;
+}
+
 module.exports = {
   COMPLETE_COMMIT_SHA_PATTERN,
   commandSegments,
@@ -226,6 +248,7 @@ module.exports = {
   parsePullRequestUrl,
   parseGitHubRepositoryRemote,
   pullRequestCommandCwd,
+  pullRequestCommandRepository,
   pullRequestKey,
   repositoryKey,
   shouldRefreshPullRequests,

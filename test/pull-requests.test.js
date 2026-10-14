@@ -28,6 +28,7 @@ const {
   isGhPrCreateCommand,
   parsePullRequestUrl,
   pullRequestCommandCwd,
+  pullRequestCommandRepository,
   shouldRefreshPullRequests,
 } = require('../src/server/pull-request-utils');
 const { DashboardState } = require('../src/server/state');
@@ -94,6 +95,19 @@ test('PR 作成コマンドの cd を確定できない形式では cwd を推�
     assert.equal(pullRequestCommandCwd(command, hookCwd), null, command);
   }
   assert.equal(pullRequestCommandCwd('gh pr create', hookCwd), null);
+});
+
+test('gh pr の --repo と -R から対象リポジトリを取り出す', () => {
+  for (const command of [
+    'gh pr view 1 --repo o/r',
+    'gh pr view 1 -R o/r',
+    'gh --repo o/r pr view 1',
+    'gh --repo=o/r pr view 1',
+  ]) {
+    assert.equal(pullRequestCommandRepository(command), 'o/r', command);
+  }
+  assert.equal(pullRequestCommandRepository('gh pr view 1 --repo o/r/extra'), null);
+  assert.equal(pullRequestCommandRepository('echo "gh pr view 1 --repo o/r"'), null);
 });
 
 async function temporaryDirectory(testContext) {
