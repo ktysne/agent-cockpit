@@ -1,11 +1,16 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { isReleaseTag, latestReleaseTag } = require('./release-tag');
 
 const ROOT = path.resolve(__dirname, '..');
 const SITE_DIR = path.join(ROOT, 'site');
 const MANUAL_DIR = path.join(ROOT, 'manual');
+// 紹介ページの版を入れる要素。中身は配信のたびに版で置き換え、リポジトリの index.html は書き換えない。
+const SITE_VERSION_ELEMENT = /<([a-z][a-z\d]*)\b([^>]*\sdata-site-version(?=[\s>])[^>]*)>[^<]*<\/\1>/gi;
+const VALUE_OPTIONS = new Map([['--config', 'config'], ['--version', 'version']]);
 const FTP_PREFIX = 'AGENT_COCKPIT_FTP_';
 const UPLOAD_ATTEMPTS_PER_ITEM = 4;
 const UPLOAD_RECONNECT_DELAY_MS = 3000;
@@ -284,10 +289,11 @@ function parseArgs(argv) {
       options.dryRun = true;
       continue;
     }
-    if (arg !== '--config') throw new Error('不明な引数です: ' + arg);
+    const key = VALUE_OPTIONS.get(arg);
+    if (!key) throw new Error('不明な引数です: ' + arg);
     const value = argv[index + 1];
     if (!value || value.startsWith('--')) throw new Error(arg + ' の値がありません。');
-    options.config = value;
+    options[key] = value;
     index += 1;
   }
   return { command, ...options };
@@ -296,13 +302,38 @@ function parseArgs(argv) {
 function printUsage() {
   console.log([
     '使い方:',
-    '  node tools/site-deploy.js upload [--dry-run] [--config <path>]',
+    '  node tools/site-deploy.js upload [--dry-run] [--config <path>] [--version vX.Y.Z]',
   ].join('\n'));
+}
+
+// --version が無いときは origin の最新の版タグを使う。版タグが 1 つも無いときは空にする。
+function siteVersion(opt, dependencies) {
+  if (opt.version !== undefined) {
+    if (!isReleaseTag(opt.version)) throw new Error('--version は v1.2.3 の形式で指定してください: ' + opt.version);
+    return opt.version;
+  }
+  const latest = latestReleaseTag(dependencies);
+  if (latest === null) {
+    console.warn('警告: origin に版タグが無いため、紹介ページの版は空のまま送ります。');
+    return '';
+  }
+  return latest;
+}
+
+function embedSiteVersion(html, version) {
+  const count = [...html.matchAll(SITE_VERSION_ELEMENT)].length;
+  if (count !== 1) {
+    throw new Error('紹介ページの data-site-version の要素がちょうど 1 個ではありません (' + count + ' 個)');
+  }
+  return html.replace(SITE_VERSION_ELEMENT, (_, tag, attributes) => '<' + tag + attributes + '>' + version + '</' + tag + '>');
 }
 
 async function cmdUpload(opt, dependencies = {}) {
   const items = siteItems(dependencies.siteDir ?? SITE_DIR, dependencies.manualDir ?? MANUAL_DIR);
   checkReferences(items);
+  const version = siteVersion(opt, dependencies);
+  const index = items.find(item => item.label === 'index.html');
+  const indexHtml = embedSiteVersion(fs.readFileSync(index.localPath, 'utf8'), version);
 
   if (opt.dryRun) {
     let remoteRoot = null;
@@ -312,10 +343,12 @@ async function cmdUpload(opt, dependencies = {}) {
     } catch (error) {
       configProblem = error.message;
     }
+    console.log('埋め込む紹介ページの版: ' + (version || '(版のタグが無いため空)'));
     console.log('FTPS 送信計画 (remoteRoot: ' + (remoteRoot ?? '(未設定)') + '):');
     for (const item of items) {
+      const size = item === index ? Buffer.byteLength(indexHtml) : fs.statSync(item.localPath).size;
       const remotePath = remoteRoot ? path.posix.join(remoteRoot, item.label) : '(remoteRoot 未設定)/' + item.label;
-      console.log('  ' + remotePath + ' (' + formatSize(fs.statSync(item.localPath).size) + ')');
+      console.log('  ' + remotePath + ' (' + formatSize(size) + ')');
     }
     if (configProblem) {
       console.log('要確認: tools/deploy.config.json か AGENT_COCKPIT_FTP_* の環境変数で FTPS の接続情報を用意してください: ' + configProblem);
@@ -325,7 +358,16 @@ async function cmdUpload(opt, dependencies = {}) {
   }
 
   const config = dependencies.config ?? loadConfig(opt.config, dependencies.env ?? process.env);
-  await uploadSite(items, config, dependencies);
+  // uploadSite は送るファイル名を localPath の basename から決めるため、一時ファイルも index.html という名前で作る。
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-site-'));
+  try {
+    const indexPath = path.join(temporaryDirectory, 'index.html');
+    fs.writeFileSync(indexPath, indexHtml);
+    const sendItems = items.map(item => (item === index ? { ...item, localPath: indexPath } : item));
+    await uploadSite(sendItems, config, dependencies);
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
   return { dryRun: false, items };
 }
 

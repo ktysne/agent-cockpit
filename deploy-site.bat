@@ -59,28 +59,57 @@ echo [agent-cockpit] Branch: %BRANCH%  Commit: %COMMIT%
 if /i not "%BRANCH%"=="main" echo [agent-cockpit] WARNING: this is not the main branch.
 echo.
 
-node --use-system-ca tools\site-deploy.js upload --dry-run
+:asktag
+set "TAG="
+set /p "TAG=Release tag to create after the upload (e.g. v1.0.1). Leave empty to upload only: "
+if not defined TAG goto :tagdone
+echo(!TAG!| findstr /r /x "v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul
+if errorlevel 1 (
+    echo [agent-cockpit] Invalid tag "!TAG!". Use a form like v1.0.1, or leave it empty.
+    goto :asktag
+)
+:tagdone
+if defined TAG (
+    node tools\release-tag.js check !TAG!
+    if errorlevel 1 goto :failed
+)
+
+set "VERSION_ARG="
+if defined TAG set "VERSION_ARG=--version !TAG!"
+node --use-system-ca tools\site-deploy.js upload --dry-run !VERSION_ARG!
 if errorlevel 1 goto :failed
 echo.
 if defined DRYRUN (
     echo [agent-cockpit] Dry run finished. A real run would upload the files above.
+    if defined TAG echo [agent-cockpit] A real run would create and push tag !TAG! after the upload.
     goto :done
 )
 
+set "UPLOAD_PROMPT=Upload the site files now? (y/N): "
+if defined TAG set "UPLOAD_PROMPT=Upload the site files and then create tag !TAG!? (y/N): "
 set "UPLOAD="
-set /p "UPLOAD=Upload the site files now? (y/N): "
+set /p "UPLOAD=!UPLOAD_PROMPT!"
 if /i not "!UPLOAD!"=="y" (
     echo [agent-cockpit] Upload skipped.
     goto :done
 )
-node --use-system-ca tools\site-deploy.js upload
+node --use-system-ca tools\site-deploy.js upload !VERSION_ARG!
 if errorlevel 1 goto :uploadfailed
 echo [agent-cockpit] Site upload completed: https://ktysne.info/agent-cockpit/
+if not defined TAG goto :done
+node tools\release-tag.js create !TAG!
+if errorlevel 1 goto :tagfailed
+echo [agent-cockpit] Tag !TAG! pushed. Running servers notify users of the update within 6 hours.
 goto :done
 
 :uploadfailed
 echo.
 echo [agent-cockpit] Upload failed. Running deploy-site.bat again completes the upload.
+goto :pausefail
+
+:tagfailed
+echo.
+echo [agent-cockpit] Tag creation failed. The site is already uploaded. Running deploy-site.bat again with the same tag finishes the tag.
 goto :pausefail
 
 :done

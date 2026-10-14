@@ -5,6 +5,7 @@ const path = require('node:path');
 const { temporaryDirectory } = require('./support/temp');
 const {
   checkReferences,
+  cmdUpload,
   loadConfig,
   main,
   parseArgs,
@@ -314,6 +315,7 @@ test('dry-run は対象と要確認を表示し、FTPS クライアントへ接�
   try {
     const result = await main(['upload', '--dry-run', '--config', missingConfig], {
       env: {},
+      execFileSync: () => 'a\trefs/tags/v1.0.0\n',
       client: { async access() { accessCount += 1; } },
     });
     assert.equal(result.dryRun, true);
@@ -329,12 +331,108 @@ test('dry-run は対象と要確認を表示し、FTPS クライアントへ接�
   assert.equal(output.filter(line => line.startsWith('  (remoteRoot 未設定)/')).length, siteItems().length);
 });
 
+const SITE_VERSION_HTML = '<a class="btn primary" href="#install">導入<small class="site-version" data-site-version></small></a>';
+
+function recordingFtpServer() {
+  const server = fakeFtpServer();
+  const sent = new Map();
+  const createClient = () => {
+    const client = server.dependencies.createClient();
+    const uploadFrom = client.uploadFrom;
+    client.uploadFrom = async (localPath, name) => {
+      sent.set(name, fs.readFileSync(localPath, 'utf8'));
+      return uploadFrom(localPath, name);
+    };
+    return client;
+  };
+  return { server, sent, createClient };
+}
+
+test('紹介ページの版の要素に指定した版を入れて送り、リポジトリの index.html は書き換えない', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  write(siteDir, 'index.html', SITE_VERSION_HTML);
+  const { sent, createClient } = recordingFtpServer();
+
+  await cmdUpload({ command: 'upload', version: 'v9.9.9' }, {
+    siteDir,
+    manualDir,
+    config: FTP_CONFIG,
+    createClient,
+    pauseBeforeReconnect: async () => {},
+  });
+
+  assert.equal(sent.get('index.html.uploading'), SITE_VERSION_HTML.replace('data-site-version></small>', 'data-site-version>v9.9.9</small>'));
+  assert.equal(fs.readFileSync(path.join(siteDir, 'index.html'), 'utf8'), SITE_VERSION_HTML);
+});
+
+test('紹介ページに版の要素が無いときは、何も送らずに止まる', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  write(siteDir, 'index.html', '<p>導入</p>');
+  const { server, createClient } = recordingFtpServer();
+
+  await assert.rejects(cmdUpload({ command: 'upload', version: 'v9.9.9' }, {
+    siteDir,
+    manualDir,
+    config: FTP_CONFIG,
+    createClient,
+  }), /data-site-version/);
+  assert.equal(server.clientCount(), 0);
+});
+
+test('--version が無いときは origin の最新の版タグを紹介ページに入れる', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  write(siteDir, 'index.html', SITE_VERSION_HTML);
+  const lsRemoteCalls = [];
+  const execFileSync = (file, args) => {
+    lsRemoteCalls.push(args.join(' '));
+    return [
+      'a\trefs/tags/v1.0.9',
+      'b\trefs/tags/v1.0.10',
+      'c\trefs/tags/v1.0.10^{}',
+      'd\trefs/tags/v2.0.0-rc1',
+    ].join('\n') + '\n';
+  };
+  const output = [];
+  const previousLog = console.log;
+  console.log = message => output.push(message);
+  try {
+    await cmdUpload({ command: 'upload', dryRun: true, config: path.join(directory, 'missing.json') }, {
+      siteDir,
+      manualDir,
+      env: {},
+      execFileSync,
+    });
+  } finally {
+    console.log = previousLog;
+  }
+
+  assert.deepEqual(lsRemoteCalls, ['ls-remote --tags origin']);
+  assert.ok(output.includes('埋め込む紹介ページの版: v1.0.10'));
+});
+
+test('origin の版タグを取得できないときは、版を決めずに止まる', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const execFileSync = () => { throw new Error('fatal: unable to access'); };
+
+  await assert.rejects(cmdUpload({ command: 'upload', dryRun: true, config: path.join(directory, 'missing.json') }, {
+    siteDir,
+    manualDir,
+    env: {},
+    execFileSync,
+  }), /git ls-remote --tags origin が失敗しました/);
+});
+
 test('parseArgs は upload の dry-run と config を読み、未知のコマンドには使い方を表示する', async () => {
   assert.deepEqual(parseArgs(['upload', '--dry-run', '--config', 'custom.json']), {
     command: 'upload',
     dryRun: true,
     config: 'custom.json',
   });
+  assert.equal(parseArgs(['upload', '--version', 'v1.0.1']).version, 'v1.0.1');
 
   const previousExitCode = process.exitCode;
   const previousLog = console.log;
