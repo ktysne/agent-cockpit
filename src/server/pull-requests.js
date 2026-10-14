@@ -3,6 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const {
   isCompleteCommitSha,
   parseGitHubRepositoryRemote,
@@ -21,6 +22,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 const GH_CONCURRENCY_LIMIT = 4;
 const INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+// コマンドの後の取り直しも間引かないと、gh pr のたびに全リポジトリを一斉に取るため、修正前の定期取得と同じ間隔までは間引く。
+const COMMAND_REFRESH_INACTIVE_INTERVAL_MS = 60_000;
+// 開発者が確定した操作の確かめ直しの中で呼ぶ gh を、定期取得より先に実行するための印。
+const ghPriorityContext = new AsyncLocalStorage();
 
 function asText(value, maximum = 500) {
   return typeof value === 'string' ? value.slice(0, maximum) : '';
@@ -1051,7 +1056,7 @@ class PullRequestTracker {
     this.timer = null;
   }
 
-  refreshAll() {
+  refreshAll({ inactiveIntervalMs = INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS } = {}) {
     const repositories = new Map();
     for (const record of [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]) {
       const key = repoKey(record.owner, record.repo);
@@ -1062,7 +1067,7 @@ class PullRequestTracker {
     const now = this.now();
     const refreshes = [...repositories.entries()]
       .filter(([key, { active }]) => active || !this.lastFetchStartedAt.has(key)
-        || now - this.lastFetchStartedAt.get(key) >= INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS)
+        || now - this.lastFetchStartedAt.get(key) >= inactiveIntervalMs)
       .map(([, { owner, repo }]) => this.refreshRepo(owner, repo));
     return Promise.all(refreshes).then((results) => {
       // 取り直しの間に登録されたリポジトリを消さないため、登録は待った後に数え直す。
@@ -1132,10 +1137,14 @@ class PullRequestTracker {
     return operation;
   }
 
-  async refreshRepoFresh(owner, repo) {
+  async refreshRepoFresh(owner, repo, { priority = false } = {}) {
     const key = repoKey(owner, repo);
     await this.inFlight.get(key)?.catch(() => {});
-    return this.refreshRepo(owner, repo);
+    return priority ? ghPriorityContext.run(true, () => this.refreshRepo(owner, repo)) : this.refreshRepo(owner, repo);
+  }
+
+  refreshAfterCommand() {
+    return this.refreshAll({ inactiveIntervalMs: COMMAND_REFRESH_INACTIVE_INTERVAL_MS });
   }
 
   mergeCandidate(registration) {
@@ -1206,7 +1215,7 @@ class PullRequestTracker {
     const repository = args.includes('-R') ? args[args.indexOf('-R') + 1] : args.find(arg => /^repos\/[^/]+\/[^/]+/.test(arg))?.split('/').slice(1, 3).join('/');
     const number = args[0] === 'pr' && /^\d+$/.test(args[2]) ? Number(args[2]) : undefined;
     const key = `${operation}:${repository || ''}:${number || ''}`;
-    await this.acquireGhSlot(priority);
+    await this.acquireGhSlot(priority || ghPriorityContext.getStore() === true);
     try {
       const output = await runGh(args, { execFileImpl: this.execFileImpl, ghPath: this.ghPath });
       this.diagnosticFailures.delete(key);

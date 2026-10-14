@@ -193,7 +193,7 @@ function createHookRoutes(ctx) {
     }
     if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (
       event.refreshPullRequests || state.wasPullRequestRefreshCommand(event.session_id, event.tool_use_id)
-    )) void pullRequestTracker?.refreshAll().catch(() => {});
+    )) void pullRequestTracker?.refreshAfterCommand().catch(() => {});
     if (event) answerDelivery.afterEvent(event);
     await state.waitForPersistence();
     jsonResponse(response, 202, { accepted: true });

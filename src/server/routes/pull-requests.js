@@ -38,7 +38,7 @@ function createPullRequestRoutes(ctx) {
       return;
     }
     try {
-      const refreshed = await pullRequestTracker.refreshRepoFresh(registration.owner, registration.repo);
+      const refreshed = await pullRequestTracker.refreshRepoFresh(registration.owner, registration.repo, { priority: true });
       const candidate = refreshed?.error ? null : pullRequestTracker.mergeCandidate(registration);
       if (!candidate?.pullRequest) {
         jsonResponse(response, 409, { error: 'Pull request is no longer open' });

@@ -1501,7 +1501,7 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
     close() {},
     snapshot: () => [],
     refreshRepo(owner, repo) { calls.repos.push(`${owner}/${repo}`); return Promise.resolve(); },
-    refreshAll() { calls.all += 1; return Promise.resolve(); },
+    refreshAfterCommand() { calls.all += 1; return Promise.resolve(); },
   };
   const runtime = await runningServer(t, {
     pullRequestTracker,
