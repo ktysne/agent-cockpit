@@ -633,6 +633,7 @@ async function startServer(options = {}) {
   await refreshSessionFiles().catch(() => {});
   for (const session of state.snapshot().sessions) scheduleTaskNotifications(session.session_id);
   const notificationTimer = setInterval(() => {
+    state.pruneExpiredStoreRecords(Date.now());
     for (const session of state.snapshot().sessions) void reconcileTaskNotifications(session.session_id);
   }, 60_000);
   notificationTimer.unref();

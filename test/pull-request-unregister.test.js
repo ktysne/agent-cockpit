@@ -34,6 +34,9 @@ async function unregisterServer(t, { unreachable = false, open = [] } = {}) {
 test('取得できないリポジトリの登録を外すと保存記録と PR の枠が消え取得対象から外れる', async (t) => {
   const { runtime, send, groups, register, calls } = await unregisterServer(t, { unreachable: true });
   await register(1);
+  runtime.pullRequestTracker.diagnosticFailures.set('api.pull-requests:example/project:', 2);
+  runtime.pullRequestTracker.diagnosticFailures.set('pr.view:example/project:9', 1);
+  runtime.pullRequestTracker.mergedHeadBackfillAttempts.add('example/project#9');
   assert.ok((await groups())[0].error);
   assert.equal((await groups())[0].unregisterableCount, 1);
   runtime.state.setPullRequestMergeReservation({ session_id: 'unregister-test', owner: 'example', repo: 'project', number: 1,
@@ -44,6 +47,9 @@ test('取得できないリポジトリの登録を外すと保存記録と PR �
   const history = runtime.state.mergedPullRequestHistoryForRepo('example', 'project');
   assert.equal(jsonBody(await send()).deleted, 1);
   assert.deepEqual(await groups(), []);
+  assert.equal(runtime.pullRequestTracker.diagnosticFailures.has('api.pull-requests:example/project:'), false);
+  assert.equal(runtime.pullRequestTracker.diagnosticFailures.has('pr.view:example/project:9'), false);
+  assert.equal(runtime.pullRequestTracker.mergedHeadBackfillAttempts.has('example/project#9'), false);
   assert.deepEqual(runtime.state.pullRequestRegistrations(), []);
   assert.deepEqual(runtime.state.pullRequestProviders('example', 'project', 1), []);
   assert.deepEqual(runtime.state.pullRequestMergeReservations(), reservations);

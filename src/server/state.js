@@ -14,6 +14,8 @@ const { isRecord } = require('./value-utils');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null, periods: Object.freeze([]) });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
+// 24 時間以上停止したセッションは、途中のツールやサブエージェントの表示を復元しない。
+const ABSENT_SESSION_ENTRIES_RETENTION_MS = 24 * 60 * 60_000;
 const TRANSIENT_NOTICE_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -1596,6 +1598,15 @@ class DashboardState {
 
   pruneExpiredStoreRecords(now) {
     this.lastStorePruneAt = now;
+    for (const [sessionId, endedAt] of this.endedByAbsence) {
+      if (now - endedAt <= ABSENT_SESSION_ENTRIES_RETENTION_MS) continue;
+      const entries = this.entries.get(sessionId);
+      if (!entries?.length) continue;
+      const retained = entries.filter(({ event }, index) => index === 0 || (
+        event.provider === 'codex' && !event.agent_id && event.hook_event_name === 'SessionStart' && event.source === 'resume'
+      ));
+      if (retained.length !== entries.length) this.entries.replace(sessionId, retained);
+    }
     let mergeHistoryChanged = false;
     let sessionRecordsChanged = false;
     for (const [sessionId, deletedAt] of this.deletedSessions) {

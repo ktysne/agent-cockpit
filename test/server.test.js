@@ -1116,6 +1116,66 @@ async function runningServer(t, options = {}) {
   return server.runtime;
 }
 
+test('ファイル不在から24時間以内の再開では、前のツール表示を復元する', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'absent-recent-resume';
+  const base = Date.now();
+  const send = async (event) => {
+    const response = await request(runtime.info.port, {
+      method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event),
+    });
+    assert.equal(response.status, 202);
+  };
+  runtime.state.syncSessionFiles([{ session_id: sessionId, cwd: runtime.homeDir }], base);
+  await send({ session_id: sessionId, hook_event_name: 'SessionStart', source: 'startup', hookAt: base + 1 });
+  await send({ session_id: sessionId, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'read-before-absence',
+    summary: 'README.md', hookAt: base + 2 });
+  runtime.state.syncSessionFiles([], base + 60_001);
+  runtime.state.endedByAbsence.set(sessionId, base - (24 * 60 * 60_000 - 60_000));
+  runtime.state.pruneExpiredStoreRecords(Date.now());
+  assert.equal(runtime.state.endedByAbsence.has(sessionId), true);
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.some((session) => session.session_id === sessionId), false);
+
+  runtime.state.syncSessionFiles([{ session_id: sessionId, cwd: runtime.homeDir }], base + 60_002);
+  const session = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((item) => item.session_id === sessionId);
+  assert.ok(session.tools.some((tool) => tool.tool_use_id === 'read-before-absence'));
+});
+
+test('24時間を過ぎた不在セッションの整理後も、Codex の再開回数を保ち行を再表示しない', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'absent-aged-codex';
+  const base = Date.now();
+  const send = async (event) => {
+    const response = await request(runtime.info.port, {
+      method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event),
+    });
+    assert.equal(response.status, 202);
+  };
+  await send({ session_id: sessionId, provider: 'codex', hook_event_name: 'SessionStart', source: 'startup', codexPid: process.pid,
+    hookAt: base + 1 });
+  await send({ session_id: sessionId, provider: 'codex', hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'read-before-absence',
+    summary: 'README.md', hookAt: base + 2 });
+  await send({ session_id: sessionId, provider: 'codex', hook_event_name: 'SessionStart', source: 'resume', codexPid: process.pid,
+    hookAt: base + 3 });
+  await send({ session_id: sessionId, provider: 'codex', hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'read-after-resume',
+    summary: 'README.md', hookAt: base + 4 });
+  runtime.state.syncSessionFiles([], base + 60_100);
+  runtime.state.endedByAbsence.set(sessionId, base - 24 * 60 * 60_000 - 1);
+  runtime.state.pruneExpiredStoreRecords(Date.now());
+
+  assert.deepEqual(runtime.state.entries.get(sessionId).map(({ event }) => [event.hook_event_name, event.source]), [
+    ['SessionStart', 'startup'], ['SessionStart', 'resume'],
+  ]);
+  assert.equal(runtime.state.endedByAbsence.has(sessionId), true);
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.some((session) => session.session_id === sessionId), false);
+
+  await send({ session_id: sessionId, provider: 'codex', hook_event_name: 'SessionEnd', hookAt: base + 60_101 });
+  await send({ session_id: sessionId, provider: 'codex', hook_event_name: 'SessionStart', source: 'resume', codexPid: process.pid,
+    hookAt: base + 60_102 });
+  const resumed = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((item) => item.session_id === sessionId);
+  assert.equal(resumed.codex.resumes, 2);
+});
+
 test('常駐サーバーの Host は state と POST の要求でも照合する', async (t) => {
   const runtime = await runningServer(t);
   const host = `example.test:${runtime.info.port}`;
