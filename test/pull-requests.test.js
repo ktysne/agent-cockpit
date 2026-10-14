@@ -2947,3 +2947,62 @@ test('壊れたクロスレビュー状態は失敗分類だけを残し、同�
   assert.equal(entries[0].level, 'warn');
   assert.doesNotMatch(JSON.stringify(entries), /private|invalid-json|message/);
 });
+
+test('期限の整理を間引いている間に 24 時間を過ぎたマージ履歴は返さない', () => {
+  const state = new DashboardState();
+  const mergedAt = Date.parse('2026-10-01T00:00:00.000Z');
+  state.recordMergedPullRequest({
+    owner: 'example', repo: 'project', number: 7, title: '期限の境目', url: 'https://github.com/example/project/pull/7',
+    mergedAt: new Date(mergedAt).toISOString(), method: 'merge', automatic: false,
+  }, mergedAt);
+  const retentionMs = 24 * 60 * 60 * 1000;
+
+  assert.equal(state.mergedPullRequestHistoryForRepo('example', 'project', mergedAt + retentionMs - 1000).length, 1);
+  assert.deepEqual(state.mergedPullRequestHistoryForRepo('example', 'project', mergedAt + retentionMs + 1000), []);
+});
+
+test('コマンドの後の取り直しは、閉じた登録だけのリポジトリも 60 秒経っていれば取る', async (t) => {
+  const { tracker, github, calls } = await trackerFixture(t);
+  let now = Date.parse('2026-10-03T12:00:00.000Z');
+  tracker.now = () => now;
+  github.views.set(31, { ...ghPullRequest(31, 'feature/31', 'main', '1'.repeat(40)), state: 'CLOSED', mergedAt: null });
+  await tracker.refreshAll();
+  const callCount = calls.length;
+
+  now += 60_000 - 1;
+  await tracker.refreshAfterCommand();
+  assert.equal(calls.length, callCount);
+
+  now += 1;
+  await tracker.refreshAfterCommand();
+  assert.ok(calls.length > callCount);
+});
+
+test('確定操作の確かめ直しの取得は、その中の gh も待ち行列で定期取得より先に実行する', async (t) => {
+  const { tracker } = await trackerFixture(t, [31]);
+  const started = [];
+  const held = [];
+  const realExecFile = tracker.execFileImpl;
+  tracker.execFileImpl = (file, args, options, callback) => {
+    const label = args.join(' ');
+    started.push(label);
+    held.push(() => (label.includes('example/background')
+      ? callback(null, '{}')
+      : realExecFile(file, args, options, callback)));
+  };
+  const settle = async () => { for (let index = 0; index < 5; index += 1) await new Promise(setImmediate); };
+  const background = Array.from({ length: 6 }, (_, index) => tracker.execute(['api', `repos/example/background/${index}`]));
+  await settle();
+  assert.equal(started.length, 4);
+  const fresh = tracker.refreshRepoFresh('example', 'project', { priority: true });
+  await settle();
+  held.shift()();
+  await settle();
+  assert.ok(!started[4].includes('example/background'));
+
+  while (held.length) {
+    held.shift()();
+    await settle();
+  }
+  await Promise.allSettled([...background, fresh]);
+});

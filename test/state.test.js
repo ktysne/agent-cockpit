@@ -2270,14 +2270,14 @@ test('結果行のない完了通知は背景 Codex を稼働中から外し、�
 
   const agent = state.snapshot().sessions[0].agents.find((item) => item.isCodex);
   assert.equal(agent.active, false);
-  assert.equal(agent.unconfirmed, undefined);
+  assert.equal(agent.unconfirmed, false);
   assert.equal(agent.resultReceived, undefined);
   assert.equal(agent.runId, 'codex-review-20261004-100000-1');
   assert.equal(agent.model, 'gpt-6');
 
   const replayed = deriveSessions(state.entries.get(sessionId))[0].agents.find((item) => item.isCodex);
   assert.deepEqual([replayed.active, replayed.unconfirmed, replayed.resultReceived, replayed.runId], [
-    false, undefined, undefined, 'codex-review-20261004-100000-1',
+    false, false, undefined, 'codex-review-20261004-100000-1',
   ]);
 });
 

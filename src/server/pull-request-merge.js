@@ -212,7 +212,7 @@ class PullRequestMergeManager {
   async refreshedCandidate(registration) {
     let refreshed;
     try {
-      refreshed = await this.tracker.refreshRepoFresh(registration.owner, registration.repo);
+      refreshed = await this.tracker.refreshRepoFresh(registration.owner, registration.repo, { priority: true });
     } catch {
       return { error: 'GitHub から PR の状態を取り直せませんでした', refreshFailed: true };
     }
