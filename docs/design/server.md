@@ -17,10 +17,18 @@
 |---|---|
 | `server.json` | `{pid, port, secret, uiSecret, startedAt}` |
 | `away.json` | `{enabled, since, periods}` |
-| `server.log` | 起動、停止、エラー。追記し、起動時に 1 MB を超えていたら `server.log.1` に移す。ツールの入力の要約は書かない |
+| `server.log` | 起動、停止、エラー。追記する。ツールの入力の要約は書かない |
+| `server.log.1` | 1 つ前の `server.log`。常駐サーバーを起動するとき、`server.log` が 1 MB を超えていればこの名前に移し、前の `server.log.1` を置き換える |
 | `diagnostics/<起動時刻>-<pid>.<区分番号>.jsonl` | 診断ログ。1 区分 2000 行、直近 10 起動、全体 30 区分まで |
-| `start.lock` | 再起動の排他。10 秒で失効する |
+| `diagnostics/hooks-pending.jsonl` | 常駐サーバーへ送れなかったフックの診断の記録。フックが追記し、256 KB を超える追記は捨てる。常駐サーバーがセッションの走査のたびに診断ログへ取り込む |
+| `diagnostics/hooks-pending.jsonl.importing` | 取り込み中の `hooks-pending.jsonl`。この名前に移してから読み、読み終えたら消す。残っていれば次の取り込みで先に読む |
+| `diagnostics/hooks-pending.lock` | `hooks-pending.jsonl` の追記と取り込みの排他。中身は持ち主の pid で、取り込む側は、持ち主が終わっているか、pid の無いまま 10 秒たったロックを消して取り直す |
+| `start.lock` | 常駐サーバーの起動の排他。10 秒で失効する |
 | `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、削除済みセッションの時刻、PR の記録、Codex のセッションの復旧の記録 |
+| `store.json.broken-<時刻>` | 読み込めなかった `store.json` の退避先。時刻は ISO 形式の `:` と `.` を `-` に置き換えたもの。退避した後は保存の無い状態で動く |
+| `tray.json` | タスクトレイの設定 `{notifyPendingCounts}`。許可待ちと判断待ちが増えたときに Windows の通知を出すかを持つ |
+| `browser/` | タスクトレイがダッシュボードを Edge のアプリのウィンドウで開くときのプロファイル(`--user-data-dir`) |
+| `agent-cockpit.ico` | ショートカットのアイコン。`src/tray/install-shortcut.ps1` がタスクトレイのスクリプトから書き出す |
 | `routing.json` | 経路の設定 |
 | `route-agents/*.json` | サブエージェント開始時の経路記録。24 時間使われていない記録は次の開始時に削除する |
 
@@ -215,7 +223,7 @@ PostToolUse の出力全文は送らない。
 - 旧 `store.json` に残る `display.mergeAfterReviewDefault` は読み込み時に無視する。`mergeReservations` は登録セッション、リポジトリ、PR、方式、ブランチ削除の有無、予約時刻を `store.json` に保存する。旧 GitHub 自動マージ形式は予約として復元せず、そのまま捨てる。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 10 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 10 分へ戻し、書き込み時は拒む。
 - 表示設定 `display.awayAnswerWaitMinutes` は離席中の質問への回答を待つ時間で、既定は 3 分、範囲は 1〜30 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 3 分へ戻し、書き込み時は拒む。
-- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, routing, integrations, uiVersion}` を返す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, routing, integrations, uiVersion}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
 ## 保存
