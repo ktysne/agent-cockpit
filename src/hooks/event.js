@@ -23,7 +23,7 @@ const {
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
   pullRequestCommandCwd,
-  pullRequestCommandRepository,
+  pullRequestRefreshScope,
   shouldRefreshPullRequests,
 } = require('../server/pull-request-utils');
 
@@ -341,8 +341,9 @@ function taskNotificationValue(block, tagName) {
 function addPullRequestRefreshScope(event, command, cwd) {
   const commandCwd = pullRequestCommandCwd(command, cwd);
   if (commandCwd) event.commandCwd = commandCwd;
-  const repository = pullRequestCommandRepository(command);
-  if (repository) event.refreshRepository = repository;
+  const scope = pullRequestRefreshScope(command);
+  if (scope.repository) event.refreshRepository = scope.repository;
+  if (scope.unknown) event.refreshScopeUnknown = true;
 }
 
 function makeHookEvent(input, now = Date.now(), options = {}) {

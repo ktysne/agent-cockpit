@@ -213,26 +213,47 @@ function shouldRefreshPullRequests(command) {
   });
 }
 
-function pullRequestCommandRepository(command) {
-  for (const segment of commandSegments(command)) {
+function ghRepositoryOption(words) {
+  let value = null;
+  for (let index = 1; index < words.length; index += 1) {
+    if (words[index] === '--repo' || words[index] === '-R') value = words[++index] ?? '';
+    else if (words[index].startsWith('--repo=')) value = words[index].slice('--repo='.length);
+  }
+  return value;
+}
+
+/**
+ * 取り直しの対象のコマンドが指すリポジトリを返す。
+ * repository は gh の --repo の指定、cwd はコマンドを始めた作業ディレクトリのリポジトリを指す。
+ * 途中の cd、git -C、複数の対象を含むなど、1 つに決められないときは unknown を返す。
+ */
+function pullRequestRefreshScope(command) {
+  const targets = new Set();
+  let repository = null;
+  for (const [index, segment] of commandSegments(command).entries()) {
     const words = commandWords(segment);
-    if (words[0] !== 'gh' || words[subcommandIndex(words, 'gh')] !== 'pr') continue;
-    for (let index = 1; index < words.length; index += 1) {
-      let value;
-      if (words[index] === '--repo' || words[index] === '-R') {
-        value = words[index + 1];
-        index += 1;
-      } else if (words[index].startsWith('--repo=')) {
-        value = words[index].slice('--repo='.length);
+    if (index > 0 && ['cd', 'pushd', 'popd'].includes(words[0])) return { unknown: true };
+    if (words[0] === 'git') {
+      const subcommand = subcommandIndex(words, 'git');
+      if (words[subcommand] !== 'push') continue;
+      if (words.slice(1, subcommand).some((word) => ['-C', '--git-dir', '--work-tree'].includes(word.split('=')[0]))) {
+        return { unknown: true };
       }
-      if (typeof value !== 'string') continue;
+      targets.add('cwd');
+    } else if (words[0] === 'gh' && words[subcommandIndex(words, 'gh')] === 'pr') {
+      const value = ghRepositoryOption(words);
+      if (value === null) {
+        targets.add('cwd');
+        continue;
+      }
       const parts = value.split('/');
-      if (parts.length === 2 && validRepositoryPart(parts[0]) && validRepositoryPart(parts[1])) {
-        return `${parts[0]}/${parts[1]}`;
-      }
+      if (parts.length !== 2 || !validRepositoryPart(parts[0]) || !validRepositoryPart(parts[1])) return { unknown: true };
+      repository ??= `${parts[0]}/${parts[1]}`;
+      targets.add(repositoryKey(parts[0], parts[1]));
     }
   }
-  return null;
+  if (targets.size !== 1) return { unknown: true };
+  return targets.has('cwd') ? { cwd: true } : { repository };
 }
 
 module.exports = {
@@ -248,7 +269,7 @@ module.exports = {
   parsePullRequestUrl,
   parseGitHubRepositoryRemote,
   pullRequestCommandCwd,
-  pullRequestCommandRepository,
+  pullRequestRefreshScope,
   pullRequestKey,
   repositoryKey,
   shouldRefreshPullRequests,

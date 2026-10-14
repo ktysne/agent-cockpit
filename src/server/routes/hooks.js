@@ -1,5 +1,4 @@
 const EVENT_DELAY_THRESHOLD_MS = 5000;
-const UNRESOLVED_COMMAND_REFRESH_INTERVAL_MS = 5000;
 const { recordClientEntries } = require('../../client/diagnostic-events');
 const { jsonResponse } = require('../http-helpers');
 const { validSessionId, validText, validPlanInput, decisionSummaries } = require('../request-validation');
@@ -11,12 +10,13 @@ const { applyReviewSkip } = require('./review-skip');
 
 function createHookRoutes(ctx) {
   const { state, answerDelivery, claudeHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
-  let lastUnresolvedCommandRefreshAt = 0;
 
   function refreshPullRequestsAfterCommand(event) {
     const registrations = state.pullRequestRegistrations();
     let scopedRegistrations = null;
-    if (event.refreshRepository) {
+    if (event.refreshScopeUnknown) {
+      // 対象を 1 つに決められないコマンドは、下の全体の取り直しへ回す。
+    } else if (event.refreshRepository) {
       const [owner, repo] = event.refreshRepository.split('/');
       const key = repositoryKey(owner, repo);
       scopedRegistrations = registrations.filter((record) => repositoryKey(record.owner, record.repo) === key);
@@ -27,9 +27,6 @@ function createHookRoutes(ctx) {
 
     // 下位のフォルダーや .claude/worktrees 以外の worktree の cwd は、登録の product と key がずれるので全体へ戻す。
     if (scopedRegistrations === null || (!event.refreshRepository && scopedRegistrations.length === 0)) {
-      const now = Date.now();
-      if (now - lastUnresolvedCommandRefreshAt < UNRESOLVED_COMMAND_REFRESH_INTERVAL_MS) return;
-      lastUnresolvedCommandRefreshAt = now;
       void pullRequestTracker?.refreshAfterCommand().catch(() => {});
       return;
     }

@@ -34,6 +34,10 @@ function sanitizePullRequestRefreshScope(event, input) {
     event.commandCwd = input.commandCwd;
   }
   if (!event.refreshPullRequestsCommand && !event.refreshPullRequests) return;
+  if (input.refreshScopeUnknown === true) {
+    event.refreshScopeUnknown = true;
+    return;
+  }
   if (typeof input.refreshRepository !== 'string' || input.refreshRepository.length > 201) return;
   const parts = input.refreshRepository.split('/');
   if (parts.length === 2 && validRepositoryPart(parts[0]) && validRepositoryPart(parts[1])) {

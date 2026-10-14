@@ -273,6 +273,9 @@ test('PR 取り直しコマンドの cwd と --repo を Claude と Codex のイ�
       assert.equal(view.refreshRepository, 'o/r', `${provider} ${hook_event_name} refreshRepository`);
       assert.equal(sanitizeEvent(view).refreshRepository, 'o/r', `${provider} ${hook_event_name} sanitized refreshRepository`);
       assert.equal(Object.hasOwn(sanitizeEvent({ ...view, refreshRepository: 'o/r/extra' }), 'refreshRepository'), false);
+
+      const elsewhere = makeBashEvent(provider, hook_event_name, 'git -C ../other push');
+      assert.equal(sanitizeEvent(elsewhere).refreshScopeUnknown, true, `${provider} ${hook_event_name} refreshScopeUnknown`);
     }
   }
 });

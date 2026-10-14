@@ -24,6 +24,8 @@ const GH_CONCURRENCY_LIMIT = 4;
 const INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 // コマンドの後の取り直しも間引かないと、gh pr のたびに全リポジトリを一斉に取るため、修正前の定期取得と同じ間隔までは間引く。
 const COMMAND_REFRESH_INACTIVE_INTERVAL_MS = 60_000;
+// 対象のリポジトリが決まらないコマンドの全体の取り直しは、この間隔に 1 回へまとめ、間に来た分は間隔の明けに 1 回取る。
+const COMMAND_REFRESH_COALESCE_MS = 5000;
 // 開発者が確定した操作の確かめ直しの中で呼ぶ gh を、定期取得より先に実行するための印。
 const ghPriorityContext = new AsyncLocalStorage();
 
@@ -1036,6 +1038,8 @@ class PullRequestTracker {
     this.priorityGhQueue = [];
     this.priorityRepositories = new Map();
     this.deferredRefreshes = new Map();
+    this.lastCommandRefreshAt = -Infinity;
+    this.commandRefreshTimer = null;
     this.initialFetchCompleted = new Set();
     this.mergedHeadBackfillAttempts = new Set();
     this.mergedHeadBackfillRetries = new Set();
@@ -1058,9 +1062,11 @@ class PullRequestTracker {
     this.timer = null;
     for (const timeout of this.deferredRefreshes.values()) clearTimeout(timeout);
     this.deferredRefreshes.clear();
+    clearTimeout(this.commandRefreshTimer);
+    this.commandRefreshTimer = null;
   }
 
-  refreshAll({ inactiveIntervalMs = INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS } = {}) {
+  refreshAll({ inactiveIntervalMs = INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS, fresh = false } = {}) {
     const repositories = new Map();
     for (const record of [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]) {
       const key = repoKey(record.owner, record.repo);
@@ -1072,7 +1078,7 @@ class PullRequestTracker {
     const refreshes = [];
     for (const [key, { owner, repo, active }] of repositories) {
       const elapsed = this.lastFetchStartedAt.has(key) ? now - this.lastFetchStartedAt.get(key) : Infinity;
-      if (active || elapsed >= inactiveIntervalMs) refreshes.push(this.refreshRepo(owner, repo));
+      if (active || elapsed >= inactiveIntervalMs) refreshes.push(fresh ? this.refreshRepoFresh(owner, repo) : this.refreshRepo(owner, repo));
       // コマンドの後に飛ばしたリポジトリは、間隔が明けた時点で取る。15 分の定期取得まで反映を待たせないため。
       else if (inactiveIntervalMs < INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS) this.deferRefresh(owner, repo, inactiveIntervalMs - elapsed);
     }
@@ -1179,8 +1185,21 @@ class PullRequestTracker {
     return ghPriorityContext.run(true, () => this.refreshRepo(owner, repo));
   }
 
+  // 先に動く取得はコマンドの前の状態かもしれないので、終わるのを待ってから取り直す。
   refreshAfterCommand() {
-    return this.refreshAll({ inactiveIntervalMs: COMMAND_REFRESH_INACTIVE_INTERVAL_MS });
+    const elapsed = this.now() - this.lastCommandRefreshAt;
+    if (elapsed < COMMAND_REFRESH_COALESCE_MS) {
+      if (!this.commandRefreshTimer) {
+        this.commandRefreshTimer = setTimeout(() => {
+          this.commandRefreshTimer = null;
+          void this.refreshAfterCommand().catch(() => {});
+        }, COMMAND_REFRESH_COALESCE_MS - elapsed);
+        this.commandRefreshTimer.unref?.();
+      }
+      return Promise.resolve([]);
+    }
+    this.lastCommandRefreshAt = this.now();
+    return this.refreshAll({ inactiveIntervalMs: COMMAND_REFRESH_INACTIVE_INTERVAL_MS, fresh: true });
   }
 
   mergeCandidate(registration) {

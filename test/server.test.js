@@ -1766,27 +1766,30 @@ test('Bash の push は cwd の product に PR を登録したリポジトリだ
   assert.equal(calls.all, 0);
 });
 
-test('対象を特定できない PR 取り直しは 5 秒以内に 1 回だけ全体へ行う', async (t) => {
-  const calls = { all: 0 };
+test('対象を 1 つに決められないコマンドの取り直しは、cwd に登録があっても全体へ行う', async (t) => {
+  const calls = { all: 0, scoped: 0 };
   const pullRequestTracker = {
     start() {},
     close() {},
     snapshot: () => [],
     refreshAfterCommand() { calls.all += 1; return Promise.resolve(); },
+    refreshRepoFresh() { calls.scoped += 1; return Promise.resolve(); },
   };
   const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
-  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
-  for (let index = 0; index < 3; index += 1) {
-    const response = await request(runtime.info.port, {
-      method: 'POST', path: '/api/events', headers,
-      body: JSON.stringify({
-        session_id: 'unresolved-refresh', hook_event_name: 'PostToolUse', hookAt: Date.now(),
-        tool_name: 'Bash', tool_use_id: `unknown-${index}`, refreshPullRequests: true,
-      }),
-    });
-    assert.equal(response.status, 202);
-  }
-  assert.equal(calls.all, 1);
+  runtime.state.registerPullRequest('unknown-scope-session', {
+    url: 'https://github.com/example/project/pull/51',
+  }, { cwd: process.cwd(), product: productFromCwd(process.cwd()) });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    body: JSON.stringify({
+      session_id: 'unknown-scope', hook_event_name: 'PostToolUse', hookAt: Date.now(), cwd: process.cwd(),
+      tool_name: 'Bash', tool_use_id: 'push-elsewhere', refreshPullRequests: true, refreshScopeUnknown: true,
+    }),
+  });
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(calls, { all: 1, scoped: 0 });
 });
 
 test('cwd の製品に PR 登録が無い取り直しは全体へ行う', async (t) => {
