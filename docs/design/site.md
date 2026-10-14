@@ -79,7 +79,7 @@ Claude Code のメインは Opus 5.5(`claude-opus-5-5`)、Codex のメインは 
 
 1. 初回だけ、`tools/deploy.config.example.json` を `tools/deploy.config.json` にコピーし、接続情報を書く。このファイルは認証情報を含むので、Git で管理しない。ファイルの代わりに、環境変数 `AGENT_COCKPIT_FTP_HOST`、`AGENT_COCKPIT_FTP_USER`、`AGENT_COCKPIT_FTP_PASSWORD`、`AGENT_COCKPIT_FTP_REMOTE_ROOT` でも設定できる。
 2. `npm install` で開発用の依存を入れる。
-3. リポジトリ直下の `deploy-site.bat` をダブルクリックする。版のタグを尋ねられるので、タグを入れるか空のままにする(「版とタグ」を参照)。送る前の検査と、送るファイルとリモートのパスの表示が済んだ後に、送るかを尋ねられるので、`y` を入力する。
+3. リポジトリ直下の `deploy-site.bat` をダブルクリックする。送る前の検査と、送るファイルとリモートのパスの表示が済んだ後に、送るかを尋ねられるので、`y` を入力する。リリースに合わせて版を入れて送るときは、`release.bat` を使う(「版とタグ」を参照)。
 
 `deploy-site.bat` は、Node.js の版、`basic-ftp` の有無、コミットしていない変更が無いことを確かめてから送る。
 main 以外のブランチでは警告を出す。
@@ -94,19 +94,33 @@ bat を使わないときは、`npm run site:deploy:dry` で確かめてから `
 ### 版とタグ
 
 紹介ページの「AI に導入を頼む」ボタンの中の `data-site-version` の要素に、版を入れて送る。
-版は `vX.Y.Z` の形式で、`deploy-site.bat` のタグの入力か、`tools/site-deploy.js` の `--version` で指定する。
+版は `vX.Y.Z` の形式で、`tools/site-deploy.js` の `--version` で指定する。
 指定が無いときは、`git ls-remote --tags origin` の正式な版タグの最大を使う。版タグが 1 つも無いときは、版を空にして警告を出す。
 リポジトリの `site/index.html` は書き換えず、送る内容だけを一時ファイルで置き換える。要素がちょうど 1 個でなければ、何も送らずに止まる。
 
-タグを入力したときは、次の順に進む。
+`deploy-site.bat` は `--version` を渡さず、origin の最新の版タグを入れて、配信だけを行う。
+版を上げてタグを作る処理は、リポジトリ直下の `release.bat` が行う。
+`release.bat` は、版を尋ね、`tools/release.js plan <版>` で残りの手順を表示し、確認の後に `tools/release.js run <版>` を実行し、続けて `--version vX.Y.Z` を渡して配信する。
 
-1. `tools/release-tag.js check <タグ>` で確かめる。形式が `vX.Y.Z` であること、ブランチが `main` であること、HEAD が `origin/main` と同じコミットであること、`package.json` の `version` がタグと一致すること、origin の最新の版より新しいことを確かめる。origin に同じ名前のタグが HEAD を指していれば、作成済みとして通す。どれかに当たれば、何も送らずに止まる。
-2. 版を入れて送る。
-3. 送信が済んだら、`tools/release-tag.js create <タグ>` でタグを作って origin へ push する。ローカルに HEAD を指す同名タグがあれば作り直さず、origin に HEAD を指す同名タグがあれば push を省く。
-4. タグの作成が失敗したら、送信は済んでいるので、同じタグで `deploy-site.bat` をもう一度実行する。済んだ手順は飛ばされ、続きから進む。
+`tools/release.js` の手順は、次の 5 つである。
 
-`deploy-site.bat --dry-run` でタグを入力したときは、1 の検査までを行い、タグは作らない。送信の計画には埋め込む版を 1 行で表示する。
-タグを空のままにしたときは、タグは作らず、版は origin の最新の版タグになる。
+1. `test`: `npm test` を実行する。
+2. `bump`: `package.json` と `package-lock.json` の `version` を上げてコミットする。
+3. `push-commit`: `main` を origin へ push する。
+4. `tag`: `vX.Y.Z` の注釈つきタグを作る。
+5. `push-tag`: `vX.Y.Z` を origin へ push する。
+
+`plan` と `run` は、同じ判定で今の git の状態から残りの手順を求める。`run` は手順の直前に状態を求め直し、予定した手順が残っているときだけ実行する。
+実行の記録は持たないので、同じ版でもう一度実行すれば、済んだ手順を飛ばして続きから進む。
+
+- ブランチが `main` でないとき、コミットしていない変更があるときは、止まる。
+- `package.json` の `version` が指定の版と違う新規のリリースでは、HEAD が `origin/main` と同じで、指定の版が origin の最新の版と現在の版より新しいことを確かめる。残りは `test` から `push-tag` までのすべてである。
+- 指定の版と `version` が同じときは、再実行か、版を手で上げた `main` として扱う。HEAD が `origin/main` の 1 コミット先で、そのコミットが `package.json` と `package-lock.json` だけを変えているなら、`push-commit` が残る。それ以外のずれは止まる。
+- origin の同名タグが HEAD を指していれば、タグは済みとする。別のコミットを指していれば止まる。ローカルの同名タグが HEAD を指していれば `tag` は済みで、別のコミットを指していれば止まる。
+- `test` は、版を手で上げた `main` でタグがどこにも無いときと、新規のリリースで実行する。版のコミットが未 push のときは、そのコミットを作った実行が済ませているので繰り返さない。
+
+`docs/update.md` に `### vX.Y.Z` の節が無い版では、追加作業の手順を先に書くよう案内を表示する。
+`main` の ruleset で直接の push を拒否すると、`push-commit` が失敗する。
 
 ### 送る対象
 
