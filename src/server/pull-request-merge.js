@@ -323,7 +323,7 @@ class PullRequestMergeManager {
       try {
         await this.tracker.execute([
           'pr', 'edit', String(child.number), '-R', repository, '--base', targetBranch,
-        ]);
+        ], { priority: true });
       } catch {
         const completed = completedRetargetStatus(retargeted);
         return reject(502, `#${child.number} の base を ${targetBranch} に付け替えられませんでした。${completed}。マージはしていません`, 'retarget-failed');
@@ -399,7 +399,7 @@ class PullRequestMergeManager {
       await this.tracker.execute([
         'pr', 'merge', String(registration.number), '-R', repository,
         `--${mergeInput.method}`, '--match-head-commit', mergeInput.headRefOid,
-      ]);
+      ], { priority: true });
     } catch (error) {
       this.diagnostics?.record('warn', 'merge', 'merge.result',
         { repository, number: registration.number, result: typeof error.code === 'number' ? 'gh-exit' : 'gh-failed' });
@@ -413,7 +413,7 @@ class PullRequestMergeManager {
       { repository, number: registration.number, result: 'gh-success' });
     let view;
     try {
-      view = await this.tracker.readPullRequestView(registration.owner, registration.repo, registration.number);
+      view = await this.tracker.readPullRequestView(registration.owner, registration.repo, registration.number, { priority: true });
     } catch {
       return reject(502, `gh pr merge は成功しましたが、PR #${registration.number} の状態を確認できませんでした。後続の状態取得で確認します`, 'merge-unconfirmed');
     }
@@ -620,11 +620,11 @@ class PullRequestMergeManager {
     if (!validRepositoryPart(owner) || !validRepositoryPart(repo) || !validBranchName(branch)) throw new Error('invalid branch');
     const reference = `repos/${owner}/${repo}/git/ref/heads/${branch}`;
     try {
-      await this.tracker.execute(['api', '-X', 'DELETE', `repos/${owner}/${repo}/git/refs/heads/${branch}`]);
+      await this.tracker.execute(['api', '-X', 'DELETE', `repos/${owner}/${repo}/git/refs/heads/${branch}`], { priority: true });
     } catch (error) {
       if (isMissingRemoteBranchError(error)) return;
       try {
-        await this.tracker.execute(['api', reference]);
+        await this.tracker.execute(['api', reference], { priority: true });
       } catch (lookupError) {
         if (isGitHubNotFoundError(lookupError)) return;
       }
