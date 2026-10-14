@@ -53,23 +53,28 @@ npm run test:inprocess
 
 ## リリース
 
-追加作業がある版は、先に [更新手順](update.md) の「版ごとの追加作業」に手順を書きます。
-リリースする版の `X.Y.Z` へ `package.json` の `version` を合わせたコミットを `main` に入れてから、`deploy-site.bat` を実行します。
-タグの入力を尋ねられたら `vX.Y.Z` を入れます。
+リリースは、リポジトリ直下の `release.bat` を 1 回実行すれば終わります。
+追加作業がある版は、先に [更新手順](update.md) の「版ごとの追加作業」に `### vX.Y.Z` の節で手順を書き、`main` に入れておきます。
 
-1. 紹介ページに版を入れて配信します。
-2. 配信が済んだら、そのコミットに `vX.Y.Z` の注釈つきタグを作って push します。
+1. `main` ブランチで `release.bat` を実行し、リリースする版を `X.Y.Z` か `vX.Y.Z` の形で入力します。
+2. 表示された手順を確かめ、`y` を入力します。
+
+`release.bat` は、次の順に進めます。
+
+1. `npm test` を実行します。
+2. `package.json` と `package-lock.json` の `version` を上げてコミットし、`main` を origin へ push します。
+3. 注釈つきの `vX.Y.Z` タグを作って push します。
+4. 紹介ページに版を入れて配信します。
 
 常駐サーバーは GitHub の `vX.Y.Z` タグを見て、利用者に更新を知らせます。
-配信に失敗したら、同じタグを入れて `deploy-site.bat` をもう一度実行します。済んだ手順は飛ばされます。
+途中で失敗したら、同じ版で `release.bat` をもう一度実行します。
+git の状態から済んだ手順を読み取り、続きから進みます。
+タグを push した後で配信だけが失敗したときは、`deploy-site.bat` でも配信だけをやり直せます。
 配信の手順は [docs/design/site.md](design/site.md) の「配信」にあります。
 
-配信せずにタグだけを打つときは、次のコマンドを使います。
-
-```sh
-git tag -a vX.Y.Z -m "vX.Y.Z"
-git push origin vX.Y.Z
-```
+`main` の ruleset を有効にして直接の push を拒否すると、`release.bat` は版のコミットを push できず、この手順は使えません。
+その場合は、版を上げるコミットを PR で `main` に入れてから、`release.bat` を同じ版で実行します。
+この場合も、残りの手順(テスト、タグ、配信)は `release.bat` が進めます。
 
 ## 開発用の起動
 

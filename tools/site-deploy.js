@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { isReleaseTag, latestReleaseTag } = require('./release-tag');
+const { isReleaseTag, latestReleaseTag } = require('./release');
 
 const ROOT = path.resolve(__dirname, '..');
 const SITE_DIR = path.join(ROOT, 'site');
