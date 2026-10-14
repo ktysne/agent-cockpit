@@ -54,6 +54,8 @@
     .btn:hover { background: #383834; text-decoration: none; }
     .btn.primary { border-color: var(--accent); background: var(--accent); color: #1f1e1d; }
     .btn.primary:hover { background: #e3896b; }
+    .site-version { font-family: var(--font-mono); font-size: 12px; font-weight: 400; }
+    .site-version:empty { display: none; }
 
     .hero { --hero-icon-gap: 24px; padding-block: var(--hero-icon-gap) clamp(48px, 7vw, 88px); }
     .hero-top { display: grid; gap: 28px; }
@@ -133,7 +135,7 @@
           <h1>並行するエージェントを、<br><em>1 画面</em>で見渡す。</h1>
           <p class="sub">Agent Cockpit は、並行して動く Claude Code と Codex のセッションを 1 つのダッシュボードにまとめます。どのセッションが何をしていて、どこで自分の判断を待っているかを、切り替えずに確かめられます。</p>
           <div class="actions">
-            <a class="btn primary" href="#install">AI に導入を頼む</a>
+            <a class="btn primary" href="#install">AI に導入を頼む<small class="site-version" data-site-version></small></a>
             <a class="btn" href="manual/">マニュアルを読む</a>
           </div>
           <p class="note">手元の PC で動く常駐サーバーです。導入は Claude Code などの AI に任せます。</p>

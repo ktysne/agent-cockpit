@@ -54,23 +54,22 @@ npm run test:inprocess
 ## リリース
 
 追加作業がある版は、先に [更新手順](update.md) の「版ごとの追加作業」に手順を書きます。
-`package.json` の `version` をリリースする版に合わせたコミットを `main` に入れ、そのコミットに注釈つきタグを打って push します。
-`X.Y.Z` はリリースする版に置き換えます。
+リリースする版の `X.Y.Z` へ `package.json` の `version` を合わせたコミットを `main` に入れてから、`deploy-site.bat` を実行します。
+タグの入力を尋ねられたら `vX.Y.Z` を入れます。
+
+1. 紹介ページに版を入れて配信します。
+2. 配信が済んだら、そのコミットに `vX.Y.Z` の注釈つきタグを作って push します。
+
+常駐サーバーは GitHub の `vX.Y.Z` タグを見て、利用者に更新を知らせます。
+配信に失敗したら、同じタグを入れて `deploy-site.bat` をもう一度実行します。済んだ手順は飛ばされます。
+配信の手順は [docs/design/site.md](design/site.md) の「配信」にあります。
+
+配信せずにタグだけを打つときは、次のコマンドを使います。
 
 ```sh
 git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
-
-最初のリリースは、リポジトリを公開するときの `v1.0.0` です。
-それまではタグを打たず、`package.json` の `version` も `0.0.0` のままにします。
-公開の日は、次の順に進めます。
-
-1. `package.json` の `version` を `1.0.0` にしたコミットを `main` に入れます。
-2. リポジトリを公開します。導入の依頼文と紹介ページのリンクは、公開しないと開けません。
-3. `v1.0.0` の注釈つきタグを打って push します。
-4. `deploy-site.bat` で紹介ページを配信します([docs/design/site.md](design/site.md) の「配信」)。
-5. ktysne-top の、紹介ページへのリンクを足す PR の下書きを外し、リンクの検査(`npm run check:links`)を通してマージします。
 
 ## 開発用の起動
 
