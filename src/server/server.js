@@ -204,7 +204,7 @@ function createRequestHandler(options) {
     scheduleTaskNotifications: (sessionId) => options.scheduleTaskNotifications?.(sessionId),
     scheduleSessionModel: (event) => options.scheduleSessionModel?.(event),
   };
-  const { handleHealth, handleState, handleContext, handleDevFields, handleIndex } = createReadRoutes(ctx);
+  const { handleHealth, handleState, handleTrayState, handleContext, handleDevFields, handleIndex } = createReadRoutes(ctx);
   const { handleHookAnswers, handleEvents, handlePlan, handleSessionPullRequests } = createHookRoutes(ctx);
   const { handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
   const {
@@ -255,6 +255,7 @@ function createRequestHandler(options) {
     } },
     { method: 'GET', path: '/health', auth: 'none', body: 'none', handler: handleHealth },
     { method: 'GET', path: '/api/state', auth: 'none', body: 'none', handler: handleState },
+    { method: 'GET', path: '/api/tray', auth: 'none', body: 'none', handler: handleTrayState },
     { method: 'GET', path: '/api/away', auth: 'none', body: 'none', handler: handleAwayState },
     { method: 'GET', path: /^\/api\/sessions\/([^/]+)\/context$/, auth: 'none', body: 'none', idCheck: invalidSessionId, handler: handleContext },
     { method: 'GET', path: '/api/dev/fields', auth: 'none', body: 'none', handler: handleDevFields },

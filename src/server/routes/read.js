@@ -65,6 +65,28 @@ function createReadRoutes(ctx) {
     jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), update: ctx.updateChecker?.snapshot() || null, appVersion: ctx.appVersion, routing: routing.snapshot(), integrations: { codexAgent, crossReview }, uiVersion });
   }
 
+  function handleTrayState({ response }) {
+    const snapshot = state.snapshot();
+    const permissionKeys = [];
+    const decisionKeys = [];
+    for (const session of snapshot.sessions) {
+      for (const wait of session.permissionWaits) {
+        permissionKeys.push(`${session.session_id}|${wait.agent_id}|${wait.startedAt}`);
+      }
+      for (const decision of session.decisions) {
+        const hasEffectiveAnswer = decision.answer?.sentAt && !decision.answer.ignoredAt;
+        if (decision.state === 'waiting' && !hasEffectiveAnswer) {
+          decisionKeys.push(`${session.session_id}|${decision.id}`);
+        }
+      }
+    }
+    jsonResponse(response, 200, {
+      permissionKeys,
+      decisionKeys,
+      awayEnabled: away.snapshot().enabled === true,
+    });
+  }
+
   function handleContext({ response, params }) {
     jsonResponse(response, 200, { ...away.snapshot(), ...state.planSummary(params[1]) });
   }
@@ -107,7 +129,7 @@ function createReadRoutes(ctx) {
   }
 
   const measuredHandleState = perf ? (request) => perf.measureAsync('state', () => handleState(request)) : handleState;
-  return { handleHealth, handleState: measuredHandleState, handleContext, handleDevFields, handleIndex };
+  return { handleHealth, handleState: measuredHandleState, handleTrayState, handleContext, handleDevFields, handleIndex };
 }
 
 module.exports = { createReadRoutes };

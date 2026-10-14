@@ -1070,6 +1070,42 @@ test('画面の版は配信した HTML と状態 API で一致し、ファイル
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).uiVersion, updatedVersion);
 });
 
+test('/api/tray は許可待ち、未回答の判断待ち、離席状態だけを返す', async (t) => {
+  const state = new DashboardState();
+  const sessionId = 'tray-session';
+  state.addEvent({
+    session_id: sessionId,
+    hook_event_name: 'Notification',
+    notification_type: 'permission_prompt',
+    hookAt: 1_000,
+    agent_id: 'agent-1',
+  });
+  const addWaitingDecision = (title) => state.addDecision(sessionId, {
+    title, context: '', state: 'waiting', options: [{ label: '案 A', description: '' }],
+  });
+  const unanswered = addWaitingDecision('未回答');
+  const answered = addWaitingDecision('回答済み');
+  const ignored = addWaitingDecision('無視済み');
+  const resolved = addWaitingDecision('別状態');
+  state.updateDecision(sessionId, resolved.id, 'resolved', '案 A', '');
+  state.setDecisionLifecycle(sessionId, answered.id, {
+    answer: { sentAt: new Date(2_000).toISOString() },
+  }, 2_000);
+  state.setDecisionLifecycle(sessionId, ignored.id, {
+    answer: { sentAt: new Date(3_000).toISOString(), ignoredAt: new Date(4_000).toISOString() },
+  }, 4_000);
+  const runtime = await runningServer(t, { state });
+  await runtime.away.setEnabled(true);
+
+  const response = await request(runtime.info.port, { path: '/api/tray' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(jsonBody(response), {
+    permissionKeys: [`${sessionId}|agent-1|1970-01-01T00:00:01.000Z`],
+    decisionKeys: [`${sessionId}|${unanswered.id}`, `${sessionId}|${ignored.id}`],
+    awayEnabled: true,
+  });
+});
+
 async function runningServer(t, options = {}) {
   const server = await startTestServer(t, {
     temporaryPrefix: 'agent-cockpit-test-',
