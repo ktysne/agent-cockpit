@@ -3006,3 +3006,58 @@ test('確定操作の確かめ直しの取得は、その中の gh も待ち行�
   }
   await Promise.allSettled([...background, fresh]);
 });
+
+test('コマンドの後に間隔が足りず飛ばしたリポジトリは、間隔が明けた時点で取る', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { tracker, github, calls } = await trackerFixture(t);
+  let now = Date.parse('2026-10-03T12:00:00.000Z');
+  tracker.now = () => now;
+  github.views.set(31, { ...ghPullRequest(31, 'feature/31', 'main', '1'.repeat(40)), state: 'CLOSED', mergedAt: null });
+  await tracker.refreshAll();
+  const callCount = calls.length;
+
+  now += 10_000;
+  await tracker.refreshAfterCommand();
+  assert.equal(calls.length, callCount);
+  t.mock.timers.tick(50_000 - 1);
+  await new Promise(setImmediate);
+  assert.equal(calls.length, callCount);
+  now += 50_000;
+  t.mock.timers.tick(1);
+  for (let index = 0; index < 20; index += 1) await new Promise(setImmediate);
+  assert.ok(calls.length > callCount);
+  tracker.close();
+  t.mock.timers.reset();
+});
+
+test('同じリポジトリの取得が動いている間の確定操作は、その取得の待っている gh も優先に引き上げる', async (t) => {
+  const { tracker } = await trackerFixture(t, [31]);
+  const held = [];
+  const started = [];
+  const realExecFile = tracker.execFileImpl;
+  tracker.execFileImpl = (file, args, options, callback) => {
+    const label = args.join(' ');
+    started.push(label);
+    held.push(() => (label.includes('example/background')
+      ? callback(null, '{}')
+      : realExecFile(file, args, options, callback)));
+  };
+  const settle = async () => { for (let index = 0; index < 5; index += 1) await new Promise(setImmediate); };
+  const background = Array.from({ length: 4 }, (_, index) => tracker.execute(['api', `repos/example/background/${index}`]));
+  await settle();
+  const running = tracker.refreshRepo('example', 'project');
+  const laterBackground = Array.from({ length: 2 }, (_, index) => tracker.execute(['api', `repos/example/background/later-${index}`]));
+  await settle();
+  assert.equal(started.length, 4);
+  const fresh = tracker.refreshRepoFresh('example', 'project', { priority: true });
+  await settle();
+  held.shift()();
+  await settle();
+  assert.ok(!started[4].includes('example/background'));
+
+  while (held.length) {
+    held.shift()();
+    await settle();
+  }
+  await Promise.allSettled([...background, ...laterBackground, running, fresh]);
+});
