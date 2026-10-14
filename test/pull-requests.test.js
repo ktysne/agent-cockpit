@@ -583,6 +583,131 @@ test('登録の保持期限後に refreshAll するとリポジトリと表示�
   assert.ok(state.version > versionBeforeRefresh);
 });
 
+test('閉じた登録だけのリポジトリは15分間の定期取得を飛ばし登録と表示を残す', async (t) => {
+  for (const closedState of ['closed', 'merged']) {
+    const { state, tracker, github, calls } = await trackerFixture(t);
+    let now = Date.parse('2026-10-03T12:00:00.000Z');
+    tracker.now = () => now;
+    github.views.set(31, {
+      ...ghPullRequest(31, 'feature/31', 'main', '1'.repeat(40)),
+      state: closedState.toUpperCase(), mergedAt: closedState === 'merged' ? new Date(now).toISOString() : null,
+    });
+    await tracker.refreshAll();
+    const before = tracker.snapshot();
+    const registrations = state.pullRequestRegistrations();
+    const callCount = calls.length;
+    assert.equal(registrations[0].state, closedState);
+    assert.equal(before.length, 1);
+
+    now += 15 * 60_000 - 1;
+    await tracker.refreshAll();
+    assert.equal(calls.length, callCount);
+    assert.deepEqual(tracker.snapshot(), before);
+    assert.deepEqual(state.pullRequestRegistrations(), registrations);
+
+    now += 1;
+    await tracker.refreshAll();
+    assert.ok(calls.length > callCount);
+  }
+});
+
+test('開いているか未確定の登録または関連PRがあれば毎回定期取得する', async (t) => {
+  for (const related of [false, true]) {
+    for (const prState of ['open', 'unknown', null]) {
+      const { state, tracker, calls } = await trackerFixture(t, related ? [] : [31]);
+      if (related) state.rememberRelatedPullRequest({
+        owner: 'example', repo: 'project', number: 31, url: 'https://github.com/example/project/pull/31',
+      });
+      await tracker.refreshAll();
+      if (related) state.updateRelatedPullRequest('example', 'project', 31, { state: prState });
+      else state.updatePullRequest('session-31', 'example', 'project', 31, { state: prState });
+      if (related) {
+        state.registerPullRequest('session-32', { url: 'https://github.com/example/project/pull/32' });
+        state.updatePullRequest('session-32', 'example', 'project', 32, { state: 'closed' });
+      } else {
+        state.rememberRelatedPullRequest({
+          owner: 'example', repo: 'project', number: 32, url: 'https://github.com/example/project/pull/32',
+        });
+        state.updateRelatedPullRequest('example', 'project', 32, { state: 'closed' });
+      }
+      const callCount = calls.length;
+      await tracker.refreshAll();
+      assert.ok(calls.length > callCount, `${related ? '関連PR' : '登録'}: ${prState}`);
+    }
+  }
+});
+
+test('閉じた関連PRだけでも取得状態を残し個別取得の開始から15分後に定期取得する', async (t) => {
+  const { state, tracker, github, calls } = await trackerFixture(t, []);
+  let now = Date.parse('2026-10-03T12:00:00.000Z');
+  tracker.now = () => now;
+  state.rememberRelatedPullRequest({
+    owner: 'example', repo: 'project', number: 31, url: 'https://github.com/example/project/pull/31',
+  });
+  github.views.set(31, { ...ghPullRequest(31, 'feature/31', 'main'), state: 'CLOSED' });
+  await tracker.refreshAll();
+  const before = tracker.snapshot();
+  const repository = tracker.repositoryState('example', 'project');
+  assert.ok(repository);
+  const related = state.relatedPullRequestRegistrations();
+  const callCount = calls.length;
+  now += 10 * 60_000;
+  await tracker.refreshAll();
+  assert.equal(calls.length, callCount);
+  assert.equal(tracker.repositoryState('example', 'project'), repository);
+  assert.deepEqual(tracker.snapshot(), before);
+  assert.deepEqual(state.relatedPullRequestRegistrations(), related);
+
+  await tracker.refreshRepoFresh('example', 'project');
+  assert.ok(calls.length > callCount);
+  const freshCount = calls.length;
+  now += 5 * 60_000;
+  await tracker.refreshAll();
+  assert.equal(calls.length, freshCount);
+  now += 10 * 60_000;
+  await tracker.refreshAll();
+  assert.ok(calls.length > freshCount);
+
+  state.registerPullRequest('session-32', { url: 'https://github.com/example/project/pull/32' });
+  github.openPullRequests.push(ghPullRequest(32, 'feature/32', 'main'));
+  const beforeRegistrationFetch = calls.length;
+  await tracker.refreshRepo('example', 'project');
+  assert.ok(calls.length > beforeRegistrationFetch);
+  assert.equal(state.pullRequestRegistrations()[0].state, 'open');
+});
+
+test('ghは4本まで起動し20秒を超えて待った取得も失敗後に順に実行する', async (t) => {
+  const { tracker } = await trackerFixture(t, []);
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const started = [];
+  const running = [];
+  let peak = 0;
+  tracker.execFileImpl = (_file, args, options, callback) => {
+    started.push(args[1]);
+    assert.equal(options.timeout, 20_000);
+    running.push(callback);
+    peak = Math.max(peak, running.length);
+  };
+  const requests = Array.from({ length: 7 }, (_, index) => tracker.execute(['api', `repos/example/project/${index}`]));
+  const results = Promise.allSettled(requests);
+  await new Promise(setImmediate);
+  assert.equal(started.length, 4);
+  t.mock.timers.tick(25_000);
+  await new Promise(setImmediate);
+  assert.equal(started.length, 4);
+  running.shift()(Object.assign(new Error('gh timeout'), { killed: true }));
+  await new Promise(setImmediate);
+  assert.equal(started.length, 5);
+  while (running.length) {
+    running.shift()(null, '{}');
+    await new Promise(setImmediate);
+  }
+  assert.equal(peak, 4);
+  assert.deepEqual(started, Array.from({ length: 7 }, (_, index) => `repos/example/project/${index}`));
+  assert.equal((await results)[0].status, 'rejected');
+  t.mock.timers.reset();
+});
+
 test('初回の PR 取得中を snapshot に示し、成功と失敗の完了後に外す', async (t) => {
   const success = await trackerFixture(t, [31]);
   const firstFetch = success.tracker.refreshRepo('example', 'project');
@@ -2834,4 +2959,131 @@ test('期限の整理を間引いている間に 24 時間を過ぎたマージ�
 
   assert.equal(state.mergedPullRequestHistoryForRepo('example', 'project', mergedAt + retentionMs - 1000).length, 1);
   assert.deepEqual(state.mergedPullRequestHistoryForRepo('example', 'project', mergedAt + retentionMs + 1000), []);
+});
+
+test('コマンドの後の取り直しは、閉じた登録だけのリポジトリも 60 秒経っていれば取る', async (t) => {
+  const { tracker, github, calls } = await trackerFixture(t);
+  let now = Date.parse('2026-10-03T12:00:00.000Z');
+  tracker.now = () => now;
+  github.views.set(31, { ...ghPullRequest(31, 'feature/31', 'main', '1'.repeat(40)), state: 'CLOSED', mergedAt: null });
+  await tracker.refreshAll();
+  const callCount = calls.length;
+
+  now += 60_000 - 1;
+  await tracker.refreshAfterCommand();
+  assert.equal(calls.length, callCount);
+
+  now += 1;
+  await tracker.refreshAfterCommand();
+  assert.ok(calls.length > callCount);
+});
+
+test('確定操作の確かめ直しの取得は、その中の gh も待ち行列で定期取得より先に実行する', async (t) => {
+  const { tracker } = await trackerFixture(t, [31]);
+  const started = [];
+  const held = [];
+  const realExecFile = tracker.execFileImpl;
+  tracker.execFileImpl = (file, args, options, callback) => {
+    const label = args.join(' ');
+    started.push(label);
+    held.push(() => (label.includes('example/background')
+      ? callback(null, '{}')
+      : realExecFile(file, args, options, callback)));
+  };
+  const settle = async () => { for (let index = 0; index < 5; index += 1) await new Promise(setImmediate); };
+  const background = Array.from({ length: 6 }, (_, index) => tracker.execute(['api', `repos/example/background/${index}`]));
+  await settle();
+  assert.equal(started.length, 4);
+  const fresh = tracker.refreshRepoFresh('example', 'project', { priority: true });
+  await settle();
+  held.shift()();
+  await settle();
+  assert.ok(!started[4].includes('example/background'));
+
+  while (held.length) {
+    held.shift()();
+    await settle();
+  }
+  await Promise.allSettled([...background, fresh]);
+});
+
+test('コマンドの後に間隔が足りず飛ばしたリポジトリは、間隔が明けた時点で取る', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { tracker, github, calls } = await trackerFixture(t);
+  let now = Date.parse('2026-10-03T12:00:00.000Z');
+  tracker.now = () => now;
+  github.views.set(31, { ...ghPullRequest(31, 'feature/31', 'main', '1'.repeat(40)), state: 'CLOSED', mergedAt: null });
+  await tracker.refreshAll();
+  const callCount = calls.length;
+
+  now += 10_000;
+  await tracker.refreshAfterCommand();
+  assert.equal(calls.length, callCount);
+  t.mock.timers.tick(50_000 - 1);
+  await new Promise(setImmediate);
+  assert.equal(calls.length, callCount);
+  now += 50_000;
+  t.mock.timers.tick(1);
+  for (let index = 0; index < 20; index += 1) await new Promise(setImmediate);
+  assert.ok(calls.length > callCount);
+  tracker.close();
+  t.mock.timers.reset();
+});
+
+test('同じリポジトリの取得が動いている間の確定操作は、その取得の待っている gh も優先に引き上げる', async (t) => {
+  const { tracker } = await trackerFixture(t, [31]);
+  const held = [];
+  const started = [];
+  const realExecFile = tracker.execFileImpl;
+  tracker.execFileImpl = (file, args, options, callback) => {
+    const label = args.join(' ');
+    started.push(label);
+    held.push(() => (label.includes('example/background')
+      ? callback(null, '{}')
+      : realExecFile(file, args, options, callback)));
+  };
+  const settle = async () => { for (let index = 0; index < 5; index += 1) await new Promise(setImmediate); };
+  const background = Array.from({ length: 4 }, (_, index) => tracker.execute(['api', `repos/example/background/${index}`]));
+  await settle();
+  const running = tracker.refreshRepo('example', 'project');
+  const laterBackground = Array.from({ length: 2 }, (_, index) => tracker.execute(['api', `repos/example/background/later-${index}`]));
+  await settle();
+  assert.equal(started.length, 4);
+  const fresh = tracker.refreshRepoFresh('example', 'project', { priority: true });
+  await settle();
+  held.shift()();
+  await settle();
+  assert.ok(!started[4].includes('example/background'));
+
+  while (held.length) {
+    held.shift()();
+    await settle();
+  }
+  await Promise.allSettled([...background, ...laterBackground, running, fresh]);
+});
+
+test('予約した取り直しの時刻に同じリポジトリの取得が動いていれば、終わるのを待ってから取り直す', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { tracker, github, calls } = await trackerFixture(t);
+  let now = Date.parse('2026-10-03T12:00:00.000Z');
+  tracker.now = () => now;
+  github.views.set(31, { ...ghPullRequest(31, 'feature/31', 'main', '1'.repeat(40)), state: 'CLOSED', mergedAt: null });
+  await tracker.refreshAll();
+
+  now += 10_000;
+  await tracker.refreshAfterCommand();
+  let finishRunning;
+  tracker.inFlight.set('example/project', new Promise((resolve) => { finishRunning = resolve; }));
+  const callCount = calls.length;
+  now += 50_000;
+  t.mock.timers.tick(50_000);
+  for (let index = 0; index < 20; index += 1) await new Promise(setImmediate);
+  assert.equal(calls.length, callCount);
+
+  tracker.inFlight.delete('example/project');
+  finishRunning();
+  for (let index = 0; index < 20; index += 1) await new Promise(setImmediate);
+  assert.ok(calls.length > callCount);
+  tracker.close();
+  t.mock.timers.reset();
 });

@@ -3,6 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const {
   isCompleteCommitSha,
   parseGitHubRepositoryRemote,
@@ -19,6 +20,12 @@ const MERGED_PULL_REQUEST_LIMIT = 1000;
 const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
+const GH_CONCURRENCY_LIMIT = 4;
+const INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+// コマンドの後の取り直しも間引かないと、gh pr のたびに全リポジトリを一斉に取るため、修正前の定期取得と同じ間隔までは間引く。
+const COMMAND_REFRESH_INACTIVE_INTERVAL_MS = 60_000;
+// 開発者が確定した操作の確かめ直しの中で呼ぶ gh を、定期取得より先に実行するための印。
+const ghPriorityContext = new AsyncLocalStorage();
 
 function asText(value, maximum = 500) {
   return typeof value === 'string' ? value.slice(0, maximum) : '';
@@ -1023,6 +1030,12 @@ class PullRequestTracker {
     this.productViews = new Map();
     this.crossReviewByRepository = new Map();
     this.inFlight = new Map();
+    this.lastFetchStartedAt = new Map();
+    this.activeGhCount = 0;
+    this.ghQueue = [];
+    this.priorityGhQueue = [];
+    this.priorityRepositories = new Map();
+    this.deferredRefreshes = new Map();
     this.initialFetchCompleted = new Set();
     this.mergedHeadBackfillAttempts = new Set();
     this.mergedHeadBackfillRetries = new Set();
@@ -1043,15 +1056,26 @@ class PullRequestTracker {
   close() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    for (const timeout of this.deferredRefreshes.values()) clearTimeout(timeout);
+    this.deferredRefreshes.clear();
   }
 
-  refreshAll() {
+  refreshAll({ inactiveIntervalMs = INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS } = {}) {
     const repositories = new Map();
     for (const record of [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]) {
       const key = repoKey(record.owner, record.repo);
-      repositories.set(key, { owner: record.owner, repo: record.repo });
+      const previous = repositories.get(key);
+      const active = record.state == null || ['open', 'unknown'].includes(record.state);
+      repositories.set(key, { owner: record.owner, repo: record.repo, active: previous?.active || active });
     }
-    const refreshes = [...repositories.values()].map(({ owner, repo }) => this.refreshRepo(owner, repo));
+    const now = this.now();
+    const refreshes = [];
+    for (const [key, { owner, repo, active }] of repositories) {
+      const elapsed = this.lastFetchStartedAt.has(key) ? now - this.lastFetchStartedAt.get(key) : Infinity;
+      if (active || elapsed >= inactiveIntervalMs) refreshes.push(this.refreshRepo(owner, repo));
+      // コマンドの後に飛ばしたリポジトリは、間隔が明けた時点で取る。15 分の定期取得まで反映を待たせないため。
+      else if (inactiveIntervalMs < INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS) this.deferRefresh(owner, repo, inactiveIntervalMs - elapsed);
+    }
     return Promise.all(refreshes).then((results) => {
       // 取り直しの間に登録されたリポジトリを消さないため、登録は待った後に数え直す。
       const registeredKeys = new Set([...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
@@ -1060,6 +1084,7 @@ class PullRequestTracker {
       for (const key of this.repositories.keys()) {
         if (!registeredKeys.has(key)) {
           this.repositories.delete(key);
+          this.lastFetchStartedAt.delete(key);
           removed = true;
         }
       }
@@ -1095,10 +1120,27 @@ class PullRequestTracker {
     return deleted;
   }
 
+  deferRefresh(owner, repo, delayMs) {
+    const key = repoKey(owner, repo);
+    if (this.deferredRefreshes.has(key)) return;
+    const timeout = setTimeout(() => {
+      this.deferredRefreshes.delete(key);
+      if (!this.state.pullRequestRegistrationsForRepo(owner, repo).length
+        && !this.state.relatedPullRequestRegistrationsForRepo(owner, repo).length) return;
+      // 先に動いている取得はコマンドの前の状態かもしれないので、合流せず終わるのを待ってから取り直す。
+      void this.refreshRepoFresh(owner, repo).catch(() => {});
+    }, Math.max(0, delayMs));
+    timeout.unref?.();
+    this.deferredRefreshes.set(key, timeout);
+  }
+
   refreshRepo(owner, repo) {
     const repository = safeRepo(owner, repo);
     const key = repoKey(owner, repo);
     if (this.inFlight.has(key)) return this.inFlight.get(key);
+    clearTimeout(this.deferredRefreshes.get(key));
+    this.deferredRefreshes.delete(key);
+    this.lastFetchStartedAt.set(key, this.now());
     const operation = this.fetchRepository(owner, repo, repository)
       .then(async (result) => {
         this.initialFetchCompleted.add(key);
@@ -1118,10 +1160,27 @@ class PullRequestTracker {
     return operation;
   }
 
-  async refreshRepoFresh(owner, repo) {
+  async refreshRepoFresh(owner, repo, { priority = false } = {}) {
     const key = repoKey(owner, repo);
-    await this.inFlight.get(key)?.catch(() => {});
-    return this.refreshRepo(owner, repo);
+    if (!priority) {
+      await this.inFlight.get(key)?.catch(() => {});
+      return this.refreshRepo(owner, repo);
+    }
+    // 先に動いている同じリポジトリの取得を待つ間も、その gh を優先に引き上げて確定操作を待たせない。
+    this.priorityRepositories.set(key, (this.priorityRepositories.get(key) || 0) + 1);
+    this.promoteQueuedGh(key);
+    try {
+      await this.inFlight.get(key)?.catch(() => {});
+    } finally {
+      const count = this.priorityRepositories.get(key) - 1;
+      if (count > 0) this.priorityRepositories.set(key, count);
+      else this.priorityRepositories.delete(key);
+    }
+    return ghPriorityContext.run(true, () => this.refreshRepo(owner, repo));
+  }
+
+  refreshAfterCommand() {
+    return this.refreshAll({ inactiveIntervalMs: COMMAND_REFRESH_INACTIVE_INTERVAL_MS });
   }
 
   mergeCandidate(registration) {
@@ -1166,7 +1225,30 @@ class PullRequestTracker {
     return this.repositories.get(repositoryKey(owner, repo)) || null;
   }
 
-  async execute(args) {
+  acquireGhSlot(priority, queueRepositoryKey) {
+    if (this.activeGhCount < GH_CONCURRENCY_LIMIT) {
+      this.activeGhCount += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      (priority ? this.priorityGhQueue : this.ghQueue).push({ resolve, queueRepositoryKey });
+    });
+  }
+
+  promoteQueuedGh(queueRepositoryKey) {
+    const promoted = this.ghQueue.filter((entry) => entry.queueRepositoryKey === queueRepositoryKey);
+    if (!promoted.length) return;
+    this.ghQueue = this.ghQueue.filter((entry) => entry.queueRepositoryKey !== queueRepositoryKey);
+    this.priorityGhQueue.push(...promoted);
+  }
+
+  releaseGhSlot() {
+    const next = this.priorityGhQueue.shift() || this.ghQueue.shift();
+    if (next) next.resolve();
+    else this.activeGhCount -= 1;
+  }
+
+  async execute(args, { priority = false } = {}) {
     const apiPath = args.find(arg => arg.startsWith('repos/'));
     const operation = args[0] === 'pr' ? `pr.${args[1]}`
       : apiPath?.includes('/compare/') ? 'api.compare'
@@ -1176,6 +1258,10 @@ class PullRequestTracker {
     const repository = args.includes('-R') ? args[args.indexOf('-R') + 1] : args.find(arg => /^repos\/[^/]+\/[^/]+/.test(arg))?.split('/').slice(1, 3).join('/');
     const number = args[0] === 'pr' && /^\d+$/.test(args[2]) ? Number(args[2]) : undefined;
     const key = `${operation}:${repository || ''}:${number || ''}`;
+    const queueRepositoryKey = repository ? repository.toLowerCase() : null;
+    await this.acquireGhSlot(
+      priority || ghPriorityContext.getStore() === true || this.priorityRepositories.has(queueRepositoryKey), queueRepositoryKey,
+    );
     try {
       const output = await runGh(args, { execFileImpl: this.execFileImpl, ghPath: this.ghPath });
       this.diagnosticFailures.delete(key);
@@ -1192,13 +1278,15 @@ class PullRequestTracker {
           : error.signal ? 'signal' : typeof error.code === 'number' ? 'exit' : 'execution',
         code: error.code, signal: error.signal, exitCode: typeof error.code === 'number' ? error.code : undefined });
       throw error;
+    } finally {
+      this.releaseGhSlot();
     }
   }
 
-  async readPullRequestView(owner, repo, number) {
+  async readPullRequestView(owner, repo, number, options) {
     const output = await this.execute([
       'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt`,
-    ]);
+    ], options);
     const value = JSON.parse(output);
     const state = String(value?.state || '').toUpperCase();
     const pullRequest = normalizeOpenPullRequest(value);
