@@ -114,3 +114,65 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
   await context.refresh();
   assert.deepEqual(notices, [update]);
 });
+
+function updateCheckContext(send) {
+  const nodes = new Map();
+  const get = id => {
+    if (!nodes.has(id)) nodes.set(id, { disabled: false, textContent: '' });
+    return nodes.get(id);
+  };
+  const posted = [];
+  const applied = [];
+  const context = vm.createContext({
+    updateCheckButton: get('update-check'), updateCheckStatus: get('update-check-status'),
+    postUiAction: async (url, body) => { posted.push([url, body]); return send(); },
+    applyUpdateState: update => applied.push(update),
+  });
+  vm.runInContext(functionSource(html, 'checkForUpdate'), context);
+  return { context, get, posted, applied };
+}
+
+const jsonResponse = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+
+test('更新を確認は、最新なら何も出さず、それ以外は結果を一行で出し、新しい版では通知欄も更新する', async () => {
+  const latest = { ...update, current: '0.0.0', checkedAt: 'x', error: null };
+  const cases = [
+    { body: { current: '1.0.1', latest: '1.0.1', available: false, checkedAt: 'x', error: null }, status: 200,
+      message: '', applied: [] },
+    { body: latest, status: 200, message: '新しい版 v1.0.0 があります。', applied: [latest] },
+    { body: { current: '1.0.1', latest: null, available: false, checkedAt: 'x', error: 'TIMEOUT' }, status: 200,
+      message: '確認できませんでした。時間をおいてやり直してください。', applied: [] },
+    { body: { error: 'Internal Server Error' }, status: 500,
+      message: '確認できませんでした。時間をおいてやり直してください。', applied: [] },
+    { body: { error: 'update-check-disabled' }, status: 409,
+      message: 'この常駐サーバーでは更新を確認できません。', applied: [] },
+  ];
+  for (const { body, status, message, applied: expected } of cases) {
+    const { context, get, posted, applied } = updateCheckContext(async () => jsonResponse(status, body));
+    await context.checkForUpdate();
+    assert.equal(JSON.stringify(posted), JSON.stringify([['/api/update/check', {}]]));
+    assert.equal(get('update-check-status').textContent, message);
+    assert.equal(get('update-check').disabled, false);
+    assert.equal(get('update-check').textContent, '更新を確認');
+    assert.equal(JSON.stringify(applied), JSON.stringify(expected));
+  }
+});
+
+test('更新を確認は、通信に失敗したら確認できなかった文言を出す', async () => {
+  const { context, get } = updateCheckContext(async () => { throw new Error('offline'); });
+  await context.checkForUpdate();
+  assert.equal(get('update-check-status').textContent, '確認できませんでした。時間をおいてやり直してください。');
+  assert.equal(get('update-check').disabled, false);
+});
+
+test('更新を確認は、確認の間だけボタンを無効にして確認中と表示する', async () => {
+  let finish;
+  const { context, get } = updateCheckContext(() => new Promise(resolve => { finish = resolve; }));
+  const running = context.checkForUpdate();
+  assert.equal(get('update-check').disabled, true);
+  assert.equal(get('update-check').textContent, '確認中…');
+  finish(jsonResponse(200, { current: '1.0.1', latest: '1.0.1', available: false, checkedAt: 'x', error: null }));
+  await running;
+  assert.equal(get('update-check').disabled, false);
+  assert.equal(get('update-check').textContent, '更新を確認');
+});

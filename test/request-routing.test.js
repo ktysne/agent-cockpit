@@ -36,6 +36,7 @@ const WRITE_ROUTES = [
   { path: '/api/away', auth: 'ui-optional-origin', nullBody: INVALID_REQUEST },
   { path: '/api/routing', auth: 'ui', nullBody: INVALID_REQUEST },
   { path: '/api/open-url', auth: 'ui', nullBody: INVALID_REQUEST },
+  { path: '/api/update/check', auth: 'ui', nullBody: INVALID_REQUEST },
   { path: '/api/events', auth: 'hook', nullBody: { status: 500, error: 'Internal Server Error' }, arrayBody: { status: 202 } },
   { path: '/api/sessions/session-a/plan', auth: 'hook', nullBody: INVALID_REQUEST },
   { path: '/api/sessions/session-a/prs', auth: 'hook', nullBody: INVALID_REQUEST },
