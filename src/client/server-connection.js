@@ -156,8 +156,9 @@ async function canConnectToPort(port, { deadline = Date.now() + 200, now = Date.
   });
 }
 
-async function serverIsHealthy(info, { fetchImpl = fetch, deadline = Date.now() + 250, now = Date.now } = {}) {
-  if (!info) return false;
+// 'healthy'、応答が期限に間に合わない 'timeout'、それ以外(接続できない、別のアプリ、別の起動)の 'unhealthy' を返す。
+async function serverHealth(info, { fetchImpl = fetch, deadline = Date.now() + 250, now = Date.now } = {}) {
+  if (!info) return 'unhealthy';
   try {
     const result = await fetchWithDeadline(
       fetchImpl,
@@ -168,12 +169,16 @@ async function serverIsHealthy(info, { fetchImpl = fetch, deadline = Date.now() 
       now,
       async (response) => ({ ok: response.ok, json: response.ok ? await response.json() : null }),
     );
-    if (!result.ok) return false;
+    if (!result.ok) return 'unhealthy';
     const health = result.json;
-    return health.app === 'agent-cockpit' && health.pid === info.pid && health.startedAt === info.startedAt;
-  } catch {
-    return false;
+    return health.app === 'agent-cockpit' && health.pid === info.pid && health.startedAt === info.startedAt ? 'healthy' : 'unhealthy';
+  } catch (error) {
+    return error?.code === 'ATTEMPT_TIMEOUT' || error?.code === 'DEADLINE_TIMEOUT' ? 'timeout' : 'unhealthy';
   }
+}
+
+async function serverIsHealthy(info, options) {
+  return await serverHealth(info, options) === 'healthy';
 }
 
 async function waitForHealthyServer(homeDir, { fetchImpl = fetch, deadline, intervalMs = 35, readInfo = readServerInfo, fileSystem, now = Date.now } = {}) {
@@ -196,17 +201,25 @@ async function ensureServerRunning({
   canConnectToPort: checkPort = canConnectToPort,
   now = Date.now,
 } = {}) {
+  // 応答が遅いだけで番号が埋まっていれば、起動しても EADDRINUSE で終わるので起動しない。
+  // 応答はあるが識別が合わないときは別のアプリなので、秘密値を送らないよう server.json の情報を返さない。
+  const reusableInfo = async (current) => {
+    const health = await serverHealth(current, { fetchImpl, deadline, now });
+    if (health === 'healthy') return current;
+    if (health === 'timeout' && await checkPort(current.port ?? DEFAULT_PORT, { deadline, now })) return current;
+    return null;
+  };
   let info = await readInfo(homeDir, fileSystem);
-  if (await serverIsHealthy(info, { fetchImpl, deadline, now })) return info;
-  if (info && await checkPort(info.port ?? DEFAULT_PORT, { deadline, now })) return info;
+  const reused = await reusableInfo(info);
+  if (reused) return reused;
 
   const token = await acquireStartLock(homeDir, now(), fileSystem);
   if (!token) return waitForHealthyServer(homeDir, { fetchImpl, deadline, readInfo, fileSystem, now });
 
   try {
     info = await readInfo(homeDir, fileSystem);
-    if (await serverIsHealthy(info, { fetchImpl, deadline, now })) return info;
-    if (info && await checkPort(info.port ?? DEFAULT_PORT, { deadline, now })) return info;
+    const reusedAfterLock = await reusableInfo(info);
+    if (reusedAfterLock) return reusedAfterLock;
     await startServer({ homeDir, environment });
     return await waitForHealthyServer(homeDir, { fetchImpl, deadline, readInfo, fileSystem, now });
   } catch {
