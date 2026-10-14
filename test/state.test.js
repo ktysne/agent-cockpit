@@ -18,6 +18,53 @@ test('Claude のモデル ID を表示名にし、読み取り結果が無いと
   assert.equal(state.snapshot().sessions[0].modelName, 'Opus 5.5');
 });
 
+test('委譲へ分類し直した Codex thread の行が消えると版が進む', () => {
+  const state = new DashboardState();
+  const launch = {
+    session_id: 'parent', hook_event_name: 'PreToolUse', tool_name: 'Bash',
+    summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md', hookAt: 100,
+  };
+  state.addEvent(launch);
+  state.addEvent({
+    session_id: 'thread', provider: 'codex', hook_event_name: 'SessionStart',
+    hookAt: 150, claudeParentSessionId: 'parent',
+  });
+  assert.equal(state.sessions.has('thread'), true);
+
+  const version = state.version;
+  state.addEvent(launch);
+
+  assert.equal(state.sessions.has('thread'), false);
+  assert.equal(state.version, version + 1);
+});
+
+test('表示が変わらない同時刻の Notification では版が進まない', () => {
+  const state = new DashboardState();
+  const event = {
+    session_id: 'unchanged', hook_event_name: 'Notification', notification_type: 'idle_prompt', hookAt: 100,
+  };
+  state.addEvent(event);
+  const previousSession = state.snapshot().sessions[0];
+  const version = state.version;
+
+  state.addEvent(event);
+
+  assert.deepEqual(state.snapshot().sessions[0], previousSession);
+  assert.equal(state.version, version);
+});
+
+test('SessionEnd で file-only セッションが一覧から消えると版が進む', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'file-only', name: 'file-only' }]);
+  assert.equal(state.snapshot().sessions[0].session_id, 'file-only');
+  const version = state.version;
+
+  state.addEvent({ session_id: 'file-only', hook_event_name: 'SessionEnd', hookAt: 100 });
+
+  assert.deepEqual(state.snapshot().sessions, []);
+  assert.equal(state.version, version + 1);
+});
+
 test('別のモデルで再開したセッションは、再開前の応答の記録で開始時のモデルを上書きしない', () => {
   const state = new DashboardState();
   state.addEvent({ session_id: 'resumed', hook_event_name: 'SessionStart', model: 'claude-sonnet-5-5', hookAt: 1000 });
