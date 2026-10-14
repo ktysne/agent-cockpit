@@ -128,10 +128,10 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
 <body>
 <main>
   <h1>Agent Cockpit のシステム構成</h1>
-  <p class="lead">Claude Code のセッション状態を、127.0.0.1 の常駐サーバーが集めてダッシュボードに表示する。ダッシュボードで書いた回答は、フック経由でセッションへ戻る。<a href="architecture-detail.html">詳細版</a></p>
+  <p class="lead">Claude Code と Codex（CLI、デスクトップ）のセッション状態を、127.0.0.1 の常駐サーバーが集めてダッシュボードに表示する。ダッシュボードで書いた回答は、フック経由でセッションへ戻る。<a href="architecture-detail.html">詳細版</a></p>
 
   <div class="figure">
-    <svg viewBox="0 0 1100 670" role="img" aria-labelledby="fig-title">
+    <svg viewBox="0 0 1100 690" role="img" aria-labelledby="fig-title">
       <title id="fig-title">Agent Cockpit の構成とデータの流れ</title>
       <defs>
         <marker id="m-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-blue" d="M0,0 L10,5 L0,10 z"/></marker>
@@ -140,35 +140,36 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
         <marker id="m-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-gray" d="M0,0 L10,5 L0,10 z"/></marker>
       </defs>
 
-      <!-- Claude Code デスクトップアプリ -->
-      <rect class="b-cc" x="20" y="20" width="340" height="460" rx="12"/>
-      <text class="title" x="40" y="48">Claude Code デスクトップアプリ</text>
-      <text class="sub" x="40" y="66">各セッションごとに動く</text>
+      <!-- Claude Code / Codex のセッション -->
+      <rect class="b-cc" x="20" y="20" width="340" height="470" rx="12"/>
+      <text class="title" x="40" y="48">Claude Code / Codex のセッション</text>
+      <text class="sub" x="40" y="66">デスクトップアプリ・CLI。セッションごとに動く</text>
 
       <rect class="b-in" x="60" y="84" width="280" height="68" rx="8"/>
       <text class="title" x="76" y="110">メインセッション</text>
-      <text class="sub" x="76" y="132">作業・AskUserQuestion・MCP 呼び出し</text>
+      <text class="sub" x="76" y="132">作業・質問ツール・MCP 呼び出し</text>
 
-      <rect class="b-in" x="60" y="196" width="280" height="148" rx="8"/>
-      <text class="title" x="76" y="222">フック（src/hooks）</text>
-      <text x="76" y="246"><tspan font-weight="600">event.js</tspan><tspan class="sub">　イベントを送る・サーバー起動</tspan></text>
-      <text x="76" y="270"><tspan font-weight="600">answer.js</tspan><tspan class="sub">　回答と知らせを差し込む</tspan></text>
-      <text x="76" y="294"><tspan font-weight="600">away.js</tspan><tspan class="sub">　離席中の質問に回答を返す</tspan></text>
-      <text x="76" y="318"><tspan font-weight="600">route.js</tspan><tspan class="sub">　経路の設定を伝えて守らせる</tspan></text>
+      <rect class="b-in" x="60" y="190" width="280" height="176" rx="8"/>
+      <text class="title" x="76" y="216">フック（src/hooks）</text>
+      <text x="76" y="240"><tspan font-weight="600">event.js</tspan><tspan class="sub">　イベントを送る・サーバー起動</tspan></text>
+      <text x="76" y="264"><tspan font-weight="600">answer.js</tspan><tspan class="sub">　回答と知らせを差し込む</tspan></text>
+      <text x="76" y="288"><tspan font-weight="600">away.js</tspan><tspan class="sub">　離席中の質問に回答を返す</tspan></text>
+      <text x="76" y="312"><tspan font-weight="600">route.js</tspan><tspan class="sub">　経路を伝えて守らせる（Claude）</tspan></text>
+      <text class="sub" x="76" y="344">Codex は同じスクリプトを引数 codex で登録</text>
 
-      <rect class="b-in" x="60" y="372" width="280" height="88" rx="8"/>
-      <text class="title" x="76" y="398">MCP サーバー（src/mcp・stdio）</text>
-      <text class="sub" x="76" y="420">cockpit_set_tasks / add_decision /</text>
-      <text class="sub" x="76" y="440">update_decision / add_pr / skip_review</text>
+      <rect class="b-in" x="60" y="384" width="280" height="88" rx="8"/>
+      <text class="title" x="76" y="410">MCP サーバー（src/mcp・stdio）</text>
+      <text class="sub" x="76" y="432">cockpit_set_tasks / add_decision /</text>
+      <text class="sub" x="76" y="452">update_decision / add_pr / skip_review</text>
 
       <!-- セッション内のつながり -->
-      <path class="ln gray" d="M200,152 L200,196" marker-start="url(#m-gray)" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="208" y="179">発火 / 文脈・回答を返す</text>
-      <path class="ln gray" d="M60,118 L38,118 L38,416 L60,416" marker-end="url(#m-gray)"/>
+      <path class="ln gray" d="M200,152 L200,190" marker-start="url(#m-gray)" marker-end="url(#m-gray)"/>
+      <text class="label gray" x="208" y="176">発火 / 文脈・回答を返す</text>
+      <path class="ln gray" d="M60,118 L38,118 L38,428 L60,428" marker-end="url(#m-gray)"/>
       <text class="label gray" x="0" y="0" transform="translate(32,310) rotate(-90)">ツール呼び出し</text>
 
       <!-- 常駐サーバー -->
-      <rect class="b-srv" x="440" y="150" width="270" height="290" rx="12"/>
+      <rect class="b-srv" x="440" y="150" width="270" height="310" rx="12"/>
       <text class="title" x="460" y="180">常駐サーバー（src/server）</text>
       <text class="sub" x="460" y="200">Node.js ・ 127.0.0.1:47821 のみ</text>
       <text x="460" y="232">・イベントからセッション状態を組み立て</text>
@@ -176,9 +177,11 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text x="460" y="276">・回答と知らせを配信待ちに置く</text>
       <text x="460" y="298">・PR の状態取得・マージ・予約</text>
       <text x="460" y="320">・経路と表示の設定を保存</text>
-      <text x="460" y="342">・URL を既定のブラウザーで開く</text>
-      <text class="sub" x="460" y="398">書き込みは起動ごとの秘密値と</text>
-      <text class="sub" x="460" y="416">Origin を照合する</text>
+      <text x="460" y="342">・診断ログを記録</text>
+      <text x="460" y="364">・新しい版のタグを確認</text>
+      <text x="460" y="386">・URL を既定のブラウザーで開く</text>
+      <text class="sub" x="460" y="424">書き込みは起動ごとの秘密値と</text>
+      <text class="sub" x="460" y="442">Origin を照合する</text>
 
       <!-- タスクトレイ -->
       <rect class="b-ext" x="790" y="20" width="290" height="92" rx="10"/>
@@ -187,7 +190,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text class="sub" x="808" y="90">離席中の切り替え、待ち件数の通知</text>
 
       <!-- ダッシュボード -->
-      <rect class="b-web" x="790" y="150" width="290" height="290" rx="12"/>
+      <rect class="b-web" x="790" y="150" width="290" height="310" rx="12"/>
       <text class="title" x="808" y="180">ダッシュボード（src/web）</text>
       <text class="sub" x="808" y="200">内部ブラウザかトレイの画面で開く 1 枚の HTML</text>
       <text x="808" y="232">・セッション / タスク / 完了条件</text>
@@ -195,7 +198,10 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text x="808" y="276">・判断事項と回答欄</text>
       <text x="808" y="298">・PR スタックとマージ確認・予約</text>
       <text x="808" y="320">・離席中 / 経路 / 表示の設定</text>
-      <text x="808" y="342">・マニュアルへの入口</text>
+      <text x="808" y="342">・新しい版の通知と診断ログ</text>
+      <text x="808" y="364">・マニュアルへの入口</text>
+      <text class="sub" x="808" y="424">Claude は橙、Codex は青紫の色帯で</text>
+      <text class="sub" x="808" y="442">見分ける</text>
 
       <!-- ① イベント -->
       <path class="ln blue" d="M340,232 L440,232" marker-end="url(#m-blue)"/>
@@ -204,8 +210,8 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <path class="ln green" d="M440,282 L340,282" marker-end="url(#m-green)"/>
       <text class="label green" x="350" y="300">② 回答・知らせ</text>
       <!-- ③ MCP -->
-      <path class="ln blue" d="M340,416 L390,416 L390,400 L440,400" marker-end="url(#m-blue)"/>
-      <text class="label blue" x="352" y="472">③ タスク・判断・PR</text>
+      <path class="ln blue" d="M340,428 L440,428" marker-end="url(#m-blue)"/>
+      <text class="label blue" x="362" y="420">③ 計画・PR</text>
 
       <!-- ④ 状態取得 -->
       <path class="ln orange" d="M710,222 L790,222" marker-end="url(#m-orange)"/>
@@ -221,55 +227,72 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text class="label gray" x="998" y="136">開く</text>
 
       <!-- 下段：外部 -->
-      <rect class="b-ext" x="20" y="540" width="245" height="110" rx="10"/>
-      <text class="title" x="36" y="568">~/.claude（読み取り）</text>
-      <text class="sub" x="36" y="592">sessions/*.json（稼働中のセッション）</text>
-      <text class="sub" x="36" y="612">会話ログ（文脈量の見積もり）</text>
+      <rect class="b-ext" x="20" y="550" width="200" height="120" rx="10"/>
+      <text class="title" x="36" y="578">~/.claude（読み取り）</text>
+      <text class="sub" x="36" y="602">sessions/*.json</text>
+      <text class="sub" x="36" y="620">（稼働中のセッション）</text>
+      <text class="sub" x="36" y="642">会話ログ（中断の検出・</text>
+      <text class="sub" x="36" y="660">状態の推定）</text>
 
-      <rect class="b-ext" x="285" y="540" width="245" height="110" rx="10"/>
-      <text class="title" x="301" y="568">~/.agent-cockpit（保存）</text>
-      <text class="sub" x="301" y="592">store.json：タスク・判断・表示設定</text>
-      <text class="sub" x="301" y="612">server.json・routing.json</text>
-      <text class="sub" x="301" y="632">away.json・tray.json</text>
+      <rect class="b-ext" x="235" y="550" width="200" height="120" rx="10"/>
+      <text class="title" x="251" y="578">~/.codex（読み取り）</text>
+      <text class="sub" x="251" y="602">session_index.jsonl</text>
+      <text class="sub" x="251" y="620">（スレッド名）</text>
+      <text class="sub" x="251" y="642">thread-writer-locks/</text>
+      <text class="sub" x="251" y="660">（会話の終了）</text>
 
-      <rect class="b-opt" x="550" y="540" width="245" height="110" rx="10"/>
-      <text class="title" x="566" y="568">連携（任意）</text>
-      <text class="sub" x="566" y="592">codex-agent.sh の有無と出力</text>
-      <text class="sub" x="566" y="612">ai-cross-review のレビュー状態</text>
+      <rect class="b-ext" x="450" y="550" width="200" height="120" rx="10"/>
+      <text class="title" x="466" y="578">~/.agent-cockpit</text>
+      <text class="sub" x="466" y="602">store.json・server.json</text>
+      <text class="sub" x="466" y="620">routing.json・away.json</text>
+      <text class="sub" x="466" y="642">diagnostics/：診断ログ</text>
+      <text class="sub" x="466" y="660">tray.json：トレイの設定</text>
 
-      <rect class="b-ext" x="815" y="540" width="265" height="110" rx="10"/>
-      <text class="title" x="831" y="568">GitHub</text>
-      <text class="sub" x="831" y="592">gh で PR と CI の状態を 60 秒ごとに取得</text>
-      <text class="sub" x="831" y="612">確認済みの最下段の PR だけマージ</text>
+      <rect class="b-opt" x="665" y="550" width="200" height="120" rx="10"/>
+      <text class="title" x="681" y="578">連携（任意）</text>
+      <text class="sub" x="681" y="602">codex-agent.sh の有無と</text>
+      <text class="sub" x="681" y="620">出力</text>
+      <text class="sub" x="681" y="642">ai-cross-review の</text>
+      <text class="sub" x="681" y="660">レビュー状態</text>
 
-      <path class="ln gray" d="M142,540 L142,508 L455,508 L455,440" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="160" y="500">読み取り</text>
-      <path class="ln gray" d="M500,440 L500,540" marker-start="url(#m-gray)" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="508" y="490">保存・復元</text>
-      <path class="ln gray dash" d="M640,540 L640,440" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="634" y="470" text-anchor="end">有無と状態を確認</text>
-      <path class="ln orange" d="M690,440 L690,508 L947,508 L947,540" marker-start="url(#m-orange)" marker-end="url(#m-orange)"/>
-      <text class="label orange" x="760" y="500">⑥ gh pr view / merge</text>
+      <rect class="b-ext" x="880" y="550" width="200" height="120" rx="10"/>
+      <text class="title" x="896" y="578">GitHub</text>
+      <text class="sub" x="896" y="602">gh で PR と CI の状態を</text>
+      <text class="sub" x="896" y="620">60 秒ごとに取得</text>
+      <text class="sub" x="896" y="642">確認済みの最下段だけマージ</text>
+      <text class="sub" x="896" y="660">git で新しい版のタグを確認</text>
+
+      <path class="ln gray" d="M120,550 L120,515 L470,515 L470,460" marker-end="url(#m-gray)"/>
+      <path class="ln gray" d="M335,550 L335,515"/>
+      <text class="label gray" x="140" y="507">⑦ 読み取り</text>
+      <path class="ln gray" d="M560,460 L560,550" marker-start="url(#m-gray)" marker-end="url(#m-gray)"/>
+      <text class="label gray" x="568" y="505">保存・復元</text>
+      <path class="ln gray dash" d="M765,550 L765,490 L660,490 L660,460" marker-end="url(#m-gray)"/>
+      <text class="label gray" x="773" y="530">有無と状態を確認</text>
+      <path class="ln orange" d="M700,460 L700,475 L980,475 L980,550" marker-start="url(#m-orange)" marker-end="url(#m-orange)"/>
+      <text class="label orange" x="890" y="494">⑥ gh・git</text>
     </svg>
   </div>
 
   <h2>データの流れ</h2>
   <ol class="flows">
-    <li><b>イベント（フック → サーバー）</b>：<code>event.js</code> がツール実行、通知、サブエージェントの開始と終了などを <code>POST /api/events</code> で送る。サーバーはここからセッションの状態を組み立てる。常駐サーバーが動いていなければ、<code>SessionStart</code> の <code>event.js</code> が起動する。</li>
-    <li><b>回答・知らせ（サーバー → フック → セッション）</b>：<code>answer.js</code> がサーバーに問い合わせ、ダッシュボードで書かれた回答、PR のマージ結果の知らせ、衝突の解消の依頼、タスクの登録の催促をセッションの文脈として渡す。待機中のセッションは <code>Stop</code> のフックで起こす。離席中は、<code>away.js</code> が <code>AskUserQuestion</code> を止めてダッシュボードの回答を待ち、その回答を質問の答えとして返す。</li>
-    <li><b>タスク・判断・PR（MCP → サーバー）</b>：メインセッションが MCP ツールを呼ぶと、MCP サーバーが計画（タスク、完了条件、判断事項）、PR、クロスレビュー不要の記録を常駐サーバーへ送る。</li>
+    <li><b>イベント（フック → サーバー）</b>：<code>event.js</code> がツール実行、通知、サブエージェントの開始と終了などを <code>POST /api/events</code> で送る。サーバーはここからセッションの状態を組み立てる。常駐サーバーが動いていなければ、<code>SessionStart</code> の <code>event.js</code> が起動する。Codex のセッションは、同じスクリプトを最後の引数 <code>codex</code> 付きで登録して送る。</li>
+    <li><b>回答・知らせ（サーバー → フック → セッション）</b>：<code>answer.js</code> がサーバーに問い合わせ、ダッシュボードで書かれた回答、PR のマージ結果の知らせ、衝突の解消の依頼、タスクの登録の催促をセッションの文脈として渡す。離席中は、<code>away.js</code> が質問ツール（Claude は <code>AskUserQuestion</code>、Codex は <code>request_user_input</code>）を止めてダッシュボードの回答を待ち、その回答を質問の答えとして返す。待機中の Claude のセッションは <code>Stop</code> のフック（<code>asyncRewake</code>）で起こす。Codex には同じ仕組みが無いので、<code>PostToolUse</code> と <code>Stop</code> のフックで渡し、離席中は <code>Stop</code> で回答を待つ。</li>
+    <li><b>計画・PR（MCP → サーバー）</b>：メインセッションが MCP ツールを呼ぶと、MCP サーバーが計画（タスク、完了条件、判断事項）、PR、クロスレビュー不要の記録を常駐サーバーへ送る。</li>
     <li><b>状態の表示（サーバー → ダッシュボード）</b>：ダッシュボードは <code>GET /api/state</code> を 2 秒ごとに取得して画面を描き直す。</li>
-    <li><b>回答・操作（ダッシュボード → サーバー）</b>：回答、離席中の切り替え、経路と表示の設定、PR のマージ確認と予約、衝突の解消の依頼などを送る。回答と依頼はサーバーの配信待ちに置かれ、②で届く。マニュアルと外部のページ（PR など）は、サーバーに頼んで既定のブラウザーで開く。</li>
-    <li><b>GitHub（サーバー ⇄ GitHub）</b>：<code>gh</code> CLI で PR と CI の状態を 60 秒ごとに取得する。マージできるのは、開発者が画面で確認したスタック最下段の PR だけで、画面で見た head の SHA を照合する。レビュー収束後マージの予約は、クロスレビューの収束を記録した head の SHA で照合する。</li>
+    <li><b>回答・操作（ダッシュボード → サーバー）</b>：回答、離席中の切り替え、経路と表示の設定、PR のマージ確認と予約、衝突の解消の依頼、診断ログの削除などを送る。回答と依頼はサーバーの配信待ちに置かれ、②で届く。マニュアルと外部のページ（PR など）は、サーバーに頼んで既定のブラウザーで開く。</li>
+    <li><b>GitHub（サーバー ⇄ GitHub）</b>：<code>gh</code> CLI で PR と CI の状態を 60 秒ごとに取得する。マージできるのは、開発者が画面で確認したスタック最下段の PR だけで、画面で見た head の SHA を照合する。レビュー収束後マージの予約は、クロスレビューの収束を記録した head の SHA で照合する。新しい版のタグは <code>git ls-remote</code> で 6 時間ごとに確かめ、画面で知らせる。</li>
+    <li><b>読み取り（ファイル → サーバー）</b>：<code>~/.claude</code> と <code>~/.codex</code> を 10 秒ごとに読み、稼働中のセッション、利用者の中断、Codex のスレッド名と会話の終了を拾う。どちらも公開仕様ではないので、読めなくても本体は動く。</li>
   </ol>
 
   <h2>構成要素</h2>
   <div class="grid">
-    <div class="card"><h3>フック</h3><p>Claude Code の設定に登録するスクリプト群。イベントを送り、回答と知らせをセッションへ渡す。<code>route.js</code> は経路の設定をサブエージェントへ伝え、Claude を選んだ担当が Codex を起動しようとしたら止める。</p></div>
-    <div class="card"><h3>MCP サーバー</h3><p>セッションが計画、判断事項、PR を書き込むための窓口。常駐サーバーへ HTTP で転送する。</p></div>
-    <div class="card"><h3>常駐サーバー</h3><p>すべての情報が集まる中心。127.0.0.1 にだけ待ち受け、外部パッケージを使わず Node.js で動く。セッションが 1 つも無く、30 分要求も無いと終了し、次のフックが起動し直す。</p></div>
-    <div class="card"><h3>ダッシュボード</h3><p>常駐サーバーが配信する画面。状態の表示と、回答やマージ確認の入力を担う。</p></div>
+    <div class="card"><h3>フック</h3><p>Claude Code と Codex の設定に登録するスクリプト群。イベントを送り、回答と知らせをセッションへ渡す。<code>route.js</code> は Claude だけに登録し、経路の設定をサブエージェントへ伝え、Claude を選んだ担当が Codex を起動しようとしたら止める。</p></div>
+    <div class="card"><h3>MCP サーバー</h3><p>セッションが計画、判断事項、PR を書き込むための窓口。常駐サーバーへ HTTP で転送する。Codex からの呼び出しはクライアント名で見分け、記録先のセッションを要求に付いた ID で決める。</p></div>
+    <div class="card"><h3>常駐サーバー</h3><p>すべての情報が集まる中心。127.0.0.1 にだけ待ち受け、外部パッケージを使わず Node.js で動く。30 分要求が無く、セッションも無いと終了し、次のフックが起動し直す。Claude Code の無い環境でも同じ条件で終了する。</p></div>
+    <div class="card"><h3>ダッシュボード</h3><p>常駐サーバーが配信する画面。状態の表示と、回答やマージ確認の入力を担う。見出しに版を出し、新しい版があれば更新の依頼文を渡す。</p></div>
     <div class="card"><h3>タスクトレイ</h3><p>Windows 用の常駐アイコン。サーバーの起動と再起動、ダッシュボードを開く操作、離席中の切り替え、待ち件数の通知を担う。</p></div>
+    <div class="card"><h3>診断ログ</h3><p>常駐サーバー、フック、MCP、画面の出来事を <code>~/.agent-cockpit/diagnostics/</code> に記録する。会話、質問と回答、ツールの入出力、秘密値は残さない。設定画面の入口から読み、書き出し、削除できる。</p></div>
     <div class="card"><h3>マニュアル</h3><p><code>manual/</code> で組み立てた利用者向けの説明。紹介ページと一緒に https://ktysne.info/agent-cockpit/manual/ へ配信し、設定画面の入口から既定のブラウザーで開く。</p></div>
   </div>
 
