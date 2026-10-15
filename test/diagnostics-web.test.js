@@ -160,6 +160,66 @@ test('古い起動の応答が遅れても、現在選択中の記録を上書�
   assert.equal(node('diagnostics-list').attributes['aria-busy'], 'false');
 });
 
+test('古い起動の詳細応答が遅れても、選択した起動の responseRuntime と書き出しヘッダーを保つ', async () => {
+  const pendingRuntime = { version: '1.4.0', commit: 'c933f60abcdef', sourceState: 'pending' };
+  const releaseRuntime = { ...pendingRuntime, sourceState: 'release' };
+  const current = { id: 'current', current: true, startedAt: 2, count: 1, sources: ['server'] };
+  const previous = { id: 'previous', startedAt: 1, count: 1, sources: ['hook'] };
+  let respondToCurrent;
+  let signalCurrentRequest;
+  const currentRequestStarted = new Promise(resolve => { signalCurrentRequest = resolve; });
+  const { context, node } = diagnosticPage({ runs: [current, previous], fetchImpl: async route => {
+    const runId = new URL(route, 'http://localhost').searchParams.get('run');
+    if (runId === null) return { ok: true, json: async () => ({ runs: [current, previous], responseRuntime: pendingRuntime }) };
+    if (runId === current.id) return new Promise(resolve => {
+      respondToCurrent = resolve;
+      signalCurrentRequest();
+    });
+    return { ok: true, json: async () => ({ entries: [], runtime: releaseRuntime, responseRuntime: releaseRuntime }) };
+  } });
+  const currentLoad = context.refreshDiagnostics();
+  await currentRequestStarted;
+  node('diagnostics-run').value = previous.id;
+  await node('diagnostics-run').listeners.change();
+  respondToCurrent({ ok: true, json: async () => ({ entries: [], runtime: pendingRuntime, responseRuntime: pendingRuntime }) });
+  await currentLoad;
+
+  assert.equal(vm.runInContext('diagnosticResponseRuntime.sourceState', context), 'release');
+  let exported = '';
+  context.downloadDiagnosticText = (runs, suffix, responseRuntime) => {
+    exported = context.diagnosticExportText(runs, responseRuntime);
+  };
+  node('diagnostics-export-run').listeners.click();
+  assert.match(exported, /viewer=v1\.4\.0 level=/);
+});
+
+test('一覧を再取得した後に遅れて届いた詳細応答は responseRuntime を巻き戻さない', async () => {
+  const pendingRuntime = { version: '1.4.0', commit: 'c933f60abcdef', sourceState: 'pending' };
+  const releaseRuntime = { ...pendingRuntime, sourceState: 'release' };
+  const current = { id: 'current', current: true, startedAt: 2, count: 1, sources: ['server'] };
+  let detailCount = 0;
+  let respondToOldDetail;
+  let signalOldDetail;
+  const oldDetailStarted = new Promise(resolve => { signalOldDetail = resolve; });
+  const { context } = diagnosticPage({ runs: [current], fetchImpl: async route => {
+    const runId = new URL(route, 'http://localhost').searchParams.get('run');
+    if (runId === null) return { ok: true, json: async () => ({ runs: [current], responseRuntime: releaseRuntime }) };
+    detailCount += 1;
+    if (detailCount === 1) return new Promise(resolve => {
+      respondToOldDetail = resolve;
+      signalOldDetail();
+    });
+    return { ok: true, json: async () => ({ entries: [] }) };
+  } });
+  const oldRefresh = context.refreshDiagnostics();
+  await oldDetailStarted;
+  await context.refreshDiagnostics();
+  respondToOldDetail({ ok: true, json: async () => ({ entries: [], runtime: pendingRuntime, responseRuntime: pendingRuntime }) });
+  await oldRefresh;
+
+  assert.equal(vm.runInContext('diagnosticResponseRuntime.sourceState', context), 'release');
+});
+
 test('選択中の起動を取得できない場合は再試行を案内し、コピーと書き出しを行わない', async () => {
   const previous = { id: '20261012T000000Z-1', current: false, startedAt: '2026-10-12T00:00:00Z', count: 1, sources: ['hook'] };
   const { context, node, appended } = diagnosticPage({ runs: [
@@ -206,6 +266,67 @@ test('全起動の書き出しは実行時に全起動を取得し、取得中�
   assert.equal(button.disabled, false);
   assert.ok(appended.some(link => link.download === 'agent-cockpit-diagnostics-all.txt'));
   assert.match(node('diagnostics-status').textContent, /すべての起動を書き出しました/);
+});
+
+test('全起動の書き出しは途中で一覧や選択が更新されても、自分の最後の responseRuntime を使う', async () => {
+  const current = { id: 'current', current: true, startedAt: 3, count: 1, sources: ['server'] };
+  const middle = { id: 'middle', startedAt: 2, count: 1, sources: ['hook'] };
+  const older = { id: 'older', startedAt: 1, count: 1, sources: ['mcp'] };
+  const [initialRuntime, refreshedRuntime, selectedRuntime, exportLastRuntime] = [
+    { version: '1.2.0', sourceState: 'release' },
+    { version: '2.3.0', commit: 'abcdef012345', sourceState: 'pending' },
+    { version: '3.4.0', commit: '123456abcdef', sourceState: 'pending' },
+    { version: '6.7.0', commit: 'cdefab987654', sourceState: 'release' },
+  ];
+  let listCount = 0;
+  let olderDetailCount = 0;
+  let respondToMiddle;
+  let startMiddleRequest;
+  const middleRequestStarted = new Promise(resolve => { startMiddleRequest = resolve; });
+  const { context, node } = diagnosticPage({ runs: [current, middle, older], fetchImpl: async route => {
+    const runId = new URL(route, 'http://localhost').searchParams.get('run');
+    if (runId === null) {
+      listCount += 1;
+      return { ok: true, json: async () => ({ runs: [current, middle, older], responseRuntime: listCount === 1 ? initialRuntime : refreshedRuntime }) };
+    }
+    if (runId === current.id) return { ok: true, json: async () => ({ entries: [] }) };
+    if (runId === middle.id) return new Promise(resolve => {
+      respondToMiddle = resolve;
+      startMiddleRequest();
+    });
+    olderDetailCount += 1;
+    const responseRuntime = olderDetailCount === 1 ? selectedRuntime : exportLastRuntime;
+    return { ok: true, json: async () => ({ entries: [], responseRuntime }) };
+  } });
+  await context.refreshDiagnostics();
+  let exported = '';
+  context.downloadDiagnosticText = (runs, suffix, responseRuntime) => {
+    exported = context.diagnosticExportText(runs, responseRuntime);
+  };
+  const button = node('diagnostics-export-all');
+  const exportRequest = button.listeners.click({ currentTarget: button });
+  await middleRequestStarted;
+  await context.refreshDiagnostics();
+  node('diagnostics-run').value = older.id;
+  await node('diagnostics-run').listeners.change();
+  assert.equal(vm.runInContext('diagnosticResponseRuntime.version', context), selectedRuntime.version);
+  respondToMiddle({ ok: true, json: async () => ({ entries: [] }) });
+  await exportRequest;
+  assert.match(exported, /viewer=v6\.7\.0 level=/);
+  assert.equal(vm.runInContext('diagnosticResponseRuntime.version', context), selectedRuntime.version);
+});
+
+test('全起動の詳細に responseRuntime がない場合は開始時の共有値をヘッダーに使う', async () => {
+  const current = { id: 'current', current: true, startedAt: 1, count: 0, sources: [] };
+  const { context, node } = diagnosticPage({ runs: [current] });
+  await context.refreshDiagnostics();
+  let exported = '';
+  context.downloadDiagnosticText = (runs, suffix, responseRuntime) => {
+    exported = context.diagnosticExportText(runs, responseRuntime);
+  };
+  const button = node('diagnostics-export-all');
+  await button.listeners.click({ currentTarget: button });
+  assert.match(exported, /viewer=v1\.2\.3 level=/);
 });
 
 test('全起動の一部を取得できない場合は書き出さない', async () => {
@@ -261,7 +382,7 @@ test('コピーの代替要素と書き出しのリンクはモーダルの中�
   assert.equal(await context.copyDiagnosticText('copy text'), true);
   assert.equal(appended[0].value, 'copy text');
   assert.equal(appended[0].selected, true);
-  context.downloadDiagnosticText([{ id: 'run', startedAt: 1, entries: [] }], 'run');
+  context.downloadDiagnosticText([{ id: 'run', startedAt: 1, entries: [] }], 'run', null);
   assert.equal(appended[1].download, 'agent-cockpit-diagnostics-run.txt');
   assert.equal(appended[1].clicked, true);
   assert.equal(appended[1].removed, true);
@@ -270,7 +391,7 @@ test('コピーの代替要素と書き出しのリンクはモーダルの中�
 test('書き出しは絞り込み前の記録と版とレベルと起動識別子を含む', async () => {
   const { context, entries } = diagnosticPage();
   await context.refreshDiagnostics();
-  const text = context.diagnosticExportText([{ id: 'run', startedAt: 1, entries }]);
+  const text = context.diagnosticExportText([{ id: 'run', startedAt: 1, entries }], vm.runInContext('diagnosticResponseRuntime', context));
   assert.match(text, /viewer=v1.2.3 level=info run=run exported=/);
   assert.match(text, /\[debug\].*request.failed/);
 });
@@ -354,11 +475,11 @@ test('起動の選択肢と選択または全起動の書き出しは各起動�
   assert.match(node('diagnostics-run').children[1].textContent, /v1.3.0\+9fa2714$/);
   assert.match(node('diagnostics-run').children[2].textContent, /バージョン不明$/);
   for (const exported of [runs, [runs[1]]]) {
-    const text = context.diagnosticExportText(exported);
+    const text = context.diagnosticExportText(exported, vm.runInContext('diagnosticResponseRuntime', context));
     assert.match(text, /viewer=v1.2.3/);
     assert.match(text, /## 起動 older .*v1.3.0\+9fa2714 commit=9fa2714abcdef state=diverged/);
   }
-  assert.match(context.diagnosticExportText(runs), /## 起動 legacy .*バージョン不明/);
+  assert.match(context.diagnosticExportText(runs, vm.runInContext('diagnosticResponseRuntime', context)), /## 起動 legacy .*バージョン不明/);
 });
 
 test('一覧の取得後にソースの状態が確定しても、選択と全起動の書き出しは起動ごとの取得で得た版を使う', async () => {
@@ -373,7 +494,7 @@ test('一覧の取得後にソースの状態が確定しても、選択と全�
   await context.refreshDiagnostics();
   assert.equal(context.selectedDiagnosticRun().runtime.sourceState, 'release');
   let exported = '';
-  context.downloadDiagnosticText = runs => { exported = context.diagnosticExportText(runs); };
+  context.downloadDiagnosticText = (runs, suffix, responseRuntime) => { exported = context.diagnosticExportText(runs, responseRuntime); };
   const button = node('diagnostics-export-all');
   await button.listeners.click({ currentTarget: button });
   assert.match(exported, /viewer=v1.4.0 level=/);

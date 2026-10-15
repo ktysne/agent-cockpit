@@ -1241,6 +1241,8 @@ function showWriteError(message) {
 const DIAGNOSTIC_LEVEL_ORDER = ['error', 'warn', 'info', 'debug'];
 const DIAGNOSTIC_SOURCE_ORDER = ['server', 'hook', 'mcp', 'web', 'gh', 'merge', 'codex'];
 let diagnosticResponseRuntime = null;
+let diagnosticsResponseRuntimeRequestSequence = 0;
+let diagnosticsAppliedResponseRuntimeRequestSequence = 0;
 let diagnosticsRefreshSequence = 0;
 let diagnosticsSelectionSequence = 0;
 let diagnosticsListLoading = false;
@@ -1274,6 +1276,17 @@ function diagnosticLocalTime(value, seconds = false) {
 
 function selectedDiagnosticRun() {
   return diagnosticRuns.find(run => run.id === diagnosticsRunSelect.value) || diagnosticRuns.find(run => run.current) || null;
+}
+
+function nextDiagnosticsResponseRuntimeRequestSequence() {
+  diagnosticsResponseRuntimeRequestSequence += 1;
+  return diagnosticsResponseRuntimeRequestSequence;
+}
+
+function applyDiagnosticResponseRuntime(responseRuntime, requestSequence) {
+  if (responseRuntime === undefined || requestSequence < diagnosticsAppliedResponseRuntimeRequestSequence) return;
+  diagnosticsAppliedResponseRuntimeRequestSequence = requestSequence;
+  diagnosticResponseRuntime = responseRuntime;
 }
 
 function replaceSelectOptions(select, values, selectedValue) {
@@ -1328,6 +1341,7 @@ function renderDiagnosticEntries() {
 
 async function refreshDiagnostics() {
   const sequence = ++diagnosticsRefreshSequence;
+  const responseRuntimeRequestSequence = nextDiagnosticsResponseRuntimeRequestSequence();
   diagnosticsSelectionSequence += 1;
   diagnosticsListLoading = true;
   diagnosticsStatus.textContent = '記録を読み込んでいます。';
@@ -1338,7 +1352,7 @@ async function refreshDiagnostics() {
     const data = await response.json();
     if (sequence !== diagnosticsRefreshSequence) return;
     diagnosticRuns = data.runs.map(run => ({ ...run, entries: undefined, loadError: false }));
-    diagnosticResponseRuntime = data.responseRuntime;
+    applyDiagnosticResponseRuntime(data.responseRuntime, responseRuntimeRequestSequence);
     refreshDiagnosticOptions();
     diagnosticsLevelSelect.value = displayPreferences.diagnosticsLevel;
     diagnosticsListLoading = false;
@@ -1377,8 +1391,10 @@ async function loadSelectedDiagnosticRun(run, sequence) {
   diagnosticsList.setAttribute('aria-busy', 'true');
   renderDiagnosticEntries();
   try {
+    const responseRuntimeRequestSequence = nextDiagnosticsResponseRuntimeRequestSequence();
     const data = await loadDiagnosticRun(run.id);
     if (sequence !== diagnosticsSelectionSequence || diagnosticsListLoading || selectedDiagnosticRun()?.id !== run.id) return false;
+    applyDiagnosticResponseRuntime(data.responseRuntime, responseRuntimeRequestSequence);
     run.runtime = withLoadedRuntime(run, data).runtime;
     run.entries = data.entries;
     run.loadError = false;
@@ -1458,11 +1474,11 @@ async function copyDiagnosticText(text) {
   return copied;
 }
 
-function diagnosticExportText(runs) {
+function diagnosticExportText(runs, responseRuntime) {
   const runLabel = runs.length === 1 ? runs[0].id : 'all';
   const lines = [
     '# agent-cockpit 診断ログ',
-    `# viewer=${formatRuntime(diagnosticResponseRuntime)} level=${displayPreferences.diagnosticsLevel} run=${runLabel} exported=${diagnosticLocalTime(Date.now(), true)}`,
+    `# viewer=${formatRuntime(responseRuntime)} level=${displayPreferences.diagnosticsLevel} run=${runLabel} exported=${diagnosticLocalTime(Date.now(), true)}`,
     '',
   ];
   for (const run of runs) {
@@ -1473,8 +1489,8 @@ function diagnosticExportText(runs) {
   return lines.join('\n');
 }
 
-function downloadDiagnosticText(runs, suffix) {
-  const blob = new Blob([diagnosticExportText(runs)], { type: 'text/plain;charset=utf-8' });
+function downloadDiagnosticText(runs, suffix, responseRuntime) {
+  const blob = new Blob([diagnosticExportText(runs, responseRuntime)], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -1507,7 +1523,7 @@ document.getElementById('diagnostics-export-run').addEventListener('click', () =
       : '選んだ起動の記録を読み込んでいます。完了後にもう一度お試しください。';
     return;
   }
-  downloadDiagnosticText([run], run.id);
+  downloadDiagnosticText([run], run.id, diagnosticResponseRuntime);
   diagnosticsStatus.textContent = '選んだ起動を書き出しました。';
 });
 document.getElementById('diagnostics-export-all').addEventListener('click', async event => {
@@ -1518,10 +1534,12 @@ document.getElementById('diagnostics-export-all').addEventListener('click', asyn
   diagnosticsStatus.textContent = 'すべての起動の記録を読み込んでいます。';
   const runs = [...diagnosticRuns].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
   const deletionGeneration = diagnosticDeletionGeneration;
+  let exportResponseRuntime = diagnosticResponseRuntime;
   try {
     const loadedRuns = [];
     for (const run of runs) {
       const data = await loadDiagnosticRun(run.id);
+      if (data.responseRuntime !== undefined) exportResponseRuntime = data.responseRuntime;
       loadedRuns.push({ ...withLoadedRuntime(run, data), entries: data.entries });
     }
     // 取得の途中で削除が終わると、取得済みの分に削除した記録が残るため、書き出さない。
@@ -1529,7 +1547,7 @@ document.getElementById('diagnostics-export-all').addEventListener('click', asyn
       diagnosticsStatus.textContent = '書き出しの途中で記録を削除したため、書き出しを取りやめました。もう一度「すべての起動を書き出す」を押してください。';
       return;
     }
-    downloadDiagnosticText(loadedRuns, 'all');
+    downloadDiagnosticText(loadedRuns, 'all', exportResponseRuntime);
     diagnosticsStatus.textContent = 'すべての起動を書き出しました。';
   } catch {
     diagnosticsStatus.textContent = 'すべての起動を書き出せませんでした。記録を読み込めない起動があります。「更新」でやり直してください。';
@@ -1596,9 +1614,7 @@ document.getElementById('diagnostics-delete-confirm').addEventListener('click', 
 async function loadDiagnosticRun(run) {
   const response = await fetchUi('/api/diagnostics?run=' + encodeURIComponent(run), { cache: 'no-store' });
   if (!response.ok) throw new Error('Cannot read diagnostics');
-  const data = await response.json();
-  if (data.responseRuntime !== undefined) diagnosticResponseRuntime = data.responseRuntime;
-  return data;
+  return response.json();
 }
 
 // 一覧の取得後にソースの状態が確定することがあるため、起動ごとの取得で版を差し替える。
