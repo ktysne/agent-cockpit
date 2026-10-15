@@ -486,6 +486,7 @@ Claude のメインセッションの `PostToolUse` で `mcp__ccd_turn__update_p
 両方が書く場合は後の書き込みを使い、保存形式と画面では出どころを分けない。
 アプリの一覧を使うターンでは、`cockpit_set_tasks` は同じ題で完了条件を足すときに使う。
 取り込みが無い CLI、Codex、サブエージェントでは `cockpit_set_tasks` で登録する。
+Codex の計画ツールは取り込まないので、Codex のセッションへのタスク登録の指示と催促は、アプリの一覧に触れない従来の文にする。
 
 `update_plan` の `items` は 12 件、`content` は 200 文字までとし、状態は `pending`→`todo`、`in_progress`→`doing`、`completed`→`done` に対応させる。
 完了条件は前後の空白を除いた題が完全一致する既存タスクから引き継ぎ、該当が無ければ空にする。

@@ -3,6 +3,9 @@ const TASK_REMINDER_INTERVAL_MS = 10 * 60 * 1000;
 
 const NO_TASKS_REMINDER = 'タスクが登録されていない。アプリのタスク一覧か `cockpit_set_tasks` で今の作業のタスクを登録し、完了条件は `cockpit_set_tasks` で足す。';
 const SUBAGENT_REMINDER = 'サブエージェントが終わった後にタスクが書き直されていない。報告に合わせてアプリのタスク一覧か `cockpit_set_tasks` で状態を更新する。';
+// Codex の計画ツールは取り込まないので、Codex には `cockpit_set_tasks` だけを求める。
+const CODEX_NO_TASKS_REMINDER = 'タスクが登録されていない。`cockpit_set_tasks` で今の作業のタスクと完了条件を登録する。';
+const CODEX_SUBAGENT_REMINDER = 'サブエージェントが終わった後にタスクが書き直されていない。報告に合わせて `cockpit_set_tasks` で状態を更新する。';
 
 class TaskNudges {
   constructor({ state, now = Date.now } = {}) {
@@ -94,7 +97,9 @@ class TaskNudges {
 
     session.lastNudgeAt = now;
     if (subagentReportIsStale) session.nudgedSubagentStopAt = session.lastSubagentStopAt;
-    return subagentReportIsStale ? SUBAGENT_REMINDER : NO_TASKS_REMINDER;
+    const codex = this.state.providerForSession?.(sessionId) === 'codex';
+    if (subagentReportIsStale) return codex ? CODEX_SUBAGENT_REMINDER : SUBAGENT_REMINDER;
+    return codex ? CODEX_NO_TASKS_REMINDER : NO_TASKS_REMINDER;
   }
 
   hasTasks(sessionId) {
@@ -107,5 +112,7 @@ module.exports = {
   TASK_REMINDER_INTERVAL_MS,
   NO_TASKS_REMINDER,
   SUBAGENT_REMINDER,
+  CODEX_NO_TASKS_REMINDER,
+  CODEX_SUBAGENT_REMINDER,
   TaskNudges,
 };

@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
-const { AWAY_CONTEXT, TASK_CONTEXT, runAwayHook, sessionSummary } = require('../src/hooks/away');
+const { AWAY_CONTEXT, TASK_CONTEXT, CODEX_TASK_CONTEXT, runAwayHook, sessionSummary } = require('../src/hooks/away');
 const { temporaryDirectory } = require('./support/temp');
 
 async function temporaryHome(testContext, withServerInfo = true) {
@@ -117,6 +117,12 @@ test('server.json が無くてもメインセッションへタスク登録の�
   });
   assert.equal(result.hookSpecificOutput.additionalContext, TASK_CONTEXT);
   assert.equal(fetchCount, 0);
+});
+
+test('Codex のメインセッションにはアプリの一覧の取り込みを案内せず、一覧全体の登録を求める', async (t) => {
+  const homeDir = await temporaryHome(t, false);
+  const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit' }, { homeDir, provider: 'codex' });
+  assert.equal(result.hookSpecificOutput.additionalContext, CODEX_TASK_CONTEXT);
 });
 
 test('サブエージェントの UserPromptSubmit にはタスク登録の決まりを足さない', async (t) => {

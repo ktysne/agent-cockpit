@@ -6,6 +6,8 @@ const { isQuestionTool } = require('../server/events');
 
 const AWAY_CONTEXT = 'Agent Cockpit: 開発者は離席中です({since}から)。開発者に尋ねずに、推奨を適用して作業を続けてください。破壊的な操作は行わず、判断待ちとして最後の報告に書いてください。';
 const TASK_CONTEXT = 'Agent Cockpit: 作業を始めるときはタスクと完了条件を登録してください。このアプリのタスク一覧を使うターンでは、cockpit がその一覧を取り込むので、`cockpit_set_tasks` は完了条件を足すときだけ、一覧と同じ題で呼んでください。アプリのタスク一覧を使わないときは、従来どおり `cockpit_set_tasks` で一覧全体を登録し、タスクの状態か完了条件が変わったら書き直してください。サブエージェントに渡したときと、その報告を受けたとき、PR のマージを確かめたとき、作業を切り替えたときも書き直してください。質問への回答だけで終わるような、作業を伴わないターンでは登録しなくて構いません。';
+// Codex の計画ツールは取り込まないので、Codex には一覧全体の登録を求める。
+const CODEX_TASK_CONTEXT = 'Agent Cockpit: 作業を始めるときは `cockpit_set_tasks` でタスクと完了条件を登録してください。タスクの状態か完了条件が変わったら、一覧全体を書き直してください。サブエージェントに渡したときと、その報告を受けたとき、PR のマージを確かめたとき、作業を切り替えたときも書き直してください。質問への回答だけで終わるような、作業を伴わないターンでは登録しなくて構いません。';
 
 function sessionSummary(snapshot) {
   const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
@@ -21,7 +23,7 @@ function sessionSummary(snapshot) {
   return lines.join('\n');
 }
 
-function outputForAway(input, away, snapshot = null) {
+function outputForAway(input, away, snapshot = null, provider = 'claude') {
   const hookEventName = input.hook_event_name;
   if (hookEventName === 'PreToolUse') return null;
   const context = [];
@@ -29,7 +31,7 @@ function outputForAway(input, away, snapshot = null) {
     context.push(sessionSummary(snapshot));
   }
   if (!input.agent_id && ['SessionStart', 'UserPromptSubmit'].includes(hookEventName)) {
-    context.push(TASK_CONTEXT);
+    context.push(provider === 'codex' ? CODEX_TASK_CONTEXT : TASK_CONTEXT);
   }
   if (away.enabled === true && Number.isFinite(away.since)) {
     context.push(AWAY_CONTEXT.replace('{since}', new Date(away.since).toISOString()));
@@ -53,7 +55,7 @@ async function runAwayHook(input, options = {}) {
 
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const info = await readServerInfo(homeDir);
-  if (!info || info.port < 1 || info.port > 65535) return outputForAway(input, { enabled: false });
+  if (!info || info.port < 1 || info.port > 65535) return outputForAway(input, { enabled: false }, null, provider);
 
   const fetchImpl = options.fetchImpl || fetch;
   const wantsSummary = hookEventName === 'SessionStart' && ['compact', 'resume'].includes(input.source) &&
@@ -68,13 +70,13 @@ async function runAwayHook(input, options = {}) {
       attemptTimeoutMs: HOOK_TIMEOUT_MS,
     });
     const response = result.ok ? result.json : null;
-    if (!response || typeof response !== 'object') return outputForAway(input, { enabled: false });
+    if (!response || typeof response !== 'object') return outputForAway(input, { enabled: false }, null, provider);
     if (response.enabled === true && (!Number.isFinite(response.since) || !Number.isFinite(new Date(response.since).getTime()))) {
-      return outputForAway(input, { enabled: false });
+      return outputForAway(input, { enabled: false }, null, provider);
     }
-    return outputForAway(input, response, wantsSummary ? response : null);
+    return outputForAway(input, response, wantsSummary ? response : null, provider);
   } catch {
-    return outputForAway(input, { enabled: false });
+    return outputForAway(input, { enabled: false }, null, provider);
   }
 }
 
@@ -96,4 +98,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { AWAY_CONTEXT, TASK_CONTEXT, sessionSummary, outputForAway, runAwayHook };
+module.exports = { AWAY_CONTEXT, TASK_CONTEXT, CODEX_TASK_CONTEXT, sessionSummary, outputForAway, runAwayHook };

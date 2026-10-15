@@ -6,6 +6,7 @@ const {
   TASK_REMINDER_INTERVAL_MS,
   NO_TASKS_REMINDER,
   SUBAGENT_REMINDER,
+  CODEX_NO_TASKS_REMINDER,
   TaskNudges,
 } = require('../src/server/task-nudges');
 
@@ -157,4 +158,14 @@ test('PostToolBatch は判断事項の回答とタスク催促を同じ addition
   assert.match(context, /判断事項/);
   assert.match(context, /期限付きで進める。/);
   assert.match(context, /タスクが登録されていない/);
+});
+
+test('Codex のセッションにはアプリのタスク一覧に触れない催促を出す', () => {
+  const state = { planSummary: () => ({ tasks: [] }), providerForSession: () => 'codex' };
+  const { nudges } = makeNudges({ state });
+  nudges.afterEvent(event('codex', 'UserPromptSubmit', START));
+  for (let index = 1; index <= 5; index += 1) {
+    nudges.afterEvent(event('codex', 'PreToolUse', START + index, { tool_name: 'Read' }));
+  }
+  assert.equal(nudges.reminderFor('codex'), CODEX_NO_TASKS_REMINDER);
 });
