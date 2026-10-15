@@ -1,6 +1,6 @@
 {
   "name": "agent-cockpit",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "Claude Code と Codex(CLI、デスクトップ)のセッションの状態(タスク、完了条件、作業中の内容、サブエージェント、判断待ち、PR)を 1 画面にまとめるローカルのダッシュボード。",
   "scripts": {
