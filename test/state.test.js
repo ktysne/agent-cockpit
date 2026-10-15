@@ -530,6 +530,7 @@ test('表示設定の既定値は種類別、新しい欄順、3分、10分を�
   assert.deepEqual(display.sectionOrder, ['sinceSeen', 'judgment', 'prs', 'tasks', 'now']);
   assert.equal(display.awayAnswerWaitMinutes, 3);
   assert.equal(display.idleHideMinutes, 10);
+  assert.equal(display.ghConcurrencyLimit, 8);
 });
 
 test('予約取消の知らせは記録時刻から1分後に PR の状態へ含めない', () => {

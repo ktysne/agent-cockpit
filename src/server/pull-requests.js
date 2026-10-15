@@ -14,13 +14,13 @@ const {
 } = require('./pull-request-utils');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { findWorktreeRoot } = require('./git-worktree');
+const { DISPLAY_SCHEMA } = require('./display-preferences');
 
 const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
 const MERGED_PULL_REQUEST_LIMIT = 1000;
 const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
-const GH_CONCURRENCY_LIMIT = 4;
 const INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 // コマンドの後の取り直しも間引かないと、gh pr のたびに全リポジトリを一斉に取るため、修正前の定期取得と同じ間隔までは間引く。
 const COMMAND_REFRESH_INACTIVE_INTERVAL_MS = 60_000;
@@ -1267,14 +1267,27 @@ class PullRequestTracker {
     return this.repositories.get(repositoryKey(owner, repo)) || null;
   }
 
+  ghConcurrencyLimit() {
+    const limit = this.state?.getDisplayPreferences?.()?.ghConcurrencyLimit;
+    return Number.isInteger(limit) && limit >= 1 ? limit : DISPLAY_SCHEMA.ghConcurrencyLimit.default;
+  }
+
+  // 上限は設定から毎回読むので、下げても実行中の gh は止めず、解放のたびに新しい上限まで払い出す。
   acquireGhSlot(priority, queueRepositoryKey) {
-    if (this.activeGhCount < GH_CONCURRENCY_LIMIT) {
-      this.activeGhCount += 1;
-      return Promise.resolve();
-    }
     return new Promise((resolve) => {
       (priority ? this.priorityGhQueue : this.ghQueue).push({ resolve, queueRepositoryKey });
+      this.dispatchQueuedGh();
     });
+  }
+
+  dispatchQueuedGh() {
+    const limit = this.ghConcurrencyLimit();
+    while (this.activeGhCount < limit) {
+      const next = this.priorityGhQueue.shift() || this.ghQueue.shift();
+      if (!next) return;
+      this.activeGhCount += 1;
+      next.resolve();
+    }
   }
 
   promoteQueuedGh(queueRepositoryKey) {
@@ -1285,9 +1298,8 @@ class PullRequestTracker {
   }
 
   releaseGhSlot() {
-    const next = this.priorityGhQueue.shift() || this.ghQueue.shift();
-    if (next) next.resolve();
-    else this.activeGhCount -= 1;
+    this.activeGhCount -= 1;
+    this.dispatchQueuedGh();
   }
 
   async execute(args, { priority = false } = {}) {

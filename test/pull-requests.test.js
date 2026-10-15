@@ -358,6 +358,24 @@ async function trackerFixture(testContext, registeredNumbers = [31], cwd = proce
   return { state, github, calls, unexpectedCalls, tracker };
 }
 
+function holdGhExecutions(tracker) {
+  const started = [];
+  const pending = [];
+  tracker.execFileImpl = (_file, args, _options, callback) => {
+    started.push(args[1]);
+    pending.push(callback);
+  };
+  return {
+    started,
+    pending,
+    finishNext() { pending.shift()(null, '{}'); },
+  };
+}
+
+async function settleGhExecutions() {
+  for (let index = 0; index < 5; index += 1) await new Promise(setImmediate);
+}
+
 for (const exists of [true, false]) {
   test(`残す選択をしたマージ済みブランチが${exists ? '同じ head で実在すれば追跡を止める' : '404 なら base をたどる'}`, async (t) => {
     const { state, github, calls, tracker } = await trackerFixture(t);
@@ -707,8 +725,9 @@ test('閉じた関連PRだけでも取得状態を残し個別取得の開始か
   assert.equal(state.pullRequestRegistrations()[0].state, 'open');
 });
 
-test('ghは4本まで起動し20秒を超えて待った取得も失敗後に順に実行する', async (t) => {
-  const { tracker } = await trackerFixture(t, []);
+test('設定した上限まで gh を起動し20秒を超えて待った取得も失敗後に順に実行する', async (t) => {
+  const { state, tracker } = await trackerFixture(t, []);
+  state.getDisplayPreferences = () => ({ ghConcurrencyLimit: 4 });
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const started = [];
   const running = [];
@@ -737,6 +756,72 @@ test('ghは4本まで起動し20秒を超えて待った取得も失敗後に順
   assert.deepEqual(started, Array.from({ length: 7 }, (_, index) => `repos/example/project/${index}`));
   assert.equal((await results)[0].status, 'rejected');
   t.mock.timers.reset();
+});
+
+test('gh は設定値まで起動し、未設定なら既定の8本まで起動する', async (t) => {
+  for (const { limit, expected } of [{ limit: 2, expected: 2 }, { limit: undefined, expected: 8 }]) {
+    const { state, tracker } = await trackerFixture(t, []);
+    state.getDisplayPreferences = () => limit === undefined ? {} : { ghConcurrencyLimit: limit };
+    const held = holdGhExecutions(tracker);
+    const requests = Array.from({ length: expected + 1 }, (_, index) => (
+      tracker.execute(['api', `repos/example/project/${index}`])
+    ));
+    await settleGhExecutions();
+    assert.equal(held.started.length, expected);
+    while (held.pending.length) {
+      held.finishNext();
+      await settleGhExecutions();
+    }
+    await Promise.all(requests);
+  }
+});
+
+test('実行中に gh の上限を上げると次の解放で待ち行列から新しい上限まで起動する', async (t) => {
+  const { state, tracker } = await trackerFixture(t, []);
+  let limit = 1;
+  state.getDisplayPreferences = () => ({ ghConcurrencyLimit: limit });
+  const held = holdGhExecutions(tracker);
+  const requests = Array.from({ length: 3 }, (_, index) => (
+    tracker.execute(['api', `repos/example/project/${index}`])
+  ));
+  await settleGhExecutions();
+  assert.equal(held.started.length, 1);
+
+  limit = 3;
+  held.finishNext();
+  await settleGhExecutions();
+  assert.equal(held.started.length, 3);
+  while (held.pending.length) {
+    held.finishNext();
+    await settleGhExecutions();
+  }
+  await Promise.all(requests);
+});
+
+test('実行中に gh の上限を下げても既存処理を止めず、新しい上限を下回るまで待ち行列から起動しない', async (t) => {
+  const { state, tracker } = await trackerFixture(t, []);
+  let limit = 3;
+  state.getDisplayPreferences = () => ({ ghConcurrencyLimit: limit });
+  const held = holdGhExecutions(tracker);
+  const requests = Array.from({ length: 4 }, (_, index) => (
+    tracker.execute(['api', `repos/example/project/${index}`])
+  ));
+  await settleGhExecutions();
+  assert.equal(held.started.length, 3);
+
+  limit = 1;
+  held.finishNext();
+  await settleGhExecutions();
+  assert.equal(held.started.length, 3);
+  held.finishNext();
+  await settleGhExecutions();
+  assert.equal(held.started.length, 3);
+  held.finishNext();
+  await settleGhExecutions();
+  assert.equal(held.started.length, 4);
+  held.finishNext();
+  await settleGhExecutions();
+  await Promise.all(requests);
 });
 
 test('初回の PR 取得中を snapshot に示し、成功と失敗の完了後に外す', async (t) => {
@@ -3039,7 +3124,8 @@ test('コマンドの後の全体の取り直しが 5 秒以内に続いたら�
 });
 
 test('確定操作の確かめ直しの取得は、その中の gh も待ち行列で定期取得より先に実行する', async (t) => {
-  const { tracker } = await trackerFixture(t, [31]);
+  const { state, tracker } = await trackerFixture(t, [31]);
+  state.getDisplayPreferences = () => ({ ghConcurrencyLimit: 4 });
   const started = [];
   const held = [];
   const realExecFile = tracker.execFileImpl;
@@ -3091,7 +3177,8 @@ test('コマンドの後に間隔が足りず飛ばしたリポジトリは、�
 });
 
 test('同じリポジトリの取得が動いている間の確定操作は、その取得の待っている gh も優先に引き上げる', async (t) => {
-  const { tracker } = await trackerFixture(t, [31]);
+  const { state, tracker } = await trackerFixture(t, [31]);
+  state.getDisplayPreferences = () => ({ ghConcurrencyLimit: 4 });
   const held = [];
   const started = [];
   const realExecFile = tracker.execFileImpl;

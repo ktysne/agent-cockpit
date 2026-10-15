@@ -310,6 +310,7 @@ PostToolUse の出力全文は送らない。
 - 旧 `store.json` に残る `display.mergeAfterReviewDefault` は読み込み時に無視する。`mergeReservations` は登録セッション、リポジトリ、PR、方式、ブランチ削除の有無、予約時刻を `store.json` に保存する。旧 GitHub 自動マージ形式は予約として復元せず、そのまま捨てる。
 - 表示設定 `display.importAppTasks` と `display.importAppTasksAsked` は真偽値で、既定はともに false とする。保存値の互換補正と確認の扱いは「タスクと判断事項」に記す。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 10 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 10 分へ戻し、書き込み時は拒む。
+- 表示設定 `display.ghConcurrencyLimit` は GitHub CLI を同時に起動する上限数で、既定は 8、範囲は 1〜32 の整数とする。保存値が範囲外または整数でなければ読み込み時に 8 へ戻し、書き込み時は拒む。
 - 表示設定 `display.awayAnswerWaitMinutes` は離席中の質問への回答を待つ時間で、既定は 3 分、範囲は 1〜30 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 3 分へ戻し、書き込み時は拒む。
 - `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, runtime, routing, integrations, uiVersion, installed, restartRequired, restartAvailable}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は配信する HTML テンプレートのバイト列の SHA-256 先頭 16 桁で、秘密値と版の埋め込み前に計算する。
   本番では起動時に listen の前に HTML を読み、そのテンプレートと版を再起動まで固定する。
@@ -381,7 +382,7 @@ PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツ�
 確定操作の確かめ直しの取得は、その中で呼ぶ gh もすべて待ち行列で優先する。
 同じリポジトリの取得が先に動いていれば、それを待つ間、そのリポジトリの gh を優先に引き上げる。
 間引いたリポジトリの登録と表示は残し、登録と関連 PR が無くなったリポジトリの表示は従来どおり消す。
-`PullRequestTracker.execute` を通る `gh` は同時に 4 本までとし、残りは待ち行列に入れる。
+`PullRequestTracker.execute` を通る `gh` は表示設定 `display.ghConcurrencyLimit` の本数までとし、残りは待ち行列に入れる。上限は払い出しのたびに読み直す。下げても実行中の `gh` は止めず、実行数が新しい上限を下回ってから次を起動する。
 開発者が画面で確定したマージ、base の付け替え、ブランチの削除とその結果の確認は、定期取得より待ち行列で優先する。
 `gh` の 20 秒の期限は、待ち時間を含めず、起動してからの時間に掛ける。
 base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha`、`triage` を設定する。`triage` は状態ファイルの `lastTriage` を `{round, sha, outcome}` に検証したもので、`sha` は 40 桁か 64 桁の小文字、`outcome` は `fixing`、`converged`、`halted` のいずれか。無いか形が合わなければ `null` とする。表示の規則は計画書の決定「クロスレビューの結論の表示」を正本とする。セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は「レビュー不要」とする。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。

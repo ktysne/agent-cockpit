@@ -2153,6 +2153,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.deepEqual(jsonBody(mode).display.sectionOrder, ['sinceSeen', 'judgment', 'prs', 'tasks', 'now']);
   assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 3);
   assert.equal(jsonBody(mode).display.idleHideMinutes, 10);
+  assert.equal(jsonBody(mode).display.ghConcurrencyLimit, 8);
   assert.equal(jsonBody(mode).display.hideFinished, true);
   assert.equal(jsonBody(mode).display.importAppTasks, false);
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display.importAppTasks, false);
@@ -2180,6 +2181,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     ['longWaitMinutes', 0], ['longWaitMinutes', 121], ['longWaitMinutes', 1.5], ['longWaitMinutes', '15'],
     ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
     ['idleHideMinutes', 4], ['idleHideMinutes', 1441], ['idleHideMinutes', 30.5], ['idleHideMinutes', '30'], ['idleHideMinutes', null],
+    ['ghConcurrencyLimit', 0], ['ghConcurrencyLimit', 33],
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
     ['importAppTasks', 1], ['importAppTasks', 'false'], ['importAppTasks', null],
     ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
@@ -2201,6 +2203,13 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     });
     assert.equal(idleHideRange.status, 200);
     assert.equal(jsonBody(idleHideRange).display.idleHideMinutes, idleHideMinutes);
+  }
+  for (const ghConcurrencyLimit of [1, 32]) {
+    const ghLimitRange = await request(runtime.info.port, {
+      method: 'POST', path: endpoint, body: JSON.stringify({ ghConcurrencyLimit }), headers: validHeaders,
+    });
+    assert.equal(ghLimitRange.status, 200);
+    assert.equal(jsonBody(ghLimitRange).display.ghConcurrencyLimit, ghConcurrencyLimit);
   }
   const minimumWaitSettings = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ longWaitMinutes: 1, awayAnswerWaitMinutes: 1 }), headers: validHeaders,
@@ -2245,7 +2254,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'sinceSeen', 'judgment', 'prs', 'now'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, importAppTasks: true, importAppTasksAsked: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info',
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, ghConcurrencyLimit: 32, hideFinished: true, importAppTasks: true, importAppTasksAsked: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info',
   });
 });
 

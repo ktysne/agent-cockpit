@@ -481,13 +481,15 @@ test('判断事項は待ち時間を表示し、回答のない長い待ちだ�
 });
 
 test('ブラウザーに残った旧形式の表示設定を読んでも、サーバーの設定と同じ項目がそろう', () => {
-  const sources = ['readDisplayPreferences', 'normalizeDisplayPreferences', 'normalizeSectionOrder', 'normalizeDisplayMinutes']
+  const sources = ['readDisplayPreferences', 'normalizeDisplayPreferences', 'normalizeSectionOrder', 'normalizeDisplayInteger']
     .map((name) => functionSource(pageHtml, name));
-  const settings = pageHtml.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  const settings = pageHtml.match(/const DISPLAY_INTEGER_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   assert.ok(sources.every(Boolean) && settings);
   const minuteInputs = {
     longWaitMinutesInput: {}, awayAnswerWaitMinutesInput: {}, idleHideMinutesInput: {},
+    ghConcurrencyLimitInput: {},
     longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {},
+    ghConcurrencyLimitError: {},
   };
   const storage = new Map();
   const context = pageContext(pageHtml, {
@@ -500,6 +502,7 @@ test('ブラウザーに残った旧形式の表示設定を読んでも、サ�
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
     DEFAULT_IDLE_HIDE_MINUTES: 10,
+    DEFAULT_GH_CONCURRENCY_LIMIT: 8,
   });
   vm.runInContext(`${settings}\n${sources.join('\n')}`, context);
   const expectedKeys = Object.keys(context.normalizeDisplayPreferences(null)).sort();
@@ -1812,9 +1815,9 @@ test('前回見てからの設定は離席中のみを既定にし、有効な�
 });
 
 test('終わったもののチェックは表示設定として保存し、失敗時に戻してフォーカス中は同期しない', async () => {
-  const names = ['normalizeDisplayMinutes', 'normalizeSectionOrder', 'normalizeDisplayPreferences', 'renderDisplaySettings', 'setDisplaySettingInput', 'displaySettingError', 'changeDisplaySetting'];
+  const names = ['normalizeDisplayInteger', 'normalizeSectionOrder', 'normalizeDisplayPreferences', 'renderDisplaySettings', 'setDisplaySettingInput', 'displaySettingError', 'changeDisplaySetting'];
   const functions = names.map((name) => functionSource(pageHtml, name));
-  const settings = pageHtml.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  const settings = pageHtml.match(/const DISPLAY_INTEGER_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   const saveFunctions = ['settleDisplaySaves', 'saveDisplayPreferences'].map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean) && saveFunctions.every(Boolean) && settings);
   assert.match(pageHtml, /id="settings-hide-finished" name="hideFinished" type="checkbox"/);
@@ -1828,11 +1831,13 @@ test('終わったもののチェックは表示設定として保存し、失�
   const longWaitMinutesInput = { type: 'number', value: '' };
   const awayAnswerWaitMinutesInput = { type: 'number', value: '' };
   const idleHideMinutesInput = { type: 'number', value: '' };
+  const ghConcurrencyLimitInput = { type: 'number', value: '' };
   const longWaitMinutesError = { textContent: '', hidden: true };
   const awayAnswerWaitMinutesError = { textContent: '', hidden: true };
   const idleHideMinutesError = { textContent: '', hidden: true };
+  const ghConcurrencyLimitError = { textContent: '', hidden: true };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { hideFinished: false, importAppTasks: true, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeableCondition: 'cross-review' };
+  const displayPreferences = { hideFinished: false, importAppTasks: true, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, ghConcurrencyLimit: 8, mergeableCondition: 'cross-review' };
   const context = pageContext(pageHtml, {
     displayPreferences,
     SECTION_ORDER_KEYS: new Set(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']),
@@ -1840,6 +1845,7 @@ test('終わったもののチェックは表示設定として保存し、失�
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
     DEFAULT_IDLE_HIDE_MINUTES: 10,
+    DEFAULT_GH_CONCURRENCY_LIMIT: 8,
     FILTERS: [],
     displayPreferencesReady: true,
     pendingDisplayChanges: {},
@@ -1851,11 +1857,13 @@ test('終わったもののチェックは表示設定として保存し、失�
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
+    ghConcurrencyLimitInput,
     mergeableConditionInputs,
     diagnosticsLevelSelect: { value: 'info', closest: () => ({ open: false }) },
     longWaitMinutesError,
     awayAnswerWaitMinutesError,
     idleHideMinutesError,
+    ghConcurrencyLimitError,
     lastState: null,
     document: { get activeElement() { return activeElement; } },
     enqueueDisplayPatch: (patch) => {

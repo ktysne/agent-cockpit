@@ -418,13 +418,15 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
 
 test('画面は未設定や不正なサーバー値を表示設定の既定値で補う', () => {
   const normalizeOrder = functionSource(web, 'normalizeSectionOrder');
-  const normalizeMinutes = functionSource(web, 'normalizeDisplayMinutes');
+  const normalizeMinutes = functionSource(web, 'normalizeDisplayInteger');
   const normalizeDisplay = functionSource(web, 'normalizeDisplayPreferences');
-  const settings = web.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  const settings = web.match(/const DISPLAY_INTEGER_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   assert.ok(settings);
   const minuteInputs = {
     longWaitMinutesInput: {}, awayAnswerWaitMinutesInput: {}, idleHideMinutesInput: {},
+    ghConcurrencyLimitInput: {},
     longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {},
+    ghConcurrencyLimitError: {},
   };
   const context = pageContext(web, {
     ...minuteInputs,
@@ -433,6 +435,7 @@ test('画面は未設定や不正なサーバー値を表示設定の既定値�
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
     DEFAULT_IDLE_HIDE_MINUTES: 10,
+    DEFAULT_GH_CONCURRENCY_LIMIT: 8,
     FILTERS: ['permission', 'blocking', 'provisional', 'agents', 'prs'].map((key) => ({ key })),
   });
   vm.runInContext(`${settings}\n${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
@@ -444,6 +447,7 @@ test('画面は未設定や不正なサーバー値を表示設定の既定値�
     longWaitMinutes: 15,
     awayAnswerWaitMinutes: 3,
     idleHideMinutes: 10,
+    ghConcurrencyLimit: 8,
     hideFinished: true,
     importAppTasks: false,
     importAppTasksAsked: false,
@@ -469,13 +473,13 @@ test('画面は未設定や不正なサーバー値を表示設定の既定値�
 });
 
 test('長い待ちの判定は設定値を使い、判断事項と許可待ちの表示へ反映する', () => {
-  const normalizeMinutes = functionSource(web, 'normalizeDisplayMinutes');
+  const normalizeMinutes = functionSource(web, 'normalizeDisplayInteger');
   const isLongWait = functionSource(web, 'isLongWait');
   const elapsedLabel = functionSource(web, 'decisionElapsedLabel');
   const duration = functionSource(web, 'durationLabel');
   assert.ok(duration);
   const context = pageContext(web, { displayPreferences: { longWaitMinutes: 2 }, hasEffectiveAnswer: () => false });
-  vm.runInContext(`${duration}\n${normalizeMinutes}\n${isLongWait}\n${elapsedLabel}\nthis.normalizeMinutes = normalizeDisplayMinutes; this.isLongWait = isLongWait; this.elapsedLabel = decisionElapsedLabel;`, context);
+  vm.runInContext(`${duration}\n${normalizeMinutes}\n${isLongWait}\n${elapsedLabel}\nthis.normalizeMinutes = normalizeDisplayInteger; this.isLongWait = isLongWait; this.elapsedLabel = decisionElapsedLabel;`, context);
 
   assert.equal(context.normalizeMinutes(120, 1, 120, 15), 120);
   assert.equal(context.normalizeMinutes(1.5, 1, 120, 15), 15);
@@ -501,8 +505,8 @@ test('長い待ちの判定は設定値を使い、判断事項と許可待ち�
   assert.match(mock, /オンでは、アプリの一覧を 1 つのタスクの完了条件として取り込む。依頼ごとの題はモデルが登録する。オフでは、モデルが Agent Cockpit に直接登録したタスクだけを出す。Codex のセッションには取り込める一覧が無いので、この設定にかかわらず取り込まない。/);
 });
 
-test('表示時間の保存に失敗した数値設定を元に戻す', async () => {
-  const settings = web.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+test('整数の表示設定の保存に失敗した値を元に戻す', async () => {
+  const settings = web.match(/const DISPLAY_INTEGER_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   const setInput = functionSource(web, 'setDisplaySettingInput');
   const settingError = functionSource(web, 'displaySettingError');
   const change = functionSource(web, 'changeDisplaySetting');
@@ -517,16 +521,21 @@ test('表示時間の保存に失敗した数値設定を元に戻す', async ()
   const longWaitMinutesError = { hidden: true, textContent: '' };
   const awayAnswerWaitMinutesError = { hidden: true, textContent: '' };
   const idleHideMinutesError = { hidden: true, textContent: '' };
+  const ghConcurrencyLimitInput = { valueAsNumber: 8, value: '8' };
+  const ghConcurrencyLimitError = { hidden: true, textContent: '' };
   const context = pageContext(web, {
-    displayPreferences: { longWaitMinutes: 15 },
+    displayPreferences: { longWaitMinutes: 15, ghConcurrencyLimit: 8 },
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
     DEFAULT_IDLE_HIDE_MINUTES: 10,
+    DEFAULT_GH_CONCURRENCY_LIMIT: 8,
     displayPreferencesReady: true,
     displayPreferenceSaveStates: new Map(),
     pendingDisplayChanges: {},
     longWaitMinutesInput, awayAnswerWaitMinutesInput, idleHideMinutesInput,
+    ghConcurrencyLimitInput,
     longWaitMinutesError, awayAnswerWaitMinutesError, idleHideMinutesError,
+    ghConcurrencyLimitError,
     lastState: null,
     renderDisplaySettings() {},
     renderSectionOrder() {},
@@ -542,13 +551,22 @@ test('表示時間の保存に失敗した数値設定を元に戻す', async ()
   assert.deepEqual(JSON.parse(JSON.stringify(patches)), [{ longWaitMinutes: 24 }, { longWaitMinutes: 30 }]);
   assert.equal(context.displayPreferences.longWaitMinutes, 24);
   assert.equal(failedInput.value, '24');
+
+  const failedGhInput = { valueAsNumber: 12, value: '12' };
+  assert.equal(await context.changeDisplaySetting('ghConcurrencyLimit', failedGhInput), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(patches)), [
+    { longWaitMinutes: 24 }, { longWaitMinutes: 30 }, { ghConcurrencyLimit: 12 },
+  ]);
+  assert.equal(context.displayPreferences.ghConcurrencyLimit, 8);
+  assert.equal(failedGhInput.value, '8');
 });
 
-test('モックの待ち時間設定を localStorage の UI 状態へ保存する', () => {
-  const settings = mock.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+test('モックの整数表示設定を UI 状態へ保存し表示に反映する', () => {
+  const settings = mock.match(/const DISPLAY_INTEGER_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  const capture = functionSource(mock, 'captureDisplayPreferences');
   const settingError = functionSource(mock, 'displaySettingError');
   const change = functionSource(mock, 'changeDisplaySetting');
-  assert.ok(settings && settingError && change);
+  assert.ok(settings && capture && settingError && change);
   let saved = 0;
   let rendered = 0;
   const input = { valueAsNumber: 24, value: '24' };
@@ -557,19 +575,28 @@ test('モックの待ち時間設定を localStorage の UI 状態へ保存す�
   const longError = { hidden: true, textContent: '' };
   const awayError = { hidden: true, textContent: '' };
   const idleError = { hidden: true, textContent: '' };
+  const ghSettingInput = { valueAsNumber: 8, value: '8' };
+  const ghError = { hidden: true, textContent: '' };
   const context = pageContext(mock, {
-    ui: { longWaitMinutes: 15, idleHideMinutes: 30 },
-    captureDisplayPreferences: () => ({}),
+    ui: {
+      mode: 'kind', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: [],
+      hideFinished: true, importAppTasks: false, importAppTasksAsked: false,
+      longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30,
+      ghConcurrencyLimit: 8, mergeableCondition: 'cross-review',
+    },
+    DEFAULT_SECTION_ORDER: [],
     saveDisplayPreferences: () => { saved += 1; return true; },
     render: () => { rendered += 1; },
     longWaitMinutesInput: input,
     awayAnswerWaitMinutesInput: awaySettingInput,
     idleHideMinutesInput: idleSettingInput,
+    ghConcurrencyLimitInput: ghSettingInput,
     longWaitMinutesError: longError,
     awayAnswerWaitMinutesError: awayError,
     idleHideMinutesError: idleError,
+    ghConcurrencyLimitError: ghError,
   });
-  vm.runInContext(`${settings}\n${settingError}\n${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
+  vm.runInContext(`${settings}\n${capture}\n${settingError}\n${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
   assert.equal(context.changeDisplaySetting('longWaitMinutes', input), true);
   assert.equal(context.ui.longWaitMinutes, 24);
   assert.equal(saved, 1);
@@ -579,6 +606,12 @@ test('モックの待ち時間設定を localStorage の UI 状態へ保存す�
   assert.equal(context.ui.idleHideMinutes, 5);
   assert.equal(saved, 2);
   assert.equal(rendered, 2);
+  const ghInput = { valueAsNumber: 12, value: '12' };
+  assert.equal(context.changeDisplaySetting('ghConcurrencyLimit', ghInput), true);
+  assert.equal(context.ui.ghConcurrencyLimit, 12);
+  assert.equal(context.captureDisplayPreferences().ghConcurrencyLimit, 12);
+  assert.equal(saved, 3);
+  assert.equal(rendered, 3);
 });
 
 test('セクションの並び順を保存し、端のボタンを無効化してフォーカスを維持する', () => {
@@ -1129,13 +1162,15 @@ test('種類別の描画では集約折り畳みだけを使い、プロダク�
 
 test('定期の同期は入力中の待ち時間の欄を上書きせず、ほかの欄は保存値にそろえる', () => {
   const render = functionSource(web, 'renderDisplaySettings');
-  const settings = web.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  const settings = web.match(/const DISPLAY_INTEGER_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   assert.ok(render && settings);
   const longWaitMinutesInput = { value: '120' };
   const awayAnswerWaitMinutesInput = { value: '9' };
   const idleHideMinutesInput = { value: '90' };
+  const ghConcurrencyLimitInput = { value: '7' };
   const errors = {
     longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {},
+    ghConcurrencyLimitError: {},
   };
   const hideFinishedInput = { checked: false };
   const importAppTasksInput = { checked: true };
@@ -1145,15 +1180,17 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
+    ghConcurrencyLimitInput,
     ...errors,
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
     DEFAULT_IDLE_HIDE_MINUTES: 10,
+    DEFAULT_GH_CONCURRENCY_LIMIT: 8,
     hideFinishedInput,
     importAppTasksInput,
     mergeableConditionInputs,
     diagnosticsLevelSelect: { value: 'info', closest: () => ({ open: false }) },
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: false, importAppTasks: true, mergeableCondition: 'ci' },
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, ghConcurrencyLimit: 12, hideFinished: false, importAppTasks: true, mergeableCondition: 'ci' },
   });
   vm.runInContext(`${settings}\n${render}`, context);
   context.renderDisplaySettings();
@@ -1161,6 +1198,7 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.equal(longWaitMinutesInput.value, '120');
   assert.equal(awayAnswerWaitMinutesInput.value, '5');
   assert.equal(idleHideMinutesInput.value, '30');
+  assert.equal(ghConcurrencyLimitInput.value, '12');
   assert.equal(hideFinishedInput.checked, false);
   assert.equal(importAppTasksInput.checked, true);
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, true, false]);
@@ -1189,7 +1227,7 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
     displayPreferences: { ...displayPreferences, importAppTasks: true },
     displayPreferenceSaveStates: new Map(),
     displayPreferencesReady: true,
-    DISPLAY_MINUTE_SETTINGS: [
+    DISPLAY_INTEGER_SETTINGS: [
       { key: 'longWaitMinutes', input: longWaitMinutesInput, error: null, min: 1, max: 120, default: 15 },
       { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: null, min: 1, max: 30, default: 3 },
       { key: 'idleHideMinutes', input: idleHideMinutesInput, error: null, min: 5, max: 1440, default: 10 },
