@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const {
+  main,
   inspectRelease,
   latestReleaseTag,
   parseVersion,
@@ -357,4 +358,38 @@ test('origin に版タグが 1 つも無いときは、最新の版を無しと�
   const { dependencies } = fakeRepository({ remoteLines: `${OTHER}\trefs/tags/nightly\n` });
 
   assert.equal(latestReleaseTag(dependencies), null);
+});
+
+
+test('report はサーバーが無いか health を取得できなければ停止中と案内する', async () => {
+  for (const readServerInfo of [async () => null, async () => ({ port: 47821 })]) {
+    const lines = [];
+    await main(['report', 'v1.0.2'], { readServerInfo, log: line => lines.push(line),
+      fetchImpl: async () => { throw new Error('offline'); } });
+    assert.deepEqual(lines, ['公開した版: v1.0.2', '常駐サーバーは動いていません。']);
+  }
+});
+
+test('report は版とタグのコミットが一致する稼働中サーバーを公開した版と案内する', async () => {
+  const lines = [];
+  const info = { port: 47821, pid: 123, startedAt: 'now' };
+  await main(['report', 'v1.0.2'], { log: line => lines.push(line),
+    readServerInfo: async () => info,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD }) }),
+    execFileSync(file, args) { assert.deepEqual(args, ['rev-parse', 'v1.0.2^{commit}']); return HEAD; },
+  });
+  assert.match(lines.join('\n'), /稼働中の常駐サーバーは公開した版です/);
+});
+
+test('report は版またはコミットが違うサーバーを切り替えず再起動を案内する', async () => {
+  for (const changes of [{ version: '1.0.1' }, { commit: OTHER }]) {
+    const lines = [];
+    const info = { port: 47821, pid: 123, startedAt: 'now' };
+    await main(['report', 'v1.0.2'], { log: line => lines.push(line), readServerInfo: async () => info,
+      fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD, ...changes }) }),
+      execFileSync: () => HEAD,
+    });
+    assert.match(lines.join('\n'), /稼働中の常駐サーバー: 版 .*、commit [ab]{7}/);
+    assert.match(lines.join('\n'), /リリースは稼働中のサーバーを切り替えません/);
+  }
 });

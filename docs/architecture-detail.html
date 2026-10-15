@@ -583,7 +583,7 @@ ul.points li { margin-bottom: 6px; }
     <tbody>
       <tr><td><code>server-connection.js</code></td><td>常駐サーバーを探し、無ければ起動する。書き込みが認証か接続で失敗したら、<code>server.json</code> を読み直して 1 回だけやり直す。フックの接続の期限は 1 秒。</td><td>② ⑰</td></tr>
       <tr><td><code>hooks-pending.js</code><br><code>diagnostic-events.js</code></td><td>届かなかったフックの記録の退避と取り込み。外から届く診断の記録の種類とレベルを決める。</td><td>⑲ ㉑</td></tr>
-      <tr><td><code>restart-server.js</code></td><td>更新の後に常駐サーバーを再起動する CLI。保存のまとめ書きを待ってから止め、起動し直せなかったら失敗にする。</td><td>②</td></tr>
+      <tr><td><code>restart-server.js</code></td><td>更新の後に常駐サーバーを再起動する CLI。保存のまとめ書きを待ってから止め、起動後の health の起動情報、版、コミットをこのチェックアウトの期待値と照合する。不一致は失敗、期待のコミットを取得できない場合は未照合と案内する。</td><td>②</td></tr>
     </tbody>
   </table>
   </div>

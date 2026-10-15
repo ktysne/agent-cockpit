@@ -61,6 +61,7 @@ if errorlevel 1 goto :uploadfailed
 
 echo.
 echo [agent-cockpit] Tag !TAG! pushed. Running servers notify users of the update within 6 hours.
+node tools\release.js report !TAG!
 echo [agent-cockpit] Site upload completed: https://ktysne.info/agent-cockpit/
 goto :done
 

@@ -302,17 +302,41 @@ function runRelease(input, dependencies = {}) {
   return planned;
 }
 
+async function reportRelease(input, dependencies = {}) {
+  const log = dependencies.log ?? console.log;
+  try {
+    const { version, tag } = parseVersion(input);
+    log(`公開した版: ${tag}`);
+    const { cockpitHomeFromOptions } = require('../src/server/identity');
+    const { readServerInfo, requestFromServer } = require('../src/client/server-connection');
+    const info = await (dependencies.readServerInfo ?? readServerInfo)(cockpitHomeFromOptions(dependencies));
+    const response = await requestFromServer(info, '/health', { method: 'GET' }, { fetchImpl: dependencies.fetchImpl });
+    const health = response.json;
+    if (!response.ok || health?.app !== 'agent-cockpit' || health.pid !== info.pid || health.startedAt !== info.startedAt) {
+      log('常駐サーバーは動いていません。');
+      return;
+    }
+    log(`稼働中の常駐サーバー: 版 ${health.version ?? '不明'}、commit ${health.commit?.slice(0, 7) ?? '不明'}`);
+    const commit = gitRunner(dependencies)(['rev-parse', `${tag}^{commit}`]).trim();
+    if (health.version === version && health.commit === commit) log('稼働中の常駐サーバーは公開した版です。');
+    else log('公開した版で動かすには常駐サーバーを再起動してください。リリースは稼働中のサーバーを切り替えません。');
+  } catch (error) {
+    log('公開版と稼働中の常駐サーバーを照合できませんでした: ' + error.message);
+  }
+}
+
 function printUsage() {
-  console.error('使い方: node tools/release.js plan|run <X.Y.Z または vX.Y.Z>');
+  console.error('使い方: node tools/release.js plan|run|report <X.Y.Z または vX.Y.Z>');
 }
 
 async function main(argv = process.argv.slice(2), dependencies = {}) {
   const [command, input, ...rest] = argv;
-  if (!['plan', 'run'].includes(command) || input === undefined || rest.length) {
+  if (!['plan', 'run', 'report'].includes(command) || input === undefined || rest.length) {
     printUsage();
     process.exitCode = 1;
     return;
   }
+  if (command === 'report') return reportRelease(input, dependencies);
   return command === 'plan' ? planRelease(input, dependencies) : runRelease(input, dependencies);
 }
 
@@ -334,4 +358,5 @@ module.exports = {
   remoteTagCommits,
   rewriteVersion,
   runRelease,
+  reportRelease,
 };
