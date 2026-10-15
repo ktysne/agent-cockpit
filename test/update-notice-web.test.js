@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const { functionSource } = require('./support/page-context');
 
 const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
+const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
 function noticeContext(navigator = {}) {
   const nodes = new Map();
@@ -181,11 +182,18 @@ function updateCheckContext(send) {
     postUiAction: async (url, body) => { posted.push([url, body]); return send(); },
     applyUpdateState: update => applied.push(update),
   });
-  vm.runInContext(functionSource(html, 'checkForUpdate'), context);
+  vm.runInContext(['formatUpdateSucceededAt', 'updateCheckFailureMessage', 'checkForUpdate']
+    .map(name => functionSource(html, name)).join('\n'), context);
   return { context, get, posted, applied };
 }
 
 const jsonResponse = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+const updateFailureText = '確認できませんでした。時間をおいてやり直してください。';
+
+function localUpdateTime(succeededAt) {
+  const date = new Date(succeededAt);
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
 
 test('更新を確認は、最新なら何も出さず、それ以外は結果を一行で出し、新しい版では通知欄も更新する', async () => {
   const latest = { ...update, current: '0.0.0', checkedAt: 'x', error: null };
@@ -194,7 +202,7 @@ test('更新を確認は、最新なら何も出さず、それ以外は結果�
       message: '', applied: [] },
     { body: latest, status: 200, message: '新しいバージョン v1.0.0 があります。', applied: [latest] },
     { body: { current: '1.0.1', latest: null, available: false, checkedAt: 'x', error: 'TIMEOUT' }, status: 200,
-      message: '確認できませんでした。時間をおいてやり直してください。', applied: [] },
+      message: updateFailureText, applied: [] },
     { body: { error: 'Internal Server Error' }, status: 500,
       message: '確認できませんでした。時間をおいてやり直してください。', applied: [] },
     { body: { error: 'update-check-disabled' }, status: 409,
@@ -211,11 +219,96 @@ test('更新を確認は、最新なら何も出さず、それ以外は結果�
   }
 });
 
+test('更新を確認が失敗しても、既知の更新通知を保ち最後の成功時刻を表示する', async () => {
+  const succeededAt = '2026-10-15T02:03:00.000Z';
+  const failedUpdate = { ...update, succeededAt, error: 'TIMEOUT' };
+  const { context, get, applied } = updateCheckContext(async () => jsonResponse(200, failedUpdate));
+  await context.checkForUpdate();
+  assert.equal(get('update-check-status').textContent,
+    `${updateFailureText} 最後に確認できたのは ${localUpdateTime(succeededAt)} です。`);
+  assert.deepEqual(applied, [failedUpdate]);
+});
+
 test('更新を確認は、通信に失敗したら確認できなかった文言を出す', async () => {
   const { context, get } = updateCheckContext(async () => { throw new Error('offline'); });
   await context.checkForUpdate();
   assert.equal(get('update-check-status').textContent, '確認できませんでした。時間をおいてやり直してください。');
   assert.equal(get('update-check').disabled, false);
+});
+
+function settingsClickContext(source, update) {
+  const nodes = new Map();
+  const get = id => {
+    if (!nodes.has(id)) nodes.set(id, { hidden: false, textContent: '' });
+    return nodes.get(id);
+  };
+  let onClick;
+  const context = vm.createContext({
+    settingsButton: { addEventListener(type, callback) { assert.equal(type, 'click'); onClick = callback; } },
+    settingsDialog: { showModal() { this.opened = true; } },
+    settingsSaveError: get('settings-save-error'),
+    updateCheckStatus: get('update-check-status'),
+    lastState: { update },
+    DATA: { update },
+    writeErrorUntil: 0,
+    writeErrorMessage: '',
+  });
+  const handler = source.match(/settingsButton\.addEventListener\('click', \(\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(handler);
+  const functions = ['formatUpdateSucceededAt', 'updateCheckFailureMessage']
+    .map(name => functionSource(source, name)).join('\n');
+  vm.runInContext(`${functions}\n${handler}`, context);
+  return { context, get, open: () => onClick() };
+}
+
+test('設定を開くと最後の確認が失敗していた場合だけ失敗と成功時刻を表示する', () => {
+  const succeededAt = '2026-10-15T02:03:00.000Z';
+  const { context, get, open } = settingsClickContext(html, { error: 'TIMEOUT', succeededAt });
+  open();
+  assert.equal(context.settingsDialog.opened, true);
+  assert.equal(get('update-check-status').textContent,
+    `更新を確認できていません。 最後に確認できたのは ${localUpdateTime(succeededAt)} です。`);
+  context.lastState.update = { error: 'TIMEOUT' };
+  open();
+  assert.equal(get('update-check-status').textContent, '更新を確認できていません。');
+  context.lastState.update.error = null;
+  open();
+  assert.equal(get('update-check-status').textContent, '');
+});
+
+test('モックでも更新確認の失敗時にボタンの右へ状態と成功時刻を表示する', () => {
+  const succeededAt = '2026-10-15T02:03:00.000Z';
+  const update = { available: true, error: 'TIMEOUT', succeededAt };
+  const { get, open } = settingsClickContext(mockHtml, update);
+  open();
+  assert.equal(get('update-check-status').textContent,
+    `更新を確認できていません。 最後に確認できたのは ${localUpdateTime(succeededAt)} です。`);
+
+  let check;
+  let finish;
+  const updateCheckButton = {
+    disabled: false,
+    textContent: '',
+    addEventListener(type, callback) { assert.equal(type, 'click'); check = callback; },
+  };
+  const context = vm.createContext({
+    updateCheckButton,
+    updateCheckStatus: get('update-check-status'),
+    DATA: { update },
+    setTimeout(callback) { finish = callback; },
+  });
+  const handler = mockHtml.match(/updateCheckButton\.addEventListener\('click', \(\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(handler);
+  const functions = ['formatUpdateSucceededAt', 'updateCheckFailureMessage']
+    .map(name => functionSource(mockHtml, name)).join('\n');
+  vm.runInContext(`${functions}\n${handler}`, context);
+  check();
+  assert.equal(updateCheckButton.disabled, true);
+  finish();
+  assert.equal(updateCheckButton.disabled, false);
+  assert.equal(get('update-check-status').textContent,
+    `${updateFailureText} 最後に確認できたのは ${localUpdateTime(succeededAt)} です。`);
+  assert.match(mockHtml, /update: null,/);
 });
 
 test('更新を確認は、確認の間だけボタンを無効にして確認中と表示する', async () => {

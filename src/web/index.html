@@ -1191,7 +1191,9 @@ settingsButton.addEventListener('click', () => {
   settingsDialog.showModal();
   settingsSaveError.textContent = Date.now() < writeErrorUntil ? writeErrorMessage : '';
   settingsSaveError.hidden = !settingsSaveError.textContent;
-  updateCheckStatus.textContent = '';
+  updateCheckStatus.textContent = lastState?.update?.error
+    ? updateCheckFailureMessage(lastState.update, '更新を確認できていません。')
+    : '';
 });
 settingsClose.addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', (event) => {
@@ -5229,6 +5231,19 @@ function applyUpdateState(update) {
   document.getElementById('update-compare').href = update.compareUrl;
 }
 
+function formatUpdateSucceededAt(succeededAt) {
+  if (!succeededAt) return '';
+  const date = new Date(succeededAt);
+  if (!Number.isFinite(date.getTime())) return '';
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+}
+
+function updateCheckFailureMessage(update, message) {
+  const succeededAt = formatUpdateSucceededAt(update?.succeededAt);
+  return succeededAt ? `${message} 最後に確認できたのは ${succeededAt} です。` : message;
+}
+
 async function copyUpdatePrompt() {
   const prompt = updatePrompt;
   const status = document.getElementById('update-copy-status');
@@ -5261,7 +5276,8 @@ async function checkForUpdate() {
     } else if (response.ok) {
       const update = await response.json();
       if (update.error) {
-        message = '確認できませんでした。時間をおいてやり直してください。';
+        message = updateCheckFailureMessage(update, '確認できませんでした。時間をおいてやり直してください。');
+        if (update.available) applyUpdateState(update);
       } else if (update.available) {
         applyUpdateState(update);
         message = `新しいバージョン v${update.latest} があります。`;

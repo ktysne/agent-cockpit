@@ -63,7 +63,11 @@
 git は対話を無効にし、15 秒の期限と 1MB の出力上限を設ける。
 タイマーは `unref()` し、終了時に解除し、確認中の処理が終わってから診断ログを閉じる。
 成功は結果を info で、失敗は分類だけを warn で診断ログに残す。
-失敗した回は通知を隠し、次の確認時機に試し直す。
+`update` は `{current, latest, available, checkedAt, succeededAt, error}` を基本項目として持ち、新しい版がある場合は `prompt` と `compareUrl` も持つ。
+`checkedAt` は最後に試した時刻、`succeededAt` は最後に成功した時刻、`error` は最後に試した確認の失敗分類で、成功後は `error` を `null` にする。
+失敗時は前回成功した `latest`、`available`、`succeededAt` を残す。
+公開したタグは通常取り下げないため、一度見つけた更新候補は一時的な確認失敗の後も有効である。
+成功が一度もない場合は `latest` を `null`、`available` を `false`、`succeededAt` を `null` のままにする。
 
 確認結果は `DashboardState` の snapshot に入れず、`/api/state` の `update` に並べる。
 セッションの状態が変わったわけではないため、状態の `version` を進めない。
