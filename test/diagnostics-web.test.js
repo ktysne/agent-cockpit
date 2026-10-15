@@ -52,7 +52,7 @@ function diagnosticPage({ runs = [{ id: '20261013T000000Z-1', current: true, sta
       if (fetchImpl) return fetchImpl(route, init);
       const runId = new URL(route, 'http://localhost').searchParams.get('run');
       if (runId !== null) return { ok: !failedRuns.includes(runId), json: async () => ({ entries: allEntries[runId] || [] }) };
-      return { ok: true, json: async () => ({ runs, version: '1.2.3' }) };
+      return { ok: true, json: async () => ({ runs, version: '1.2.3', responseRuntime: { version: '1.2.3', sourceState: 'release' } }) };
     },
   });
   vm.runInContext(web.slice(web.indexOf('const DIAGNOSTIC_LEVEL_ORDER'), web.indexOf('async function postUiAction')), context);
@@ -126,7 +126,7 @@ test('選択中の起動が一覧から消えたら、現在の起動を選び�
     if (runId !== null) return { ok: true, json: async () => ({ entries: [{ ts: 1, level: 'mark', tag: runId === current.id ? 'server' : 'hook',
       msg: runId === current.id ? 'server.start' : 'hook.input', data: {} }] }) };
     listCount += 1;
-    return { ok: true, json: async () => ({ runs: listCount === 1 ? [current, previous] : [current], version: '1.2.3' }) };
+    return { ok: true, json: async () => ({ runs: listCount === 1 ? [current, previous] : [current], version: '1.2.3', responseRuntime: { version: '1.2.3', sourceState: 'release' } }) };
   } });
   await context.refreshDiagnostics();
   node('diagnostics-run').value = previous.id;
@@ -146,7 +146,7 @@ test('古い起動の応答が遅れても、現在選択中の記録を上書�
     if (runId === previous.id) return new Promise(resolve => { respondToPrevious = resolve; });
     return { ok: true, json: async () => route.includes('?')
       ? { entries: [{ ts: 1, level: 'mark', tag: 'server', msg: 'server.start', data: {} }] }
-      : { runs: [current, previous], version: '1.2.3' } };
+      : { runs: [current, previous], version: '1.2.3', responseRuntime: { version: '1.2.3', sourceState: 'release' } } };
   } });
   await context.refreshDiagnostics();
   node('diagnostics-run').value = previous.id;
@@ -181,7 +181,7 @@ test('全起動の書き出しは実行時に全起動を取得し、取得中�
   const pending = [];
   const { context, node, requests, appended } = diagnosticPage({ runs: [current, previous], fetchImpl: async route => {
     const runId = new URL(route, 'http://localhost').searchParams.get('run');
-    if (runId === null) return { ok: true, json: async () => ({ runs: [current, previous], version: '1.2.3' }) };
+    if (runId === null) return { ok: true, json: async () => ({ runs: [current, previous], version: '1.2.3', responseRuntime: { version: '1.2.3', sourceState: 'release' } }) };
     if (exporting) return new Promise(resolve => pending.push({ runId, resolve }));
     return { ok: true, json: async () => ({ entries: [{ ts: 1, level: 'mark', tag: 'server', msg: 'server.start', data: {} }] }) };
   } });
@@ -227,7 +227,7 @@ test('全起動の書き出しの途中で削除が終わると、取得済み�
   let respondToPrevious;
   const { context, node, appended } = diagnosticPage({ runs: [current, previous], fetchImpl: async route => {
     const runId = new URL(route, 'http://localhost').searchParams.get('run');
-    if (runId === null) return { ok: true, json: async () => ({ runs: [current, previous], version: '1.2.3' }) };
+    if (runId === null) return { ok: true, json: async () => ({ runs: [current, previous], version: '1.2.3', responseRuntime: { version: '1.2.3', sourceState: 'release' } }) };
     if (runId === previous.id) return new Promise(resolve => { respondToPrevious = resolve; });
     return { ok: true, json: async () => ({ entries: [{ ts: 1, level: 'mark', tag: 'server', msg: 'server.start', data: {} }] }) };
   } });
@@ -271,7 +271,7 @@ test('書き出しは絞り込み前の記録と版とレベルと起動識別�
   const { context, entries } = diagnosticPage();
   await context.refreshDiagnostics();
   const text = context.diagnosticExportText([{ id: 'run', startedAt: 1, entries }]);
-  assert.match(text, /version=1.2.3 level=info run=run exported=/);
+  assert.match(text, /viewer=v1.2.3 level=info run=run exported=/);
   assert.match(text, /\[debug\].*request.failed/);
 });
 
@@ -339,4 +339,37 @@ test('削除の応答を待つ間に「やめる」を押しても、送った�
   respond({ ok: true });
   await deleting;
   assert.equal(context.filteredDiagnosticEntries().length, 0);
+});
+
+
+test('起動の選択肢と選択または全起動の書き出しは各起動の版を保つ', async () => {
+  const runs = [
+    { id: 'current', current: true, runtime: { version: '1.4.0', commit: 'c933f60abcdef', sourceState: 'release' } },
+    { id: 'older', runtime: { version: '1.3.0', commit: '9fa2714abcdef', sourceState: 'diverged' } },
+    { id: 'legacy', runtime: null },
+  ].map(run => ({ ...run, startedAt: 1, count: 0, sources: [], entries: [] }));
+  const { context, node } = diagnosticPage({ runs });
+  await context.refreshDiagnostics();
+  assert.match(node('diagnostics-run').children[0].textContent, /v1.4.0$/);
+  assert.match(node('diagnostics-run').children[1].textContent, /v1.3.0\+9fa2714$/);
+  assert.match(node('diagnostics-run').children[2].textContent, /版不明$/);
+  for (const exported of [runs, [runs[1]]]) {
+    const text = context.diagnosticExportText(exported);
+    assert.match(text, /viewer=v1.2.3/);
+    assert.match(text, /## 起動 older .*v1.3.0\+9fa2714 commit=9fa2714abcdef state=diverged/);
+  }
+  assert.match(context.diagnosticExportText(runs), /## 起動 legacy .*版不明/);
+});
+
+test('モックと画面の版表示は release 以外で pending も短縮コミットを付ける', () => {
+  for (const html of [web, mock]) {
+    const context = vm.createContext({});
+    vm.runInContext(functionSource(html, 'formatRuntime'), context);
+    for (const sourceState of ['pending', 'dirty', 'diverged', 'unknown']) {
+      assert.equal(context.formatRuntime({ version: '1.4.0', commit: 'c933f60abcdef', sourceState }), 'v1.4.0+c933f60');
+    }
+    assert.equal(context.formatRuntime({ version: '1.4.0', commit: 'c933f60abcdef', sourceState: 'release' }), 'v1.4.0');
+    assert.equal(context.formatRuntime(null), '版不明');
+    assert.equal(context.formatRuntime({ commit: 'c933f60abcdef' }), '版不明');
+  }
 });

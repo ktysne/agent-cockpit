@@ -18,6 +18,8 @@ async function startTestServer(testContext, options = {}) {
       claudeHome: temporary.claudeHome,
       userHome: temporary.homeDir,
       port: 0,
+      readSourceCommit: async () => null,
+      readSourceState: () => 'unknown',
       ...serverOptions,
     });
   } catch (error) {

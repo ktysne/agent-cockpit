@@ -1165,6 +1165,7 @@ const DIAGNOSTIC_SOURCE_ORDER = ['server', 'hook', 'mcp', 'web', 'gh', 'merge', 
 const DIAGNOSTIC_RUN_SEED = [
   {
     id: '20261013T0115Z-1842', startedAt: Date.now() - 4 * 60_000, current: true,
+    runtime: { version: '1.4.0', commit: 'c933f60' + '0'.repeat(33), sourceState: 'release' },
     entries: [
       { ts: Date.now() - 238_000, level: 'info', tag: 'server', msg: 'server.start', data: { product: 'agent-cockpit', count: 3, durationMs: 42 } },
       { ts: Date.now() - 210_000, level: 'warn', tag: 'hook', msg: 'hook.rejected', data: { session: 'a1b2c3d4', product: 'agent-cockpit', classification: 'invalid-event' } },
@@ -1176,6 +1177,7 @@ const DIAGNOSTIC_RUN_SEED = [
   },
   {
     id: '20261012T2310Z-1714', startedAt: Date.now() - 2 * 60 * 60_000, current: false,
+    runtime: { version: '1.3.0', commit: '9fa2714' + '0'.repeat(33), sourceState: 'diverged' },
     entries: [
       { ts: Date.now() - 2 * 60 * 60_000, level: 'info', tag: 'server', msg: 'server.start', data: { product: 'agent-cockpit', count: 2, durationMs: 38 } },
       { ts: Date.now() - 2 * 60 * 60_000 + 54_000, level: 'error', tag: 'gh', msg: 'gh.failed', data: { product: 'agent-cockpit', pr: 201, classification: 'timeout', count: 2 } },
@@ -1183,7 +1185,7 @@ const DIAGNOSTIC_RUN_SEED = [
     ],
   },
   {
-    id: '20261011T0830Z-1602', startedAt: Date.now() - 2 * 24 * 60 * 60_000, current: false,
+    runtime: null, id: '20261011T0830Z-1602', startedAt: Date.now() - 2 * 24 * 60 * 60_000, current: false,
     entries: [
       { ts: Date.now() - 2 * 24 * 60 * 60_000, level: 'info', tag: 'server', msg: 'server.start', data: { product: 'agent-cockpit', count: 1, durationMs: 35 } },
       { ts: Date.now() - 2 * 24 * 60 * 60_000 + 20_000, level: 'warn', tag: 'hook', msg: 'hook.rejected', data: { session: 'd4c3b2a1', product: 'agent-cockpit', classification: 'unknown-event' } },
@@ -1204,6 +1206,12 @@ const diagnosticsDeleteActions = document.getElementById('diagnostics-delete-act
 const diagnosticsDeleteConfirmation = document.getElementById('diagnostics-delete-confirmation');
 
 ui.diagnosticsLevel = ['silent', 'error', 'warn', 'info', 'debug'].includes(ui.diagnosticsLevel) ? ui.diagnosticsLevel : 'info';
+
+function formatRuntime(runtime) {
+  if (!runtime?.version) return '版不明';
+  const suffix = runtime.sourceState !== 'release' && runtime.commit ? `+${runtime.commit.slice(0, 7)}` : '';
+  return `v${runtime.version}${suffix}`;
+}
 
 function diagnosticLocalTime(value, seconds = false) {
   const date = new Date(value);
@@ -1230,7 +1238,7 @@ function refreshDiagnosticOptions() {
   const runs = [...diagnosticRuns].sort((a, b) => Number(b.current) - Number(a.current) || b.startedAt - a.startedAt);
   replaceSelectOptions(diagnosticsRunSelect, runs.map(run => ({
     value: run.id,
-    label: run.current ? `現在の起動 (${diagnosticLocalTime(run.startedAt)})` : diagnosticLocalTime(run.startedAt),
+    label: `${run.current ? `現在の起動 (${diagnosticLocalTime(run.startedAt)})` : diagnosticLocalTime(run.startedAt)} ${formatRuntime(run.runtime)}`,
   })), previousRun || runs.find(run => run.current)?.id);
   const previousSource = diagnosticsSourceSelect.value;
   const knownSources = new Set(diagnosticRuns.flatMap(run => run.entries.map(entry => entry.tag)));
@@ -1328,11 +1336,11 @@ function diagnosticExportText(runs) {
   const runLabel = runs.length === 1 ? runs[0].id : 'all';
   const lines = [
     '# agent-cockpit 診断ログ',
-    `# version=mock level=${ui.diagnosticsLevel} run=${runLabel} exported=${diagnosticLocalTime(Date.now(), true)}`,
+    `# viewer=${formatRuntime(DIAGNOSTIC_RUN_SEED[0].runtime)} level=${ui.diagnosticsLevel} run=${runLabel} exported=${diagnosticLocalTime(Date.now(), true)}`,
     '',
   ];
   for (const run of runs) {
-    lines.push(`## 起動 ${run.id} (${diagnosticLocalTime(run.startedAt)})`);
+    lines.push(`## 起動 ${run.id} (${diagnosticLocalTime(run.startedAt)}) ${formatRuntime(run.runtime)}${run.runtime ? ` commit=${run.runtime.commit || 'unknown'} state=${run.runtime.sourceState}` : ''}`);
     const entries = [...run.entries].sort((a, b) => a.ts - b.ts);
     lines.push(entries.map(formatDiagnosticEntry).join('\n') || '(記録はまだありません)', '');
   }
@@ -1637,7 +1645,8 @@ function renderSummary() {
   const counts = { ...judgmentCounts, agents, prs };
   // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
   const need = judgmentCounts.permission + judgmentCounts.blocking;
-  document.title = need ? `(${need}) Agent Cockpit` : 'Agent Cockpit';
+  const appTitle = `Agent Cockpit ${formatRuntime(DIAGNOSTIC_RUN_SEED[0].runtime)}`;
+  document.title = need ? `(${need}) ${appTitle}` : appTitle;
   // 隠している種類は 0 件でも札を残す。札を押すことが、その種類を個別に表示へ戻す手段であるため。
   document.getElementById('summary').innerHTML = FILTERS.filter(x => counts[x.key] > 0 || !isShown(x.key)).map(x =>
     `<button type="button" class="chip ${x.cls}" data-filter="${x.key}" aria-pressed="${isShown(x.key)}" title="${isShown(x.key) ? '押すと非表示にする' : '押すと表示に戻す'}">${x.label} <strong>${counts[x.key]}</strong></button>`).join('');

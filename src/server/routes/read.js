@@ -73,7 +73,7 @@ function createReadRoutes(ctx) {
 
   function fingerprint() {
     return JSON.stringify([state.version, pullRequestTracker?.inFlightSignature?.() || '',
-      away.snapshot(), routing.snapshot(), ctx.updateChecker?.snapshot() || null, uiVersion, integrations]);
+      away.snapshot(), routing.snapshot(), ctx.updateChecker?.snapshot() || null, uiVersion, integrations, ctx.getSourceState()]);
   }
 
   function generateState(now) {
@@ -97,13 +97,15 @@ function createReadRoutes(ctx) {
       };
     });
     return { body: JSON.stringify({ ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen,
+      runtime: { version: ctx.getRuntime().version, commit: ctx.getRuntime().commit,
+        sourceState: ctx.getSourceState(), startedAt: ctx.getRuntime().startedAt },
       away: awayState, update: ctx.updateChecker?.snapshot() || null, appVersion: ctx.appVersion,
       routing: routing.snapshot(), integrations, uiVersion }), fingerprint: fingerprint(),
       expiresAt: Math.min(deadline.at, now + STATE_CACHE_MAX_AGE_MS) };
   }
 
-  function handleHealth({ response, info }) {
-    jsonResponse(response, 200, { app: APP_NAME, pid: info.pid, startedAt: info.startedAt });
+  function handleHealth({ response }) {
+    jsonResponse(response, 200, { app: APP_NAME, ...ctx.getRuntime(), sourceState: ctx.getSourceState() });
   }
 
   async function handleState({ request, response }) {
