@@ -92,6 +92,9 @@ test('トレイの再起動は照合結果に応じた警告を出し、成功�
   assert.match(restart, /Show-TrayNotice "別のフォルダーの agent-cockpit の常駐サーバーが動いているため、再起動しませんでした\$folderNotice。そのフォルダーのタスクトレイから再起動してください。"/);
   assert.match(restart, /if \(\$isLocalServerCommand\) \{\s*Show-TrayNotice '常駐サーバーを再起動しましたが、更新の途中のファイル/);
   assert.match(restart, /Show-TrayNotice '常駐サーバーを再起動しましたが、このフォルダーの agent-cockpit で動いているかを確かめられませんでした。もう一度再起動し、続くときはフックの登録先を確かめてください。' \(\[System\.Windows\.Forms\.ToolTipIcon\]::Warning\)/);
+  const otherFolderNotice = restart.indexOf('別のフォルダーの agent-cockpit の常駐サーバーが起動しました');
+  const mismatchBranch = restart.indexOf("if ($server.result -eq 'mismatch')");
+  assert.ok(otherFolderNotice >= 0 && otherFolderNotice < mismatchBranch, '照合が ok でも別フォルダーの起動を成功と通知しない');
   assert.match(restart, /if \(\$server\.result -ne 'ok'\) \{ throw/);
   assert.match(restart, /Show-TrayNotice '常駐サーバーを再起動しました'/);
   assert.match(restart, /常駐サーバーを再起動できませんでした。\{0\}/);

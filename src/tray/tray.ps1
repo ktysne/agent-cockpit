@@ -578,19 +578,21 @@ function Restart-ResidentServer {
       throw '起動後の server.json を読み取れません。'
     }
 
+    # バージョンとコミットが一致しても、同じコミットの別のフォルダーから起動していることがあるため、照合の結果によらず起動元を確かめる。
+    $currentProcessInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$($currentServer.ProcessId)" -ErrorAction SilentlyContinue
+    $currentCommandLine = if ($currentProcessInfo) { [string]$currentProcessInfo.CommandLine } else { '' }
+    $currentFolder = Get-ResidentServerFolderFromCommandLine $currentCommandLine
+    $normalizedCurrentCommandLine = $currentCommandLine.Replace('/', '\')
+    $normalizedLocalServerScriptPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\server\server.js')).Replace('/', '\')
+    $isLocalServerCommand = $normalizedCurrentCommandLine.IndexOf($normalizedLocalServerScriptPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    $isAgentCockpitServer = $normalizedCurrentCommandLine.IndexOf('\src\server\server.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    if ($isAgentCockpitServer -and -not $isLocalServerCommand) {
+      $folderNotice = if ($currentFolder) { "($(Format-ResidentServerFolder $currentFolder))" } else { '' }
+      Show-TrayNotice "別のフォルダーの agent-cockpit の常駐サーバーが起動しました$folderNotice。フックの登録先がこのフォルダーになっているか確かめてください。" ([System.Windows.Forms.ToolTipIcon]::Warning)
+      return
+    }
+
     if ($server.result -eq 'mismatch') {
-      $currentProcessInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$($currentServer.ProcessId)" -ErrorAction SilentlyContinue
-      $currentCommandLine = if ($currentProcessInfo) { [string]$currentProcessInfo.CommandLine } else { '' }
-      $currentFolder = Get-ResidentServerFolderFromCommandLine $currentCommandLine
-      $normalizedCurrentCommandLine = $currentCommandLine.Replace('/', '\')
-      $normalizedLocalServerScriptPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\server\server.js')).Replace('/', '\')
-      $isLocalServerCommand = $normalizedCurrentCommandLine.IndexOf($normalizedLocalServerScriptPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
-      $isAgentCockpitServer = $normalizedCurrentCommandLine.IndexOf('\src\server\server.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
-      if ($isAgentCockpitServer -and -not $isLocalServerCommand) {
-        $folderNotice = if ($currentFolder) { "($(Format-ResidentServerFolder $currentFolder))" } else { '' }
-        Show-TrayNotice "別のフォルダーの agent-cockpit の常駐サーバーが起動しました$folderNotice。フックの登録先がこのフォルダーになっているか確かめてください。" ([System.Windows.Forms.ToolTipIcon]::Warning)
-        return
-      }
       # このフォルダーから起動していて食い違うのは、再起動の途中でファイルが更新されたときである。
       if ($isLocalServerCommand) {
         Show-TrayNotice '常駐サーバーを再起動しましたが、更新の途中のファイルで起動した可能性があります。もう一度再起動してください。' ([System.Windows.Forms.ToolTipIcon]::Warning)
