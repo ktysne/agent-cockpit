@@ -188,6 +188,8 @@ function createRequestHandler(options) {
     getRuntime: options.getRuntime,
     getSourceState: options.getSourceState,
     appVersion: options.appVersion,
+    sourceRoot: options.sourceRoot,
+    uiTemplate: options.uiTemplate,
     diagnostics: options.diagnostics,
     eventCounts: options.eventCounts,
     perf: options.perf,
@@ -424,6 +426,11 @@ async function startServer(options = {}) {
   const appVersion = options.appVersion === undefined ? version : options.appVersion;
   const sourceRoot = options.sourceRoot || path.join(__dirname, '../..');
   const commit = await (options.readSourceCommit || readSourceCommit)(sourceRoot);
+  const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
+  let uiTemplate = null;
+  if (!dev) {
+    try { uiTemplate = await fs.readFile(webPath); } catch {}
+  }
   let runtime = null;
   let sourceState = 'pending';
   await fs.mkdir(homeDir, { recursive: true });
@@ -632,7 +639,9 @@ async function startServer(options = {}) {
     codexAgentScriptExists: options.codexAgentScriptExists,
     crossReviewToolExists: options.crossReviewToolExists,
     openExternalUrl: options.openExternalUrl,
-    webPath: options.webPath,
+    webPath,
+    uiTemplate,
+    sourceRoot,
     stateCacheNow: options.stateCacheNow,
     dev,
     scheduleTaskNotifications,

@@ -602,6 +602,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   </div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
+  <div class="filter-note" id="restart-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="update-note" role="status" aria-live="polite" hidden>
     <span id="update-message"></span>
     <button type="button" class="link-btn" id="update-copy">更新の依頼文をコピー</button>
@@ -821,8 +822,12 @@ const DATA = {
     },
   ],
   connection: { lost: false, lastAt: '14:32' },
-  // 画面のファイルが新しくなったが、書きかけの回答があるので読み込み直しを待っている状態。書きかけが無ければ知らせを出さずに読み込み直す。
+  // 配信される画面の版が変わり、書きかけの回答があるため読み込み直しを待つ。
   uiUpdatePending: false,
+  restartRequired: false,
+  runtime: { version: '1.4.0', commit: 'c933f60', sourceState: 'unknown' },
+  installed: { version: '1.5.0', commit: 'a1b2c3d', uiVersion: 'new-ui' },
+  uiVersion: 'current-ui',
   // codexAgent は claude-codex-bridge の ~/.claude/tools/codex-agent.sh があるか。無ければサブエージェントの段と経路の札を出さない。
   // crossReview は稼働中のセッションか PR を登録したセッションの worktree のどれかに ai-cross-review の tools/cross-review.js があるか。無ければクロスレビューの段を出さない。
   integrations: { codexAgent: true, crossReview: true },
@@ -2672,10 +2677,30 @@ function renderConnectionNote() {
     : '';
 }
 
+function renderRestartNote(state) {
+  const note = document.getElementById('restart-note');
+  note.hidden = !state.restartRequired;
+  if (note.hidden) { note.textContent = ''; return; }
+  const running = state.runtime || {};
+  const installed = state.installed || {};
+  const differs = key => running[key] != null && installed[key] != null && running[key] !== installed[key];
+  const versionChanged = differs('version');
+  const commitChanged = differs('commit');
+  const label = value => value.version
+    ? formatRuntime({ version: value.version, commit: commitChanged ? value.commit : null })
+    : value.commit ? value.commit.slice(0, 7) : '不明';
+  const details = [];
+  if (versionChanged || commitChanged) details.push(`実行中 ${label(running)} / 配置済み ${label(installed)}。`);
+  if (state.uiVersion != null && installed.uiVersion != null && state.uiVersion !== installed.uiVersion) {
+    details.push('画面のファイルが更新されています。');
+  }
+  note.textContent = '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。' + details.join('');
+}
+
 function renderReloadNote() {
   const note = document.getElementById('reload-note');
   const html = DATA.uiUpdatePending
-    ? '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
+    ? '<span>画面が新しくなりました。この画面からは送信できないので、書きかけの回答を控えてから読み込み直してください。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
     : refreshConfirmPending
       ? '<span>書きかけの回答があります。読み込み直すと消えます。</span><button type="button" class="link-btn" data-reload-discard>回答を消して読み込み直す</button>'
       : '';
@@ -2853,6 +2878,7 @@ function render() {
   renderSummary();
   renderConnectionNote();
   applyUpdateState(DATA.update);
+  renderRestartNote(DATA);
   renderReloadNote();
   renderRouting();
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode(showOriginBands) : renderKindMode(showOriginBands);
