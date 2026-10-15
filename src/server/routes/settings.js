@@ -6,7 +6,7 @@ function createSettingsRoutes(ctx) {
   const { state, away, routing, answerDelivery, openExternalUrl, updateChecker } = ctx;
 
   function handleAwayState({ response }) {
-    jsonResponse(response, 200, away.snapshot());
+    jsonResponse(response, 200, { ...away.snapshot(), importAppTasks: state.getDisplayPreferences().importAppTasks });
   }
 
   async function handleAway({ request, response, body }) {

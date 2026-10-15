@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { PlanUpdates } = require('./plan-updates');
 const assert = require('node:assert/strict');
 const { SessionEntries } = require('./session-entries');
 const fs = require('node:fs/promises');
@@ -65,7 +66,8 @@ function validStoredPlan(plan) {
     (plan.provider === undefined || ['claude', 'codex'].includes(plan.provider)) &&
     plan.tasks.every((task) => isRecord(task) && typeof task.title === 'string' && task.title.length <= 200 &&
       ['todo', 'doing', 'done'].includes(task.state) && Array.isArray(task.criteria) &&
-      task.criteria.every((item) => isRecord(item) && typeof item.text === 'string' && typeof item.met === 'boolean') &&
+      task.criteria.every((item) => isRecord(item) && typeof item.text === 'string' && typeof item.met === 'boolean' &&
+        (item.doing === undefined || typeof item.doing === 'boolean')) &&
       (task.completedAt === undefined || validTimestamp(task.completedAt))) &&
     Array.isArray(plan.decisions) && plan.decisions.every((decision) => isRecord(decision) &&
       typeof decision.id === 'string' && typeof decision.title === 'string' && typeof decision.state === 'string' &&
@@ -285,7 +287,11 @@ function normalizeStore(value) {
       tasks: plan.tasks.map((task) => ({
         title: task.title,
         state: task.state,
-        criteria: task.criteria.map((item) => ({ text: item.text, met: item.met })),
+        criteria: task.criteria.map((item) => ({
+          text: item.text,
+          met: item.met,
+          ...(item.doing === true ? { doing: true } : {}),
+        })),
         ...(task.completedAt ? { completedAt: task.completedAt } : {}),
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
@@ -1484,6 +1490,7 @@ class DashboardState {
     this.sessionFiles = new Map();
     this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
+    this.planUpdates = new PlanUpdates();
     this.askDecisionBindings = new Map();
     // 保存済み、MCP、後続イベントで終えた質問は、開始と終了のフックだけで再現できないため状態を保つ。
     this.finishedOutsideEventsAskDecisionIds = new Map();
@@ -1723,6 +1730,7 @@ class DashboardState {
   }
 
   deleteStoredSession(sessionId, { keepPullRequests = false } = {}) {
+    this.planUpdates.delete(sessionId);
     this.plans.delete(sessionId);
     this.askDecisionBindings.delete(sessionId);
     this.finishedOutsideEventsAskDecisionIds.delete(sessionId);
@@ -1760,7 +1768,11 @@ class DashboardState {
       tasks: plan.tasks.map((task) => ({
         title: task.title,
         state: task.state,
-        criteria: task.criteria.map((item) => ({ text: item.text, met: item.met })),
+        criteria: task.criteria.map((item) => ({
+          text: item.text,
+          met: item.met,
+          ...(item.doing === true ? { doing: true } : {}),
+        })),
         ...(task.completedAt ? { completedAt: task.completedAt } : {}),
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
@@ -2557,6 +2569,7 @@ class DashboardState {
   }
 
   endSession(sessionId, endedAt) {
+    this.planUpdates.delete(sessionId);
     // provider を持たない保存済みの計画は、起点の情報を消す前に補う。
     const plan = this.plans.get(sessionId);
     const planProviderAdded = Boolean(plan && !plan.provider);
@@ -2580,6 +2593,7 @@ class DashboardState {
   }
 
   endSessionByAbsence(sessionId, endedAt) {
+    this.planUpdates.delete(sessionId);
     this.diagnostics?.record('info', 'server', 'session.ended',
       { session: sessionId.slice(0, 8), provider: this.providerForSession(sessionId), reason: 'session-file-absent' });
     this.sessions.delete(sessionId);
@@ -2997,8 +3011,10 @@ class DashboardState {
   }
 
   patchDisplayPreferences(changes) {
-    const next = normalizeDisplay({ ...(this.display || defaultDisplay()), ...changes });
+    const current = normalizeDisplay(this.display || defaultDisplay());
+    const next = normalizeDisplay({ ...current, ...changes });
     if (this.display && JSON.stringify(this.display) === JSON.stringify(next)) return cloneDisplay(this.display);
+    if (current.importAppTasks !== next.importAppTasks) this.planUpdates.clear();
     this.display = next;
     this.touch();
     this.requestStoreWrite();
@@ -3069,7 +3085,11 @@ class DashboardState {
     plan.tasks = tasks.map((task) => ({
       title: task.title,
       state: task.state,
-      criteria: task.criteria.map((criterion) => ({ text: criterion.text, met: criterion.met })),
+      criteria: task.criteria.map((criterion) => ({
+        text: criterion.text,
+        met: criterion.met,
+        ...(criterion.doing === true ? { doing: true } : {}),
+      })),
       ...(task.state === 'done' ? {
         completedAt: previousTasks.get(task.title)?.state === 'done'
           ? previousTasks.get(task.title).completedAt || previousUpdatedAt || updatedAt

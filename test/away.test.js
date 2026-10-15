@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
-const { AWAY_CONTEXT, TASK_CONTEXT, runAwayHook, sessionSummary } = require('../src/hooks/away');
+const { AWAY_CONTEXT, TASK_CONTEXT, SET_TASKS_CONTEXT, runAwayHook, sessionSummary } = require('../src/hooks/away');
 const { temporaryDirectory } = require('./support/temp');
 
 async function temporaryHome(testContext, withServerInfo = true) {
@@ -119,6 +119,30 @@ test('server.json が無くてもメインセッションへタスク登録の�
   assert.equal(fetchCount, 0);
 });
 
+test('Codex のメインセッションにはアプリの一覧の取り込みを案内せず、一覧全体の登録を求める', async (t) => {
+  const homeDir = await temporaryHome(t, false);
+  const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit' }, { homeDir, provider: 'codex' });
+  assert.equal(result.hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
+});
+
+test('取り込み設定がオフなら Claude に cockpit_set_tasks だけで登録するよう伝える', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit' }, {
+    homeDir,
+    fetchImpl: async () => new Response(JSON.stringify({ enabled: false, since: null, importAppTasks: false })),
+  });
+  assert.equal(result.hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
+});
+
+test('取り込み設定が真偽値でない応答では既定どおり Claude の一覧取り込みを案内する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit' }, {
+    homeDir,
+    fetchImpl: async () => new Response(JSON.stringify({ enabled: false, since: null, importAppTasks: 'false' })),
+  });
+  assert.equal(result.hookSpecificOutput.additionalContext, TASK_CONTEXT);
+});
+
 test('サブエージェントの UserPromptSubmit にはタスク登録の決まりを足さない', async (t) => {
   const homeDir = await temporaryHome(t);
   const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit', agent_id: 'agent-1' }, {
@@ -181,6 +205,19 @@ test('resume の引き継ぎ要約と離席中の文脈を一つにまとめる'
   assert.match(context, /未解決の判断事項: なし/);
   assert.match(context, /開発者は離席中です/);
   assert.equal((context.match(/Agent Cockpit:/g) || []).length, 3);
+});
+
+test('resume の context 応答が取り込みオフなら一覧全体の登録を求める', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const result = await runAwayHook({
+    session_id: 'resume-session', hook_event_name: 'SessionStart', source: 'resume',
+  }, {
+    homeDir,
+    fetchImpl: async () => new Response(JSON.stringify({
+      enabled: false, since: null, importAppTasks: false, tasks: [], decisions: [],
+    })),
+  });
+  assert.ok(result.hookSpecificOutput.additionalContext.includes(SET_TASKS_CONTEXT));
 });
 
 test('常駐サーバーの応答が無くてもタスク登録の決まりは返す', async (t) => {

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runAwayHook } = require('../src/hooks/away');
+const { runAwayHook, TASK_CONTEXT, SET_TASKS_CONTEXT } = require('../src/hooks/away');
 const { denyAnswerOutput } = require('../src/server/decision-answers');
 const { makeHookEvent } = require('../src/hooks/event');
 const { hookHeaders, uiHeaders, jsonBody, request, startTestServer } = require('./support/server');
@@ -143,13 +143,14 @@ test('Codex のポーリングが途絶えると回答待ちを解除する', as
   assert.equal(c.decision().state, 'waiting');
 });
 
-test('Codex の SessionStart と UserPromptSubmit は Claude と同じ離席とタスクと再開の文脈を返す', async (t) => {
+test('Codex の SessionStart と UserPromptSubmit は、タスク登録の文だけを従来版にして Claude と同じ離席と再開の文脈を返す', async (t) => {
   const c = await fixture(t);
   for (const fields of [{ hook_event_name: 'SessionStart', source: 'resume' }, { hook_event_name: 'UserPromptSubmit' }]) {
     const input = c.input(fields);
     const codex = await runAwayHook(input, { homeDir: c.homeDir, provider: 'codex' });
     const claude = await runAwayHook(input, { homeDir: c.homeDir });
-    assert.deepEqual(codex, claude);
+    assert.equal(codex.hookSpecificOutput.additionalContext,
+      claude.hookSpecificOutput.additionalContext.replace(TASK_CONTEXT, SET_TASKS_CONTEXT));
     assert.match(codex.hookSpecificOutput.additionalContext, /開発者は離席中/);
     assert.match(codex.hookSpecificOutput.additionalContext, /cockpit_set_tasks/);
     if (fields.source === 'resume') assert.match(codex.hookSpecificOutput.additionalContext, /現在の状態/);

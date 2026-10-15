@@ -1,3 +1,4 @@
+const { planUpdateForTool } = require('./plan-updates');
 const path = require('node:path');
 const { isHookSessionId } = require('./session-ids');
 const { parsePullRequestUrl, validRepositoryPart } = require('./pull-request-utils');
@@ -240,6 +241,10 @@ function sanitizeEvent(input, metadata = {}) {
   }
 
   if (eventName === 'PostToolUse') {
+    if (!agentId) {
+      const update = planUpdateForTool(event.tool_name, input.planUpdate);
+      if (update) event.planUpdate = update;
+    }
     if (event.tool_name === 'Bash' && typeof input.commandCwd === 'string' && input.commandCwd.length <= 4096 && path.isAbsolute(input.commandCwd)) {
       event.commandCwd = input.commandCwd;
     }

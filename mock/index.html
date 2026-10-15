@@ -262,7 +262,9 @@ h3.sub .count { font-weight: normal; }
 .close-agent:hover { color: var(--text); }
 .criteria { margin: 4px 0 0 0; padding-left: 20px; font-size: 12px; color: var(--text-2); }
 .criteria li.met { color: var(--ok); }
+.criteria li.doing { color: var(--text); }
 .criteria li.met::marker { content: "✓ "; }
+.criteria li.doing::marker { content: "→ "; }
 .criteria li::marker { content: "・"; }
 
 .decision { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; background: var(--surface); }
@@ -503,6 +505,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
+    <div class="settings-theme-row">
+      <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
+      <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
+    </div>
+    <p class="meta" id="settings-import-app-tasks-note">オフにすると、<code>cockpit_set_tasks</code> で登録したタスクだけを出す。Codex のセッションは取り込まない。</p>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
       <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」と「プルリクエスト」は、3 つのどれより前ならセッションの上、それ以外は下に出る。</p>
@@ -635,7 +642,7 @@ const DATA = {
       ],
       tasks: [
         { title: '.ssp ファイルの読み込み', state: 'done', criteria: [{ t: '既存のサンプル 12 件を読み込める', met: true }, { t: '不正なファイルでエラー表示する', met: true }] },
-        { title: '拍子変更の解釈', state: 'doing', criteria: [{ t: '4/4 → 3/4 の切り替えが小節線に反映される', met: true }, { t: 'テンポ変更と同時の拍子変更を扱える', met: false }] },
+        { title: '拍子変更の解釈', state: 'doing', criteria: [{ t: '4/4 → 3/4 の切り替えが小節線に反映される', met: true }, { t: 'テンポ変更と同時の拍子変更を扱える', met: false, doing: true }] },
         { title: '読み込み結果のプレビュー表示', state: 'todo', criteria: [{ t: 'トラック名と小節数が一覧で見える', met: false }] },
       ],
       decisions: [
@@ -846,6 +853,7 @@ const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); 
 // 読み込み直すと消える案内なので、保存する ui には置かない。
 let refreshConfirmPending = false;
 const ui = Object.assign({ mode: 'kind', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 3, idleHideMinutes: 10, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+ui.importAppTasks ??= true;
 const TRANSIENT_NOTICE_MS = 60_000;
 ui.reservationNotices = ui.reservationNotices && typeof ui.reservationNotices === 'object' && !Array.isArray(ui.reservationNotices) ? ui.reservationNotices : {};
 ui.mergeErrors = ui.mergeErrors && typeof ui.mergeErrors === 'object' && !Array.isArray(ui.mergeErrors) ? ui.mergeErrors : {};
@@ -940,6 +948,7 @@ function shortShaLabel(value) {
 
 const themeSelect = document.getElementById('settings-theme-select');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
+const importAppTasksInput = document.getElementById('settings-import-app-tasks');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
 const settingsButton = document.getElementById('settings-button');
 const settingsClose = document.getElementById('settings-close');
@@ -954,6 +963,7 @@ function captureDisplayPreferences() {
   return {
     mode: ui.mode, order: [...ui.order], pinned: [...ui.pinned], collapsed: [...ui.collapsed], hidden: [...ui.hidden],
     sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
+    importAppTasks: ui.importAppTasks,
     longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes, idleHideMinutes: ui.idleHideMinutes,
     mergeableCondition: ui.mergeableCondition,
   };
@@ -995,6 +1005,7 @@ function applySinceSeenMode(mode) {
 function renderDisplaySettings() {
   for (const { key, input } of DISPLAY_MINUTE_SETTINGS) input.value = String(ui[key]);
   hideFinishedInput.checked = ui.hideFinished;
+  importAppTasksInput.checked = ui.importAppTasks !== false;
   for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
 }
 
@@ -1031,6 +1042,12 @@ for (const { key, input } of DISPLAY_MINUTE_SETTINGS) {
 hideFinishedInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
   ui.hideFinished = hideFinishedInput.checked;
+  if (!saveDisplayPreferences(previous)) return;
+  render();
+});
+importAppTasksInput.addEventListener('change', () => {
+  const previous = captureDisplayPreferences();
+  ui.importAppTasks = importAppTasksInput.checked;
   if (!saveDisplayPreferences(previous)) return;
   render();
 });
@@ -1866,8 +1883,8 @@ function taskItem(p, session, t, withTag) {
   return `<li class="task ${state}"><div class="task-body"><div class="task-text">
     <div class="line"><span class="state ${state}">${label}</span>${sessionTag(p, session, withTag)}
       <span class="title">${esc(t.title)}</span></div></div>
-    <div class="task-actions"><span class="meta">完了条件 ${met}/${t.criteria.length}</span>${closedHere ? '<span class="meta">画面で完了にした</span>' : ''}${close}</div></div>
-    <ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : ''}">${esc(c.t)}</li>`).join('')}</ul></li>`;
+    <div class="task-actions">${t.criteria.length ? `<span class="meta">完了条件 ${met}/${t.criteria.length}</span>` : ''}${closedHere ? '<span class="meta">画面で完了にした</span>' : ''}${close}</div></div>
+    ${t.criteria.length ? `<ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : c.doing ? 'doing' : ''}">${esc(c.t)}</li>`).join('')}</ul>` : ''}</li>`;
 }
 
 function isLongWait(minutes) {

@@ -140,7 +140,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
     mode: 'kind', order: ['C:\\project'], pinned: ['C:\\project'],
     collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
     sectionOrder: ['now', 'judgment', 'tasks', 'prs', 'sinceSeen'],
-    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, hideFinished: true, mergeableCondition: 'ci',
+    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, hideFinished: true, importAppTasks: true, mergeableCondition: 'ci',
   };
   state.patchDisplayPreferences(display);
   state.registerPullRequest('restored-session', { url: 'https://github.com/example/project/pull/47' }, {
@@ -618,6 +618,44 @@ test('DashboardState の保存は整形済み JSON と末尾改行を書き出�
 
   const contents = await fs.readFile(path.join(homeDir, 'store.json'), 'utf8');
   assert.equal(contents, `${JSON.stringify(state.serializeStore(), null, 2)}\n`);
+});
+
+test('store には doing が true の完了条件だけを書き出す', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = new DashboardState();
+  state.attachWriter(new AtomicJsonWriter(homeDir));
+  state.setTasks('criteria-doing-store', [{
+    title: '条件を保存する', state: 'doing', criteria: [
+      { text: '作業中を保存する', met: false, doing: true },
+      { text: '未着手を保存する', met: false, doing: false },
+    ],
+  }]);
+  await state.flushPersistence();
+
+  const stored = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.deepEqual(stored.plans['criteria-doing-store'].tasks[0].criteria, [
+    { text: '作業中を保存する', met: false, doing: true },
+    { text: '未着手を保存する', met: false },
+  ]);
+});
+
+test('doing のない完了条件を持つ保存済みタスクを読み込む', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const store = new DashboardState().serializeStore();
+  store.plans['legacy-criteria'] = {
+    tasks: [{ title: '以前からある条件', state: 'doing', criteria: [{ text: '読み込める', met: false }] }],
+    tasksUpdatedAt: new Date(now).toISOString(),
+    product: null,
+    decisions: [],
+  };
+  await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify(store));
+
+  const restored = await DashboardState.load(homeDir, { now });
+  assert.deepEqual(restored.plans.get('legacy-criteria').tasks[0].criteria, [
+    { text: '読み込める', met: false },
+  ]);
+  assert.equal((await fs.readdir(homeDir)).some((name) => name.startsWith('store.json.broken-')), false);
 });
 
 test('壊れた store と新しい version の store を退避して空で始める', async (t) => {

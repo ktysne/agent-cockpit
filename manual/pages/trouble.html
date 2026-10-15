@@ -55,7 +55,9 @@
   <code>codex exec</code> はプロセスの終了を確かめ、その後 60 秒で終了扱いになります(<a href="work.html#work-session-end">セッションが終わる条件</a>)。</p>
 
   <h2 id="trouble-tasks">タスクが出ない</h2>
-  <p>タスクは、メインセッションが <code>cockpit_set_tasks</code> で登録したときだけ出ます。
+  <p>タスクは、設定がオンのときに Claude Code デスクトップアプリのタスク一覧を取り込むか、<code>cockpit_set_tasks</code> で登録すると出ます。
+  設定がオフのときと、CLI、Codex、サブエージェントでは、<code>cockpit_set_tasks</code> で一覧全体を登録します。
+  アプリの一覧の取り込みが届かないときも、<code>cockpit_set_tasks</code> で登録できます。
   画面の <span class="ui">タスクはありません。</span> が続くときは、次を確かめます。</p>
   <ul>
     <li>MCP サーバーを登録できているか。<code>claude mcp list</code> で、<code>agent-cockpit</code> が <code>Connected</code> と出れば登録できています</li>

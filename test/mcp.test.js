@@ -49,6 +49,11 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
   assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), [
     'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_update_decision', 'cockpit_add_pr', 'cockpit_skip_review',
   ]);
+  const setTasksTool = responses[1].result.tools.find((tool) => tool.name === 'cockpit_set_tasks');
+  const criteriaSchema = setTasksTool.inputSchema.properties.tasks.items.properties.criteria.items;
+  assert.equal(criteriaSchema.properties.doing.type, 'boolean');
+  assert.ok(!criteriaSchema.required.includes('doing'));
+  assert.match(setTasksTool.description, /met が false で doing が true なら作業中/);
   assert.equal(responses[2].id, 3);
   assert.match(responses[2].result.content[0].text, /テストを書く \(doing\)/);
   assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/mcp-session/plan');
@@ -265,4 +270,17 @@ test('時間切れの add_pr、skip_review、plan は結果未確認の文を is
     assert.equal(fetchCount, 1, name);
     assert.equal(ensureCalls, 1, name);
   }
+});
+
+
+test('cockpit_set_tasks の成功文はアプリの一覧に無い題を知らせる', async () => {
+  const responses = await exchange([{
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'cockpit_set_tasks', arguments: { tasks: [{ title: '別の題', state: 'todo', criteria: [] }] } },
+  }], {
+    homeDir: 'C:\\temporary-cockpit', environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async () => new Response(JSON.stringify({ tasks: [{ title: '別の題', state: 'todo' }], unmatchedTitles: ['別の題'] }), { status: 200 }),
+  });
+  assert.match(responses[0].result.content[0].text, /アプリのタスク一覧に無い題: 別の題/);
 });

@@ -1818,11 +1818,13 @@ test('終わったもののチェックは表示設定として保存し、失�
   const saveFunctions = ['settleDisplaySaves', 'saveDisplayPreferences'].map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean) && saveFunctions.every(Boolean) && settings);
   assert.match(pageHtml, /id="settings-hide-finished" name="hideFinished" type="checkbox"/);
+  assert.match(pageHtml, /id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note"/);
 
   let activeElement = null;
   let resolveSave;
   let savedPatch;
   const hideFinishedInput = { type: 'checkbox', checked: false };
+  const importAppTasksInput = { type: 'checkbox', checked: true };
   const longWaitMinutesInput = { type: 'number', value: '' };
   const awayAnswerWaitMinutesInput = { type: 'number', value: '' };
   const idleHideMinutesInput = { type: 'number', value: '' };
@@ -1830,7 +1832,7 @@ test('終わったもののチェックは表示設定として保存し、失�
   const awayAnswerWaitMinutesError = { textContent: '', hidden: true };
   const idleHideMinutesError = { textContent: '', hidden: true };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeableCondition: 'cross-review' };
+  const displayPreferences = { hideFinished: false, importAppTasks: true, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeableCondition: 'cross-review' };
   const context = pageContext(pageHtml, {
     displayPreferences,
     SECTION_ORDER_KEYS: new Set(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']),
@@ -1845,6 +1847,7 @@ test('終わったもののチェックは表示設定として保存し、失�
     renderSectionOrder() {},
     render() {},
     hideFinishedInput,
+    importAppTasksInput,
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
@@ -1863,13 +1866,17 @@ test('終わったもののチェックは表示設定として保存し、失�
   vm.runInContext(`${settings}\n${functions.join('\n')}\n${saveFunctions.join('\n')}`, context);
 
   assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
+  assert.equal(context.normalizeDisplayPreferences(null).importAppTasks, true);
   assert.equal(context.normalizeDisplayPreferences(null).idleHideMinutes, 10);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: true }).hideFinished, true);
+  assert.equal(context.normalizeDisplayPreferences({ importAppTasks: false }).importAppTasks, false);
+  assert.equal(context.normalizeDisplayPreferences({ importAppTasks: 'false' }).importAppTasks, true);
   assert.equal(context.normalizeDisplayPreferences({}).mergeableCondition, 'cross-review');
   assert.equal(Object.hasOwn(context.normalizeDisplayPreferences({ mergeAfterReviewDefault: true }), 'mergeAfterReviewDefault'), false);
   context.renderDisplaySettings();
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, false, true]);
+  assert.equal(importAppTasksInput.checked, true);
   activeElement = hideFinishedInput;
   hideFinishedInput.checked = true;
   context.renderDisplaySettings();
@@ -1894,6 +1901,22 @@ test('終わったもののチェックは表示設定として保存し、失�
   await context.changeDisplaySetting('hideFinished', hideFinishedInput);
   assert.equal(displayPreferences.hideFinished, true);
   assert.equal(hideFinishedInput.checked, true);
+
+  context.enqueueDisplayPatch = async (patch) => {
+    savedPatch = patch;
+    return true;
+  };
+  importAppTasksInput.checked = false;
+  await context.changeDisplaySetting('importAppTasks', importAppTasksInput);
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { importAppTasks: false });
+  assert.equal(displayPreferences.importAppTasks, false);
+  assert.equal(importAppTasksInput.checked, false);
+
+  context.enqueueDisplayPatch = async () => false;
+  importAppTasksInput.checked = true;
+  await context.changeDisplaySetting('importAppTasks', importAppTasksInput);
+  assert.equal(displayPreferences.importAppTasks, false);
+  assert.equal(importAppTasksInput.checked, false);
 
 });
 
@@ -4942,4 +4965,59 @@ test('モックの中断の行は画面と同じ文言と点で出し、終わ�
   assert.equal(context.isIdleHiddenSession(session, now), false);
   assert.equal(context.isIdleHiddenSession({ ...session, status: 'wait' }, now), true);
   assert.match(mockHtml, /\.dot\.interrupted \{ background: transparent; box-shadow: inset 0 0 0 2px var\(--warn\); \}/);
+});
+
+
+test('完了条件が空のタスクは実画面とモックで件数と一覧を出さず、操作列の幅を維持する', () => {
+  const element = (tagName, className = '', textContent = '') => ({
+    tagName, className, textContent, children: [], dataset: {}, append(...nodes) { this.children.push(...nodes); },
+  });
+  const context = pageContext(pageHtml, { element, badge: () => element('span'), appendContextTags() {},
+    pendingTaskCloseActions: new Map(), taskCloseActionsInFlight: new Set() });
+  vm.runInContext(functionSource(pageHtml, 'appendTaskItem'), context);
+  const mockContext = pageContext(mockHtml, { taskState: (session, task) => task.state,
+    closedTaskKey: () => 'key', pendingClosedTasks: new Map(), sessionTag: () => '', esc: text => text });
+  vm.runInContext(functionSource(mockHtml, 'taskItem'), mockContext);
+  for (const state of ['todo', 'done']) {
+    const root = element('ul');
+    const task = { title: '段階', state, criteria: [] };
+    context.appendTaskItem(root, task, {}, { session_id: 'session' });
+    const flatten = node => [node, ...node.children.flatMap(flatten)];
+    assert.ok(!flatten(root).some(node => node.textContent.includes('完了条件') || node.className === 'criteria-list'));
+    assert.ok(flatten(root).some(node => node.className === 'task-actions'));
+    const markup = mockContext.taskItem({}, {}, task, false);
+    assert.doesNotMatch(markup, /完了条件|<ul class="criteria">/);
+    assert.match(markup, /class="task-actions"/);
+  }
+  for (const html of [pageHtml, mockHtml]) {
+    assert.equal(new Map(cssDeclarations(html, '.task-actions')).get('min-width'), 'calc(6em + 11px)');
+  }
+});
+
+test('作業中の完了条件は実画面とモックで doing クラスを付け、達成済みを優先する', () => {
+  const element = (tagName, className = '', textContent = '') => ({
+    tagName, className, textContent, children: [], dataset: {}, append(...nodes) { this.children.push(...nodes); },
+  });
+  const context = pageContext(pageHtml, { element, badge: () => element('span'), appendContextTags() {},
+    pendingTaskCloseActions: new Map(), taskCloseActionsInFlight: new Set() });
+  vm.runInContext(functionSource(pageHtml, 'appendTaskItem'), context);
+  const mockContext = pageContext(mockHtml, { taskState: (session, task) => task.state,
+    closedTaskKey: () => 'key', pendingClosedTasks: new Map(), sessionTag: () => '', esc: text => text });
+  vm.runInContext(functionSource(mockHtml, 'taskItem'), mockContext);
+  const task = {
+    title: '実装する', state: 'doing', criteria: [
+      { text: '作業中の条件', met: false, doing: true },
+      { text: '達成済みの条件', met: true, doing: true },
+    ],
+  };
+  const root = element('ul');
+  context.appendTaskItem(root, task, {}, { session_id: 'session' });
+  const flatten = node => [node, ...node.children.flatMap(flatten)];
+  assert.deepEqual(flatten(root).filter(node => ['doing', 'met'].includes(node.className)).map(node => node.className), ['doing', 'met']);
+
+  const markup = mockContext.taskItem({}, {}, {
+    ...task, criteria: task.criteria.map(criterion => ({ ...criterion, t: criterion.text })),
+  }, false);
+  assert.match(markup, /<li class="doing">作業中の条件<\/li>/);
+  assert.match(markup, /<li class="met">達成済みの条件<\/li>/);
 });
