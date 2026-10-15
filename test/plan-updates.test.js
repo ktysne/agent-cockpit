@@ -252,8 +252,30 @@ test('置き換えた題が完了条件を待つ間は、置き換えより前�
   await send(items(), afterFirst);
   assert.deepEqual(tasks().map(task => task.title), ['前の依頼', '新しい依頼']);
   assert.deepEqual(tasks().at(-1).criteria, criteria());
-  await send(items(['completed', 'pending']), afterFirst + 1);
+  await send(items(['completed', 'completed', 'completed']), afterFirst + 2);
+  await send(items(['completed', 'in_progress', 'pending']), afterFirst + 1);
+  assert.deepEqual(tasks().map(task => task.state), ['done', 'done']);
+  assert.deepEqual(progress(tasks()), ['done', 'done', 'done']);
+  await send(items(), Date.now() + 1000);
+  await send(items(['completed', 'completed', 'completed']), afterFirst + 3);
   assert.deepEqual(tasks().at(-1).criteria, criteria());
+});
+
+test('遅れた items が新しい順に届いても古い順に届いても同じ完了条件になる', async t => {
+  const results = [];
+  for (const order of [[1, 2], [2, 1]]) {
+    const { send, write, tasks } = await setup(t);
+    await write([{ title: '前の依頼', state: 'done' }]);
+    const base = Date.now() + 1;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await write([{ title: '前の依頼', state: 'done' }, { title: '新しい依頼', state: 'doing' }]);
+    const versions = { 1: items(), 2: items(['completed', 'completed', 'completed']) };
+    for (const step of order) await send(versions[step], base + step);
+    const { title, state, criteria: last } = tasks().at(-1);
+    results.push({ title, state, criteria: last });
+  }
+  assert.deepEqual(results[0], results[1]);
+  assert.equal(results[0].state, 'done');
 });
 
 test('置き換えた今のタスクに完了条件があれば、取り込み済みの完了条件で上書きしない', async t => {

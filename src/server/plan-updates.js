@@ -133,10 +133,20 @@ function applyItems(tasks, input, sessionTitle) {
     task = { title, autoTitle: true };
     tasks.push(task);
   }
-  task.criteria = input.items.map(item => ({ text: item.content, met: item.status === 'completed',
+  setCriteria(task, input.items);
+  return limitTasks(tasks);
+}
+
+function setCriteria(task, items) {
+  task.criteria = items.map(item => ({ text: item.content, met: item.status === 'completed',
     ...(item.status === 'in_progress' ? { doing: true } : {}) }));
   task.state = task.criteria.every(item => item.met) ? 'done' : 'doing';
-  return limitTasks(tasks);
+}
+
+// 置き換えの後に届いた通常の取り込みやまとめ書きのほうが新しいので、遅れた items を受け入れない。
+function closeLateItems(record) {
+  record.waitingSince = record.hookAt;
+  delete record.lateIndex;
 }
 
 // 非同期のフックは到着順が入れ替わるため、最新の items とそれより後の差分を hookAt 順で再構成する。
@@ -167,6 +177,7 @@ class PlanUpdates {
         record.hookAt = Math.max(record.hookAt, ...record.differences.map(update => update.hookAt));
         record.differences = [];
       }
+      closeLateItems(record);
     }
     return tasks;
   }
@@ -183,10 +194,13 @@ class PlanUpdates {
     if (toolId && record.seen.has(toolId)) return null;
     if (toolId) record.seen.add(toolId);
     if (input.items && record.hasItems && hookAt <= record.hookAt) {
-      const waiting = currentTask(record.tasks);
-      if (!(hookAt > record.waitingSince && waiting && !waiting.criteria.length)) return null;
+      // 遅れた items が複数あっても到着順に依らないよう、最初に埋めたタスクをより新しい items で更新する。
+      const waiting = record.tasks[record.lateIndex] ||
+        (currentTask(record.tasks)?.criteria.length === 0 ? currentTask(record.tasks) : null);
+      if (!(hookAt > record.waitingSince && waiting)) return null;
       record.waitingSince = hookAt;
-      record.tasks = applyItems(record.tasks, input, sessionTitle);
+      record.lateIndex = record.tasks.indexOf(waiting);
+      setCriteria(waiting, input.items);
     } else if (input.items) {
       let before = structuredClone(record.tasks);
       if (!record.hasItems && record.legacy) before = pendingTitleOnly(before);
@@ -197,6 +211,7 @@ class PlanUpdates {
       record.tasks = applyItems(before, input, sessionTitle);
       record.hookAt = hookAt;
       record.hasItems = true;
+      closeLateItems(record);
       record.differences = record.differences.filter(update => update.hookAt > hookAt);
     } else {
       if (hookAt <= record.hookAt) return null;
