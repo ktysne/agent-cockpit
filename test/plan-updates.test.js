@@ -171,6 +171,20 @@ test('取り込みの印が無い保存済みの複数タスクは最初の item
   assert.equal(tasks().length, 1);
 });
 
+test('取り込みの印が無い複数タスクは差分が先に届いても最初の items で置き換える', async t => {
+  const { state, send, tasks } = await setup(t);
+  state.setTasks('plan-session', [
+    { title: '旧1', state: 'doing', criteria: [] },
+    { title: '旧2', state: 'todo', criteria: [] },
+  ]);
+  const now = Date.now();
+  await send({ advance: true }, now + 2000);
+  await send(items(), now + 1000);
+  assert.equal(tasks().length, 1);
+  assert.ok(!tasks()[0].title.startsWith('旧'));
+  assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
+});
+
 test('取り込みの印が無い題だけのタスク 1 件は最初の items の題として引き継ぐ', async t => {
   const { state, send, tasks } = await setup(t);
   state.setTasks('plan-session', [{ title: '依頼', state: 'doing', criteria: [] }]);

@@ -165,7 +165,7 @@ class PlanUpdates {
     if (!record) {
       const tasksAt = Date.parse(plan.tasksUpdatedAt);
       record = { hookAt: Number.isFinite(tasksAt) ? tasksAt : -Infinity,
-        tasks: structuredClone(plan.tasks), hasItems: false, seen: new Set(), differences: [] };
+        tasks: structuredClone(plan.tasks), hasItems: false, seen: new Set(), differences: [], legacy: plan.appTasks !== true };
       this.sessions.set(sessionId, record);
     }
     if (toolId && record.seen.has(toolId)) return null;
@@ -173,7 +173,7 @@ class PlanUpdates {
     if (input.items) {
       if (record.hasItems && hookAt <= record.hookAt) return null;
       let before = structuredClone(record.tasks);
-      if (!record.hasItems && plan.appTasks !== true) before = pendingTitleOnly(before);
+      if (!record.hasItems && record.legacy) before = pendingTitleOnly(before);
       for (const update of record.differences.filter(update => update.hookAt < hookAt)
         .sort((a, b) => a.hookAt - b.hookAt || a.tool_use_id.localeCompare(b.tool_use_id))) {
         applyDifference(before, update.input);
