@@ -111,7 +111,9 @@ test('画面ファイルの変更を 5 秒の確認期限後に条件付き取�
   assert.equal((await local.get(first.headers.etag)).status, 304);
   local.advance(5_000);
   const changed = await expectChanged(local, first);
-  assert.notEqual(jsonBody(changed).uiVersion, jsonBody(first).uiVersion);
+  assert.equal(jsonBody(changed).uiVersion, jsonBody(first).uiVersion);
+  assert.notEqual(jsonBody(changed).installed.uiVersion, jsonBody(first).installed.uiVersion);
+  assert.equal(jsonBody(changed).restartRequired, true);
 });
 
 test('連携ファイルの有無の変更を 10 秒の確認期限後に条件付き取得で返す', async (t) => {

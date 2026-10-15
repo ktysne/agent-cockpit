@@ -549,6 +549,7 @@ h3.sub .count { font-weight: normal; }
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
+  <div class="filter-note" id="restart-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="update-note" role="status" aria-live="polite" hidden>
     <span id="update-message"></span>
     <button type="button" class="link-btn" id="update-copy">更新の依頼文をコピー</button>
@@ -1598,8 +1599,7 @@ async function postUiAction(url, body) {
   try {
     let response = await send();
     if (response.status === 401) {
-      await refreshUiSecret();
-      response = await send();
+      if (await refreshUiSecret() !== false) response = await send();
     }
     if (!response.ok) reportWebFailure(url, 'save', response.status);
     return response;
@@ -1717,9 +1717,15 @@ async function refreshUiSecret() {
   const response = await fetchUi('/', { cache: 'no-store' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+  const uiVersion = page.querySelector('meta[name="cockpit-ui-version"]')?.content || '';
+  if (initialUiVersion && uiVersion !== initialUiVersion) {
+    checkUiVersion({ ...lastState, uiVersion });
+    return false;
+  }
   const secret = page.querySelector('meta[name="cockpit-secret"]')?.content;
   if (!secret) throw new Error('secret unavailable');
   document.querySelector('meta[name="cockpit-secret"]').content = secret;
+  return true;
 }
 
 awayToggle.addEventListener('change', async () => {
@@ -5125,9 +5131,29 @@ document.addEventListener('change', (event) => {
   if (lastState) render(lastState);
 });
 
+function renderRestartNote(state) {
+  const note = document.getElementById('restart-note');
+  note.hidden = !state.restartRequired;
+  if (note.hidden) { note.textContent = ''; return; }
+  const running = state.runtime || {};
+  const installed = state.installed || {};
+  const differs = key => running[key] != null && installed[key] != null && running[key] !== installed[key];
+  const versionChanged = differs('version');
+  const commitChanged = differs('commit');
+  const label = value => value.version
+    ? formatRuntime({ version: value.version, commit: commitChanged ? value.commit : null })
+    : value.commit ? value.commit.slice(0, 7) : '不明';
+  const details = [];
+  if (versionChanged || commitChanged) details.push(`実行中 ${label(running)} / 配置済み ${label(installed)}。`);
+  if (state.uiVersion != null && installed.uiVersion != null && state.uiVersion !== installed.uiVersion) {
+    details.push('画面のファイルが更新されています。');
+  }
+  note.textContent = '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。' + details.join('');
+}
+
 function renderReloadNote(pending) {
   const html = pending
-    ? '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
+    ? '<span>画面が新しくなりました。この画面からは送信できないので、書きかけの回答を控えてから読み込み直してください。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
     : refreshConfirmPending
       ? '<span>書きかけの回答があります。読み込み直すと消えます。</span><button type="button" class="link-btn" data-reload-now>回答を消して読み込み直す</button>'
       : '';
@@ -5269,6 +5295,7 @@ async function refresh() {
     const awayBefore = header.dataset.away;
     applyAwayState(state.away);
     applyUpdateState(state.update);
+    renderRestartNote(state);
     applyAppVersion(state.appVersion, state.runtime);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
     const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;

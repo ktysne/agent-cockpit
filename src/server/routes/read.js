@@ -1,5 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
+const path = require('node:path');
+const { readSourceCommit } = require('../source-revision');
 const { SECURITY_HEADERS, jsonResponse, textResponse, escapeHtmlAttribute } = require('../http-helpers');
 const { APP_NAME } = require('../server-constants');
 const { codexAgentScriptPaths } = require('../identity');
@@ -10,8 +12,17 @@ const INTEGRATION_CHECK_INTERVAL_MS = 10_000;
 
 function createReadRoutes(ctx) {
   const { state, away, routing, dev, claudeHome, userHome, pullRequestTracker, codexAgentScriptExists, crossReviewToolExists, webPath, perf } = ctx;
-  let cachedUiFileStamp = null;
-  let uiVersion = null;
+  let uiTemplate = ctx.uiTemplate || null;
+  const templateVersion = content => crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+  let uiVersion = uiTemplate ? templateVersion(uiTemplate) : null;
+  let templateReading = null;
+  let installed = null;
+  function restartRequired() {
+    if (!installed) return false;
+    const running = { ...ctx.getRuntime(), uiVersion };
+    return ['version', 'commit', ...(dev ? [] : ['uiVersion'])].some(key =>
+      installed[key] != null && running[key] != null && installed[key] !== running[key]);
+  }
   const bootId = crypto.randomUUID();
   let generation = 0;
   let cachedState = null;
@@ -37,20 +48,38 @@ function createReadRoutes(ctx) {
     };
   }
 
-  async function currentUiVersion() {
+  let diskUiStamp = null;
+  let cachedDiskUiVersion = null;
+  // 画面のファイルは大きいので、更新時刻か大きさが変わったときだけ読み直す。
+  async function readDiskUiVersion() {
     try {
       const stat = await fs.stat(webPath);
       const stamp = `${stat.mtimeMs}:${stat.size}`;
-      if (stamp !== cachedUiFileStamp) {
-        const content = await fs.readFile(webPath);
-        uiVersion = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
-        cachedUiFileStamp = stamp;
+      if (stamp !== diskUiStamp) {
+        cachedDiskUiVersion = templateVersion(await fs.readFile(webPath));
+        diskUiStamp = stamp;
       }
-    } catch {}
-    return uiVersion;
+      return cachedDiskUiVersion;
+    } catch {
+      diskUiStamp = null;
+      return null;
+    }
   }
 
-  const checkUiVersion = externalCache(currentUiVersion, UI_VERSION_CHECK_INTERVAL_MS);
+  const checkInstalled = externalCache(async () => {
+    const sourceRoot = ctx.sourceRoot || path.join(__dirname, '../../..');
+    const [diskUiVersion, version, commit] = await Promise.all([
+      readDiskUiVersion(),
+      fs.readFile(path.join(sourceRoot, 'package.json'), 'utf8').then(content => {
+        const value = JSON.parse(content).version;
+        return typeof value === 'string' ? value : null;
+      }).catch(() => null),
+      readSourceCommit(sourceRoot),
+    ]);
+    installed = { version, commit, uiVersion: diskUiVersion };
+    if (dev && diskUiVersion != null) uiVersion = diskUiVersion;
+    return installed;
+  }, UI_VERSION_CHECK_INTERVAL_MS);
   let integrations = { codexAgent: false, crossReview: false };
   const checkIntegrations = externalCache(async () => {
     let codexAgent = false;
@@ -73,7 +102,7 @@ function createReadRoutes(ctx) {
 
   function fingerprint() {
     return JSON.stringify([state.version, pullRequestTracker?.inFlightSignature?.() || '',
-      away.snapshot(), routing.snapshot(), ctx.updateChecker?.snapshot() || null, uiVersion, integrations, ctx.getSourceState()]);
+      away.snapshot(), routing.snapshot(), ctx.updateChecker?.snapshot() || null, uiVersion, installed, restartRequired(), integrations, ctx.getSourceState()]);
   }
 
   function generateState(now) {
@@ -100,7 +129,7 @@ function createReadRoutes(ctx) {
       runtime: { version: ctx.getRuntime().version, commit: ctx.getRuntime().commit,
         sourceState: ctx.getSourceState(), startedAt: ctx.getRuntime().startedAt },
       away: awayState, update: ctx.updateChecker?.snapshot() || null, appVersion: ctx.appVersion,
-      routing: routing.snapshot(), integrations, uiVersion }), fingerprint: fingerprint(),
+      routing: routing.snapshot(), integrations, uiVersion, installed, restartRequired: restartRequired() }), fingerprint: fingerprint(),
       expiresAt: Math.min(deadline.at, now + STATE_CACHE_MAX_AGE_MS) };
   }
 
@@ -109,7 +138,7 @@ function createReadRoutes(ctx) {
   }
 
   async function handleState({ request, response }) {
-    await Promise.all([checkUiVersion(), checkIntegrations()]);
+    await Promise.all([checkInstalled(), checkIntegrations()]);
     await away.prune?.([...state.seenAtByProduct.values()], nowMs());
     const now = nowMs();
     let reusable = cachedState && cachedState.fingerprint === fingerprint() && now < cachedState.expiresAt;
@@ -170,18 +199,20 @@ function createReadRoutes(ctx) {
 
   async function handleIndex({ request, response, info }) {
     try {
-      let beforeStat = null;
-      try {
-        beforeStat = await fs.stat(webPath);
-      } catch {}
-      const content = await fs.readFile(webPath);
-      let afterStat = null;
-      try {
-        afterStat = await fs.stat(webPath);
-      } catch {}
-      uiVersion = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
-      const sameFile = beforeStat && afterStat && beforeStat.mtimeMs === afterStat.mtimeMs && beforeStat.size === afterStat.size && content.length === afterStat.size;
-      cachedUiFileStamp = sameFile ? `${afterStat.mtimeMs}:${afterStat.size}` : null;
+      let content;
+      if (dev) {
+        content = await fs.readFile(webPath);
+        uiVersion = templateVersion(content);
+      } else {
+        if (!uiTemplate) {
+          templateReading ||= fs.readFile(webPath).then(bytes => {
+            uiTemplate = bytes;
+            uiVersion = templateVersion(bytes);
+          }).finally(() => { templateReading = null; });
+          await templateReading;
+        }
+        content = uiTemplate;
+      }
       const template = content.toString('utf8');
       const html = template.replace(
         '<meta name="cockpit-secret" content="">',

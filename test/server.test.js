@@ -1078,7 +1078,7 @@ test('HTML 属性値のエスケープは一般の文字列に対応する', () 
   assert.equal(escapeHtmlAttribute(`&"'<>`), '&amp;&quot;&#39;&lt;&gt;');
 });
 
-test('画面の版は配信した HTML と状態 API で一致し、ファイル更新後に変わる', async (t) => {
+test('起動時に読めない画面は最初の成功した配信で固定する', async (t) => {
   let now = Date.now();
   const { homeDir, claudeHome } = await temporaryHome(t);
   const webPath = path.join(homeDir, 'dashboard.html');
@@ -1086,6 +1086,7 @@ test('画面の版は配信した HTML と状態 API で一致し、ファイル
   t.after(() => runtime.close());
 
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).uiVersion, null);
+  assert.equal((await request(runtime.info.port, { path: '/' })).status, 500);
 
   const initialHtml = '<!doctype html><meta name="cockpit-secret" content=""><meta name="cockpit-ui-version" content="">';
   await fs.writeFile(webPath, initialHtml);
@@ -1102,11 +1103,14 @@ test('画面の版は配信した HTML と状態 API で一致し、ファイル
   const updatedState = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   const updatedPage = await request(runtime.info.port, { path: '/' });
   const servedUpdatedVersion = updatedPage.body.match(/<meta name="cockpit-ui-version" content="([a-f0-9]{16})">/)?.[1];
-  assert.equal(updatedState.uiVersion, updatedVersion);
-  assert.equal(servedUpdatedVersion, updatedVersion);
+  assert.equal(updatedState.uiVersion, firstVersion);
+  assert.equal(servedUpdatedVersion, firstVersion);
+  assert.equal(updatedPage.body, firstPage.body);
+  assert.equal(updatedState.installed.uiVersion, updatedVersion);
+  assert.equal(updatedState.restartRequired, true);
 
   await fs.unlink(webPath);
-  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).uiVersion, updatedVersion);
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).uiVersion, firstVersion);
 });
 
 test('/api/tray は許可待ち、未回答の判断待ち、離席状態だけを返す', async (t) => {
