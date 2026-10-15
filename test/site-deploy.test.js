@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { temporaryDirectory } = require('./support/temp');
@@ -161,19 +162,22 @@ test('uploadSite は各ファイルを .uploading で送り、リネーム後に
   }, { client });
 
   assert.deepEqual(events.filter(event => event.type === 'upload').map(event => event.remoteName),
-    items.map(item => path.basename(item.localPath) + '.uploading'));
+    [...items.map(item => path.basename(item.localPath) + '.uploading'), 'upload-manifest.json.uploading']);
   assert.deepEqual(events.filter(event => event.type === 'rename').map(event => event.newName),
-    items.map(item => path.basename(item.localPath)));
-  assert.equal(events.filter(event => event.type === 'ensureDir' && event.directory === remoteRoot).length,
-    items.filter(item => item.remoteSubDir).length + 1);
+    [...items.map(item => path.basename(item.localPath)), 'upload-manifest.json']);
   assert.equal(currentDirectory, remoteRoot);
-  assert.deepEqual([...remoteFiles.keys()].sort(), items.map(item => path.posix.join(remoteRoot, item.label)).sort());
+  assert.deepEqual([...remoteFiles.keys()].sort(), [
+    ...items.map(item => path.posix.join(remoteRoot, item.label)),
+    path.posix.join(remoteRoot, 'upload-manifest.json'),
+  ].sort());
 });
 
 const FTP_CONFIG = { host: 'ftp.example.com', port: 21, user: 'user', password: 'password', secure: true, remoteRoot: '/remote/site' };
 
 function fakeFtpServer() {
   const remoteFiles = new Map();
+  const remoteContents = new Map();
+  const uploads = [];
   const failures = [];
   const pauses = [];
   let clients = 0;
@@ -198,9 +202,13 @@ function fakeFtpServer() {
       },
       async uploadFrom(localPath, name) {
         failIfPlanned('upload', name);
-        remoteFiles.set(remotePath(name), fs.statSync(localPath).size);
+        const content = fs.readFileSync(localPath);
+        remoteFiles.set(remotePath(name), content.length);
+        remoteContents.set(remotePath(name), content);
+        uploads.push({ name, content });
       },
       async list() {
+        failIfPlanned('list', '');
         return [...remoteFiles]
           .filter(([filePath]) => path.posix.dirname(filePath) === currentDirectory)
           .map(([filePath, size]) => ({ name: path.posix.basename(filePath), size }));
@@ -209,14 +217,33 @@ function fakeFtpServer() {
         failIfPlanned('rename', newName);
         if (!remoteFiles.has(remotePath(oldName)) || remoteFiles.has(remotePath(newName))) throw new Error('rename failed');
         remoteFiles.set(remotePath(newName), remoteFiles.get(remotePath(oldName)));
+        if (remoteContents.has(remotePath(oldName))) {
+          remoteContents.set(remotePath(newName), remoteContents.get(remotePath(oldName)));
+          remoteContents.delete(remotePath(oldName));
+        }
         remoteFiles.delete(remotePath(oldName));
       },
-      async remove(name) { remoteFiles.delete(remotePath(name)); },
+      async remove(name) {
+        remoteFiles.delete(remotePath(name));
+        remoteContents.delete(remotePath(name));
+      },
+      async downloadTo(destination, name) {
+        failIfPlanned('download', name);
+        const content = remoteContents.get(remotePath(name));
+        if (!content) throw Object.assign(new Error('550 File unavailable'), { code: 550 });
+        await new Promise((resolve, reject) => {
+          destination.once('finish', resolve);
+          destination.once('error', reject);
+          destination.end(content);
+        });
+      },
       close() { closed = true; },
     };
   };
   return {
     remoteFiles,
+    remoteContents,
+    uploads,
     failures,
     pauses,
     clientCount: () => clients,
@@ -225,13 +252,202 @@ function fakeFtpServer() {
 }
 
 function expectedRemoteFiles(items) {
-  return items.map(item => [path.posix.join(FTP_CONFIG.remoteRoot, item.label), fs.statSync(item.localPath).size])
-    .sort(([left], [right]) => (left < right ? -1 : 1));
+  const files = Object.fromEntries(items.map(item => [item.label,
+    crypto.createHash('sha256').update(fs.readFileSync(item.localPath)).digest('hex')]));
+  const manifestText = JSON.stringify({ schema: 1, algorithm: 'sha256', files }, null, 2) + '\n';
+  return [
+    ...items.map(item => [path.posix.join(FTP_CONFIG.remoteRoot, item.label), fs.statSync(item.localPath).size]),
+    [path.posix.join(FTP_CONFIG.remoteRoot, 'upload-manifest.json'), Buffer.byteLength(manifestText)],
+  ].sort(([left], [right]) => (left < right ? -1 : 1));
 }
 
 function sortedEntries(map) {
   return [...map].sort(([left], [right]) => (left < right ? -1 : 1));
 }
+
+function seedPublishedSite(server, items, { overrides = {}, manifestText } = {}) {
+  const files = {};
+  for (const item of items) {
+    const content = Buffer.from(overrides[item.label] ?? fs.readFileSync(item.localPath));
+    const remotePath = path.posix.join(FTP_CONFIG.remoteRoot, item.label);
+    server.remoteFiles.set(remotePath, content.length);
+    server.remoteContents.set(remotePath, content);
+    files[item.label] = crypto.createHash('sha256').update(content).digest('hex');
+  }
+  const text = manifestText ?? JSON.stringify({ schema: 1, algorithm: 'sha256', files }, null, 2) + '\n';
+  const manifestPath = path.posix.join(FTP_CONFIG.remoteRoot, 'upload-manifest.json');
+  server.remoteFiles.set(manifestPath, Buffer.byteLength(text));
+  server.remoteContents.set(manifestPath, Buffer.from(text));
+}
+
+test('一致するファイルは送らず、一覧も更新しない', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items);
+
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.deepEqual(server.uploads, []);
+});
+
+test('同じ大きさでも内容のハッシュが違うファイルだけを送る', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items);
+  write(siteDir, 'license.html', '<a href="./">Away</a>');
+
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.deepEqual(server.uploads.map(upload => upload.name), ['license.html.uploading', 'upload-manifest.json.uploading']);
+});
+
+test('送り始める前にサーバーの一覧を消すので、途中で止まった後の配信は全ファイルを送る', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items);
+  const original = fs.readFileSync(path.join(siteDir, 'license.html'));
+  write(siteDir, 'license.html', '<a href="./">Away</a>');
+  server.failures.push(...Array.from({ length: 4 }, () => operation => operation === 'upload'));
+
+  await assert.rejects(uploadSite(items, FTP_CONFIG, server.dependencies), /4 回切れた/);
+  assert.equal(server.remoteFiles.has(path.posix.join(FTP_CONFIG.remoteRoot, 'upload-manifest.json')), false);
+
+  fs.writeFileSync(path.join(siteDir, 'license.html'), original);
+  server.uploads.length = 0;
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.deepEqual(server.uploads.map(upload => upload.name), [
+    ...items.map(item => path.basename(item.localPath) + '.uploading'),
+    'upload-manifest.json.uploading',
+  ]);
+});
+
+test('一覧が無いと全ファイルを送り、最後に送る一覧が実送信内容のハッシュを持つ', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.deepEqual(server.uploads.map(upload => upload.name), [
+    ...items.map(item => path.basename(item.localPath) + '.uploading'),
+    'upload-manifest.json.uploading',
+  ]);
+  const manifest = JSON.parse(server.uploads.at(-1).content.toString('utf8'));
+  assert.deepEqual(Object.keys(manifest.files), items.map(item => item.label));
+  for (const [index, item] of items.entries()) {
+    assert.equal(manifest.files[item.label], crypto.createHash('sha256').update(server.uploads[index].content).digest('hex'));
+  }
+});
+
+test('不正な一覧の値が 1 件でもあれば全ファイルを送る', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items, { manifestText: JSON.stringify({ schema: 1, algorithm: 'sha256', files: { 'index.html': 'bad' } }) });
+
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.deepEqual(server.uploads.map(upload => upload.name), [
+    ...items.map(item => path.basename(item.localPath) + '.uploading'),
+    'upload-manifest.json.uploading',
+  ]);
+});
+
+test('--full は一覧とハッシュが一致していても全ファイルを送る', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items);
+
+  await uploadSite(items, FTP_CONFIG, { ...server.dependencies, full: true });
+
+  assert.deepEqual(server.uploads.map(upload => upload.name), [
+    ...items.map(item => path.basename(item.localPath) + '.uploading'),
+    'upload-manifest.json.uploading',
+  ]);
+});
+
+test('一覧に載っていてもサーバーに無いファイルは送る', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items);
+  const logoPath = path.posix.join(FTP_CONFIG.remoteRoot, 'assets/logo.png');
+  server.remoteFiles.delete(logoPath);
+  server.remoteContents.delete(logoPath);
+
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.deepEqual(server.uploads.map(upload => upload.name), ['logo.png.uploading', 'upload-manifest.json.uploading']);
+});
+
+test('一覧取得中に接続が切れたらつなぎ直して全ファイルを送る', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items);
+  server.failures.push(operation => operation === 'list');
+
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.equal(server.clientCount(), 2);
+  assert.deepEqual(server.uploads.map(upload => upload.name), [
+    ...items.map(item => path.basename(item.localPath) + '.uploading'),
+    'upload-manifest.json.uploading',
+  ]);
+});
+
+test('一覧のダウンロード中に接続が切れたらつなぎ直して全ファイルを送る', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items);
+  server.failures.push(operation => operation === 'download');
+
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.equal(server.clientCount(), 2);
+  assert.deepEqual(server.uploads.map(upload => upload.name), [
+    ...items.map(item => path.basename(item.localPath) + '.uploading'),
+    'upload-manifest.json.uploading',
+  ]);
+});
+
+test('紹介ページの埋め込み版が変わると他の一致ファイルを保って index.html を送る', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  write(siteDir, 'index.html', SITE_VERSION_HTML);
+  const items = siteItems(siteDir, manualDir);
+  const oldIndex = SITE_VERSION_HTML.replace('data-site-version></small>', 'data-site-version>v9.9.8</small>');
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items, { overrides: { 'index.html': oldIndex } });
+
+  await cmdUpload({ command: 'upload', version: 'v9.9.9' }, {
+    siteDir,
+    manualDir,
+    config: FTP_CONFIG,
+    ...server.dependencies,
+  });
+
+  assert.deepEqual(server.uploads.map(upload => upload.name), ['index.html.uploading', 'upload-manifest.json.uploading']);
+  const indexContent = server.remoteContents.get(path.posix.join(FTP_CONFIG.remoteRoot, 'index.html'));
+  const manifest = JSON.parse(server.remoteContents.get(path.posix.join(FTP_CONFIG.remoteRoot, 'upload-manifest.json')).toString('utf8'));
+  assert.equal(manifest.files['index.html'], crypto.createHash('sha256').update(indexContent).digest('hex'));
+  assert.match(indexContent.toString('utf8'), />v9\.9\.9</);
+});
 
 test('uploadSite は送信中に接続が切れたら、つなぎ直してそのファイルから送り直す', async t => {
   const { directory } = temporaryDirectory(t);
@@ -328,6 +544,7 @@ test('dry-run は対象と要確認を表示し、FTPS クライアントへ接�
 
   assert.equal(accessCount, 0);
   assert.ok(output.some(line => line.includes('要確認')));
+  assert.ok(output.some(line => line.includes('差分は送信時にサーバーの upload-manifest.json と比べて決めます')));
   assert.equal(output.filter(line => line.startsWith('  (remoteRoot 未設定)/')).length, siteItems().length);
 });
 
@@ -433,6 +650,7 @@ test('parseArgs は upload の dry-run と config を読み、未知のコマン
     config: 'custom.json',
   });
   assert.equal(parseArgs(['upload', '--version', 'v1.0.1']).version, 'v1.0.1');
+  assert.equal(parseArgs(['upload', '--full']).full, true);
 
   const previousExitCode = process.exitCode;
   const previousLog = console.log;

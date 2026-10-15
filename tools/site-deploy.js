@@ -1,8 +1,10 @@
 'use strict';
 
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
+const { Writable } = require('node:stream');
 const { isReleaseTag, latestReleaseTag } = require('./release');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -10,12 +12,24 @@ const SITE_DIR = path.join(ROOT, 'site');
 const MANUAL_DIR = path.join(ROOT, 'manual');
 // 紹介ページの版を入れる要素。中身は配信のたびに版で置き換え、リポジトリの index.html は書き換えない。
 const SITE_VERSION_ELEMENT = /<([a-z][a-z\d]*)\b([^>]*\sdata-site-version(?=[\s>])[^>]*)>[^<]*<\/\1>/gi;
+const UPLOAD_MANIFEST_NAME = 'upload-manifest.json';
+const UPLOAD_MANIFEST_SCHEMA = 1;
+const UPLOAD_MANIFEST_ALGORITHM = 'sha256';
+const MAX_UPLOAD_MANIFEST_BYTES = 1024 * 1024;
 const VALUE_OPTIONS = new Map([['--config', 'config'], ['--version', 'version']]);
 const FTP_PREFIX = 'AGENT_COCKPIT_FTP_';
 const UPLOAD_ATTEMPTS_PER_ITEM = 4;
 const UPLOAD_RECONNECT_DELAY_MS = 3000;
 const FTP_CONNECTION_LOST_CODES = new Set(['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNABORTED', 'ECONNREFUSED']);
 const FTP_CLOSING_REPLY_CODE = 421;
+const UPLOAD_REASON_LABELS = {
+  missing: 'サーバーに無い',
+  full: '--full 指定',
+  manifestUnreadable: '一覧を読めない',
+  notListed: '一覧に無い',
+  hashDiffers: 'ハッシュが違う',
+  sizeDiffers: 'サーバーの大きさが手元と違う',
+};
 
 function compareNames(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -197,6 +211,102 @@ async function uploadRemoteItem(client, item) {
   await replaceRemoteFile(client, temporaryName, item.remoteName, entries.has(item.remoteName));
 }
 
+function hashFile(localPath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(localPath)).digest('hex');
+}
+
+function buildUploadManifest(items) {
+  const files = {};
+  for (const item of items) files[item.label] = item.sha256;
+  return { schema: UPLOAD_MANIFEST_SCHEMA, algorithm: UPLOAD_MANIFEST_ALGORITHM, files };
+}
+
+function parseUploadManifest(text) {
+  let manifest;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
+      || manifest.schema !== UPLOAD_MANIFEST_SCHEMA || manifest.algorithm !== UPLOAD_MANIFEST_ALGORITHM
+      || !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)) return null;
+  const hashes = new Map();
+  for (const [label, hash] of Object.entries(manifest.files)) {
+    if (!label || typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash)) return null;
+    hashes.set(label, hash);
+  }
+  return hashes;
+}
+
+function decideUploadReason(item, { published, full }) {
+  if (item.remoteSize == null) return 'missing';
+  if (full) return 'full';
+  if (published == null) return 'manifestUnreadable';
+  const publishedHash = published.get(item.label);
+  if (publishedHash == null) return 'notListed';
+  if (publishedHash !== item.sha256) return 'hashDiffers';
+  if (item.remoteSize !== item.localSize) return 'sizeDiffers';
+  return null;
+}
+
+function planUploadItems(items, { published, full }) {
+  for (const item of items) {
+    item.reason = decideUploadReason(item, { published, full });
+    item.skipUpload = item.reason == null;
+    item.action = item.skipUpload ? 'SKIP' : 'SEND';
+  }
+}
+
+function describeUploadPlan(items) {
+  const counts = new Map();
+  for (const item of items) {
+    if (item.reason) counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
+  }
+  const sendCount = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  const lines = [`${items.length} 件のうち送らずに済むもの ${items.length - sendCount} 件、送るもの ${sendCount} 件`];
+  const reasons = Object.entries(UPLOAD_REASON_LABELS)
+    .filter(([reason]) => counts.has(reason))
+    .map(([reason, label]) => `${label} ${counts.get(reason)} 件`);
+  if (reasons.length) lines.push('  送る理由ごとの件数: ' + reasons.join('、'));
+  return lines;
+}
+
+async function readRemoteUploadManifest(client, rootIndex) {
+  if (!rootIndex.has(UPLOAD_MANIFEST_NAME)) return null;
+  const chunks = [];
+  let received = 0;
+  const sink = new Writable({
+    write(chunk, _encoding, callback) {
+      received += chunk.length;
+      if (received > MAX_UPLOAD_MANIFEST_BYTES) {
+        callback(new Error(UPLOAD_MANIFEST_NAME + ' が ' + MAX_UPLOAD_MANIFEST_BYTES + ' バイトを超えています'));
+        return;
+      }
+      chunks.push(chunk);
+      callback();
+    },
+  });
+  try {
+    await client.downloadTo(sink, UPLOAD_MANIFEST_NAME);
+  } catch (error) {
+    if (isFtpConnectionLost(client, error)) throw error;
+    console.warn('警告: サーバーの ' + UPLOAD_MANIFEST_NAME + ' を読めないため、全部を送ります (' + error.message + ')');
+    return null;
+  }
+  const published = parseUploadManifest(Buffer.concat(chunks).toString('utf8'));
+  if (published == null) console.warn('警告: サーバーの ' + UPLOAD_MANIFEST_NAME + ' の形式が不正なため、全部を送ります。');
+  return published;
+}
+
+// 送り始める前に一覧を消す。途中で止まった後に古い一覧が残ると、元の内容へ戻したファイルが送り途中の内容のまま一致と判定されるため。
+async function withdrawRemoteUploadManifest(client) {
+  try { await client.remove(UPLOAD_MANIFEST_NAME); } catch {}
+  if ((await listCurrentDirectory(client)).has(UPLOAD_MANIFEST_NAME)) {
+    throw new Error('サーバーの ' + UPLOAD_MANIFEST_NAME + ' を消せないため、送らずに止めます。');
+  }
+}
+
 // 421 は FTP サーバーが制御接続を閉じる前に返す応答で、ソケットの終了より先に届くことがある。
 function isFtpConnectionLost(client, error) {
   return client.closed === true || FTP_CONNECTION_LOST_CODES.has(error?.code) || error?.code === FTP_CLOSING_REPLY_CODE;
@@ -225,6 +335,23 @@ async function uploadSite(items, config, dependencies = {}) {
   };
   if (config.secureOptions) accessOptions.secureOptions = config.secureOptions;
 
+  const uploadItems = items.map(item => ({
+    ...item,
+    remoteName: path.basename(item.localPath),
+    localSize: fs.statSync(item.localPath).size,
+    sha256: hashFile(item.localPath),
+  }));
+  const manifestText = JSON.stringify(buildUploadManifest(uploadItems), null, 2) + '\n';
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-upload-'));
+  const manifestPath = path.join(temporaryDirectory, UPLOAD_MANIFEST_NAME);
+  fs.writeFileSync(manifestPath, manifestText);
+  const manifestItem = {
+    label: UPLOAD_MANIFEST_NAME,
+    localPath: manifestPath,
+    remoteName: UPLOAD_MANIFEST_NAME,
+    remoteSubDir: '',
+    localSize: Buffer.byteLength(manifestText),
+  };
   let client = createClient();
   const enterItemDirectory = async item => {
     await client.cd('/');
@@ -232,45 +359,102 @@ async function uploadSite(items, config, dependencies = {}) {
     if (item.remoteSubDir) await client.ensureDir(item.remoteSubDir);
   };
 
+  const listRemoteDirectory = async remoteSubDir => {
+    await client.cd('/');
+    await client.ensureDir(remoteRoot);
+    if (remoteSubDir) await client.ensureDir(remoteSubDir);
+    const entries = await listCurrentDirectory(client);
+    if (client.closed) throw Object.assign(new Error('一覧の取得中に FTP の接続が切れました'), { code: 'ECONNRESET' });
+    return entries;
+  };
+
+  const inspectRemote = async full => {
+    let inspectionReconnects = 0;
+    let manifestUnavailable = false;
+    while (true) {
+      try {
+        const rootIndex = await listRemoteDirectory('');
+        const subDirIndexes = new Map();
+        for (const remoteSubDir of new Set(uploadItems.map(item => item.remoteSubDir).filter(Boolean))) {
+          subDirIndexes.set(remoteSubDir, await listRemoteDirectory(remoteSubDir));
+        }
+        await client.cd('/');
+        await client.ensureDir(remoteRoot);
+        const published = full || manifestUnavailable
+          ? null
+          : await readRemoteUploadManifest(client, rootIndex);
+        for (const item of uploadItems) {
+          const directoryIndex = item.remoteSubDir ? subDirIndexes.get(item.remoteSubDir) : rootIndex;
+          item.remoteSize = directoryIndex.get(item.remoteName)?.size;
+        }
+        planUploadItems(uploadItems, { published, full });
+        return;
+      } catch (error) {
+        if (!isFtpConnectionLost(client, error)) throw error;
+        if (inspectionReconnects >= UPLOAD_ATTEMPTS_PER_ITEM - 1) throw error;
+        inspectionReconnects += 1;
+        manifestUnavailable = true;
+        console.warn('警告: サーバーの一覧を確認中に FTP の接続が切れたため、つなぎ直して全部を送ります (' + error.message + ')');
+        client.close();
+        await pauseBeforeReconnect(UPLOAD_RECONNECT_DELAY_MS);
+        client = createClient();
+        await client.access(accessOptions);
+      }
+    }
+  };
+
+  const sendItem = async item => {
+    item.remoteName ??= path.basename(item.localPath);
+    item.localSize ??= fs.statSync(item.localPath).size;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        if (attempt > 1) {
+          await pauseBeforeReconnect(UPLOAD_RECONNECT_DELAY_MS);
+          client.close();
+          client = createClient();
+          await client.access(accessOptions);
+          await enterItemDirectory(item);
+          await restorePreviousName(client, item);
+        } else if (item.remoteSubDir) {
+          await client.ensureDir(item.remoteSubDir);
+        }
+        await uploadRemoteItem(client, item);
+        if (item.remoteSubDir || attempt > 1) {
+          await client.cd('/');
+          await client.ensureDir(remoteRoot);
+        }
+        break;
+      } catch (error) {
+        // サーバーは多くのファイルを送る途中で接続を切ることがある。切れたらつなぎ直し、そのファイルから送り直す。
+        if (!isFtpConnectionLost(client, error)) throw error;
+        if (attempt >= UPLOAD_ATTEMPTS_PER_ITEM) {
+          throw new Error(item.label + ' の送信中に FTP の接続が ' + attempt + ' 回切れたので止めます。'
+            + 'もう一度実行すると、最初から送り直します (' + error.message + ')');
+        }
+        console.warn('警告: ' + item.label + ' の送信中に FTP の接続が切れたので、つなぎ直して送り直します (' + error.message + ')');
+      }
+    }
+    console.log('  送信しました: ' + item.label);
+  };
+
   try {
     await client.access(accessOptions);
     await client.cd('/');
     await client.ensureDir(remoteRoot);
-    for (const item of items) {
-      item.remoteName = path.basename(item.localPath);
-      item.localSize = fs.statSync(item.localPath).size;
-      for (let attempt = 1; ; attempt += 1) {
-        try {
-          if (attempt > 1) {
-            await pauseBeforeReconnect(UPLOAD_RECONNECT_DELAY_MS);
-            client.close();
-            client = createClient();
-            await client.access(accessOptions);
-            await enterItemDirectory(item);
-            await restorePreviousName(client, item);
-          } else if (item.remoteSubDir) {
-            await client.ensureDir(item.remoteSubDir);
-          }
-          await uploadRemoteItem(client, item);
-          if (item.remoteSubDir || attempt > 1) {
-            await client.cd('/');
-            await client.ensureDir(remoteRoot);
-          }
-          break;
-        } catch (error) {
-          // サーバーは多くのファイルを送る途中で接続を切ることがある。切れたらつなぎ直し、そのファイルから送り直す。
-          if (!isFtpConnectionLost(client, error)) throw error;
-          if (attempt >= UPLOAD_ATTEMPTS_PER_ITEM) {
-            throw new Error(item.label + ' の送信中に FTP の接続が ' + attempt + ' 回切れたので止めます。'
-              + 'もう一度実行すると、最初から送り直します (' + error.message + ')');
-          }
-          console.warn('警告: ' + item.label + ' の送信中に FTP の接続が切れたので、つなぎ直して送り直します (' + error.message + ')');
-        }
-      }
-      console.log('  送信しました: ' + item.label);
+    await inspectRemote(Boolean(dependencies.full));
+    console.log('FTPS 差分送信計画:');
+    for (const item of uploadItems) {
+      console.log('  ' + item.action + ' ' + item.label
+        + (item.reason ? '  理由: ' + UPLOAD_REASON_LABELS[item.reason] : '  理由: 前回の配信と一致'));
     }
+    console.log(describeUploadPlan(uploadItems).join('\n'));
+    if (uploadItems.every(item => item.skipUpload)) return;
+    await withdrawRemoteUploadManifest(client);
+    for (const item of uploadItems) if (!item.skipUpload) await sendItem(item);
+    await sendItem(manifestItem);
   } finally {
     client.close();
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 }
 
@@ -289,6 +473,10 @@ function parseArgs(argv) {
       options.dryRun = true;
       continue;
     }
+    if (arg === '--full') {
+      options.full = true;
+      continue;
+    }
     const key = VALUE_OPTIONS.get(arg);
     if (!key) throw new Error('不明な引数です: ' + arg);
     const value = argv[index + 1];
@@ -302,7 +490,7 @@ function parseArgs(argv) {
 function printUsage() {
   console.log([
     '使い方:',
-    '  node tools/site-deploy.js upload [--dry-run] [--config <path>] [--version vX.Y.Z]',
+    '  node tools/site-deploy.js upload [--dry-run] [--full] [--config <path>] [--version vX.Y.Z]',
   ].join('\n'));
 }
 
@@ -344,6 +532,7 @@ async function cmdUpload(opt, dependencies = {}) {
       configProblem = error.message;
     }
     console.log('埋め込む紹介ページの版: ' + (version || '(版のタグが無いため空)'));
+    console.log('差分は送信時にサーバーの upload-manifest.json と比べて決めます。');
     console.log('FTPS 送信計画 (remoteRoot: ' + (remoteRoot ?? '(未設定)') + '):');
     for (const item of items) {
       const size = item === index ? Buffer.byteLength(indexHtml) : fs.statSync(item.localPath).size;
@@ -364,7 +553,7 @@ async function cmdUpload(opt, dependencies = {}) {
     const indexPath = path.join(temporaryDirectory, 'index.html');
     fs.writeFileSync(indexPath, indexHtml);
     const sendItems = items.map(item => (item === index ? { ...item, localPath: indexPath } : item));
-    await uploadSite(sendItems, config, dependencies);
+    await uploadSite(sendItems, config, { ...dependencies, full: opt.full });
   } finally {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
