@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
 const {
   startMcpServer,
+  SERVER_VERSION,
   MCP_GITHUB_TIMEOUT_MS,
   TIMEOUT_MESSAGE,
   UNREACHABLE_MESSAGE,
@@ -66,6 +67,56 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
   assert.ok(!JSON.stringify(sent).includes('also-must-not-be-sent'));
   assert.ok(!JSON.stringify(responses).includes('also-must-not-be-sent'));
   assert.ok(!JSON.stringify(responses).includes('test-secret'));
+});
+
+test('MCP stdio の診断送信はプロセスの version と起動時に読んだ commit を付け、読めない commit は省く', async () => {
+  const collectDiagnostics = async readSourceCommit => {
+    const diagnostics = [];
+    let resolveDiagnostics;
+    const diagnosticsSent = new Promise(resolve => { resolveDiagnostics = resolve; });
+    const responses = await exchange([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'cockpit_set_tasks', arguments: { tasks: [] } } },
+    ], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-diagnostic-version' },
+      readSourceCommit,
+      ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+      fetchImpl: async (url, init) => {
+        if (url.endsWith('/api/diagnostics')) {
+          diagnostics.push(JSON.parse(init.body).entries[0].data);
+          if (diagnostics.length === 2) resolveDiagnostics();
+          return new Response('{}', { status: 202 });
+        }
+        return new Response(JSON.stringify({ tasks: [] }), { status: 200 });
+      },
+    });
+    await diagnosticsSent;
+    assert.equal(responses[1].id, 2);
+    return diagnostics;
+  };
+
+  let commitReads = 0;
+  const commit = 'b'.repeat(40);
+  const withCommit = await collectDiagnostics(async () => { commitReads += 1; return commit; });
+  assert.equal(commitReads, 1);
+  assert.deepEqual(withCommit, [
+    { tool: 'cockpit_set_tasks', phase: 'attempt', version: SERVER_VERSION, commit },
+    { tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200, version: SERVER_VERSION, commit },
+  ]);
+
+  let readBeforeWrite = 0;
+  await exchange([{ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }], {
+    readSourceCommit: async () => { readBeforeWrite += 1; return commit; },
+  });
+  assert.equal(readBeforeWrite, 1);
+
+  const withoutCommit = await collectDiagnostics(async () => null);
+  assert.deepEqual(withoutCommit, [
+    { tool: 'cockpit_set_tasks', phase: 'attempt', version: SERVER_VERSION },
+    { tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200, version: SERVER_VERSION },
+  ]);
 });
 
 test('cockpit_add_pr は PR URL を秘密値付きで常駐サーバーへ登録する', async () => {
