@@ -71,6 +71,9 @@ test('版はウィンドウのタイトルにだけ付け、見出しは名前�
   context.applyAppVersion('1.0.0');
   context.updateTitle([]);
   assert.equal(context.document.title, '(2) Agent Cockpit v1.0.0');
+  context.applyAppVersion(null, { version: '1.4.0', commit: 'c933f60abcdef', sourceState: 'dirty' });
+  context.updateTitle([]);
+  assert.equal(context.document.title, '(2) Agent Cockpit v1.4.0');
   context.applyAppVersion(null);
   context.countJudgments = () => ({ permission: 0, blocking: 0 });
   context.updateTitle([]);

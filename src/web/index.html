@@ -5204,7 +5204,7 @@ function renderReloadNote(pending) {
 }
 
 function applyAppVersion(version, runtime) {
-  if (runtime !== undefined) appVersion = runtime?.version ? formatRuntime(runtime) : '';
+  if (runtime !== undefined) appVersion = runtime?.version ? `v${runtime.version}` : '';
   else appVersion = typeof version === 'string' ? `v${version}` : '';
 }
 

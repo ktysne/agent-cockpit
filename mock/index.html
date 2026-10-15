@@ -1682,7 +1682,7 @@ function renderSummary() {
   const counts = { ...judgmentCounts, agents, prs };
   // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
   const need = judgmentCounts.permission + judgmentCounts.blocking;
-  const appTitle = `Agent Cockpit ${formatRuntime(DIAGNOSTIC_RUN_SEED[0].runtime)}`;
+  const appTitle = `Agent Cockpit v${DIAGNOSTIC_RUN_SEED[0].runtime.version}`;
   document.title = need ? `(${need}) ${appTitle}` : appTitle;
   // 隠している種類は 0 件でも札を残す。札を押すことが、その種類を個別に表示へ戻す手段であるため。
   document.getElementById('summary').innerHTML = FILTERS.filter(x => counts[x.key] > 0 || !isShown(x.key)).map(x =>
