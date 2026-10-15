@@ -13,6 +13,7 @@ function roundMilliseconds(value) {
 class PerfMetrics {
   constructor() {
     this.timings = new Map();
+    this.counts = new Map();
     this.loop = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS });
     this.loop.enable();
   }
@@ -43,10 +44,15 @@ class PerfMetrics {
     this.timings.set(name, timing);
   }
 
+  count(name) {
+    this.counts.set(name, (this.counts.get(name) || 0) + 1);
+  }
+
   // 1 回も呼ばれなかった処理は項目を出さない。取り出した後は集計をリセットする。
   // イベントループの値は、サンプルが無いと histogram の既定値が出るため 0 にする。
   summary() {
     const data = {};
+    for (const [name, count] of this.counts) data[`${name}Count`] = count;
     for (const [name, timing] of this.timings) {
       data[`${name}Count`] = timing.count;
       data[`${name}TotalMs`] = roundMilliseconds(timing.totalMs);
@@ -56,6 +62,7 @@ class PerfMetrics {
     data.loopP99Ms = sampled ? roundMilliseconds(this.loop.percentile(99) / NANOSECONDS_PER_MILLISECOND) : 0;
     data.loopMaxMs = sampled ? roundMilliseconds(this.loop.max / NANOSECONDS_PER_MILLISECOND) : 0;
     this.timings.clear();
+    this.counts.clear();
     this.loop.reset();
     return data;
   }

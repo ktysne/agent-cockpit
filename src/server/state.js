@@ -481,7 +481,10 @@ class AwayState {
     return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
   }
 
-  snapshot() {
+  snapshot(deadline) {
+    for (const period of this.value.periods) {
+      if (period.end !== null) deadline?.propose(period.end + STORE_RETENTION_MS + 1);
+    }
     return { ...this.value, periods: this.value.periods.map((period) => ({ ...period })) };
   }
 
@@ -1996,7 +1999,7 @@ class DashboardState {
     return true;
   }
 
-  mergedPullRequestHistoryForRepo(owner, repo, now = Date.now()) {
+  mergedPullRequestHistoryForRepo(owner, repo, now = Date.now(), deadline) {
     if (!Number.isFinite(this.lastStorePruneAt) || now < this.lastStorePruneAt ||
       now - this.lastStorePruneAt >= STORE_PRUNE_MIN_INTERVAL_MS) this.pruneExpiredStoreRecords(now);
     // 整理は間引くので、間引いた間に期限を過ぎた記録もここで除く。
@@ -2004,7 +2007,10 @@ class DashboardState {
       .filter((record) => !record.historyDismissedAt && now - Date.parse(record.mergedAt) < MERGED_PULL_REQUEST_RETENTION_MS)
       .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
       .sort((left, right) => Date.parse(right.mergedAt) - Date.parse(left.mergedAt) || right.number - left.number)
-      .map((record) => ({ ...record, providers: this.pullRequestProviders(record.owner, record.repo, record.number) }));
+      .map((record) => {
+        deadline?.propose(Date.parse(record.mergedAt) + MERGED_PULL_REQUEST_RETENTION_MS);
+        return { ...record, providers: this.pullRequestProviders(record.owner, record.repo, record.number) };
+      });
   }
 
   dismissMergedPullRequestHistory(owner, repo, number, now = Date.now()) {
@@ -2131,14 +2137,17 @@ class DashboardState {
     this.touch();
   }
 
-  pullRequestMergeReservationNoticesForRepo(owner, repo, now = Date.now()) {
+  pullRequestMergeReservationNoticesForRepo(owner, repo, now = Date.now(), deadline) {
     return [...this.pullRequestMergeReservationNotices.values()]
       .filter((record) => {
         const timestamp = Date.parse(record.at || '');
         return record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase()
           && !(Number.isFinite(timestamp) && now >= timestamp && now - timestamp >= TRANSIENT_NOTICE_MS);
       })
-      .map((record) => ({ ...record }));
+      .map((record) => {
+        deadline?.propose(Date.parse(record.at) + TRANSIENT_NOTICE_MS);
+        return { ...record };
+      });
   }
 
   clearPullRequestMergeReservation(owner, repo, number) {
@@ -3589,7 +3598,7 @@ class DashboardState {
     return { products, visibleProductKeys };
   }
 
-  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
+  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = [], deadline) {
     const sources = this.sinceSeenSources(pullRequestGroups);
     const { products, visibleProductKeys } = this.sinceSeenProducts(sessions, sources);
 
@@ -3603,6 +3612,11 @@ class DashboardState {
       ...this.mergedPullRequestCandidates(sources),
     ];
     const eventsByProduct = groupSinceSeenEvents(candidates, products);
+    if (awayPeriods.some((period) => period.end === null)) {
+      for (const events of eventsByProduct.values()) {
+        for (const event of events) deadline?.propose(Date.parse(event.at));
+      }
+    }
 
     const sinceSeen = [];
     for (const product of products.values()) {

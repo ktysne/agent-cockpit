@@ -255,6 +255,22 @@ PostToolUse の出力全文は送らない。
 - 表示設定 `display.awayAnswerWaitMinutes` は離席中の質問への回答を待つ時間で、既定は 3 分、範囲は 1〜30 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 3 分へ戻し、書き込み時は拒む。
 - `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, routing, integrations, uiVersion}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`GET /api/tray` はトレイ用に `{permissionKeys, decisionKeys, awayEnabled}` を返し、PR や「前回見てから」の情報を計算しない。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
 `POST /api/update/check` は今すぐの版の確認で、「更新の確認」の節に記す。
+- `GET /api/state` は計算済みの JSON 本文を、状態の指紋と有効期限が変わらない間だけ使い回す。
+  指紋は `state.version`、PR の取得中の鍵の署名、整理後の離席状態、経路設定、更新確認の結果、画面の版、連携ツールの検出結果から作る。
+  画面ファイルは 5 秒、連携ツールは 10 秒を確認期限とし、状態の版が変わった場合も確認し直す。
+  同時に要求が来たときは実行中の外部確認を共有する。確認中に版が変わっても待ち直さず、次の取得で確認し直す。イベントが続く間も応答を止めないためである。
+  外部確認と離席期間の整理を済ませてから本文を同期で生成し、初回表示による既読時刻の初期化を含め、生成後の版で指紋を確定する。
+- 本文の有効期限は生成から 30 秒以内とし、予約通知の消失、マージ履歴の保持期限、開いた離席期間へ未来の記録が入る時刻、離席期間の保持期限が先に来れば、その時刻で失効する。
+  `ETag` は起動ごとの UUID と本文生成の連番を組み合わせる。
+  期限で作り直す場合も新しい ETag を付け、再起動前の ETag は一致させない。
+  `If-None-Match` が現在の ETag と一致するときは本文なしの `304`、一致しなければ JSON 本文付きの `200` を返す。
+  応答の `Cache-Control: no-store` と安全のためのヘッダーは両方に付ける。
+  画面は 2 秒周期を維持し、304 でも接続成功の時刻を更新する。
+  前回の状態と ETag は切断中も保ち、通知の期限など時刻に応じた表示は前回の状態から描き直す。
+- `AGENT_COCKPIT_VERIFY_STATE_CACHE=1` では、使い回す本文を再生成した本文と照合する。
+  食い違いがあれば `state.cache.mismatch` を診断に記録し、新しい本文と ETag を返す。
+  通常のテストでもこの照合を有効にする。
+  `server.perf` の `stateCacheHitCount / stateCount` で使い回しの割合を確認できる。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
 ## 保存

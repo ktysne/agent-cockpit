@@ -85,16 +85,16 @@ test('refresh は後に始めた取得を反映した後に届いた古い応答
     applyAwayState() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
     refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
-    lastVersion: 0, lastState: null, liveStatus: {}, render() {}, countJudgments: () => ({ permission: 0, decisions: 0 }),
+    lastVersion: 0, lastState: null, lastStateEtag: null, liveStatus: {}, render() {}, countJudgments: () => ({ permission: 0, decisions: 0 }),
     isIdleHiddenSession: () => false,
   });
   vm.runInContext(functionSource(html, 'refresh'), context);
   const older = context.refresh();
   const newer = context.refresh();
   const newerState = { version: 2, sessions: [], away: {}, update, pullRequests: [] };
-  responses[1]({ ok: true, json: async () => newerState });
+  responses[1]({ ok: true, headers: { get: () => 'newer' }, json: async () => newerState });
   await newer;
-  responses[0]({ ok: true, json: async () => ({ version: 1, sessions: [], away: {}, update, pullRequests: [] }) });
+  responses[0]({ ok: true, headers: { get: () => 'older' }, json: async () => ({ version: 1, sessions: [], away: {}, update, pullRequests: [] }) });
   assert.equal(await older, true);
   assert.equal(context.lastState, newerState);
   assert.equal(context.appliedRefreshSequence, 2);
@@ -104,15 +104,65 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
   const notices = [];
   const state = { version: 1, sessions: [], away: {}, update, pullRequests: [] };
   const context = vm.createContext({
-    fetchUi: async () => ({ ok: true, json: async () => state }), checkUiVersion: () => false,
+    fetchUi: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => state }), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
     applyAwayState() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
-    lastVersion: 1, liveStatus: {}, render: () => assert.fail('状態全体は描き直さない'),
+    lastVersion: 1, lastStateEtag: 'same', liveStatus: {}, render: () => assert.fail('状態全体は描き直さない'),
   });
   vm.runInContext(functionSource(html, 'refresh'), context);
   await context.refresh();
   assert.deepEqual(notices, [update]);
+});
+
+function refreshContext(fetch) {
+  const state = { version: 1, sessions: [], away: {}, pullRequests: [] };
+  const failures = [];
+  const renders = [];
+  const context = vm.createContext({
+    fetch, reportWebFailure: (...args) => failures.push(args), checkUiVersion: () => false,
+    syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
+    applyAwayState() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
+    refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
+    sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
+    lastVersion: 1, lastState: state, lastStateEtag: '"first"', connectionLost: true, lastStateAt: null,
+    liveStatus: {}, hasRenderedState: true, render: value => renders.push(value),
+  });
+  vm.runInContext(['fetchUi', 'refresh'].map(name => functionSource(html, name)).join('\n'), context);
+  return { context, state, failures, renders };
+}
+
+test('304 は前回の状態を保ち、切断からの復帰と時刻に応じた表示更新を成功として扱う', async () => {
+  let options;
+  const { context, state, failures, renders } = refreshContext(async (_url, value) => {
+    options = value;
+    return { status: 304, ok: false, json: () => assert.fail('304 の本文は読まない') };
+  });
+  context.pullRequestExpirySignature = () => 'expired';
+  assert.equal(await context.refresh(), true);
+  assert.equal(options.cache, 'no-store');
+  assert.equal(options.headers['If-None-Match'], '"first"');
+  assert.equal(context.lastState, state);
+  assert.equal(context.connectionLost, false);
+  assert.ok(context.lastStateAt);
+  assert.deepEqual(failures, []);
+  assert.deepEqual(renders, [state]);
+});
+
+test('接続に失敗しても ETag を保ち、復帰後の 200 で新しい ETag を保存する', async () => {
+  let offline = true;
+  const next = { version: 1, sessions: [], away: {}, pullRequests: [] };
+  const { context, renders } = refreshContext(async () => {
+    if (offline) throw new Error('offline');
+    return { status: 200, ok: true, headers: { get: () => '"next"' }, json: async () => next };
+  });
+  assert.equal(await context.refresh(), false);
+  assert.equal(context.lastStateEtag, '"first"');
+  offline = false;
+  assert.equal(await context.refresh(), true);
+  assert.equal(context.lastStateEtag, '"next"');
+  assert.equal(context.connectionLost, false);
+  assert.deepEqual(renders, [next]);
 });
 
 function updateCheckContext(send) {
