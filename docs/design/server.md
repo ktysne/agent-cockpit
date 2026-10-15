@@ -375,6 +375,13 @@ base と head の対応から関連するオープン PR を積み上げる。�
 cwd の worktree の GitHub の remote のどれも PR のリポジトリと一致しないときは、クロスレビューを「確認できない」とし、その worktree をほかの worktree の候補からも外す。remote が読めないときや GitHub の remote が無いときは、この照合をしない。
 表示設定 `display.mergeableCondition` は「マージ操作が可能」「CI が成功」「現在の head のクロスレビューが収束または不要」の各条件を選ぶ。既定は最後の条件まで求める。収束は `lastTriage.round` と現在の round が一致し、`lastTriage.sha` と現在の head が一致する場合だけ有効とする。操作可否は CI とクロスレビューを含めずに判定し、選択条件を満たすかどうかでカードの緑表示、待ち条件と件数を決める。操作可だが条件が残る場合も、確認欄に警告を出して開発者が実行できる。
 クロスレビュー不要記録は PR の owner/repo/番号、head SHA、理由を `store.json` の `crossReviewSkips` に保存する。MCP の `cockpit_skip_review` は登録元セッションからのみ記録でき、ダッシュボードの操作は起動時の秘密値と必須 Origin を照合して記録または取り消す。どちらもサーバーが最新の PR head を取り直して照合し、別の head には適用しない。head が変われば記録を無効にし、PR 登録の保持期限に合わせて削除する。
+メインセッションの Stop 開始時だけ、登録先 repo の進行中の再取得を待ってからローカルのレビュー記録を読み直し、記録の無い PR があればレビュー不要の記録を促す。
+`stop-start` は判定を待たずに generation を返し、判定は Claude の最初の `stop-poll` と Codex の `stop-check` で待つ。`stop-start` のフックは 1 秒で打ち切るため。
+待機と読み直しの合計上限は 3 秒とし、失敗や時間切れでは催促せず Stop を続ける。Codex の `stop-check` のフックは、この上限に 2 秒を足した時間まで応答を待つ。
+登録済みの open な PR のうち `crossReview === null` だけを対象とし、開発者の回答を待つ判断事項（waiting）があるセッションには催促しない。推奨を仮に適用した判断事項（provisional）は自走中に残り続けるので、抑止の条件にしない。
+催促は Stop の generation に紐づけて返す。通常の通知キューには入れず、待機中の再取得完了やポーリングでは再判定しない。
+同じセッション、PR、head への配信はメモリー上で一度だけに制限し、セッション終了で記録を消す。本文に head SHA は含めず、現在の head を確かめて `cockpit_skip_review` に理由と渡すよう促す。
+診断ログは配信した PR ごとに repository、番号、セッション ID の先頭 8 文字だけを残す。
 MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り消しは `POST /api/pull-requests/review-skip` を使う。画面からの要求は `uiSecret` と `validRequiredUiOrigin` を通し、登録キーと表示中の head SHA が最新状態と一致することを確かめる。
 各プロダクトの PR 群には、リポジトリ全体の失敗をまとめた `error` とは別に、そのプロダクトのオープンの PR を数えきれていないことを示す `openStateUnknown` を付ける。PR の一覧を取得できなかったときと、そのプロダクトが登録した PR の状態を確かめられなかったときに真にする。
 取得できないリポジトリ(存在しないリポジトリの PR を登録した場合など)のエラーは、原因の登録が残る限り出続ける。そのため、PR 群に、状態が `unknown` の登録と関連 PR の件数 `unregisterableCount` を付け、画面はエラーの枠に「このリポジトリの登録を外す」を出す。`POST /api/pull-requests/repository/unregister` は、秘密値と必須 Origin を照合したうえで、そのリポジトリの `unknown` の記録だけを消す。`open`、`closed`、`merged` の記録、マージの履歴、予約は消さない。

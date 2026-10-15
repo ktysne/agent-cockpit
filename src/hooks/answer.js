@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const { cockpitHomeFromOptions } = require('../server/identity');
-const { MAX_LONG_POLL_MS, denyAnswerOutput } = require('../server/decision-answers');
+const { MAX_LONG_POLL_MS, REVIEW_REMINDER_WAIT_MS, denyAnswerOutput } = require('../server/decision-answers');
 const { postToServer } = require('../client/server-connection');
 const { isHookSessionId } = require('../server/session-ids');
 
@@ -8,6 +8,8 @@ const ANSWER_HOOK_TIMEOUT_MS = 30 * 60_000 + 30_000;
 const ANSWER_HOOK_DEADLINE_GRACE_MS = 30_000;
 const CODEX_STOP_WAIT_MS = 59 * 60_000;
 const POST_TOOL_BATCH_TIMEOUT_MS = 1_000;
+// stop-check はレビュー記録の催促の判定を待ってから応答するため。
+const CODEX_STOP_CHECK_TIMEOUT_MS = REVIEW_REMINDER_WAIT_MS + 2_000;
 const ASK_OUTCOMES = new Set(['answered', 'timeout', 'released', 'server-lost']);
 
 function validSessionId(value) {
@@ -161,7 +163,7 @@ async function runCodexStopCheck(input, options) {
     id: crypto.randomUUID(),
     hook_at: now(),
     provider: 'codex',
-  }, { ...options, timeoutMs: 1_000 });
+  }, { ...options, timeoutMs: CODEX_STOP_CHECK_TIMEOUT_MS });
   if (result?.hookOutput) return { exitCode: 0, output: result.hookOutput, stderrText: null };
   if (result?.wait !== true || !Number.isInteger(result.generation)) {
     return { exitCode: 0, output: null, stderrText: null };

@@ -582,9 +582,9 @@ test('後続の Stop、UserPromptSubmit、SessionEnd、親の終了で Stop の�
     const state = new DashboardState();
     const away = { snapshot: () => ({ enabled: false }) };
     const delivery = new DecisionAnswerDelivery({ state, away, now: () => NOW });
-    const generation = delivery.startStop('session-stop', 'stop-1', NOW);
+    const generation = await delivery.startStop('session-stop', 'stop-1', NOW);
     const waiting = delivery.waitForStopAnswer('session-stop', generation);
-    if (ending === 'Stop') delivery.startStop('session-stop', 'stop-2', NOW + 1);
+    if (ending === 'Stop') await delivery.startStop('session-stop', 'stop-2', NOW + 1);
     else delivery.handleLifecycleEvent('session-stop', ending, `${ending}-1`, NOW + 1);
     assert.deepEqual(await waiting, { stderrText: null, done: true });
   }
@@ -689,7 +689,7 @@ test('不在終了したセッションが再び一覧に載ると配信側の�
 test('作業イベントは古い Stop を終え、回答待ちの質問を Stop から配信しない', async () => {
   const state = new DashboardState();
   const delivery = new DecisionAnswerDelivery({ state, away: { snapshot: () => ({ enabled: false }) }, now: () => NOW });
-  const generation = delivery.startStop('session-stop-work', 'stop-1', NOW);
+  const generation = await delivery.startStop('session-stop-work', 'stop-1', NOW);
   const waiting = delivery.waitForStopAnswer('session-stop-work', generation);
   delivery.afterEvent(sanitizeEvent({
     session_id: 'session-stop-work', hook_event_name: 'PreToolUse', hookAt: NOW + 1,
@@ -698,7 +698,7 @@ test('作業イベントは古い Stop を終え、回答待ちの質問を Stop
   assert.deepEqual(await waiting, { stderrText: null, done: true });
 
   const fixture = makeFixture();
-  const stopGeneration = fixture.delivery.startStop(fixture.sessionId, 'stop-answer', NOW);
+  const stopGeneration = await fixture.delivery.startStop(fixture.sessionId, 'stop-answer', NOW);
   const stopWaiting = fixture.delivery.waitForStopAnswer(fixture.sessionId, stopGeneration);
   fixture.delivery.submitAnswer(fixture.sessionId, fixture.registration.decisionId, 'ok', 'PreToolUse に渡す回答');
   assert.equal(fixture.delivery.deliverPending(fixture.sessionId), null);
@@ -706,7 +706,7 @@ test('作業イベントは古い Stop を終え、回答待ちの質問を Stop
   assert.equal(fixture.delivery.deliverPrompt(fixture.sessionId, 'prompt-answer', NOW + 2), null);
 });
 
-test('古い Stop は世代を進めずに開始を拒否する', () => {
+test('古い Stop は世代を進めずに開始を拒否する', async () => {
   const delivery = new DecisionAnswerDelivery({
     state: new DashboardState(), away: { snapshot: () => ({ enabled: false }) }, now: () => NOW,
   });
@@ -715,9 +715,9 @@ test('古い Stop は世代を進めずに開始を拒否する', () => {
     tool_name: 'Read', tool_use_id: 'read-1',
   }));
 
-  assert.equal(delivery.startStop('session-stale-stop', 'stop-old', NOW), null);
+  assert.equal(await delivery.startStop('session-stale-stop', 'stop-old', NOW), null);
   assert.equal(delivery.stopGenerations.get('session-stale-stop'), 1);
-  assert.equal(delivery.startStop('session-stale-stop', 'stop-new', NOW + 11), 2);
+  assert.equal(await delivery.startStop('session-stale-stop', 'stop-new', NOW + 11), 2);
 });
 
 test('古い Stop のフックはサーバーへ再接続せずに終了する', async (t) => {
@@ -768,7 +768,7 @@ test('Stop の long-poll は 25 秒で再待機できる状態を返す', async 
     clearTimeoutImpl: (id) => clock.clearTimeout(id),
     maxLongPollMs: 25_000,
   });
-  const generation = delivery.startStop('session-stop-poll', 'stop-1', NOW);
+  const generation = await delivery.startStop('session-stop-poll', 'stop-1', NOW);
   const poll = delivery.waitForStopAnswer('session-stop-poll', generation);
   assert.ok([...clock.timers.values()].some((timer) => timer.at - clock.now() === 25_000));
 

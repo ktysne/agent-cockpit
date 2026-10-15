@@ -33,6 +33,7 @@ const ALLOWED_DATA = Object.freeze({
   'merge.cancelled': ['repository', 'number'],
   'merge.result': ['repository', 'number', 'result'],
   'session.ended': ['session', 'provider', 'reason'],
+  'review.reminder': ['repository', 'number', 'session'],
   'review.state': ['repository', 'number', 'session', 'file', 'head', 'failure', 'round', 'outcome', 'triageHead'],
   'diagnostics.rotate': ['segment', 'version', 'commit', 'sourceState'],
   'diagnostics.pruned': ['count'],
