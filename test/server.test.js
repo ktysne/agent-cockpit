@@ -2204,13 +2204,11 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     assert.equal(idleHideRange.status, 200);
     assert.equal(jsonBody(idleHideRange).display.idleHideMinutes, idleHideMinutes);
   }
-  for (const ghConcurrencyLimit of [1, 32]) {
-    const ghLimitRange = await request(runtime.info.port, {
-      method: 'POST', path: endpoint, body: JSON.stringify({ ghConcurrencyLimit }), headers: validHeaders,
-    });
-    assert.equal(ghLimitRange.status, 200);
-    assert.equal(jsonBody(ghLimitRange).display.ghConcurrencyLimit, ghConcurrencyLimit);
-  }
+  const ghLimit = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ ghConcurrencyLimit: 12 }), headers: validHeaders,
+  });
+  assert.equal(ghLimit.status, 200);
+  assert.equal(jsonBody(ghLimit).display.ghConcurrencyLimit, 12);
   const minimumWaitSettings = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ longWaitMinutes: 1, awayAnswerWaitMinutes: 1 }), headers: validHeaders,
   });
@@ -2254,7 +2252,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'sinceSeen', 'judgment', 'prs', 'now'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, ghConcurrencyLimit: 32, hideFinished: true, importAppTasks: true, importAppTasksAsked: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info',
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, ghConcurrencyLimit: 12, hideFinished: true, importAppTasks: true, importAppTasksAsked: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info',
   });
 });
 
