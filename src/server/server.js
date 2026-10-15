@@ -13,6 +13,8 @@ const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers');
 const { readTaskNotifications, readSessionModel, readTranscriptInterruption } = require('./transcript');
+const { TASK_OUTPUT_MISSING, codexOutputLines, readTaskOutputFileAsync } = require('../shared/task-output');
+const { parseCodexRunLine } = require('./events');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { isShortSessionId } = require('./session-ids');
 const { listLiveSessionFiles, readCodexSessionNames, findLiveSessionIdByPid, processIsAlive } = require('./session-files');
@@ -483,18 +485,59 @@ async function startServer(options = {}) {
   }
   function needsTaskNotifications(sessionId) {
     const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
-    // メインが止まっているのは、Stop の後と、利用者が中断した後。どちらも背景のタスクの完了通知を取り込む。
-    return session?.provider !== 'codex' && (session?.status === '待機中(サブエージェント稼働中)' || session?.status === '中断')
-      && session.agents.some((agent) => !agent.isCodex && agent.active);
+    if (!session || session.provider === 'codex') return false;
+    return state.backgroundCodexAgents(sessionId).length > 0 ||
+      (['待機中(サブエージェント稼働中)', '中断'].includes(session.status) &&
+        session.agents.some((agent) => !agent.isCodex && agent.active));
   }
+  // 読めた出力は task-id ごとに使い回し、読めなかった通知は次の照合で未試行の通知の後に読む。
+  // 読み取りの上限を、同じ通知の読み直しで使い切らないため。
+  const taskOutputCache = new Map();
   function reconcileTaskNotifications(sessionId) {
     if (closing || !needsTaskNotifications(sessionId)) return Promise.resolve();
     if (notificationReads.has(sessionId)) return notificationReads.get(sessionId);
     const reading = (async () => {
       try {
-        const file = state.sessionFileFor(sessionId);
-        const notifications = await notificationReader(claudeHome, file?.cwd, sessionId);
-        if (!closing && needsTaskNotifications(sessionId)) state.applyTaskNotifications(sessionId, notifications);
+        const notifications = await notificationReader(claudeHome, state.transcriptCwdFor(sessionId), sessionId);
+        if (closing || !needsTaskNotifications(sessionId)) return;
+        if (['待機中(サブエージェント稼働中)', '中断'].includes(state.sessions.get(sessionId)?.status)) {
+          state.applyTaskNotifications(sessionId, notifications);
+        }
+        let outputReads = 0;
+        const cache = taskOutputCache.get(sessionId) || { outputs: new Map(), failed: new Set() };
+        taskOutputCache.set(sessionId, cache);
+        const ordered = [...notifications].sort(([a], [b]) => cache.failed.has(a) - cache.failed.has(b));
+        for (const [taskId, notification] of ordered) {
+          if (!['completed', 'failed', 'killed', 'stopped'].includes(notification.status)) continue;
+          const candidates = () => state.backgroundCodexAgents(sessionId).filter(agent =>
+            (!agent.backgroundTaskId || agent.backgroundTaskId === taskId) &&
+            !(Date.parse(notification.recordedAt) < Date.parse(agent.startedAt)));
+          if (!candidates().length) continue;
+          const end = { taskId, status: notification.status };
+          if (notification.outputFile) {
+            if (!cache.outputs.has(taskId)) {
+              // 出力を読めない通知は記録せず、次の照合へ繰り越す。出力に waiting があれば行を閉じてはならないため。
+              if (outputReads >= 8) continue;
+              outputReads += 1;
+              const output = await (options.readTaskOutput || readTaskOutputFileAsync)(notification.outputFile);
+              if (output === null) {
+                cache.failed.add(taskId);
+                continue;
+              }
+              cache.failed.delete(taskId);
+              cache.outputs.set(taskId, output === TASK_OUTPUT_MISSING ? output : codexOutputLines(output));
+            }
+            const cached = cache.outputs.get(taskId);
+            if (cached === TASK_OUTPUT_MISSING) end.outputMissing = true;
+            else end.codexOutput = cached;
+          }
+          if (closing) return;
+          const runId = parseCodexRunLine(end.codexOutput?.runLine);
+          if (candidates().some(agent => agent.backgroundTaskId === taskId || (!agent.backgroundTaskId && runId && agent.runId === runId))) {
+            state.recordBackgroundTaskEnd(sessionId, end);
+          }
+        }
+        if (!state.backgroundCodexAgents(sessionId).length) taskOutputCache.delete(sessionId);
       } catch {}
     })().finally(() => notificationReads.delete(sessionId));
     notificationReads.set(sessionId, reading);

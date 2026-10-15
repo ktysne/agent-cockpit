@@ -16,6 +16,7 @@ const EVENT_NAMES = new Set([
   'PostToolBatch',
   'PermissionRequest',
   'Interrupt',
+  'BackgroundTaskEnd',
 ]);
 
 const MAX_ASK_QUESTIONS = 4;
@@ -286,8 +287,8 @@ function sanitizeEvent(input, metadata = {}) {
     event.message = shortString(input.message, 200) || '';
   }
 
-  if (event.provider === 'claude' && eventName === 'UserPromptSubmit' && Array.isArray(input.backgroundTaskEnds)) {
-    event.backgroundTaskEnds = input.backgroundTaskEnds.slice(0, 8).flatMap((item) => {
+  if (event.provider === 'claude' && ['UserPromptSubmit', 'BackgroundTaskEnd'].includes(eventName) && Array.isArray(input.backgroundTaskEnds)) {
+    event.backgroundTaskEnds = input.backgroundTaskEnds.slice(0, 32).flatMap((item) => {
       if (!item || typeof item !== 'object' || Array.isArray(item) ||
         typeof item.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(item.taskId)) return [];
       const end = {
@@ -301,7 +302,11 @@ function sanitizeEvent(input, metadata = {}) {
         if (audit) end.codexAudit = audit;
         if (result) end.codexResult = result;
         if (runId) end.codexRunId = runId;
+        const waitStatus = typeof item.codexOutput.waitStatusLine === 'string'
+          && item.codexOutput.waitStatusLine.slice(0, 1024).trim().match(/^codex-agent:\s*(waiting|vanished|orphaned|unverified|not-found)\s+run=/);
+        if (waitStatus) end.codexWaitStatus = waitStatus[1];
       }
+      if (item.outputMissing === true) end.outputMissing = true;
       return [end];
     });
     if (event.backgroundTaskEnds.length === 0) delete event.backgroundTaskEnds;
@@ -323,5 +328,6 @@ module.exports = {
   sanitizeDecisionResolution,
   parseCodexAuditLine,
   parseCodexResultLine,
+  parseCodexRunLine,
   sanitizeEvent,
 };

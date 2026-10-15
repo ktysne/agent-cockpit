@@ -161,6 +161,10 @@ function createHookRoutes(ctx) {
   }
 
   async function handleEvents({ response, body }) {
+    if (body?.hook_event_name === 'BackgroundTaskEnd' || (body?.hook_event_name === 'Interrupt' && body.provider !== 'codex')) {
+      jsonResponse(response, 202, { accepted: true });
+      return;
+    }
     recordClientEntries(ctx.diagnostics, body?.diagnostics, 'hook');
     const receivedAt = Date.now();
     state.captureFieldNames(body);
@@ -202,6 +206,7 @@ function createHookRoutes(ctx) {
       if (['SessionStart', 'SessionEnd'].includes(event.hook_event_name)) ctx.diagnostics?.record('info', 'server', 'event.lifecycle', data);
     }
 
+    if (event && !event.agent_id && event.provider !== 'codex') state.noteHookCwd(event.session_id, body.cwd);
     // 終了通知はメインの記録に書かれるので、サブエージェントのイベントのたびには読まない。
     if (event && !event.agent_id) scheduleTaskNotifications(event.session_id);
     if (event) scheduleSessionModel(event);

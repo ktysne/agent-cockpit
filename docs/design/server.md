@@ -149,7 +149,9 @@ Windows では `process.kill(pid)` は対象を終了させるため、停止の
 ## サブエージェントの終了通知
 
 - `TaskStop` などで止まったサブエージェントには `SubagentStop` が届かないことがあるので、常駐サーバーはメインの会話記録から終了の通知を読む。
-- 読むのは、メインが止まっている(状態が「待機中(サブエージェント稼働中)」か「中断」)で、稼働中の Claude のサブエージェントがあるセッションだけとする。メインのイベント(`agent_id` を持たないもの)を受けて約 500ms 後に 1 回読み、その状態が続く間は 60 秒ごとに読み直す。サブエージェントのイベントでは読まない。
+- 読むのは、メインが止まっている(状態が「待機中(サブエージェント稼働中)」か「中断」)で、稼働中の Claude のサブエージェントがあるセッションとする。
+  背景 Codex に稼働中か終了未確認で結果を受けていない行がある場合は、メインの状態によらず読む。
+  メインのイベント(`agent_id` を持たないもの)を受けて約 500ms 後に 1 回読み、その状態が続く間は 60 秒ごとに読み直す。サブエージェントのイベントでは読まない。
 - 記録の場所と末尾 256KB の読み方は、状態不明の推定と同じとする。
 - 対象の行は、`type` が `queue-operation`、`operation` が `enqueue` で、`content` が `<task-notification>` で始まるものだけとする。ツールの入出力や会話の本文に写った通知の文字列を、終了と取り違えないためである。
   enqueue の行を書かない古い版の Claude Code では、通知を読み取れないので、手で「終了にする」を使う。
@@ -221,7 +223,7 @@ state が `merged` の登録は残す。
 | PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。PostToolUse の Codex は結果行を受けたときに終了と判定し、監査行だけなら背景で動いているものとして扱う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash の PostToolUse では、コマンド先頭の `cd <パス> &&` から解決した絶対パスを `commandCwd` として送る(変数展開、`~`、引用符なしの `\`、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない) |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
-| Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。UserPromptSubmit では、`prompt` が `<task-notification>` で始まるときだけ通知を最大 8 件読み、`status` が終わり(`completed`、`failed`、`killed`、`stopped`)のものの `task-id` と `status` を `backgroundTaskEnds` に載せる。開発者が入力に引用した通知を、終了と取り違えないためである。`output-file` が絶対パスで、ファイル名が `<task-id>.output` と一致する場合は、先頭と末尾の各 64KB から Codex の監査行、結果行、実行 ID の行だけを `codexOutput` に載せる。128KB 以下のファイルは全体を読む。プロンプト本文と `summary` は送らない |
+| Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。UserPromptSubmit では、`prompt` が `<task-notification>` で始まるときだけ通知を全件読み、`status` が終わり(`completed`、`failed`、`killed`、`stopped`)のものの `task-id` と `status` を `backgroundTaskEnds` に載せる。開発者が入力に引用した通知を、終了と取り違えないためである。出力ファイルの読み取りは 8 件までとし、`output-file` が絶対パスで、ファイル名が `<task-id>.output` と一致する場合は、先頭と末尾の各 64KB から Codex の監査行、結果行、実行 ID の行だけを `codexOutput` に載せる。128KB 以下のファイルは全体を読む。出力ファイルが無い通知には `outputMissing` を付け、Codex の行を終了未確認にする。上限を超えて読まなかった通知と、出力を読めなかった通知は送らず、記録ファイルを読み直すサーバーの照合に任せる。出力に `waiting` があれば行を閉じてはならないためである。サーバーの照合は、セッションの一覧から `cwd` を得られなければ、フックが最初に送った `cwd` で記録ファイルを探す。サーバーが受ける `backgroundTaskEnds` は最大 32 件とする。プロンプト本文と `summary` は送らない |
 
 `answer.js` から届く `PostToolBatch` は、常駐サーバーの受信時刻を使う状態イベントとして記録する。
 サブエージェントの `PostToolBatch` は `agent_id` 付きで送り、状態イベントとしてだけ記録する。回答、知らせ、催促はメインにだけ渡すので、この要求には何も返さない。
@@ -371,7 +373,16 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - 結果行が `rate-limited` なら「GPT 不使用(利用上限)」、`unavailable` なら「GPT 不使用(使用不能)」を表示する。
 - GPT 側の情報を取得できない場合は、モデルの札を表示しない。
 - 背景で起動した Codex は、同じ親の後続ツールの PostToolUse 出力に結果行が現れたとき、まず一致する実行 ID の行を終了にする。無ければ、出力を読んだ背景タスク ID が起動時に記録した背景タスク ID と一致する Codex の行(親は問わない)を終了にする。どちらも無い場合は、実行 ID を持たないか結果行の実行 ID と一致する候補が一つだけならその行を終了にする。結果行に実行 ID が無い場合は、実行 ID を持つ行を候補に含めない。候補が複数なら行を終了にせず、終了未確認のまま残す。`--wait` の状態の行(`orphaned`、`unverified`)で終了未確認にした行は、ラッパーが既に消えていて結果行が届かないので、この候補にしない。
-- 背景タスクの完了通知が UserPromptSubmit で届いたら、同じセッションの背景タスク ID が一致する Codex の行を終了にする。出力に結果行があれば既存の結果処理を適用し、結果行が無ければ監査行と実行 ID を反映して稼働中から外し、終了未確認の印も外す。
+- 背景タスクの完了通知は UserPromptSubmit とメインの記録ファイルの両方から取り込む。
+  終了状態の通知の task-id が同じセッションの背景タスク ID と一致する、稼働中か終了未確認で結果を受けていない背景 Codex の行を終了にする。
+  行に背景タスク ID が無い場合だけ、出力ファイルの `codex-agent: run=` と行の実行 ID の一致で照合し、どちらかが無ければ終了にしない。
+  記録ファイルから得た通知は、行の開始より古いものを使わない。
+  出力ファイルは絶対パスでファイル名が `<task-id>.output` のものだけを読み、記録ファイルの経路では非同期に 1 回 8 件まで読む。
+  先頭と末尾の各 64KB から結果行が得られれば既存の結果処理を適用し、結果行が無ければ監査行と実行 ID を反映して稼働中と終了未確認の印を外す。
+  記録ファイルの経路は内部イベント `BackgroundTaskEnd` を追加し、メインの状態、最終活動時刻、ターンの区切りを変えない。
+  終了した行は次の読み取りの対象から外す。
+  `BackgroundTaskEnd` と Claude の `Interrupt` は内部イベントとして、フックと `/api/events` からは受け付けない。
+  Codex の `Interrupt` は実際のフックの通知なので、従来どおり受け付ける。
 - 結果行が現れないままサブエージェントが `SubagentStop` を迎えたときは、背景 Codex を終了未確認にする。
 - メインの `Stop` では、メイン直下の背景 Codex を稼働中のまま残す。
 - 「終了にする」は、終了未確認の行、メイン直下で稼働中の背景 Codex の行、背景で起動した稼働中の Claude のサブエージェントの行に表示する。

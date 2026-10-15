@@ -823,7 +823,7 @@ function sessionSnapshot(session) {
             ? '待機中'
             : '作業中';
 
-  return {
+  const snapshot = {
     session_id: session.session_id,
     provider: session.provider,
     ...(session.codex ? { codex: { ...session.codex } } : {}),
@@ -837,6 +837,13 @@ function sessionSnapshot(session) {
     decisions: session.decisions.map(cloneDecision),
     decisionBindings: { ...session.decisionBindings },
   };
+  // 完了通知の照合だけに使う。親の行にまとめた Codex も含むので表示の形に出さず、画面へ送らないよう列挙しない。
+  Object.defineProperty(snapshot, 'backgroundCodex', {
+    value: session.agents
+      .filter((agent) => agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) && !agent.resultReceived)
+      .map(({ agent_id, backgroundTaskId, runId, startedAt }) => ({ agent_id, backgroundTaskId, runId, startedAt })),
+  });
+  return snapshot;
 }
 
 /** @param {Map<string, DerivedSession>} sessions
@@ -1007,18 +1014,29 @@ function applyCodexResult(session, event) {
 }
 
 function applyBackgroundTaskEnds(session, event) {
-  if (session.provider === 'codex' || event.hook_event_name !== 'UserPromptSubmit' || !Array.isArray(event.backgroundTaskEnds)) return;
+  if (session.provider === 'codex' || !['UserPromptSubmit', 'BackgroundTaskEnd'].includes(event.hook_event_name) || !Array.isArray(event.backgroundTaskEnds)) return;
   for (const end of event.backgroundTaskEnds) {
-    const agent = session.agents.find((item) => item.isCodex && item.backgroundTaskId === end.taskId && !item.resultReceived);
+    if (!['completed', 'failed', 'killed', 'stopped'].includes(end.status)) continue;
+    const agent = session.agents.find((item) => item.isCodex && item.backgrounded &&
+      (item.active || item.unconfirmed) && !item.resultReceived &&
+      (item.backgroundTaskId ? item.backgroundTaskId === end.taskId : Boolean(end.codexRunId && item.runId === end.codexRunId)));
     if (!agent) continue;
     if (!agent.runId && end.codexRunId) agent.runId = end.codexRunId;
     if (end.codexResult) {
       completeCodexAgent(agent, end);
-    } else {
-      applyCodexAudit(agent, end);
-      agent.active = false;
-      agent.unconfirmed = false;
+      continue;
     }
+    // --wait が待機の上限で返っただけなら、Codex は背景で動き続けている。
+    if (end.codexWaitStatus === 'waiting') continue;
+    applyCodexAudit(agent, end);
+    agent.active = false;
+    // 終わったのが Codex 本体だと確かめられないときは、終了未確認にする。待機状態の行があればそれに従う。
+    // 出力ファイルが消えた通知は、--wait が待機の上限で返っただけかを確かめられない。
+    const unconfirmed = end.outputMissing || (end.codexWaitStatus
+      ? ['orphaned', 'unverified'].includes(end.codexWaitStatus)
+      : !agent.backgroundTaskId);
+    agent.unconfirmed = unconfirmed;
+    if (unconfirmed) agent.waitEnded = true;
   }
 }
 
@@ -1409,6 +1427,10 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     const session = sessionForEvent(sessions, event, initialAskDecisionState);
 
     if (session.ended) continue;
+    if (event.hook_event_name === 'BackgroundTaskEnd') {
+      applyBackgroundTaskEnds(session, event);
+      continue;
+    }
     applyCommonEventStart(session, event);
 
     applyToolStart(session, event);
@@ -1445,6 +1467,7 @@ class DashboardState {
     this.perf = options.perf || null;
     this.verifyEntries = options.verifyEntries ?? process.env.AGENT_COCKPIT_VERIFY_ENTRIES === '1';
     this.entries = new SessionEntries(this.verifyEntries);
+    this.hookCwds = new Map();
     this.sequence = 0;
     this.version = 0;
     this.generatedAt = new Date().toISOString();
@@ -1709,7 +1732,7 @@ class DashboardState {
     if (!this.snapshot().sessions.some((session) => session.session_id === sessionId)) return false;
     for (const records of [this.entries, this.sessions, this.endedAt, this.endedByAbsence,
       this.decisionOverrides, this.estimates, this.hiddenSessions, this.hiddenSessionUpdatedAt,
-      this.closedAgents, this.sessionFileLastSeenAt]) records.delete(sessionId);
+      this.closedAgents, this.sessionFileLastSeenAt, this.hookCwds]) records.delete(sessionId);
     this.deleteStoredSession(sessionId, { keepPullRequests: true });
     this.deletedSessions.set(sessionId, isoTime(now));
     this.onSessionEndedByAbsence?.(sessionId, now);
@@ -2673,6 +2696,16 @@ class DashboardState {
     return this.sessionFiles.get(sessionId) || null;
   }
 
+  // 記録ファイルはセッションを始めた場所で決まるので、後で cd した先の cwd では上書きしない。
+  noteHookCwd(sessionId, cwd) {
+    if (typeof cwd === 'string' && cwd && cwd.length <= 4096 && !this.hookCwds.has(sessionId)) this.hookCwds.set(sessionId, cwd);
+  }
+
+  // セッションの一覧は公開仕様ではないので、読めないときはフックが最初に送った cwd で記録ファイルを探す。
+  transcriptCwdFor(sessionId) {
+    return this.sessionFiles.get(sessionId)?.cwd || this.hookCwds.get(sessionId) || null;
+  }
+
   // 再開の SessionStart の後に読んだ記録の末尾は再開前の応答のことがあるので、時刻の新しいほうを残す。
   recordSessionModel(sessionId, observation) {
     const provider = this.sessions.get(sessionId)?.provider || this.sessionFiles.get(sessionId)?.provider;
@@ -2893,6 +2926,14 @@ class DashboardState {
     const { lastLifecycleAt, lastPromptAt } = this.entries.lifecycle(sessionId);
     if (statusAt <= lastLifecycleAt) return null;
     return { cwd: file.cwd, statusUpdatedAt: file.statusUpdatedAt, lastPromptAt };
+  }
+
+  backgroundCodexAgents(sessionId) {
+    return this.sessions.get(sessionId)?.backgroundCodex || [];
+  }
+
+  recordBackgroundTaskEnd(sessionId, end, hookAt = Date.now()) {
+    return this.addEvent({ session_id: sessionId, hook_event_name: 'BackgroundTaskEnd', backgroundTaskEnds: [end], hookAt });
   }
 
   recordInterruption(sessionId, hookAt) {

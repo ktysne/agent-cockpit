@@ -662,3 +662,36 @@ test('形に合わない背景タスク ID はフックもサーバーの正規�
   assert.equal(dropped.backgroundTaskId, undefined);
   assert.equal(dropped.backgroundOutputTaskId, undefined);
 });
+
+
+test('完了通知が 9 件あれば出力ファイルを 8 件まで読み、読まなかった通知は送らない', () => {
+  const readPaths = [];
+  const ids = Array.from({ length: 9 }, (_, index) => `task-${index}`);
+  const prompt = ids.map(id => `<task-notification><task-id>${id}</task-id><output-file>${path.resolve(id + '.output')}</output-file><status>completed</status></task-notification>`).join('\n');
+  const event = makeHookEvent({ session_id: 'many-notifications', hook_event_name: 'UserPromptSubmit', prompt }, 1, {
+    readTaskOutput(file) { readPaths.push(file); return 'codex-agent: result=ok'; },
+  });
+  assert.deepEqual(event.backgroundTaskEnds.map(end => end.taskId), ids.slice(0, 8));
+  assert.deepEqual(sanitizeEvent(event).backgroundTaskEnds.map(end => end.taskId), ids.slice(0, 8));
+  assert.deepEqual(readPaths, ids.slice(0, 8).map(id => path.resolve(id + '.output')));
+});
+
+test('完了通知の出力ファイルが消えていれば印を付けて送り、読めなければ送らない', () => {
+  const prompt = ['task-a', 'task-b'].map(id => `<task-notification><task-id>${id}</task-id><output-file>${path.resolve('missing-dir-for-test', id + '.output')}</output-file><status>completed</status></task-notification>`).join('\n');
+  const missing = makeHookEvent({ session_id: 'missing-output', hook_event_name: 'UserPromptSubmit', prompt }, 1);
+  assert.deepEqual(sanitizeEvent(missing).backgroundTaskEnds, [
+    { taskId: 'task-a', status: 'completed', outputMissing: true },
+    { taskId: 'task-b', status: 'completed', outputMissing: true },
+  ]);
+  const unreadable = makeHookEvent({ session_id: 'missing-output', hook_event_name: 'UserPromptSubmit', prompt }, 1, {
+    readTaskOutput() { return null; },
+  });
+  assert.equal(Object.hasOwn(unreadable, 'backgroundTaskEnds'), false);
+});
+
+test('フックは BackgroundTaskEnd と Claude の内部 Interrupt を送らない', () => {
+  for (const hook_event_name of ['Interrupt', 'BackgroundTaskEnd']) {
+    assert.equal(makeHookEvent({ session_id: 'internal', hook_event_name }), null);
+    if (hook_event_name === 'BackgroundTaskEnd') assert.equal(makeHookEvent({ session_id: 'internal', hook_event_name }, 1, { provider: 'codex' }), null);
+  }
+});

@@ -2490,3 +2490,37 @@ test('中断の確認の候補は、フックが作業中か許可待ちのま�
   assert.equal(candidate([prompt, { hook_event_name: 'Interrupt', hookAt: 2000 }], idle(3000)), null);
   assert.equal(candidate([prompt], idle(3000), 'codex'), null);
 });
+
+
+test('フックの完了通知は背景タスク ID が無い行だけを run ID でも照合する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const run = 'codex-review-20261004-100000-1';
+  state.addEvent({ session_id: 'run-notify', hook_event_name: 'PreToolUse', hookAt: 1,
+    tool_name: 'Bash', tool_use_id: 'wait', agent_id: 'parent', codexWaitRunId: run, summary: `bash codex-agent.sh --wait ${run}` });
+  launchBackgroundCodexInMain(state, 'run-notify', 'other', 'other-task', 2);
+  state.addEvent({ session_id: 'run-notify', hook_event_name: 'UserPromptSubmit', hookAt: 4,
+    backgroundTaskEnds: [{ taskId: 'unrelated', status: 'completed', codexOutput: {
+      runLine: `codex-agent: run=${run}`, resultLine: 'codex-agent: result=ok',
+    } }] });
+  const agents = state.snapshot().sessions[0].agents;
+  assert.equal(agents.find(agent => agent.agent_id === 'parent').gpt.active, false);
+  assert.equal(agents.find(agent => agent.backgroundTaskId === 'other-task').active, true);
+});
+
+test('内部の背景終了は畳み込み後も再生できる', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchBackgroundCodexInMain(state, 'compact-bg', 'launch', 'task-a', 1);
+  state.recordBackgroundTaskEnd('compact-bg', { taskId: 'task-a', status: 'completed' }, 4);
+  for (let index = 0; index < 1050; index += 1) {
+    const event = { session_id: 'compact-bg', tool_name: 'Read', tool_use_id: `read-${index}` };
+    state.addEvent({ ...event, hook_event_name: 'PreToolUse', hookAt: 5 + index * 2 });
+    state.addEvent({ ...event, hook_event_name: 'PostToolUse', hookAt: 6 + index * 2 });
+  }
+  state.addEvent({ session_id: 'compact-bg', hook_event_name: 'Stop', hookAt: 3000 });
+  state.entries.compact(state.entries.records.get('compact-bg'));
+  const replayed = deriveSessions(state.entries.get('compact-bg'))[0];
+  assert.equal(replayed.agents[0].active, false);
+  assert.equal(replayed.status, '待機中');
+});
