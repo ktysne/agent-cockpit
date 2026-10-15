@@ -528,7 +528,7 @@ h3.sub .count { font-weight: normal; }
       <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
       <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
     </div>
-    <p class="meta" id="settings-import-app-tasks-note">オフにすると、<code>cockpit_set_tasks</code> で登録したタスクだけを出す。Codex のセッションは取り込まない。</p>
+    <p class="meta" id="settings-import-app-tasks-note">オフにすると、アプリの一覧は出さず、モデルが Agent Cockpit に直接登録したタスクだけを出す。Codex のセッションには取り込める一覧が無いので、この設定にかかわらず取り込まない。</p>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
       <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」と「プルリクエスト」は、3 つのどれより前ならセッションの上、それ以外は下に出る。</p>
