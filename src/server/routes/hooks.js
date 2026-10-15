@@ -217,7 +217,8 @@ function createHookRoutes(ctx) {
     }
     if (!rejected && event?.planUpdate && !event.agent_id && event.provider !== 'codex' &&
       state.getDisplayPreferences().importAppTasks !== false) {
-      const tasks = state.planUpdates.apply(event, state.planFor(event.session_id));
+      const tasks = state.planUpdates.apply(event, state.planFor(event.session_id),
+        state.sessionNameFor(event.session_id) || state.sessions.get(event.session_id)?.title);
       if (tasks) {
         const saved = state.setTasks(event.session_id, tasks);
         answerDelivery.afterTasksWrite(event.session_id, Date.parse(saved.updatedAt));
@@ -268,12 +269,14 @@ function createHookRoutes(ctx) {
     }
 
     if (body.kind === 'tasks') {
-      const unmatchedTitles = state.getDisplayPreferences().importAppTasks !== false
-        ? state.planUpdates.unmatchedTitles(sessionId, body.tasks)
-        : [];
-      const saved = state.setTasks(sessionId, body.tasks);
+      const incoming = body.tasks.map(task => ({ ...task, criteria: task.criteria || [] }));
+      // 2 件以上は取り込みの無い CLI などが一覧全体を書く形なので、題でのまとめ書きにせず置き換える。
+      const tasks = incoming.length === 1 && state.getDisplayPreferences().importAppTasks !== false &&
+        state.providerForSession(sessionId) !== 'codex'
+        ? state.planUpdates.merge(sessionId, state.planFor(sessionId), incoming) : incoming;
+      const saved = state.setTasks(sessionId, tasks);
       answerDelivery.afterTasksWrite(sessionId, Date.parse(saved.updatedAt));
-      jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt, unmatchedTitles });
+      jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt });
       return;
     }
     if (body.kind === 'add_decision') {

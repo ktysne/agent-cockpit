@@ -286,6 +286,7 @@ function normalizeStore(value) {
     plans.set(sessionId, {
       tasks: plan.tasks.map((task) => ({
         title: task.title,
+        ...(task.autoTitle === true ? { autoTitle: true } : {}),
         state: task.state,
         criteria: task.criteria.map((item) => ({
           text: item.text,
@@ -1767,6 +1768,7 @@ class DashboardState {
     const plans = Object.fromEntries([...this.plans].map(([sessionId, plan]) => [sessionId, {
       tasks: plan.tasks.map((task) => ({
         title: task.title,
+        ...(task.autoTitle === true ? { autoTitle: true } : {}),
         state: task.state,
         criteria: task.criteria.map((item) => ({
           text: item.text,
@@ -3084,6 +3086,7 @@ class DashboardState {
     const updatedAt = isoTime(now);
     plan.tasks = tasks.map((task) => ({
       title: task.title,
+      ...(task.autoTitle === true ? { autoTitle: true } : {}),
       state: task.state,
       criteria: task.criteria.map((criterion) => ({
         text: criterion.text,

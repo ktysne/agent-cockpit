@@ -491,11 +491,11 @@ test('長い待ちの判定は設定値を使い、判断事項と許可待ち�
   assert.match(web, /長く待たせているとみなす時間 \(1〜120 分\)/);
   assert.match(web, /離席中に質問の回答を待つ時間 \(1〜30 分\)/);
   assert.match(web, /id="settings-import-app-tasks" name="importAppTasks" type="checkbox"/);
-  assert.match(web, /オフにすると、アプリの一覧は出さず、モデルが Agent Cockpit に直接登録したタスクだけを出す。Codex のセッションには取り込める一覧が無いので、この設定にかかわらず取り込まない。/);
+  assert.match(web, /オンでは、アプリの一覧を 1 つのタスクの完了条件として取り込む。依頼ごとの題はモデルが登録する。オフでは、モデルが Agent Cockpit に直接登録したタスクだけを出す。Codex のセッションには取り込める一覧が無いので、この設定にかかわらず取り込まない。/);
   assert.match(mock, /長く待たせているとみなす時間 \(1〜120 分\)/);
   assert.match(mock, /離席中に質問の回答を待つ時間 \(1〜30 分\)/);
   assert.match(mock, /id="settings-import-app-tasks" name="importAppTasks" type="checkbox"/);
-  assert.match(mock, /オフにすると、アプリの一覧は出さず、モデルが Agent Cockpit に直接登録したタスクだけを出す。Codex のセッションには取り込める一覧が無いので、この設定にかかわらず取り込まない。/);
+  assert.match(mock, /オンでは、アプリの一覧を 1 つのタスクの完了条件として取り込む。依頼ごとの題はモデルが登録する。オフでは、モデルが Agent Cockpit に直接登録したタスクだけを出す。Codex のセッションには取り込める一覧が無いので、この設定にかかわらず取り込まない。/);
 });
 
 test('表示時間の保存に失敗した数値設定を元に戻す', async () => {

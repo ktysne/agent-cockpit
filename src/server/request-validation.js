@@ -30,11 +30,11 @@ function validTasks(value) {
     if (
       !task || typeof task !== 'object' || Array.isArray(task) ||
       !validText(task.title, 200) || titles.has(task.title) || !['todo', 'doing', 'done'].includes(task.state) ||
-      !Array.isArray(task.criteria) || task.criteria.length > 20 || !task.criteria.every((criterion) => (
+      (task.criteria !== undefined && (!Array.isArray(task.criteria) || task.criteria.length > 20 || !task.criteria.every((criterion) => (
         criterion && typeof criterion === 'object' && !Array.isArray(criterion) &&
         validText(criterion.text, 2000) && typeof criterion.met === 'boolean' &&
         (criterion.doing === undefined || typeof criterion.doing === 'boolean')
-      ))
+      ))))
     ) return false;
     titles.add(task.title);
   }

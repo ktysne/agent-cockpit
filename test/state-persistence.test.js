@@ -1378,3 +1378,17 @@ test('PR の要約の文は題の有無と行動の組み合わせで決まる',
   assert.equal(text('題', 'ci-failure', 'merged'), 'PR #7(題)の CI が失敗した。マージした');
   assert.equal(text('題', 'ci-failure', 'created', 'merged'), 'PR #7(題)の CI が失敗した。作成し、マージした');
 });
+
+test('自動の題の印は保存と復元で残り、印の無い既存タスクも読める', async t => {
+  const homeDir = await temporaryHome(t);
+  const state = new DashboardState({ homeDir });
+  state.setTasks('persist-auto-title', [
+    { title: '以前の依頼', state: 'done', criteria: [] },
+    { title: '作業', state: 'doing', criteria: [{ text: '確認', met: false }], autoTitle: true },
+  ]);
+  await state.flushPersistence();
+  const restored = await DashboardState.load(homeDir);
+  const tasks = restored.planFor('persist-auto-title').tasks;
+  assert.equal(tasks[0].autoTitle, undefined);
+  assert.equal(tasks[1].autoTitle, true);
+});

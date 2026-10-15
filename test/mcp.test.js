@@ -273,14 +273,24 @@ test('時間切れの add_pr、skip_review、plan は結果未確認の文を is
 });
 
 
-test('cockpit_set_tasks の成功文はアプリの一覧に無い題を知らせる', async () => {
+test('cockpit_set_tasks の成功文は登録された題を知らせる', async () => {
   const responses = await exchange([{
     jsonrpc: '2.0', id: 1, method: 'tools/call',
     params: { name: 'cockpit_set_tasks', arguments: { tasks: [{ title: '別の題', state: 'todo', criteria: [] }] } },
   }], {
     homeDir: 'C:\\temporary-cockpit', environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
     ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
-    fetchImpl: async () => new Response(JSON.stringify({ tasks: [{ title: '別の題', state: 'todo' }], unmatchedTitles: ['別の題'] }), { status: 200 }),
+    fetchImpl: async () => new Response(JSON.stringify({ tasks: [{ title: '別の題', state: 'todo' }] }), { status: 200 }),
   });
-  assert.match(responses[0].result.content[0].text, /アプリのタスク一覧に無い題: 別の題/);
+  assert.match(responses[0].result.content[0].text, /タスクを記録しました: 別の題/);
+});
+
+test('Codex の MCP ツール説明は従来どおり一覧全体の登録を案内する', async () => {
+  const responses = await exchange([
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'codex-mcp-client' } } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+  ]);
+  const tool = responses[1].result.tools.find(tool => tool.name === 'cockpit_set_tasks');
+  assert.match(tool.description, /一覧全体を新しい内容に置き換え/);
+  assert.doesNotMatch(tool.description, /アプリのタスク一覧/);
 });
