@@ -453,8 +453,11 @@ async function startServer(options = {}) {
   const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
   away.attachWriter?.(storageWriter);
   const routing = options.routing || await RoutingState.load(homeDir, { writer: storageWriter });
+  const pullRequestTracker = options.pullRequestTracker || new PullRequestTracker({ state, diagnostics, ...(options.pullRequestOptions || {}) });
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
+    pullRequestTracker,
+    diagnostics,
     away,
     answerWaitMs: () => {
       const minutes = state.getDisplayPreferences?.().awayAnswerWaitMinutes;
@@ -464,7 +467,6 @@ async function startServer(options = {}) {
   });
   state.onSessionEndedByAbsence = (sessionId, endedAt) => answerDelivery.sessionEnded?.(sessionId, endedAt);
   state.onSessionReopened = (sessionId) => answerDelivery.sessionReopened?.(sessionId);
-  const pullRequestTracker = options.pullRequestTracker || new PullRequestTracker({ state, diagnostics, ...(options.pullRequestOptions || {}) });
   const pullRequestMergeManager = options.pullRequestMergeManager || new PullRequestMergeManager({
     state,
     tracker: pullRequestTracker,

@@ -1316,7 +1316,7 @@ test('PR 通知は PostToolBatch、UserPromptSubmit、Stop の待機で一度ず
   delivery.notifySessions(['session-prompt'], 'PR #2 が main に入りました');
   assert.match(delivery.deliverPrompt('session-prompt', 'prompt-1'), /PR #2 が main に入りました/);
 
-  const generation = delivery.startStop('session-stop', 'stop-1');
+  const generation = await delivery.startStop('session-stop', 'stop-1');
   const waiting = delivery.waitForStopAnswer('session-stop', generation);
   delivery.notifySessions(['session-stop'], 'PR #3 が main に入りました');
   const result = await waiting;

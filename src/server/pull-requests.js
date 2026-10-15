@@ -1624,6 +1624,24 @@ class PullRequestTracker {
     return this.repositories.get(key);
   }
 
+  async missingReviewRecords(sessionId) {
+    const registrations = this.state.pullRequestRegistrations().filter((record) => record.session_id === sessionId);
+    const repositories = new Map(registrations.map((record) => [repoKey(record.owner, record.repo), record]));
+    await Promise.all([...repositories].map(async ([key, { owner, repo }]) => {
+      await this.inFlight.get(key);
+      await this.refreshReviewGroups(owner, repo);
+    }));
+    const targets = new Map();
+    for (const { owner, repo, number } of registrations) {
+      const key = repoKey(owner, repo);
+      const pullRequest = this.repositories.get(key)?.openPullRequests.find((pr) => pr.number === number);
+      if (pullRequest?.headRefOid && this.crossReviewByRepository.get(key)?.get(number) === null) {
+        targets.set(`${key}#${number}`, { owner, repo, number, headRefOid: pullRequest.headRefOid });
+      }
+    }
+    return [...targets.values()];
+  }
+
   async refreshReviewGroups(owner, repo) {
     const key = repoKey(owner, repo);
     const repositoryState = this.repositories.get(key);

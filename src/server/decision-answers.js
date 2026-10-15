@@ -4,6 +4,7 @@ const { TaskNudges } = require('./task-nudges');
 
 const ANSWER_WAIT_MS = 5 * 60_000;
 const MAX_LONG_POLL_MS = 25_000;
+const REVIEW_REMINDER_WAIT_MS = 3_000;
 const MAX_ASK_POLL_GAP_MS = 30_000;
 const ANSWER_HOOK_DENY_REASON = '開発者は離席中です。AskUserQuestion で尋ねずに、推奨の選択肢を適用して作業を続けてください。判断事項の id は「{id}」です。推奨で進めたら cockpit_update_decision でこの id を provisional にし、選んだ選択肢を書いてください。判断が必要だった事項と仮に適用した推奨は、最後の報告の「あなたの判断が必要なこと」に一覧で書いてください。破壊的な操作は行わず、判断待ちとして残してください。';
 // 知らせはフックの英語の定型文に包まれて届き、返答が英語に引きずられやすいため、毎回添える。
@@ -143,8 +144,13 @@ function decisionAnswerText(decision) {
 }
 
 class DecisionAnswerDelivery {
-  constructor({ state, away, now = Date.now, setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout, maxLongPollMs = MAX_LONG_POLL_MS, answerWaitMs = ANSWER_WAIT_MS, maxAskPollGapMs = MAX_ASK_POLL_GAP_MS } = {}) {
+  constructor({ state, away, pullRequestTracker, diagnostics, reviewReminderWaitMs = REVIEW_REMINDER_WAIT_MS, now = Date.now, setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout, maxLongPollMs = MAX_LONG_POLL_MS, answerWaitMs = ANSWER_WAIT_MS, maxAskPollGapMs = MAX_ASK_POLL_GAP_MS } = {}) {
     this.state = state;
+    this.pullRequestTracker = pullRequestTracker;
+    this.diagnostics = diagnostics;
+    this.reviewReminderWaitMs = reviewReminderWaitMs;
+    this.stopReviewReminders = new Map();
+    this.remindedReviewHeads = new Map();
     this.away = away;
     this.now = now;
     this.setTimeout = setTimeoutImpl;
@@ -379,19 +385,38 @@ class DecisionAnswerDelivery {
     return messages.length ? messages.join('\n') : null;
   }
 
+  // stop-start のフックは 1 秒で打ち切るので、判定はここで待たず、最初の stop-poll と stop-check で待つ。
   startStop(sessionId, eventId, hookAt = this.now()) {
     if (hookAt < (this.lastLifecycleAt.get(sessionId) ?? -1)) return null;
     this.handleLifecycleEvent(sessionId, 'Stop', eventId, hookAt);
     const generation = (this.stopGenerations.get(sessionId) || 0) + 1;
     this.stopGenerations.set(sessionId, generation);
+    if (this.pullRequestTracker) this.stopReviewReminders.set(sessionId, { generation, candidates: this.reviewReminderCandidates(sessionId) });
+    else this.stopReviewReminders.delete(sessionId);
     this.signal(sessionId);
     return generation;
   }
 
-  checkStop(sessionId, eventId, hookAt = this.now()) {
+  async reviewReminderCandidates(sessionId) {
+    let timer;
+    try {
+      return await Promise.race([
+        this.pullRequestTracker.missingReviewRecords(sessionId),
+        new Promise((resolve) => { timer = this.setTimeout(() => resolve(null), this.reviewReminderWaitMs); }),
+      ]);
+    } catch {
+      return null;
+    } finally {
+      this.clearTimeout(timer);
+    }
+  }
+
+  async checkStop(sessionId, eventId, hookAt = this.now()) {
     const generation = this.startStop(sessionId, eventId, hookAt);
     if (generation === null) return { hookOutput: null, generation: null, wait: false };
-    const reason = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
+    const reminder = await this.deliverReviewReminder(sessionId, generation);
+    if (this.closed || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation) return { hookOutput: null, generation: null, wait: false };
+    const reason = [reminder, this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     return {
       hookOutput: reason ? { decision: 'block', reason } : null,
       generation,
@@ -400,9 +425,37 @@ class DecisionAnswerDelivery {
     };
   }
 
+  // provisional は自走中に長く残るので抑止の条件にしない。記録が要るのは自走中の省略も同じため。
+  async deliverReviewReminder(sessionId, generation) {
+    const pending = this.stopReviewReminders.get(sessionId);
+    if (pending?.generation !== generation) return null;
+    this.stopReviewReminders.delete(sessionId);
+    const candidates = await pending.candidates;
+    if (!candidates?.length || this.closed || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation) return null;
+    if (this.state.decisionsFor(sessionId).some((decision) => decision.state === 'waiting')) return null;
+    const seen = this.remindedReviewHeads.get(sessionId) || new Set();
+    const targets = candidates.filter(({ owner, repo, number, headRefOid }) => !seen.has(`${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`));
+    if (!targets.length) return null;
+    for (const { owner, repo, number, headRefOid } of targets) {
+      seen.add(`${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`);
+      this.diagnostics?.record('info', 'merge', 'review.reminder', { repository: `${owner}/${repo}`, number, session: sessionId.slice(0, 8) });
+    }
+    this.remindedReviewHeads.set(sessionId, seen);
+    return [
+      '次の PR には、クロスレビューの記録もレビュー不要の記録もありません:',
+      ...targets.map(({ owner, repo, number }) => `PR #${number} (${owner}/${repo})。`),
+      'ダッシュボードではレビュー未実施と表示され、レビューを条件にしたマージの対象になりません。レビューを省略した場合は、PR の現在の head SHA を確かめ、`cockpit_skip_review` に理由と一緒に渡して記録してください。これからレビューする場合は、対応は不要です。',
+      SESSION_NOTIFICATION_REPLY_LANGUAGE,
+    ].join('\n');
+  }
+
   async waitForStopAnswer(sessionId, generation, parentAlive = true, provider = 'claude') {
     if (this.stopWaitEnded(sessionId, generation, parentAlive, provider)) return { stderrText: null, done: true };
-    const text = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
+    // 判定が無い世代では await を挟まない。挟むと合図の待ち受けの登録が遅れ、その間の合図を取りこぼすため。
+    const reminder = this.stopReviewReminders.get(sessionId)?.generation === generation
+      ? await this.deliverReviewReminder(sessionId, generation) : null;
+    if (this.stopWaitEnded(sessionId, generation, parentAlive, provider)) return { stderrText: null, done: true };
+    const text = [reminder, this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     if (text) return { stderrText: text, done: true };
     await this.waitForSignal(sessionId, this.maxLongPollMs);
     if (this.stopWaitEnded(sessionId, generation, parentAlive, provider)) return { stderrText: null, done: true };
@@ -432,6 +485,8 @@ class DecisionAnswerDelivery {
 
   sessionEnded(sessionId, endedAt = this.now()) {
     this.taskNudges.sessionEnded(sessionId);
+    this.stopReviewReminders.delete(sessionId);
+    this.remindedReviewHeads.delete(sessionId);
     this.sessionNotifications.delete(sessionId);
     this.handleLifecycleEvent(sessionId, 'SessionEnd', `SessionEnd:${endedAt}`, endedAt);
     this.clearSessionAskWaits(sessionId);
@@ -637,6 +692,7 @@ module.exports = {
   ANSWER_WAIT_MS,
   MAX_LONG_POLL_MS,
   MAX_ASK_POLL_GAP_MS,
+  REVIEW_REMINDER_WAIT_MS,
   DecisionAnswerDelivery,
   hasDuplicateQuestions,
   recommendedOptions,

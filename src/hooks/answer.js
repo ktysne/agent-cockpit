@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const { cockpitHomeFromOptions } = require('../server/identity');
-const { MAX_LONG_POLL_MS, denyAnswerOutput } = require('../server/decision-answers');
+const { MAX_LONG_POLL_MS, REVIEW_REMINDER_WAIT_MS, denyAnswerOutput } = require('../server/decision-answers');
 const { postToServer } = require('../client/server-connection');
 const { isHookSessionId } = require('../server/session-ids');
 
@@ -8,6 +8,10 @@ const ANSWER_HOOK_TIMEOUT_MS = 30 * 60_000 + 30_000;
 const ANSWER_HOOK_DEADLINE_GRACE_MS = 30_000;
 const CODEX_STOP_WAIT_MS = 59 * 60_000;
 const POST_TOOL_BATCH_TIMEOUT_MS = 1_000;
+// stop-check はレビュー記録の催促の判定を待ってから応答するため。
+const CODEX_STOP_CHECK_TIMEOUT_MS = REVIEW_REMINDER_WAIT_MS + 2_000;
+// 最初の stop-poll は催促の判定を待ってから long-poll に入る。先に打ち切ると、その後の回答が届かないまま配信済みになる。
+const CLAUDE_STOP_POLL_TIMEOUT_MS = REVIEW_REMINDER_WAIT_MS + MAX_LONG_POLL_MS + 1_500;
 const ASK_OUTCOMES = new Set(['answered', 'timeout', 'released', 'server-lost']);
 
 function validSessionId(value) {
@@ -161,7 +165,7 @@ async function runCodexStopCheck(input, options) {
     id: crypto.randomUUID(),
     hook_at: now(),
     provider: 'codex',
-  }, { ...options, timeoutMs: 1_000 });
+  }, { ...options, timeoutMs: CODEX_STOP_CHECK_TIMEOUT_MS });
   if (result?.hookOutput) return { exitCode: 0, output: result.hookOutput, stderrText: null };
   if (result?.wait !== true || !Number.isInteger(result.generation)) {
     return { exitCode: 0, output: null, stderrText: null };
@@ -211,7 +215,7 @@ async function runStop(input, options) {
     const result = await postHookRequest({
       action: 'stop-poll', event_name: 'Stop', session_id: sessionId, id: eventId,
       generation: started.generation, parent_alive: parentAlive,
-    }, { ...options, timeoutMs: MAX_LONG_POLL_MS + 1_500 });
+    }, { ...options, timeoutMs: CLAUDE_STOP_POLL_TIMEOUT_MS });
     if (!result) return { exitCode: 0, stderrText: null };
     if (result.done === true) {
       if (typeof result.stderrText === 'string' && result.stderrText) return { exitCode: 2, stderrText: result.stderrText };
