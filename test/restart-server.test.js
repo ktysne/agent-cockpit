@@ -63,9 +63,8 @@ test('起動後の版やコミットが違うか版が無ければ期待値と�
       fetchImpl: health({ app: 'agent-cockpit', ...started, ...running, ...changes }),
     })), error => {
       assert.equal(error.result, 'mismatch');
-      assert.match(error.message, /別のチェックアウトから起動した常駐サーバーか、更新前のコード/);
-      assert.match(error.message, /期待: 版 1.4.0/);
-      assert.match(error.message, /実際: 版/);
+      assert.equal(error.message,
+        `再起動した常駐サーバーは、このフォルダーのコードで動いていません(このフォルダー: バージョン 1.4.0、動いているサーバー: バージョン ${Object.hasOwn(changes, 'version') ? changes.version ?? '不明' : running.version})。別のフォルダーの agent-cockpit の常駐サーバーが動いていないか確かめてください。`);
       assert.equal(error.details.running.commit, changes.commit ?? commit);
       return true;
     });
@@ -73,10 +72,15 @@ test('起動後の版やコミットが違うか版が無ければ期待値と�
 });
 
 test('起動後の health が別の pid や起動時刻なら mismatch にする', async () => {
-  for (const changes of [{ pid: 999 }, { startedAt: 'other' }]) {
+  for (const changes of [{ pid: 999 }, { startedAt: 'other' }, { app: 'other' }]) {
     await assert.rejects(restartServer(options({
       fetchImpl: health({ app: 'agent-cockpit', ...started, ...running, ...changes }),
-    })), { result: 'mismatch' });
+    })), error => {
+      assert.equal(error.result, 'mismatch');
+      assert.equal(error.message,
+        '再起動した常駐サーバーは、このフォルダーのコードで動いていません(このフォルダー: バージョン 1.4.0、動いているサーバー: バージョン 1.4.0)。別のフォルダーの agent-cockpit の常駐サーバーが動いていないか確かめてください。');
+      return true;
+    });
   }
 });
 
@@ -123,13 +127,31 @@ test('終了を確認できなければ stop-timeout にして次のサーバー
   })), { result: 'stop-timeout' });
 });
 
-test('人向けの成功出力は起動情報とコミットの照合結果を示す', async () => {
+test('人向けの成功出力はバージョンを示し、コミットを照合できなければその旨を添える', async () => {
   for (const expectedCommit of [commit, null]) {
     const lines = [];
     assert.equal(await main([], options({ readSourceCommit: async () => expectedCommit, log: line => lines.push(line) })), 0);
-    assert.match(lines.join('\n'), /停止した pid: 123、起動後の pid: 456/);
-    assert.match(lines.join('\n'), /版 1.4.0、commit aaaaaaa、sourceState pending/);
-    assert.match(lines.join('\n'), expectedCommit ? /版とコミットが一致/ : /commit を照合できませんでした/);
+    assert.deepEqual(lines, [expectedCommit
+      ? '常駐サーバーを再起動しました(バージョン 1.4.0)。'
+      : '常駐サーバーを再起動しました(バージョン 1.4.0)。このフォルダーのコミットを読めなかったため、更新後のコードで動いているかは確かめられませんでした。']);
+  }
+});
+
+test('人向けの mismatch 出力は指定文を使い、ほかの失敗出力は維持する', async () => {
+  for (const scenario of [
+    {
+      overrides: { fetchImpl: health({ app: 'agent-cockpit', ...started, ...running, commit: 'b'.repeat(40) }) },
+      expected: '再起動した常駐サーバーは、このフォルダーのコードで動いていません(このフォルダー: バージョン 1.4.0、動いているサーバー: バージョン 1.4.0)。別のフォルダーの agent-cockpit の常駐サーバーが動いていないか確かめてください。',
+    },
+    {
+      overrides: { ensureServerRunning: async () => null },
+      expected: '常駐サーバーの再起動に失敗しました: 常駐サーバーを起動できませんでした。',
+    },
+  ]) {
+    const lines = [];
+    const code = await main([], options({ ...scenario.overrides, logError: line => lines.push(line) }));
+    assert.equal(code, 1);
+    assert.deepEqual(lines, [scenario.expected]);
   }
 });
 

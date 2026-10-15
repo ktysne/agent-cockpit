@@ -352,13 +352,13 @@ test('起動の選択肢と選択または全起動の書き出しは各起動�
   await context.refreshDiagnostics();
   assert.match(node('diagnostics-run').children[0].textContent, /v1.4.0$/);
   assert.match(node('diagnostics-run').children[1].textContent, /v1.3.0\+9fa2714$/);
-  assert.match(node('diagnostics-run').children[2].textContent, /版不明$/);
+  assert.match(node('diagnostics-run').children[2].textContent, /バージョン不明$/);
   for (const exported of [runs, [runs[1]]]) {
     const text = context.diagnosticExportText(exported);
     assert.match(text, /viewer=v1.2.3/);
     assert.match(text, /## 起動 older .*v1.3.0\+9fa2714 commit=9fa2714abcdef state=diverged/);
   }
-  assert.match(context.diagnosticExportText(runs), /## 起動 legacy .*版不明/);
+  assert.match(context.diagnosticExportText(runs), /## 起動 legacy .*バージョン不明/);
 });
 
 test('一覧の取得後にソースの状態が確定しても、選択と全起動の書き出しは起動ごとの取得で得た版を使う', async () => {
@@ -388,7 +388,7 @@ test('モックと画面の版表示は release 以外で pending も短縮コ�
       assert.equal(context.formatRuntime({ version: '1.4.0', commit: 'c933f60abcdef', sourceState }), 'v1.4.0+c933f60');
     }
     assert.equal(context.formatRuntime({ version: '1.4.0', commit: 'c933f60abcdef', sourceState: 'release' }), 'v1.4.0');
-    assert.equal(context.formatRuntime(null), '版不明');
-    assert.equal(context.formatRuntime({ commit: 'c933f60abcdef' }), '版不明');
+    assert.equal(context.formatRuntime(null), 'バージョン不明');
+    assert.equal(context.formatRuntime({ commit: 'c933f60abcdef' }), 'バージョン不明');
   }
 });

@@ -21,7 +21,7 @@ const PACKAGE_LOCK = '{\r\n  "name": "demo",\r\n  "version": "1.0.1",\r\n  "lock
   + '  "packages": {\r\n    "": {\r\n      "name": "demo",\r\n      "version": "1.0.1"\r\n    },\r\n'
   + '    "node_modules/dep": {\r\n      "version": "1.0.1"\r\n    }\r\n  }\r\n}\r\n';
 const BUMPED_LOCK = rewriteVersion(PACKAGE_LOCK, '1.0.2', true);
-const UPDATE_DOC ='## 版ごとの追加作業\n\n今はありません。\n';
+const UPDATE_DOC ='## バージョンごとの追加作業\n\n今はありません。\n';
 
 // git、npm、ファイルを偽物に差し替えた作業ツリー。呼び出しを記録し、状態を実際の git と同じように進める。
 function fakeRepository(overrides = {}) {
@@ -122,7 +122,7 @@ test('版は 1.0.2 と v1.0.2 の両方を受け、X.Y.Z とタグに正規化�
 test('形式に合わない版は、git を呼ばずに拒否する', () => {
   for (const input of ['1.0', 'v1.0', '01.0.1', '1.0.1-rc.1', 'vv1.0.1', '', undefined]) {
     const { repo, dependencies } = fakeRepository();
-    assert.throws(() => inspectRelease(input, dependencies), /1\.2\.3 または v1\.2\.3 の形式/);
+    assert.throws(() => inspectRelease(input, dependencies), /バージョンは 1\.2\.3 または v1\.2\.3 の形式/);
     assert.deepEqual(repo.calls, []);
   }
 });
@@ -144,18 +144,18 @@ test('新規のリリースで HEAD が origin/main と違えば拒否する', (
 
 test('origin の最新の版以下の版は拒否する', () => {
   const { dependencies } = fakeRepository({ remoteTags: { 'v1.0.5': OTHER } });
-  assert.throws(() => inspectRelease('1.0.4', dependencies), /最新の版 v1\.0\.5 以下です/);
+  assert.throws(() => inspectRelease('1.0.4', dependencies), /最新のバージョン v1\.0\.5 以下です/);
 });
 
 test('package.json の現在の版以下の版は拒否する', () => {
   const { dependencies } = fakeRepository();
-  assert.throws(() => inspectRelease('1.0.0', dependencies), /現在の版 1\.0\.1 以下です/);
+  assert.throws(() => inspectRelease('1.0.0', dependencies), /現在のバージョン 1\.0\.1 以下です/);
 });
 
 test('版の大小は 3 つの整数で比べ、1.0.10 は 1.0.9 より新しいと扱う', () => {
   const { dependencies } = fakeRepository({ remoteTags: { 'v1.0.9': OTHER } });
   assert.equal(inspectRelease('1.0.10', dependencies).tag, 'v1.0.10');
-  assert.throws(() => inspectRelease('1.0.9', fakeRepository({ remoteTags: { 'v1.0.10': OTHER } }).dependencies), /最新の版 v1\.0\.10 以下です/);
+  assert.throws(() => inspectRelease('1.0.9', fakeRepository({ remoteTags: { 'v1.0.10': OTHER } }).dependencies), /最新のバージョン v1\.0\.10 以下です/);
 });
 
 test('新規のリリースでは全手順が残り、run が test、bump、commit、push main、tag、push tag の順に呼ぶ', () => {
@@ -171,7 +171,7 @@ test('新規のリリースでは全手順が残り、run が test、bump、comm
     'write package.json',
     'write package-lock.json',
     'add package.json package-lock.json',
-    'commit -m chore(release): 版を 1.0.2 に上げる',
+    'commit -m chore(release): バージョンを 1.0.2 に上げる',
     'push origin main',
     'tag -a v1.0.2 -m v1.0.2',
     'push origin v1.0.2',
@@ -241,7 +241,7 @@ test('未 push のコミットが版の更新以外のファイルを含めば�
     changedFiles: ['package.json', 'src/server.js'],
     files: { 'package.json': PACKAGE_JSON.replace('1.0.1', '1.0.2'), 'update.md': UPDATE_DOC },
   });
-  assert.throws(() => inspectRelease('1.0.2', dependencies), /版を上げるコミットでもありません/);
+  assert.throws(() => inspectRelease('1.0.2', dependencies), /バージョンを上げるコミットでもありません/);
 });
 
 test('未 push のコミットが package.json の版以外の項目も変えていれば拒否する', () => {
@@ -252,7 +252,7 @@ test('未 push のコミットが package.json の版以外の項目も変えて
     changedFiles: ['package.json'],
     files: { 'package.json': bumped.replace('"private": true', '"private": false'), 'update.md': UPDATE_DOC },
   });
-  assert.throws(() => inspectRelease('1.0.2', dependencies), /版を上げるコミットでもありません/);
+  assert.throws(() => inspectRelease('1.0.2', dependencies), /バージョンを上げるコミットでもありません/);
 });
 
 test('タグがローカルにだけある再実行では、push-tag だけが残る', () => {
@@ -290,7 +290,7 @@ test('origin の同名タグが HEAD 以外を指せば拒否する', () => {
   const { repo, dependencies } = handBumped();
   repo.remoteTags['v1.0.2'] = OTHER;
 
-  assert.throws(() => inspectRelease('1.0.2', dependencies), /HEAD と別のコミットを指しています/);
+  assert.throws(() => inspectRelease('1.0.2', dependencies), /HEAD と別のコミットを指しています。バージョン番号を上げてから実行してください/);
 });
 
 test('ローカルの同名タグが HEAD 以外を指せば拒否する', () => {
@@ -313,7 +313,7 @@ test('plan は残りの手順を番号つきで表示し、更新手順の節が
     '  4. v1.0.2 の注釈つきタグを作成',
     '  5. v1.0.2 を origin へ push',
     '  6. 紹介ページを配信',
-    '[release] 利用者に追加の作業が要る版なら、先に docs/update.md の「版ごとの追加作業」に手順を書いてください。',
+    '[release] 利用者に追加の作業が要るバージョンなら、先に docs/update.md の「バージョンごとの追加作業」に手順を書いてください。',
   ]);
 });
 
@@ -366,7 +366,7 @@ test('report はサーバーが無いか health を取得できなければ停�
     const lines = [];
     await main(['report', 'v1.0.2'], { readServerInfo, log: line => lines.push(line),
       fetchImpl: async () => { throw new Error('offline'); } });
-    assert.deepEqual(lines, ['公開した版: v1.0.2', '常駐サーバーは動いていません。']);
+    assert.deepEqual(lines, ['公開したバージョン: v1.0.2', '手元の常駐サーバーは動いていません。']);
   }
 });
 
@@ -378,7 +378,7 @@ test('report は版とタグのコミットが一致する稼働中サーバー�
     fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD }) }),
     execFileSync(file, args) { assert.deepEqual(args, ['rev-parse', 'v1.0.2^{commit}']); return HEAD; },
   });
-  assert.match(lines.join('\n'), /稼働中の常駐サーバーは公開した版です/);
+  assert.deepEqual(lines, ['公開したバージョン: v1.0.2', '手元の常駐サーバーは、公開したバージョンで動いています。']);
 });
 
 test('report は版またはコミットが違うサーバーを切り替えず再起動を案内する', async () => {
@@ -389,7 +389,22 @@ test('report は版またはコミットが違うサーバーを切り替えず�
       fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD, ...changes }) }),
       execFileSync: () => HEAD,
     });
-    assert.match(lines.join('\n'), /稼働中の常駐サーバー: 版 .*、commit [ab]{7}/);
-    assert.match(lines.join('\n'), /リリースは稼働中のサーバーを切り替えません/);
+    assert.deepEqual(lines, [
+      '公開したバージョン: v1.0.2',
+      `手元の常駐サーバーはバージョン ${changes.version ?? '1.0.2'} で動いています。公開したバージョンで動かすには、常駐サーバーを再起動してください。`,
+    ]);
   }
+});
+
+test('report は公開したバージョンと手元の常駐サーバーを照合できなければ知らせる', async () => {
+  const lines = [];
+  const info = { port: 47821, pid: 123, startedAt: 'now' };
+  await main(['report', 'v1.0.2'], { log: line => lines.push(line), readServerInfo: async () => info,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD }) }),
+    execFileSync: () => { throw new Error('tag unavailable'); },
+  });
+  assert.deepEqual(lines, [
+    '公開したバージョン: v1.0.2',
+    '公開したバージョンと手元の常駐サーバーを照合できませんでした: git rev-parse v1.0.2^{commit} が失敗しました: tag unavailable',
+  ]);
 });

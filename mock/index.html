@@ -597,7 +597,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   </section>
   <section aria-labelledby="diagnostics-policy-included-title">
     <h3 id="diagnostics-policy-included-title">記録する情報</h3>
-    <p>記録の種類と時刻、出どころ、フックのイベント名、provider、ツール名、セッション ID の先頭 8 文字、プロダクト名、PR 番号、件数、長さ、所要時間、成否、失敗の分類、HTTP の状態、照合結果を残します。常駐サーバーの pid、ポート、版、ソースの commit も記録します。文字列は 200 文字までです。</p>
+    <p>記録の種類と時刻、出どころ、フックのイベント名、provider、ツール名、セッション ID の先頭 8 文字、プロダクト名、PR 番号、件数、長さ、所要時間、成否、失敗の分類、HTTP の状態、照合結果を残します。常駐サーバーの pid、ポート、バージョン、ソースの commit も記録します。文字列は 200 文字までです。</p>
   </section>
   <div class="diagnostics-policy-close"><button id="diagnostics-policy-close" type="button" autofocus>閉じる</button></div>
 </dialog>
@@ -1245,7 +1245,7 @@ const diagnosticsDeleteConfirmation = document.getElementById('diagnostics-delet
 ui.diagnosticsLevel = ['silent', 'error', 'warn', 'info', 'debug'].includes(ui.diagnosticsLevel) ? ui.diagnosticsLevel : 'info';
 
 function formatRuntime(runtime) {
-  if (!runtime?.version) return '版不明';
+  if (!runtime?.version) return 'バージョン不明';
   const suffix = runtime.sourceState !== 'release' && runtime.commit ? `+${runtime.commit.slice(0, 7)}` : '';
   return `v${runtime.version}${suffix}`;
 }
@@ -2678,7 +2678,7 @@ function applyUpdateState(update) {
   }
   updatePrompt = prompt;
   if (updateNote.hidden) return;
-  document.getElementById('update-message').textContent = `新しい版 v${update.latest} があります。`;
+  document.getElementById('update-message').textContent = `新しいバージョン v${update.latest} があります。`;
   document.getElementById('update-compare').href = update.compareUrl;
 }
 
@@ -2715,18 +2715,10 @@ function renderRestartNote(state) {
   if (note.hidden) { note.textContent = ''; return; }
   const running = state.runtime || {};
   const installed = state.installed || {};
-  const differs = key => running[key] != null && installed[key] != null && running[key] !== installed[key];
-  const versionChanged = differs('version');
-  const commitChanged = differs('commit');
-  const label = value => value.version
-    ? formatRuntime({ version: value.version, commit: commitChanged ? value.commit : null })
-    : value.commit ? value.commit.slice(0, 7) : '不明';
-  const details = [];
-  if (versionChanged || commitChanged) details.push(`実行中 ${label(running)} / 配置済み ${label(installed)}。`);
-  if (state.uiVersion != null && installed.uiVersion != null && state.uiVersion !== installed.uiVersion) {
-    details.push('画面のファイルが更新されています。');
-  }
-  note.textContent = '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。' + details.join('');
+  const versionChanged = running.version != null && installed.version != null && running.version !== installed.version;
+  note.textContent = versionChanged
+    ? `バージョン ${installed.version} のファイルが配置されています。常駐サーバーを再起動すると反映されます。`
+    : '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。';
 }
 
 function renderReloadNote() {

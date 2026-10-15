@@ -30,7 +30,7 @@ agent-cockpit は単独で使えます。次のツールを導入済みなら、
 ## 導入
 
 導入は AI(Claude Code など)に任せる前提で、手順を [docs/setup.md](docs/setup.md) にまとめています。
-更新は、ダッシュボードの新しい版の通知から依頼文をコピーし、AI に依頼できます。
+更新は、ダッシュボードの新しいバージョンの通知から依頼文をコピーし、AI に依頼できます。
 AI には、次のように依頼してください。
 
 > agent-cockpit を導入して。手順は https://raw.githubusercontent.com/ktysne/agent-cockpit/main/docs/setup.md にある。
