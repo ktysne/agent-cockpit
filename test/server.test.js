@@ -1575,12 +1575,13 @@ test('/plan は秘密値と Origin を照合し、session ID と入力上限を�
 });
 
 test('/prs は秘密値と Origin を照合し、MCP とフックから PR を登録する', async (t) => {
-  const calls = { repos: [], all: 0 };
+  const calls = { repos: [], fresh: [], all: 0 };
   const pullRequestTracker = {
     start() {},
     close() {},
     snapshot: () => [],
     refreshRepo(owner, repo) { calls.repos.push(`${owner}/${repo}`); return Promise.resolve(); },
+    refreshRepoFresh(owner, repo) { calls.fresh.push(`${owner}/${repo}`); return Promise.resolve(); },
     refreshAfterCommand() { calls.all += 1; return Promise.resolve(); },
   };
   const runtime = await runningServer(t, {
@@ -1689,10 +1690,132 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
       tool_name: 'Bash', tool_use_id: 'push-1',
     }),
   });
-  assert.equal(calls.all, 2);
+  assert.equal(calls.all, 1);
   assert.ok(calls.repos.includes('example/project'));
+  assert.ok(calls.fresh.includes('example/project'));
   const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   assert.deepEqual(snapshot.pullRequests, []);
+});
+
+test('Bash の push は cwd の product に PR を登録したリポジトリだけを取り直す', async (t) => {
+  const calls = { fresh: [], all: 0 };
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    refreshRepoFresh(owner, repo) { calls.fresh.push(`${owner}/${repo}`); return Promise.resolve(); },
+    refreshAfterCommand() { calls.all += 1; return Promise.resolve(); },
+  };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  const productCwd = (name) => path.join(runtime.homeDir, name, '.claude', 'worktrees', 'feature');
+  const cwdA = productCwd('product-a');
+  const cwdB = productCwd('product-b');
+  runtime.state.registerPullRequest('refresh-scope-a', {
+    url: 'https://github.com/example/repo-a/pull/1',
+  }, { cwd: cwdA, product: productFromCwd(cwdA) });
+  runtime.state.registerPullRequest('refresh-scope-b', {
+    url: 'https://github.com/example/repo-b/pull/2',
+  }, { cwd: cwdB, product: productFromCwd(cwdB) });
+
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    body: JSON.stringify({
+      session_id: 'refresh-scope-event', hook_event_name: 'PostToolUse', hookAt: Date.now(),
+      cwd: cwdA, tool_name: 'Bash', tool_use_id: 'push-a', refreshPullRequests: true,
+    }),
+  });
+  assert.equal(response.status, 202);
+  assert.deepEqual(calls.fresh, ['example/repo-a']);
+  assert.equal(calls.all, 0);
+
+  const commandCwdResponse = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    body: JSON.stringify({
+      session_id: 'refresh-scope-event', hook_event_name: 'PostToolUse', hookAt: Date.now(),
+      cwd: cwdA, commandCwd: cwdB, tool_name: 'Bash', tool_use_id: 'push-b', refreshPullRequests: true,
+    }),
+  });
+  assert.equal(commandCwdResponse.status, 202);
+  assert.deepEqual(calls.fresh, ['example/repo-a', 'example/repo-b']);
+
+  const repositoryResponse = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    body: JSON.stringify({
+      session_id: 'refresh-scope-event', hook_event_name: 'PostToolUse', hookAt: Date.now(),
+      cwd: cwdB, tool_name: 'Bash', tool_use_id: 'view-a', refreshPullRequests: true,
+      refreshRepository: 'example/repo-a',
+    }),
+  });
+  assert.equal(repositoryResponse.status, 202);
+  assert.deepEqual(calls.fresh, ['example/repo-a', 'example/repo-b', 'example/repo-a']);
+
+  const unregisteredResponse = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    body: JSON.stringify({
+      session_id: 'refresh-scope-event', hook_event_name: 'PostToolUse', hookAt: Date.now(),
+      cwd: cwdA, tool_name: 'Bash', tool_use_id: 'view-unregistered', refreshPullRequests: true,
+      refreshRepository: 'example/unregistered',
+    }),
+  });
+  assert.equal(unregisteredResponse.status, 202);
+  assert.deepEqual(calls.fresh, ['example/repo-a', 'example/repo-b', 'example/repo-a']);
+  assert.equal(calls.all, 0);
+});
+
+test('対象を 1 つに決められないコマンドの取り直しは、cwd に登録があっても全体へ行う', async (t) => {
+  const calls = { all: 0, scoped: 0 };
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    refreshAfterCommand() { calls.all += 1; return Promise.resolve(); },
+    refreshRepoFresh() { calls.scoped += 1; return Promise.resolve(); },
+  };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  runtime.state.registerPullRequest('unknown-scope-session', {
+    url: 'https://github.com/example/project/pull/51',
+  }, { cwd: process.cwd(), product: productFromCwd(process.cwd()) });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    body: JSON.stringify({
+      session_id: 'unknown-scope', hook_event_name: 'PostToolUse', hookAt: Date.now(), cwd: process.cwd(),
+      tool_name: 'Bash', tool_use_id: 'push-elsewhere', refreshPullRequests: true, refreshScopeUnknown: true,
+    }),
+  });
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(calls, { all: 1, scoped: 0 });
+});
+
+test('cwd の製品に PR 登録が無い取り直しは全体へ行う', async (t) => {
+  const calls = { all: 0, scoped: 0 };
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    refreshAfterCommand() { calls.all += 1; return Promise.resolve(); },
+    refreshRepoFresh() { calls.scoped += 1; return Promise.resolve(); },
+  };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  runtime.state.registerPullRequest('registered-session', {
+    url: 'https://github.com/example/project/pull/50',
+  }, { cwd: process.cwd(), product: { key: 'other-product', name: 'other' } });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    body: JSON.stringify({
+      session_id: 'subfolder-refresh', hook_event_name: 'PostToolUse', hookAt: Date.now(), cwd: process.cwd(),
+      tool_name: 'Bash', tool_use_id: 'push-subfolder', refreshPullRequests: true,
+    }),
+  });
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(calls, { all: 1, scoped: 0 });
 });
 
 test('レビュー不要は画面から設定と取消ができ、MCP は秘密値と現在の head を照合する', async (t) => {

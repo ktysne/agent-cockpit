@@ -5,11 +5,41 @@ const { validSessionId, validText, validPlanInput, decisionSummaries } = require
 const { sanitizeEvent, isQuestionTool } = require('../events');
 const { productFromCwd } = require('../identity');
 const { claudeAgentDefinition, codexAgentDefinition } = require('../session-files');
-const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('../pull-request-utils');
+const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, repositoryKey, validRepositoryPart } = require('../pull-request-utils');
 const { applyReviewSkip } = require('./review-skip');
 
 function createHookRoutes(ctx) {
   const { state, answerDelivery, claudeHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
+
+  function refreshPullRequestsAfterCommand(event) {
+    const registrations = state.pullRequestRegistrations();
+    let scopedRegistrations = null;
+    if (event.refreshScopeUnknown) {
+      // 対象を 1 つに決められないコマンドは、下の全体の取り直しへ回す。
+    } else if (event.refreshRepository) {
+      const [owner, repo] = event.refreshRepository.split('/');
+      const key = repositoryKey(owner, repo);
+      scopedRegistrations = registrations.filter((record) => repositoryKey(record.owner, record.repo) === key);
+    } else {
+      const product = event.commandCwd ? productFromCwd(event.commandCwd) : event.product || productFromCwd(event.cwd);
+      if (product) scopedRegistrations = registrations.filter((record) => record.product?.key === product.key);
+    }
+
+    // 下位のフォルダーや .claude/worktrees 以外の worktree の cwd は、登録の product と key がずれるので全体へ戻す。
+    if (scopedRegistrations === null || (!event.refreshRepository && scopedRegistrations.length === 0)) {
+      void pullRequestTracker?.refreshAfterCommand().catch(() => {});
+      return;
+    }
+
+    const repositories = new Map();
+    for (const record of scopedRegistrations) {
+      const key = repositoryKey(record.owner, record.repo);
+      if (!repositories.has(key)) repositories.set(key, { owner: record.owner, repo: record.repo });
+    }
+    for (const { owner, repo } of repositories.values()) {
+      void pullRequestTracker?.refreshRepoFresh(owner, repo).catch(() => {});
+    }
+  }
 
   async function resolveWriterSessionId(routeId, body) {
     if (Object.hasOwn(body, 'codexSessionId')) {
@@ -193,7 +223,7 @@ function createHookRoutes(ctx) {
     }
     if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (
       event.refreshPullRequests || state.wasPullRequestRefreshCommand(event.session_id, event.tool_use_id)
-    )) void pullRequestTracker?.refreshAfterCommand().catch(() => {});
+    )) refreshPullRequestsAfterCommand(event);
     if (event) answerDelivery.afterEvent(event);
     jsonResponse(response, 202, { accepted: true });
   }

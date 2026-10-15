@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { isHookSessionId } = require('./session-ids');
-const { parsePullRequestUrl } = require('./pull-request-utils');
+const { parsePullRequestUrl, validRepositoryPart } = require('./pull-request-utils');
 
 const EVENT_NAMES = new Set([
   'SessionStart',
@@ -26,6 +26,23 @@ const CODEX_REVIEW_DEFINITIONS = new Set(['codex-review', 'codex-subagent']);
 
 function boundedString(value, limit) {
   return typeof value === 'string' ? value.slice(0, limit) : '';
+}
+
+function sanitizePullRequestRefreshScope(event, input) {
+  if (event.tool_name !== 'Bash' || !['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) return;
+  if (typeof input.commandCwd === 'string' && input.commandCwd.length <= 4096 && path.isAbsolute(input.commandCwd)) {
+    event.commandCwd = input.commandCwd;
+  }
+  if (!event.refreshPullRequestsCommand && !event.refreshPullRequests) return;
+  if (input.refreshScopeUnknown === true) {
+    event.refreshScopeUnknown = true;
+    return;
+  }
+  if (typeof input.refreshRepository !== 'string' || input.refreshRepository.length > 201) return;
+  const parts = input.refreshRepository.split('/');
+  if (parts.length === 2 && validRepositoryPart(parts[0]) && validRepositoryPart(parts[1])) {
+    event.refreshRepository = `${parts[0]}/${parts[1]}`;
+  }
 }
 
 function recommendedOptionFor(question) {
@@ -177,9 +194,6 @@ function sanitizeEvent(input, metadata = {}) {
         if (input.refreshPullRequests === true) event.refreshPullRequests = true;
       }
       if (eventName === 'PostToolUse') {
-        if (event.tool_name === 'Bash' && typeof input.commandCwd === 'string' && input.commandCwd.length <= 4096 && path.isAbsolute(input.commandCwd)) {
-          event.commandCwd = input.commandCwd;
-        }
         const pullRequest = parsePullRequestUrl(input.pullRequest?.url);
         if (pullRequest && input.pullRequest.owner === pullRequest.owner && input.pullRequest.repo === pullRequest.repo &&
           input.pullRequest.number === pullRequest.number) event.pullRequest = pullRequest;
@@ -188,6 +202,7 @@ function sanitizeEvent(input, metadata = {}) {
         event.questions = sanitizeCodexQuestions(event.tool_name, input.questions);
       }
     }
+    sanitizePullRequestRefreshScope(event, input);
     return event;
   }
   if (eventName === 'PermissionRequest') {
@@ -246,6 +261,7 @@ function sanitizeEvent(input, metadata = {}) {
       if (typeof input[key] === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(input[key])) event[key] = input[key];
     }
   }
+  sanitizePullRequestRefreshScope(event, input);
   if (eventName === 'PostToolUse') {
     const pullRequest = parsePullRequestUrl(input.pullRequest?.url);
     if (pullRequest && input.pullRequest.owner === pullRequest.owner && input.pullRequest.repo === pullRequest.repo &&

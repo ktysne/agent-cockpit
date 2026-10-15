@@ -23,6 +23,7 @@ const {
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
   pullRequestCommandCwd,
+  pullRequestRefreshScope,
   shouldRefreshPullRequests,
 } = require('../server/pull-request-utils');
 
@@ -337,6 +338,14 @@ function taskNotificationValue(block, tagName) {
   return block.match(new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`))?.[1]?.trim() || '';
 }
 
+function addPullRequestRefreshScope(event, command, cwd) {
+  const commandCwd = pullRequestCommandCwd(command, cwd);
+  if (commandCwd) event.commandCwd = commandCwd;
+  const scope = pullRequestRefreshScope(command, cwd);
+  if (scope.repository) event.refreshRepository = scope.repository;
+  if (scope.unknown) event.refreshScopeUnknown = true;
+}
+
 function makeHookEvent(input, now = Date.now(), options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const eventName = pickString(input.hook_event_name);
@@ -400,7 +409,10 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
       if (event.tool_name === 'Bash') {
         const command = pickString(input.tool_input?.command);
         if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
-        if (shouldRefreshPullRequests(command)) event.refreshPullRequestsCommand = true;
+        if (shouldRefreshPullRequests(command)) {
+          event.refreshPullRequestsCommand = true;
+          addPullRequestRefreshScope(event, command, input.cwd);
+        }
       }
       if (isQuestionTool('codex', event.tool_name) && !input.agent_id) {
         event.questions = sanitizeCodexQuestions(event.tool_name, input.tool_input?.questions);
@@ -408,7 +420,10 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     } else if (event.tool_name === 'Bash') {
       const command = pickString(input.tool_input?.command);
       if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
-      if (shouldRefreshPullRequests(command)) event.refreshPullRequests = true;
+      if (shouldRefreshPullRequests(command)) {
+        event.refreshPullRequests = true;
+        addPullRequestRefreshScope(event, command, input.cwd);
+      }
       const pullRequest = eventName === 'PostToolUse' ? firstPullRequestUrl(input.tool_response) : null;
       if (pullRequest) {
         event.pullRequest = pullRequest;
@@ -427,7 +442,10 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
       const codexReviewDefinition = extractCodexReviewDefinition(command);
       if (codexReviewDefinition) event.codexReviewDefinition = codexReviewDefinition;
       if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
-      if (shouldRefreshPullRequests(command)) event.refreshPullRequestsCommand = true;
+      if (shouldRefreshPullRequests(command)) {
+        event.refreshPullRequestsCommand = true;
+        addPullRequestRefreshScope(event, command, input.cwd);
+      }
     }
     if (event.tool_name === 'Agent') event.description = pickString(input.tool_input?.description).slice(0, 200);
     if (event.tool_name === 'AskUserQuestion' && !input.agent_id) {
@@ -439,7 +457,10 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     if (event.tool_name === 'Bash') {
       const command = pickString(input.tool_input?.command);
       if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
-      if (shouldRefreshPullRequests(command)) event.refreshPullRequests = true;
+      if (shouldRefreshPullRequests(command)) {
+        event.refreshPullRequests = true;
+        addPullRequestRefreshScope(event, command, input.cwd);
+      }
       const pullRequest = eventName === 'PostToolUse' ? firstPullRequestUrl(input.tool_response) : null;
       if (pullRequest) {
         event.pullRequest = pullRequest;

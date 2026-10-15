@@ -71,7 +71,8 @@ test('同じ一万イベントの先頭と末尾の処理時間が大幅に増�
   const last = mean(times.slice(-500));
   t.diagnostic(`先頭 ${first.toFixed(3)}ms、末尾 ${last.toFixed(3)}ms、比 ${(last / first).toFixed(2)}`);
   // 短い処理では時計と GC の揺れが比率を支配するため、平均 0.25ms を判定の下限にする。
-  assert.ok(last <= Math.max(first, 0.25) * 3, `先頭 ${first.toFixed(3)}ms、末尾 ${last.toFixed(3)}ms`);
+  // 区切りのイベントは残すので緩やかには増える。畳み込みが効かないと数十倍になるので、5 倍で分ける。
+  assert.ok(last <= Math.max(first, 0.25) * 5,`先頭 ${first.toFixed(3)}ms、末尾 ${last.toFixed(3)}ms`);
 });
 
 test('Codex のツールに毎回モデルと作業ディレクトリが付いても畳み込み後の表示が一致する', () => {

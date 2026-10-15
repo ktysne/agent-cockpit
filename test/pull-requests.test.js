@@ -28,6 +28,7 @@ const {
   isGhPrCreateCommand,
   parsePullRequestUrl,
   pullRequestCommandCwd,
+  pullRequestRefreshScope,
   shouldRefreshPullRequests,
 } = require('../src/server/pull-request-utils');
 const { DashboardState } = require('../src/server/state');
@@ -94,6 +95,36 @@ test('PR 作成コマンドの cd を確定できない形式では cwd を推�
     assert.equal(pullRequestCommandCwd(command, hookCwd), null, command);
   }
   assert.equal(pullRequestCommandCwd('gh pr create', hookCwd), null);
+});
+
+test('取り直しの対象のコマンドから、指すリポジトリを 1 つに決める', () => {
+  const hookCwd = path.resolve(os.tmpdir(), 'session-repo');
+  for (const command of [
+    'gh pr view 1 --repo o/r',
+    'gh pr view 1 -R o/r',
+    'gh --repo o/r pr view 1',
+    'gh --repo=o/r pr view 1',
+    'gh pr view 1 -R o/r && gh pr checks 1 --repo O/R',
+  ]) {
+    assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { repository: 'o/r' }, command);
+  }
+  const targetCwd = path.resolve(os.tmpdir(), 'target-repo').replaceAll('\\', '/');
+  for (const command of ['git push', `cd "${targetCwd}" && git push && gh pr view 1`, 'echo "gh pr view 1 --repo o/r" && git push']) {
+    assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { cwd: true }, command);
+  }
+  for (const command of [
+    'git -C /work/b push',
+    'git -C../other push',
+    'cd ../other; git push',
+    'pushd ../other && git push',
+    'git --git-dir=/work/b/.git push',
+    'gh pr view 1 -R o/a && gh pr view 1 -R o/b',
+    'git push && gh pr view 1 -R o/b',
+    'git push && cd /work/b && git push',
+    'gh pr view 1 --repo o/r/extra',
+  ]) {
+    assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { unknown: true }, command);
+  }
 });
 
 async function temporaryDirectory(testContext) {
@@ -2969,13 +3000,42 @@ test('コマンドの後の取り直しは、閉じた登録だけのリポジ�
   await tracker.refreshAll();
   const callCount = calls.length;
 
-  now += 60_000 - 1;
+  now += 55_000 - 1;
   await tracker.refreshAfterCommand();
   assert.equal(calls.length, callCount);
 
-  now += 1;
+  now += 5_000 + 1;
   await tracker.refreshAfterCommand();
   assert.ok(calls.length > callCount);
+  tracker.close();
+});
+
+test('コマンドの後の全体の取り直しが 5 秒以内に続いたら、すぐの 1 回と間隔の明けの 1 回にまとめる', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { tracker, calls } = await trackerFixture(t);
+  let now = Date.parse('2026-10-03T12:00:00.000Z');
+  tracker.now = () => now;
+  await tracker.refreshAll();
+  const fetchCount = () => calls.filter((args) => args[0] === 'pr' && args[1] === 'list').length;
+  const settle = async () => { for (let index = 0; index < 20; index += 1) await new Promise(setImmediate); };
+
+  const before = fetchCount();
+  await tracker.refreshAfterCommand();
+  const afterFirst = fetchCount();
+  assert.ok(afterFirst > before);
+  now += 1_000;
+  await tracker.refreshAfterCommand();
+  now += 1_000;
+  await tracker.refreshAfterCommand();
+  assert.equal(fetchCount(), afterFirst);
+
+  // 予約は 2 回目の呼び出しの時点で、残りの 4 秒後に置かれる。
+  now += 3_000;
+  t.mock.timers.tick(4_000);
+  await settle();
+  assert.equal(fetchCount() - afterFirst, afterFirst - before);
+  tracker.close();
+  t.mock.timers.reset();
 });
 
 test('確定操作の確かめ直しの取得は、その中の gh も待ち行列で定期取得より先に実行する', async (t) => {

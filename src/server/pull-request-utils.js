@@ -213,6 +213,49 @@ function shouldRefreshPullRequests(command) {
   });
 }
 
+function ghRepositoryOption(words) {
+  let value = null;
+  for (let index = 1; index < words.length; index += 1) {
+    if (words[index] === '--repo' || words[index] === '-R') value = words[++index] ?? '';
+    else if (words[index].startsWith('--repo=')) value = words[index].slice('--repo='.length);
+  }
+  return value;
+}
+
+/**
+ * 取り直しの対象のコマンドが指すリポジトリを返す。
+ * repository は gh の --repo の指定、cwd はコマンドを始めた作業ディレクトリのリポジトリを指す。
+ * 移動先を決められない cd、git -C、複数の対象を含むなど、1 つに決められないときは unknown を返す。
+ */
+function pullRequestRefreshScope(command, cwd) {
+  const targets = new Set();
+  let repository = null;
+  for (const [index, segment] of commandSegments(command).entries()) {
+    const words = commandWords(segment);
+    if (['cd', 'pushd', 'popd'].includes(words[0]) && (index > 0 || !pullRequestCommandCwd(command, cwd))) return { unknown: true };
+    if (words[0] === 'git') {
+      const subcommand = subcommandIndex(words, 'git');
+      if (words[subcommand] !== 'push') continue;
+      if (words.slice(1, subcommand).some((word) => word.startsWith('-C') || ['--git-dir', '--work-tree'].includes(word.split('=')[0]))) {
+        return { unknown: true };
+      }
+      targets.add('cwd');
+    } else if (words[0] === 'gh' && words[subcommandIndex(words, 'gh')] === 'pr') {
+      const value = ghRepositoryOption(words);
+      if (value === null) {
+        targets.add('cwd');
+        continue;
+      }
+      const parts = value.split('/');
+      if (parts.length !== 2 || !validRepositoryPart(parts[0]) || !validRepositoryPart(parts[1])) return { unknown: true };
+      repository ??= `${parts[0]}/${parts[1]}`;
+      targets.add(repositoryKey(parts[0], parts[1]));
+    }
+  }
+  if (targets.size !== 1) return { unknown: true };
+  return targets.has('cwd') ? { cwd: true } : { repository };
+}
+
 module.exports = {
   COMPLETE_COMMIT_SHA_PATTERN,
   commandSegments,
@@ -226,6 +269,7 @@ module.exports = {
   parsePullRequestUrl,
   parseGitHubRepositoryRemote,
   pullRequestCommandCwd,
+  pullRequestRefreshScope,
   pullRequestKey,
   repositoryKey,
   shouldRefreshPullRequests,
