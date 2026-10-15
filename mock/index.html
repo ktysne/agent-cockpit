@@ -506,6 +506,12 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
+      <label for="settings-gh-concurrency-limit">GitHub CLI の同時起動上限数 (1〜32)</label>
+      <input id="settings-gh-concurrency-limit" name="ghConcurrencyLimit" type="number" step="1" inputmode="numeric" aria-describedby="settings-gh-concurrency-limit-note settings-gh-concurrency-limit-error">
+      <span class="settings-input-error" id="settings-gh-concurrency-limit-error" role="alert" hidden></span>
+    </div>
+    <p class="meta" id="settings-gh-concurrency-limit-note">プルリクエストの取得に使う gh を同時に動かす数。大きいほど一覧の更新が速く、PC と GitHub API への負荷が増える。変えた値は次に起動する gh から効く。</p>
+    <div class="settings-theme-row">
       <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
       <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
     </div>
@@ -866,7 +872,7 @@ const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) ||
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
 // 読み込み直すと消える案内なので、保存する ui には置かない。
 let refreshConfirmPending = false;
-const ui = Object.assign({ mode: 'kind', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 3, idleHideMinutes: 10, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+const ui = Object.assign({ mode: 'kind', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 3, idleHideMinutes: 10, ghConcurrencyLimit: 8, hideFinished: true, mergeableCondition: 'cross-review' }, load());
 ui.importAppTasksAsked = ui.importAppTasksAsked === true;
 ui.importAppTasks = ui.importAppTasksAsked && ui.importAppTasks === true;
 const TRANSIENT_NOTICE_MS = 60_000;
@@ -899,7 +905,7 @@ function transientMessageVisible(notice, now = Date.now()) {
   return Boolean(notice && typeof notice.message === 'string' && !transientNoticeExpired(notice.shownAt, now));
 }
 
-function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
+function normalizeDisplayInteger(value, minimum, maximum, fallback) {
   return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
 }
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
@@ -908,17 +914,20 @@ const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
-const DISPLAY_MINUTE_SETTINGS = [
-  { key: 'longWaitMinutes', input: longWaitMinutesInput, error: longWaitMinutesError, min: 1, max: 120, default: 15 },
-  { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: awayAnswerWaitMinutesError, min: 1, max: 30, default: 5 },
-  { key: 'idleHideMinutes', input: idleHideMinutesInput, error: idleHideMinutesError, min: 5, max: 1440, default: 30 },
+const ghConcurrencyLimitInput = document.getElementById('settings-gh-concurrency-limit');
+const ghConcurrencyLimitError = document.getElementById('settings-gh-concurrency-limit-error');
+const DISPLAY_INTEGER_SETTINGS = [
+  { key: 'longWaitMinutes', input: longWaitMinutesInput, error: longWaitMinutesError, min: 1, max: 120, unit: '分', default: 15 },
+  { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: awayAnswerWaitMinutesError, min: 1, max: 30, unit: '分', default: 5 },
+  { key: 'idleHideMinutes', input: idleHideMinutesInput, error: idleHideMinutesError, min: 5, max: 1440, unit: '分', default: 30 },
+  { key: 'ghConcurrencyLimit', input: ghConcurrencyLimitInput, error: ghConcurrencyLimitError, min: 1, max: 32, unit: '', default: 8 },
 ];
-for (const { input, min, max } of DISPLAY_MINUTE_SETTINGS) {
+for (const { input, min, max } of DISPLAY_INTEGER_SETTINGS) {
   input.min = String(min);
   input.max = String(max);
 }
-for (const { key, min, max, default: fallback } of DISPLAY_MINUTE_SETTINGS) {
-  ui[key] = normalizeDisplayMinutes(ui[key], min, max, fallback);
+for (const { key, min, max, default: fallback } of DISPLAY_INTEGER_SETTINGS) {
+  ui[key] = normalizeDisplayInteger(ui[key], min, max, fallback);
 }
 ui.hideFinished = ui.hideFinished !== false;
 // 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
@@ -981,6 +990,7 @@ function captureDisplayPreferences() {
     sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
     importAppTasks: ui.importAppTasks, importAppTasksAsked: ui.importAppTasksAsked,
     longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes, idleHideMinutes: ui.idleHideMinutes,
+    ghConcurrencyLimit: ui.ghConcurrencyLimit,
     mergeableCondition: ui.mergeableCondition,
   };
 }
@@ -1019,23 +1029,23 @@ function applySinceSeenMode(mode) {
 }
 
 function renderDisplaySettings() {
-  for (const { key, input } of DISPLAY_MINUTE_SETTINGS) input.value = String(ui[key]);
+  for (const { key, input } of DISPLAY_INTEGER_SETTINGS) input.value = String(ui[key]);
   hideFinishedInput.checked = ui.hideFinished;
   importAppTasksInput.checked = ui.importAppTasks === true;
   for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
 }
 
 function displaySettingError(key) {
-  return DISPLAY_MINUTE_SETTINGS.find((setting) => setting.key === key)?.error || null;
+  return DISPLAY_INTEGER_SETTINGS.find((setting) => setting.key === key)?.error || null;
 }
 
 function changeDisplaySetting(key, input) {
-  const setting = DISPLAY_MINUTE_SETTINGS.find((item) => item.key === key);
+  const setting = DISPLAY_INTEGER_SETTINGS.find((item) => item.key === key);
   if (!setting) return false;
   const value = input.valueAsNumber;
   if (!Number.isInteger(value) || value < setting.min || value > setting.max) {
     const error = displaySettingError(key);
-    error.textContent = `${setting.min}〜${setting.max} 分の値を入力してください。`;
+    error.textContent = `${setting.min}〜${setting.max} ${setting.unit}の値を入力してください。`;
     error.hidden = false;
     input.value = String(ui[key]);
     return false;
@@ -1052,7 +1062,7 @@ function changeDisplaySetting(key, input) {
 }
 
 renderDisplaySettings();
-for (const { key, input } of DISPLAY_MINUTE_SETTINGS) {
+for (const { key, input } of DISPLAY_INTEGER_SETTINGS) {
   input.addEventListener('change', () => changeDisplaySetting(key, input));
 }
 hideFinishedInput.addEventListener('change', () => {

@@ -2,13 +2,13 @@
   "name": "dialog",
   "target": null,
   "width": 1700,
-  "height": 2400,
+  "height": 2640,
   "parts": [
     {
       "key": "settings.theme",
       "bounds": {
         "x": 474,
-        "y": 308,
+        "y": 182,
         "width": 752,
         "height": 72
       },
@@ -18,7 +18,7 @@
       "key": "settings.since-seen",
       "bounds": {
         "x": 474,
-        "y": 380,
+        "y": 254,
         "width": 752,
         "height": 72
       },
@@ -28,7 +28,7 @@
       "key": "settings.mergeable",
       "bounds": {
         "x": 474,
-        "y": 543,
+        "y": 417,
         "width": 752,
         "height": 524
       },
@@ -38,7 +38,7 @@
       "key": "settings.hide-finished",
       "bounds": {
         "x": 474,
-        "y": 1153,
+        "y": 1027,
         "width": 752,
         "height": 45
       },
@@ -48,7 +48,7 @@
       "key": "settings.long-wait",
       "bounds": {
         "x": 474,
-        "y": 1198,
+        "y": 1072,
         "width": 752,
         "height": 72
       },
@@ -58,7 +58,7 @@
       "key": "settings.idle",
       "bounds": {
         "x": 474,
-        "y": 1270,
+        "y": 1144,
         "width": 752,
         "height": 72
       },
@@ -68,9 +68,29 @@
       "key": "settings.away-wait",
       "bounds": {
         "x": 474,
-        "y": 1342,
+        "y": 1216,
         "width": 752,
         "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.gh-concurrency",
+      "bounds": {
+        "x": 474,
+        "y": 1288,
+        "width": 752,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.import-app-tasks",
+      "bounds": {
+        "x": 474,
+        "y": 1523,
+        "width": 752,
+        "height": 45
       },
       "visible": true
     },
@@ -78,7 +98,7 @@
       "key": "settings.order",
       "bounds": {
         "x": 474,
-        "y": 1442,
+        "y": 1773,
         "width": 752,
         "height": 701
       },
@@ -88,7 +108,7 @@
       "key": "settings.manual",
       "bounds": {
         "x": 448,
-        "y": 2200,
+        "y": 2532,
         "width": 90,
         "height": 72
       },
@@ -98,7 +118,7 @@
       "key": "settings.close",
       "bounds": {
         "x": 1131,
-        "y": 2200,
+        "y": 2532,
         "width": 121,
         "height": 72
       },

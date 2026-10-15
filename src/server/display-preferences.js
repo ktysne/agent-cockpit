@@ -19,6 +19,7 @@ const DISPLAY_SCHEMA = Object.freeze({
   longWaitMinutes: Object.freeze({ type: 'integer', default: 15, minimum: 1, maximum: 120 }),
   awayAnswerWaitMinutes: Object.freeze({ type: 'integer', default: 3, minimum: 1, maximum: 30 }),
   idleHideMinutes: Object.freeze({ type: 'integer', default: 10, minimum: 5, maximum: 1440 }),
+  ghConcurrencyLimit: Object.freeze({ type: 'integer', default: 8, minimum: 1, maximum: 32 }),
   hideFinished: Object.freeze({ type: 'boolean', default: true }),
   importAppTasks: Object.freeze({ type: 'boolean', default: false }),
   importAppTasksAsked: Object.freeze({ type: 'boolean', default: false }),

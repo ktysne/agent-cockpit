@@ -525,6 +525,12 @@ h3.sub .count { font-weight: normal; }
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
+      <label for="settings-gh-concurrency-limit">GitHub CLI の同時起動上限数 (1〜32)</label>
+      <input id="settings-gh-concurrency-limit" name="ghConcurrencyLimit" type="number" step="1" inputmode="numeric" aria-describedby="settings-gh-concurrency-limit-note settings-gh-concurrency-limit-error">
+      <span class="settings-input-error" id="settings-gh-concurrency-limit-error" role="alert" hidden></span>
+    </div>
+    <p class="meta" id="settings-gh-concurrency-limit-note">プルリクエストの取得に使う gh を同時に動かす数。大きいほど一覧の更新が速く、PC と GitHub API への負荷が増える。変えた値は次に起動する gh から効く。</p>
+    <div class="settings-theme-row">
       <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
       <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
     </div>
@@ -652,6 +658,7 @@ const WAIT_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_LONG_WAIT_MINUTES = 15;
 const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 3;
 const DEFAULT_IDLE_HIDE_MINUTES = 10;
+const DEFAULT_GH_CONCURRENCY_LIMIT = 8;
 const summary = document.getElementById('summary');
 const root = document.getElementById('root');
 const liveStatus = document.getElementById('live-status');
@@ -664,12 +671,15 @@ const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
-const DISPLAY_MINUTE_SETTINGS = [
-  { key: 'longWaitMinutes', input: longWaitMinutesInput, error: longWaitMinutesError, min: 1, max: 120, default: DEFAULT_LONG_WAIT_MINUTES },
-  { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: awayAnswerWaitMinutesError, min: 1, max: 30, default: DEFAULT_AWAY_ANSWER_WAIT_MINUTES },
-  { key: 'idleHideMinutes', input: idleHideMinutesInput, error: idleHideMinutesError, min: 5, max: 1440, default: DEFAULT_IDLE_HIDE_MINUTES },
+const ghConcurrencyLimitInput = document.getElementById('settings-gh-concurrency-limit');
+const ghConcurrencyLimitError = document.getElementById('settings-gh-concurrency-limit-error');
+const DISPLAY_INTEGER_SETTINGS = [
+  { key: 'longWaitMinutes', input: longWaitMinutesInput, error: longWaitMinutesError, min: 1, max: 120, unit: '分', default: DEFAULT_LONG_WAIT_MINUTES },
+  { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: awayAnswerWaitMinutesError, min: 1, max: 30, unit: '分', default: DEFAULT_AWAY_ANSWER_WAIT_MINUTES },
+  { key: 'idleHideMinutes', input: idleHideMinutesInput, error: idleHideMinutesError, min: 5, max: 1440, unit: '分', default: DEFAULT_IDLE_HIDE_MINUTES },
+  { key: 'ghConcurrencyLimit', input: ghConcurrencyLimitInput, error: ghConcurrencyLimitError, min: 1, max: 32, unit: '', default: DEFAULT_GH_CONCURRENCY_LIMIT },
 ];
-for (const { input, min, max } of DISPLAY_MINUTE_SETTINGS) {
+for (const { input, min, max } of DISPLAY_INTEGER_SETTINGS) {
   input.min = String(min);
   input.max = String(max);
 }
@@ -800,7 +810,7 @@ function normalizeSectionOrder(order) {
   return [...known, ...DEFAULT_SECTION_ORDER.filter((key) => !known.includes(key))];
 }
 
-function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
+function normalizeDisplayInteger(value, minimum, maximum, fallback) {
   return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
 }
 
@@ -868,8 +878,8 @@ function normalizeDisplayPreferences(value) {
     collapsed: uniqueStrings(value?.collapsed),
     hidden: [...new Set(Array.isArray(value?.hidden) ? value.hidden.filter((item) => FILTERS.some((filter) => filter.key === item)) : [])],
     sectionOrder: normalizeSectionOrder(value?.sectionOrder),
-    ...Object.fromEntries(DISPLAY_MINUTE_SETTINGS.map(({ key, min, max, default: fallback }) => (
-      [key, normalizeDisplayMinutes(value?.[key], min, max, fallback)]
+    ...Object.fromEntries(DISPLAY_INTEGER_SETTINGS.map(({ key, min, max, default: fallback }) => (
+      [key, normalizeDisplayInteger(value?.[key], min, max, fallback)]
     ))),
     hideFinished: value?.hideFinished !== false,
     importAppTasks: value?.importAppTasksAsked === true && value?.importAppTasks === true,
@@ -894,7 +904,7 @@ const displayPreferenceSaveStates = new Map();
 
 // 入力中の欄を定期の同期で上書きすると、確定前の値が消えるため、フォーカス中の欄は飛ばす。
 function renderDisplaySettings() {
-  for (const { input, key } of DISPLAY_MINUTE_SETTINGS) {
+  for (const { input, key } of DISPLAY_INTEGER_SETTINGS) {
     if (document.activeElement === input) continue;
     input.value = String(displayPreferences[key]);
   }
@@ -980,15 +990,15 @@ function saveDisplayPreferences(changes, settingInput = null) {
 }
 
 function displaySettingError(key) {
-  return DISPLAY_MINUTE_SETTINGS.find((setting) => setting.key === key)?.error || null;
+  return DISPLAY_INTEGER_SETTINGS.find((setting) => setting.key === key)?.error || null;
 }
 
 function changeDisplaySetting(key, input) {
-  const setting = DISPLAY_MINUTE_SETTINGS.find((item) => item.key === key);
+  const setting = DISPLAY_INTEGER_SETTINGS.find((item) => item.key === key);
   const value = input.type === 'checkbox' ? input.checked : input.valueAsNumber;
   if (setting && input.type !== 'checkbox' && (!Number.isInteger(value) || value < setting.min || value > setting.max)) {
     const error = displaySettingError(key);
-    error.textContent = `${setting.min}〜${setting.max} 分の値を入力してください。`;
+    error.textContent = `${setting.min}〜${setting.max} ${setting.unit}の値を入力してください。`;
     error.hidden = false;
     setDisplaySettingInput(input, displayPreferences[key]);
     return Promise.resolve(false);
@@ -1159,7 +1169,7 @@ document.getElementById('settings-section-order-reset').addEventListener('click'
   if (lastState) render(lastState);
 });
 
-for (const { key, input } of DISPLAY_MINUTE_SETTINGS) {
+for (const { key, input } of DISPLAY_INTEGER_SETTINGS) {
   input.addEventListener('change', () => changeDisplaySetting(key, input));
 }
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));

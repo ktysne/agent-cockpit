@@ -186,7 +186,8 @@ function mergeInput(number = 1, changes = {}) {
 }
 
 test('確定操作のブランチ削除は待機中の定期取得より先にghを起動する', async (t) => {
-  const { tracker, manager } = await mergeFixture(t);
+  const { state, tracker, manager } = await mergeFixture(t);
+  state.getDisplayPreferences = () => ({ ghConcurrencyLimit: 4 });
   const started = [];
   const running = [];
   tracker.execFileImpl = (_file, args, options, callback) => {

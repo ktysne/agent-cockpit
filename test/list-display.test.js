@@ -1543,8 +1543,8 @@ test('PR の初回取得中は空一覧の代わりに取得中の案内を出�
   assert.match(mock, /p\.repo\.loading \? `<div class="empty">GitHub から取得しています<\/div>`/);
 });
 
-test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲を示す', async () => {
-  const settings = web.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+test('整数表示設定の範囲外は欄の近くに示し、ラベルにも範囲を示す', async () => {
+  const settings = web.match(/const DISPLAY_INTEGER_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   const inputSource = functionSource(web, 'setDisplaySettingInput');
   const errorSource = functionSource(web, 'displaySettingError');
   const changeSource = functionSource(web, 'changeDisplaySetting');
@@ -1552,16 +1552,20 @@ test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲�
   const longError = { hidden: true, textContent: '' };
   const awayError = { hidden: true, textContent: '' };
   const idleError = { hidden: true, textContent: '' };
+  const ghError = { hidden: true, textContent: '' };
   const input = { type: 'number', valueAsNumber: 121, value: '121' };
+  const ghInput = { type: 'number', valueAsNumber: 33, value: '33' };
   const context = pageContext(web, {
     longWaitMinutesInput: input, longWaitMinutesError: longError, awayAnswerWaitMinutesError: awayError,
     idleHideMinutesError: idleError,
+    ghConcurrencyLimitInput: ghInput, ghConcurrencyLimitError: ghError,
     awayAnswerWaitMinutesInput: { type: 'number', value: '' },
     idleHideMinutesInput: { type: 'number', valueAsNumber: 4, value: '4' },
-    displayPreferences: { longWaitMinutes: 15, idleHideMinutes: 30 },
+    displayPreferences: { longWaitMinutes: 15, idleHideMinutes: 30, ghConcurrencyLimit: 8 },
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
     DEFAULT_IDLE_HIDE_MINUTES: 10,
+    DEFAULT_GH_CONCURRENCY_LIMIT: 8,
   });
   vm.runInContext(`${settings}\n${inputSource}\n${errorSource}\n${changeSource}\nthis.changeSetting = changeDisplaySetting;`, context);
   assert.equal(await context.changeSetting('longWaitMinutes', input), false);
@@ -1572,6 +1576,10 @@ test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲�
   assert.equal(idleError.hidden, false);
   assert.equal(idleError.textContent, '5〜1440 分の値を入力してください。');
   assert.equal(context.idleHideMinutesInput.value, '30');
+  assert.equal(await context.changeSetting('ghConcurrencyLimit', ghInput), false);
+  assert.equal(ghError.hidden, false);
+  assert.equal(ghError.textContent, '1〜32 の値を入力してください。');
+  assert.equal(ghInput.value, '8');
   assert.match(web, /長く待たせているとみなす時間 \(1〜120 分\)/);
   assert.match(web, /更新の無いセッションを隠すまで \(分\)/);
   assert.match(settings, /key: 'idleHideMinutes'[^\n]*min: 5, max: 1440/);
@@ -1580,8 +1588,10 @@ test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲�
   assert.match(web, /id="settings-long-wait-error" role="alert"/);
   assert.match(mock, /id="settings-away-answer-wait-error" role="alert"/);
   assert.match(mock, /更新の無いセッションを隠すまで \(分\)/);
-  const mockSettings = mock.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  const mockSettings = mock.match(/const DISPLAY_INTEGER_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   assert.match(mockSettings, /key: 'idleHideMinutes'[^\n]*min: 5, max: 1440/);
+  assert.match(settings, /key: 'ghConcurrencyLimit'[^\n]*min: 1, max: 32/);
+  assert.match(web, /GitHub CLI の同時起動上限数 \(1〜32\)/);
 });
 
 test('更新の無いセッションの「表示する」「隠す」が描き直しで消えたら表示切り替えへフォーカスを戻す', () => {
