@@ -221,6 +221,7 @@ function createHookRoutes(ctx) {
         state.sessionNameFor(event.session_id) || state.sessions.get(event.session_id)?.title);
       if (tasks) {
         const saved = state.setTasks(event.session_id, tasks);
+        state.markAppTasks(event.session_id);
         answerDelivery.afterTasksWrite(event.session_id, Date.parse(saved.updatedAt));
       }
     }
@@ -270,10 +271,12 @@ function createHookRoutes(ctx) {
 
     if (body.kind === 'tasks') {
       const incoming = body.tasks.map(task => ({ ...task, criteria: task.criteria || [] }));
-      // 2 件以上は取り込みの無い CLI などが一覧全体を書く形なので、題でのまとめ書きにせず置き換える。
-      const tasks = incoming.length === 1 && state.getDisplayPreferences().importAppTasks !== false &&
-        state.providerForSession(sessionId) !== 'codex'
-        ? state.planUpdates.merge(sessionId, state.planFor(sessionId), incoming) : incoming;
+      // 取り込みの無い CLI などは一覧全体を書くので置き換える。2 件以上も一覧全体を書く形として扱う。
+      const merging = incoming.length === 1 && state.planFor(sessionId).appTasks === true &&
+        state.getDisplayPreferences().importAppTasks !== false && state.providerForSession(sessionId) !== 'codex';
+      const tasks = merging ? state.planUpdates.merge(sessionId, state.planFor(sessionId), incoming) : incoming;
+      // 置き換えた一覧より前の基準から差分を組み立て直すと、置き換えた内容が消えるため、記録を捨てる。
+      if (!merging) state.planUpdates.delete(sessionId);
       const saved = state.setTasks(sessionId, tasks);
       answerDelivery.afterTasksWrite(sessionId, Date.parse(saved.updatedAt));
       jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt });

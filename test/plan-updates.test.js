@@ -137,7 +137,8 @@ test('後から登録した題で自動の題を改名し、差分後も保つ',
 });
 
 test('同じ題をまとめ書きし、空でない完了条件だけ置き換えて他の題を残す', async t => {
-  const { write, tasks } = await setup(t);
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '段階1', status: 'in_progress' }] });
   await write([{ title: '前の依頼', state: 'doing', criteria: criteria() }]);
   await write([{ title: '次の依頼', state: 'doing', criteria: criteria() }]);
   await write([{ title: ' 前の依頼 ', state: 'done', criteria: [] }]);
@@ -146,6 +147,39 @@ test('同じ題をまとめ書きし、空でない完了条件だけ置き換�
   assert.deepEqual(tasks()[0].criteria, criteria());
   await write([{ title: '次の依頼', state: 'doing', criteria: [{ text: '確認', met: true }] }]);
   assert.deepEqual(tasks()[1].criteria, [{ text: '確認', met: true }]);
+});
+
+test('アプリの一覧を取り込んでいないセッションの 1 件の set_tasks は一覧を置き換える', async t => {
+  const { write, tasks } = await setup(t);
+  await write([{ title: 'A', state: 'doing', criteria: criteria() }]);
+  await write([{ title: 'B', state: 'doing', criteria: [] }]);
+  assert.deepEqual(tasks().map(task => `${task.title}:${task.state}`), ['B:doing']);
+});
+
+test('一覧を置き換えた後の差分は置き換えた完了条件から進める', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '古い段階', status: 'in_progress' }] });
+  await write([
+    { title: '依頼', state: 'doing', criteria: criteria() },
+    { title: '別の依頼', state: 'todo', criteria: [] },
+  ]);
+  await write([{ title: '依頼', state: 'doing', criteria: criteria() }, { title: '最後', state: 'doing', criteria: criteria() }]);
+  await send({ advance: true });
+  assert.deepEqual(tasks().map(task => task.title), ['依頼', '最後']);
+  assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
+});
+
+test('終えた題を作業中で登録し直すと末尾へ移り、次の一覧がそこへ入る', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '段階1', status: 'in_progress' }] });
+  await write([{ title: '依頼A', state: 'doing' }]);
+  await send({ items: [{ content: '段階1', status: 'completed' }] });
+  await write([{ title: '依頼B', state: 'doing' }]);
+  await send({ items: [{ content: 'B の段階', status: 'in_progress' }], scope: 'continuation' });
+  await write([{ title: '依頼A', state: 'doing' }]);
+  await send({ items: [{ content: 'A の再開', status: 'in_progress' }], scope: 'continuation' });
+  assert.deepEqual(tasks().map(task => `${task.title}:${task.state}`), ['依頼B:done', '依頼A:doing']);
+  assert.deepEqual(tasks().at(-1).criteria.map(item => item.text), ['A の再開']);
 });
 
 test('取り込み中でも 2 件以上の set_tasks は一覧全体を置き換える', async t => {

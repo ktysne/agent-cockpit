@@ -61,6 +61,12 @@ function mergeTasks(tasks, incoming) {
   for (const entry of incoming) {
     const title = entry.title.trim();
     let task = tasks.find(task => task.title.trim() === title);
+    // 今のタスクは末尾にある前提なので、終えたタスクを再開するときは末尾へ移し、他を終える。
+    if (task && entry.state !== 'done' && task !== tasks.at(-1)) {
+      tasks.splice(tasks.indexOf(task), 1);
+      finishPrevious(tasks);
+      tasks.push(task);
+    }
     if (!task) {
       const current = currentTask(tasks);
       if (current && (current.autoTitle || !current.criteria.length)) {
