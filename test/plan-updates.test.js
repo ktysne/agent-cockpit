@@ -182,6 +182,24 @@ test('終えた題を作業中で登録し直すと末尾へ移り、次の一�
   assert.deepEqual(tasks().at(-1).criteria.map(item => item.text), ['A の再開']);
 });
 
+test('一覧を置き換える前に作られた items が遅れて届いても置き換えた内容を保つ', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '古い段階', status: 'in_progress' }] });
+  const beforeReplace = Date.now() - 1000;
+  await write([{ title: '依頼', state: 'doing', criteria: criteria() }, { title: '最後', state: 'doing', criteria: criteria() }]);
+  await send({ items: [{ content: '遅れた段階', status: 'in_progress' }] }, beforeReplace);
+  assert.deepEqual(tasks().map(task => task.title), ['依頼', '最後']);
+  assert.deepEqual(tasks().at(-1).criteria, criteria());
+});
+
+test('未完了のタスクを未完了のまま更新しても並びと他の状態を保つ', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '段階1', status: 'in_progress' }] });
+  await write([{ title: 'A', state: 'todo', criteria: [] }, { title: 'B', state: 'doing', criteria: [] }]);
+  await write([{ title: 'A', state: 'todo' }]);
+  assert.deepEqual(tasks().map(task => `${task.title}:${task.state}`), ['A:todo', 'B:doing']);
+});
+
 test('取り込み中でも 2 件以上の set_tasks は一覧全体を置き換える', async t => {
   const { write, tasks } = await setup(t);
   await write([{ title: '前の依頼', state: 'doing', criteria: criteria() }]);
@@ -267,7 +285,7 @@ test('不正な items と差分は全体を無視する', async t => {
 test('タスクが上限を超えたら古い done を捨てる', async t => {
   const { write, send, tasks } = await setup(t);
   await write(Array.from({ length: 50 }, (_, i) => ({ title: '依頼' + i, state: 'done', criteria: [] })));
-  await send(items(), 100);
+  await send(items());
   assert.equal(tasks().length, 50);
   assert.equal(tasks()[0].title, '依頼1');
 });
@@ -318,10 +336,10 @@ test('差分で完了した後の題登録は履歴を残して次の取り込�
 test('完了条件をまとめ書きした後の差分は新しい完了条件から進める', async t => {
   const { send, write, tasks } = await setup(t);
   await write([{ title: '依頼', state: 'doing' }]);
-  await send(items(), 100);
-  await send({ advance: true }, 200);
+  await send(items());
+  await send({ advance: true });
   await write([{ title: '依頼', state: 'doing', criteria: criteria() }]);
-  await send({ advance: true }, 300);
+  await send({ advance: true });
   assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
 });
 

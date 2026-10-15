@@ -62,7 +62,7 @@ function mergeTasks(tasks, incoming) {
     const title = entry.title.trim();
     let task = tasks.find(task => task.title.trim() === title);
     // 今のタスクは末尾にある前提なので、終えたタスクを再開するときは末尾へ移し、他を終える。
-    if (task && entry.state !== 'done' && task !== tasks.at(-1)) {
+    if (task && task.state === 'done' && entry.state !== 'done' && task !== tasks.at(-1)) {
       tasks.splice(tasks.indexOf(task), 1);
       finishPrevious(tasks);
       tasks.push(task);
@@ -127,6 +127,13 @@ function applyItems(tasks, input, sessionTitle) {
 class PlanUpdates {
   constructor() { this.sessions = new Map(); }
   delete(sessionId) { this.sessions.delete(sessionId); }
+
+  // 一覧を置き換えた時刻を基準にし、それより前に作られた items と差分が遅れて届いても退ける。
+  replaced(sessionId, tasks, at) {
+    const record = this.sessions.get(sessionId);
+    this.sessions.set(sessionId, { hookAt: at, tasks: structuredClone(tasks), hasItems: true,
+      seen: record?.seen || new Set(), differences: (record?.differences || []).filter(update => update.hookAt > at) });
+  }
   clear() { this.sessions.clear(); }
 
   merge(sessionId, plan, incoming) {

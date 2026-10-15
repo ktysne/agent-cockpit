@@ -275,9 +275,9 @@ function createHookRoutes(ctx) {
       const merging = incoming.length === 1 && state.planFor(sessionId).appTasks === true &&
         state.getDisplayPreferences().importAppTasks !== false && state.providerForSession(sessionId) !== 'codex';
       const tasks = merging ? state.planUpdates.merge(sessionId, state.planFor(sessionId), incoming) : incoming;
-      // 置き換えた一覧より前の基準から差分を組み立て直すと、置き換えた内容が消えるため、記録を捨てる。
-      if (!merging) state.planUpdates.delete(sessionId);
       const saved = state.setTasks(sessionId, tasks);
+      // 置き換えより前の基準から組み立て直すと、置き換えた内容が消えるため、基準を置き換えた一覧にする。
+      if (!merging) state.planUpdates.replaced(sessionId, saved.tasks, Date.parse(saved.updatedAt));
       answerDelivery.afterTasksWrite(sessionId, Date.parse(saved.updatedAt));
       jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt });
       return;
