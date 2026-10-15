@@ -1174,7 +1174,9 @@ document.getElementById('refresh-button').addEventListener('click', () => {
 settingsButton.addEventListener('click', () => {
   settingsDialog.showModal();
   settingsSaveError.hidden = !settingsSaveError.textContent;
-  updateCheckStatus.textContent = '';
+  updateCheckStatus.textContent = DATA.update?.error
+    ? updateCheckFailureMessage(DATA.update, '更新を確認できていません。')
+    : '';
 });
 updateCheckButton.addEventListener('click', () => {
   updateCheckButton.disabled = true;
@@ -1183,6 +1185,11 @@ updateCheckButton.addEventListener('click', () => {
   setTimeout(() => {
     updateCheckButton.disabled = false;
     updateCheckButton.textContent = '更新を確認';
+    if (DATA.update?.error) {
+      updateCheckStatus.textContent = updateCheckFailureMessage(
+        DATA.update, '確認できませんでした。時間をおいてやり直してください。',
+      );
+    }
   }, 600);
 });
 settingsClose.addEventListener('click', () => settingsDialog.close());
@@ -2680,6 +2687,19 @@ function applyUpdateState(update) {
   if (updateNote.hidden) return;
   document.getElementById('update-message').textContent = `新しいバージョン v${update.latest} があります。`;
   document.getElementById('update-compare').href = update.compareUrl;
+}
+
+function formatUpdateSucceededAt(succeededAt) {
+  if (!succeededAt) return '';
+  const date = new Date(succeededAt);
+  if (!Number.isFinite(date.getTime())) return '';
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+}
+
+function updateCheckFailureMessage(update, message) {
+  const succeededAt = formatUpdateSucceededAt(update?.succeededAt);
+  return succeededAt ? `${message} 最後に確認できたのは ${succeededAt} です。` : message;
 }
 
 async function copyUpdatePrompt() {

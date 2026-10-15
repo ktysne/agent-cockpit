@@ -40,7 +40,7 @@ class UpdateChecker {
     this.setTimeoutImpl = setTimeoutImpl;
     this.clearTimeoutImpl = clearTimeoutImpl;
     this.diagnostics = diagnostics;
-    this.result = { current, latest: null, available: false, checkedAt: null, error: null };
+    this.result = { current, latest: null, available: false, checkedAt: null, succeededAt: null, error: null };
     this.timer = null;
     this.running = false;
     this.inFlight = null;
@@ -85,13 +85,13 @@ class UpdateChecker {
       });
       const latest = latestVersionFromTags(output);
       if (latest === null) throw Object.assign(new Error('No version tags'), { code: 'NO_VERSION_TAGS' });
+      const checkedAt = new Date(this.nowMs()).toISOString();
       this.result = { current: this.current, latest, available: compareVersions(latest, this.current) > 0,
-        checkedAt: new Date(this.nowMs()).toISOString(), error: null };
+        checkedAt, succeededAt: checkedAt, error: null };
       await this.diagnostics?.record('info', 'server', 'update.checked', this.result);
     } catch (error) {
       const failure = error.killed ? 'TIMEOUT' : String(error.code || 'CHECK_FAILED');
-      this.result = { current: this.current, latest: null, available: false,
-        checkedAt: new Date(this.nowMs()).toISOString(), error: failure };
+      this.result = { ...this.result, checkedAt: new Date(this.nowMs()).toISOString(), error: failure };
       await this.diagnostics?.record('warn', 'server', 'update.failed', { failure });
     }
     return this.snapshot();

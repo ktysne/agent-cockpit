@@ -76,21 +76,56 @@ test('起動 1 分後と 6 時間ごとに固定 URL を対話なしで調べ、
   assert.equal(calls.length, 2);
 });
 
-test('確認に失敗した回は以前の通知も隠し、失敗分類だけを診断に残す', async () => {
+test('成功後の確認に失敗しても更新候補と成功時刻を残し、失敗分類を診断に残す', async () => {
   for (const [failure, expected] of [[{ code: 'ENOENT' }, 'ENOENT'], [{ killed: true }, 'TIMEOUT'],
     [{ code: 128 }, '128'], [null, 'NO_VERSION_TAGS']]) {
     const records = [];
+    let now = 1000;
     const checker = new UpdateChecker({ current: '0.0.0', execFileImpl: gitResult(tags('1.0.0')),
-      nowMs: () => 1000, diagnostics: { record: (...args) => records.push(args) } });
+      nowMs: () => now, diagnostics: { record: (...args) => records.push(args) } });
     await checker.check();
-    assert.equal(checker.snapshot().available, true);
+    const succeededAt = checker.snapshot().succeededAt;
+    assert.equal(succeededAt, '1970-01-01T00:00:01.000Z');
+    now = 2000;
     checker.execFileImpl = (_file, _args, _options, callback) => callback(failure, '');
     await checker.check();
-    assert.deepEqual(checker.snapshot(), { current: '0.0.0', latest: null, available: false,
-      checkedAt: '1970-01-01T00:00:01.000Z', error: expected });
+    const result = checker.snapshot();
+    assert.equal(result.latest, '1.0.0');
+    assert.equal(result.available, true);
+    assert.equal(result.succeededAt, succeededAt);
+    assert.equal(result.checkedAt, '1970-01-01T00:00:02.000Z');
+    assert.equal(result.error, expected);
+    assert.match(result.prompt, /v1\.0\.0/);
+    assert.equal(result.compareUrl, 'https://github.com/ktysne/agent-cockpit/tree/v1.0.0');
     assert.deepEqual(records.at(-1), ['warn', 'server', 'update.failed', { failure: expected }]);
     assert.equal(records[0][0], 'info');
   }
+});
+
+test('成功する前の確認失敗は更新候補を持たず、成功時刻を null のままにする', async () => {
+  const checker = new UpdateChecker({ current: '1.0.0', nowMs: () => 1000,
+    execFileImpl: (_file, _args, _options, callback) => callback({ code: 'ENOENT' }, '') });
+  const result = await checker.check();
+  assert.equal(result.latest, null);
+  assert.equal(result.available, false);
+  assert.equal(result.succeededAt, null);
+  assert.equal(result.checkedAt, '1970-01-01T00:00:01.000Z');
+  assert.equal(result.error, 'ENOENT');
+});
+
+test('失敗後の確認成功は結果と成功時刻を更新し、失敗分類を消す', async () => {
+  let now = 1000;
+  const checker = new UpdateChecker({ current: '1.0.0', nowMs: () => now,
+    execFileImpl: (_file, _args, _options, callback) => callback({ code: 'ENOENT' }, '') });
+  await checker.check();
+  now = 2000;
+  checker.execFileImpl = gitResult(tags('1.1.0'));
+  const result = await checker.check();
+  assert.equal(result.latest, '1.1.0');
+  assert.equal(result.available, true);
+  assert.equal(result.checkedAt, '1970-01-01T00:00:02.000Z');
+  assert.equal(result.succeededAt, result.checkedAt);
+  assert.equal(result.error, null);
 });
 
 test('版確認のオプションが無いサーバーは git を起動しない', async t => {
@@ -156,6 +191,7 @@ test('版確認の成功と失敗は診断 API から結果と分類だけを読
   assert.deepEqual(entries.map(entry => [entry.level, entry.msg]), [['info', 'update.checked'], ['warn', 'update.failed']]);
   assert.equal(entries[0].data.latest, '1.0.0');
   assert.equal(entries[0].data.available, true);
+  assert.equal(Object.hasOwn(entries[0].data, 'succeededAt'), false);
   assert.deepEqual(entries[1].data, { failure: 'ENOENT' });
   assert.doesNotMatch(JSON.stringify(entries), /private|stderr|prompt|compareUrl/);
 });
