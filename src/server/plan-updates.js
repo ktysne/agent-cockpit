@@ -110,6 +110,16 @@ function pendingTitleOnly(tasks) {
   return tasks.length === 1 && tasks[0].state !== 'done' && !tasks[0].criteria.length ? tasks : [];
 }
 
+// 置き換えた一覧の今のタスクが完了条件の空の題だけなら、自動の題で待っていた取り込み済みの完了条件を引き継ぐ。
+function keepImportedCriteria(saved, incoming) {
+  const imported = currentTask(saved);
+  const target = currentTask(incoming);
+  if (!imported?.autoTitle || !imported.criteria.length || !target || target.criteria.length) return incoming;
+  const tasks = structuredClone(incoming);
+  currentTask(tasks).criteria = structuredClone(imported.criteria);
+  return tasks;
+}
+
 function applyItems(tasks, input, sessionTitle) {
   let task = currentTask(tasks);
   if (!(task && !task.criteria.length) && (input.scope === 'new_task' || !task)) {
@@ -135,9 +145,11 @@ class PlanUpdates {
   delete(sessionId) { this.sessions.delete(sessionId); }
 
   // 一覧を置き換えた時刻を基準にし、それより前に作られた items と差分が遅れて届いても退ける。
-  replaced(sessionId, tasks, at) {
+  // ただし、前の基準より後に作られた未着の items は、置き換えた題が完了条件を待つ間だけ受け入れる。
+  replaced(sessionId, tasks, at, previousAt = -Infinity) {
     const record = this.sessions.get(sessionId);
     this.sessions.set(sessionId, { hookAt: at, tasks: structuredClone(tasks), hasItems: true,
+      waitingSince: record ? record.hookAt : previousAt,
       seen: record?.seen || new Set(), differences: (record?.differences || []).filter(update => update.hookAt > at) });
   }
   clear() { this.sessions.clear(); }
@@ -170,8 +182,12 @@ class PlanUpdates {
     }
     if (toolId && record.seen.has(toolId)) return null;
     if (toolId) record.seen.add(toolId);
-    if (input.items) {
-      if (record.hasItems && hookAt <= record.hookAt) return null;
+    if (input.items && record.hasItems && hookAt <= record.hookAt) {
+      const waiting = currentTask(record.tasks);
+      if (!(hookAt > record.waitingSince && waiting && !waiting.criteria.length)) return null;
+      record.waitingSince = hookAt;
+      record.tasks = applyItems(record.tasks, input, sessionTitle);
+    } else if (input.items) {
       let before = structuredClone(record.tasks);
       if (!record.hasItems && record.legacy) before = pendingTitleOnly(before);
       for (const update of record.differences.filter(update => update.hookAt < hookAt)
@@ -193,4 +209,4 @@ class PlanUpdates {
   }
 }
 
-module.exports = { planUpdateForTool, PlanUpdates };
+module.exports = { planUpdateForTool, keepImportedCriteria, PlanUpdates };

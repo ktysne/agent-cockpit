@@ -230,6 +230,40 @@ test('一覧を置き換える前に作られた items が遅れて届いても�
   assert.deepEqual(tasks().at(-1).criteria, criteria());
 });
 
+test('自動の題で取り込んだ完了条件は、題を付けて一覧全体を置き換えても新しい題へ引き継ぐ', async t => {
+  const { send, write, tasks } = await setup(t);
+  await write([{ title: '前の依頼', state: 'done' }]);
+  await send(items());
+  await write([{ title: '前の依頼', state: 'done' }, { title: '新しい依頼', state: 'doing' }]);
+  assert.deepEqual(tasks().map(task => task.title), ['前の依頼', '新しい依頼']);
+  assert.deepEqual(tasks().at(-1).criteria, criteria());
+  await send({ advance: true });
+  assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
+});
+
+test('置き換えた題が完了条件を待つ間は、置き換えより前に作られた未着の items を受け入れる', async t => {
+  const { send, write, tasks } = await setup(t);
+  await write([{ title: '前の依頼', state: 'done' }]);
+  const afterFirst = Date.now() + 1;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await write([{ title: '前の依頼', state: 'done' }, { title: '新しい依頼', state: 'doing' }]);
+  await send(items(['completed', 'pending']), afterFirst - 1000);
+  assert.deepEqual(tasks().at(-1).criteria, []);
+  await send(items(), afterFirst);
+  assert.deepEqual(tasks().map(task => task.title), ['前の依頼', '新しい依頼']);
+  assert.deepEqual(tasks().at(-1).criteria, criteria());
+  await send(items(['completed', 'pending']), afterFirst + 1);
+  assert.deepEqual(tasks().at(-1).criteria, criteria());
+});
+
+test('置き換えた今のタスクに完了条件があれば、取り込み済みの完了条件で上書きしない', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send(items());
+  const own = [{ text: '独自の条件', met: false }];
+  await write([{ title: '前の依頼', state: 'done' }, { title: '新しい依頼', state: 'doing', criteria: own }]);
+  assert.deepEqual(tasks().at(-1).criteria, own);
+});
+
 test('未完了のタスクを未完了のまま更新しても並びと他の状態を保つ', async t => {
   const { send, write, tasks } = await setup(t);
   await send({ items: [{ content: '段階1', status: 'in_progress' }] });
