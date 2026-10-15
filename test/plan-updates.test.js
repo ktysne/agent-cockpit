@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeHookEvent } = require('../src/hooks/event');
 const { DashboardState } = require('../src/server/state');
-const { startTestServer, request, hookHeaders, jsonBody } = require('./support/server');
+const { startTestServer, request, hookHeaders, uiHeaders, jsonBody } = require('./support/server');
 
 const items = (statuses = ['in_progress', 'pending', 'pending']) => ({
   items: statuses.map((status, index) => ({ content: '段階' + (index + 1), status, session: '捨てる値' })),
@@ -21,9 +21,14 @@ async function setup(t) {
     tool_name: 'mcp__ccd_turn__update_plan', tool_use_id: 'plan-' + ++serial,
     hookAt, planUpdate: input, ...extra,
   });
-  const tasks = () => state.snapshot().sessions.find(session => session.session_id === 'plan-session')?.tasks || [];
-  const write = tasks => post('/api/sessions/plan-session/plan', { kind: 'tasks', tasks });
-  return { state, send, tasks, write, post };
+  const tasks = (sessionId = 'plan-session') => state.snapshot().sessions.find(session => session.session_id === sessionId)?.tasks || [];
+  const write = (tasks, sessionId = 'plan-session') => post(`/api/sessions/${sessionId}/plan`, { kind: 'tasks', tasks });
+  const display = importAppTasks => request(info.port, {
+    method: 'POST', path: '/api/display',
+    headers: { ...uiHeaders(info, `http://127.0.0.1:${info.port}`), 'content-type': 'application/json' },
+    body: JSON.stringify({ importAppTasks }),
+  });
+  return { state, send, tasks, write, post, display };
 }
 
 test('items は一覧と状態を置き換え、同じ呼び出しの差分と不要なキーを使わない', async t => {
@@ -108,6 +113,48 @@ test('agent_id 付きと codex のイベントは一覧を取り込まない', a
   const { send, state } = await setup(t);
   for (const extra of [{ agent_id: 'child' }, { provider: 'codex', session_id: 'codex-session' }]) await send(items(), undefined, extra);
   assert.deepEqual(state.snapshot().sessions.flatMap(session => session.tasks), []);
+});
+
+test('取り込みオフでは update_plan が一覧を書き換えない', async t => {
+  const { send, tasks, write, display } = await setup(t);
+  await write([{ title: '手動登録', state: 'doing', criteria: [] }]);
+  assert.equal((await display(false)).status, 200);
+  await send(items(), Date.now());
+  assert.deepEqual(tasks().map(task => task.title), ['手動登録']);
+});
+
+test('取り込みオフの cockpit_set_tasks はアプリの未登録題を応答に含めない', async t => {
+  const { send, write, display } = await setup(t);
+  await send(items(), Date.now());
+  assert.equal((await display(false)).status, 200);
+  const saved = await write([{ title: '手動登録', state: 'doing', criteria: [] }]);
+  assert.deepEqual(jsonBody(saved).unmatchedTitles, []);
+});
+
+test('設定を切り替えた後の update_plan 差分は切り替え前の基準を使わない', async t => {
+  const { send, tasks, write, display } = await setup(t);
+  const beforeToggle = Date.now();
+  await send(items(), beforeToggle);
+  await send(items(), beforeToggle + 1, { session_id: 'other-session' });
+  assert.equal((await display(false)).status, 200);
+  const manualTasks = [
+    { title: '手動の一段目', state: 'todo', criteria: [] },
+    { title: '手動の二段目', state: 'doing', criteria: [] },
+    { title: '手動の三段目', state: 'todo', criteria: [] },
+  ];
+  await write(manualTasks);
+  await write(manualTasks, 'other-session');
+  assert.equal((await display(true)).status, 200);
+  const afterToggle = Date.now() + 10_000;
+  await send({ advance: true }, afterToggle);
+  await send({ advance: true }, afterToggle + 1, { session_id: 'other-session' });
+  const expected = [
+    { title: '手動の一段目', state: 'todo' },
+    { title: '手動の二段目', state: 'done' },
+    { title: '手動の三段目', state: 'doing' },
+  ];
+  assert.deepEqual(tasks().map(({ title, state }) => ({ title, state })), expected);
+  assert.deepEqual(tasks('other-session').map(({ title, state }) => ({ title, state })), expected);
 });
 
 test('形が違う入力は丸ごと無視してタスクを書き換えない', async t => {

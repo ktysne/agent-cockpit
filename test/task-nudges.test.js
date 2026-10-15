@@ -6,9 +6,11 @@ const {
   TASK_REMINDER_INTERVAL_MS,
   NO_TASKS_REMINDER,
   SUBAGENT_REMINDER,
-  CODEX_NO_TASKS_REMINDER,
+  SET_TASKS_NO_TASKS_REMINDER,
+  SET_TASKS_SUBAGENT_REMINDER,
   TaskNudges,
 } = require('../src/server/task-nudges');
+const { startTestServer, request, hookHeaders, uiHeaders, jsonBody } = require('./support/server');
 
 const START = Date.UTC(2026, 9, 2, 1, 2, 3);
 
@@ -160,12 +162,60 @@ test('PostToolBatch は判断事項の回答とタスク催促を同じ addition
   assert.match(context, /タスクが登録されていない/);
 });
 
-test('Codex のセッションにはアプリのタスク一覧に触れない催促を出す', () => {
+test('Codex のセッションには cockpit_set_tasks だけで登録するよう催促する', () => {
   const state = { planSummary: () => ({ tasks: [] }), providerForSession: () => 'codex' };
   const { nudges } = makeNudges({ state });
   nudges.afterEvent(event('codex', 'UserPromptSubmit', START));
   for (let index = 1; index <= 5; index += 1) {
     nudges.afterEvent(event('codex', 'PreToolUse', START + index, { tool_name: 'Read' }));
   }
-  assert.equal(nudges.reminderFor('codex'), CODEX_NO_TASKS_REMINDER);
+  assert.equal(nudges.reminderFor('codex'), SET_TASKS_NO_TASKS_REMINDER);
+});
+
+test('取り込み設定がオフの Claude セッションには cockpit_set_tasks だけで登録するよう催促する', () => {
+  const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: false });
+  const { nudges } = makeNudges({ state });
+  nudges.afterEvent(event('claude', 'UserPromptSubmit', START));
+  for (let index = 1; index <= 5; index += 1) {
+    nudges.afterEvent(event('claude', 'PreToolUse', START + index, { tool_name: 'Read' }));
+  }
+  assert.equal(nudges.reminderFor('claude'), SET_TASKS_NO_TASKS_REMINDER);
+});
+
+test('取り込みオフの Claude セッションに届いた PostToolBatch は cockpit_set_tasks だけの催促を返す', async t => {
+  const state = new DashboardState();
+  const { info } = await startTestServer(t, { state });
+  const origin = `http://127.0.0.1:${info.port}`;
+  const display = await request(info.port, {
+    method: 'POST', path: '/api/display',
+    headers: { ...uiHeaders(info, origin), 'content-type': 'application/json' },
+    body: JSON.stringify({ importAppTasks: false }),
+  });
+  assert.equal(display.status, 200);
+  for (const event of [
+    { session_id: 'claude-nudge', provider: 'claude', hook_event_name: 'UserPromptSubmit' },
+    { session_id: 'claude-nudge', provider: 'claude', hook_event_name: 'PreToolUse', tool_name: 'Agent' },
+  ]) {
+    const response = await request(info.port, {
+      method: 'POST', path: '/api/events', headers: hookHeaders(info.secret), body: JSON.stringify(event),
+    });
+    assert.equal(response.status, 202);
+  }
+  const batch = await request(info.port, {
+    method: 'POST', path: '/api/hooks/answers', headers: hookHeaders(info.secret),
+    body: JSON.stringify({ action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: 'claude-nudge', id: 'batch' }),
+  });
+  assert.equal(jsonBody(batch).hookOutput.hookSpecificOutput.additionalContext, SET_TASKS_NO_TASKS_REMINDER);
+});
+
+test('取り込み設定がオフの Claude セッションにはサブエージェント終了後も一覧全体を書き直すよう促す', () => {
+  const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: false });
+  state.setTasks('claude-agent', [task()], START);
+  const { nudges, setNow } = makeNudges({ state });
+  nudges.tasksWritten('claude-agent', START);
+  nudges.afterEvent(event('claude-agent', 'SubagentStop', START + 1, { agent_id: 'agent-1' }));
+  setNow(START + TASK_REMINDER_INTERVAL_MS + 1);
+  assert.equal(nudges.reminderFor('claude-agent'), SET_TASKS_SUBAGENT_REMINDER);
 });

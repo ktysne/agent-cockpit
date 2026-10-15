@@ -482,11 +482,13 @@ MCP で終えた判断事項は `finishedByToolUseId` を書き換えないの�
 タスクは `[{title, state, criteria: [{text, met}]}]` の配列で持つ。
 `state` は `todo`、`doing`、`done` のいずれかにする。
 MCP の `cockpit_set_tasks` は配列全体を置き換え、成功時に `tasksUpdatedAt` を更新する。
-Claude のメインセッションの `PostToolUse` で `mcp__ccd_turn__update_plan` が届いた場合も、`state.setTasks` で同じ一覧を置き換える。
+Claude のメインセッションの `PostToolUse` で `mcp__ccd_turn__update_plan` が届き、設定 `importAppTasks` がオンの場合も、`state.setTasks` で同じ一覧を置き換える。
+この設定は既定でオンであり、オフにするとアプリの一覧を取り込まず、タスクは `cockpit_set_tasks` で登録する。
 両方が書く場合は後の書き込みを使い、保存形式と画面では出どころを分けない。
-アプリの一覧を使うターンでは、`cockpit_set_tasks` は同じ題で完了条件を足すときに使う。
+取り込み中は、`cockpit_set_tasks` をアプリの一覧と同じ題で完了条件を足すときに使う。
 取り込みが無い CLI、Codex、サブエージェントでは `cockpit_set_tasks` で登録する。
-Codex の計画ツールは取り込まないので、Codex のセッションへのタスク登録の指示と催促は、アプリの一覧に触れない従来の文にする。
+Codex の計画ツールは設定にかかわらず取り込まない。
+Claude と Codex のどちらも、取り込みが無いときはタスク登録の指示と催促に `cockpit_set_tasks` だけを案内する。
 
 `update_plan` の `items` は 12 件、`content` は 200 文字までとし、状態は `pending`→`todo`、`in_progress`→`doing`、`completed`→`done` に対応させる。
 完了条件は前後の空白を除いた題が完全一致する既存タスクから引き継ぎ、該当が無ければ空にする。
@@ -502,8 +504,10 @@ Codex の計画ツールは取り込まないので、Codex のセッション�
 同じ `tool_use_id` と、基準より古い `items` は無視する。
 基準が無い場合は現在のタスクの題、状態、`tasksUpdatedAt` を固定した基準とし、それより後の差分だけを適用する。
 記録は永続化せず、セッション終了や削除で捨てる。
+`importAppTasks` の値が切り替わったときも、全セッションの記録を捨てる。
+オフの間に `cockpit_set_tasks` が書いた一覧を、オンへ戻した後に切り替え前の基準からの差分で置き換えないためである。
 取り込み後は通常のタスク登録と同じく催促の管理へ書き込み時刻を伝える。
-`cockpit_set_tasks` の題がアプリの基準一覧に無い場合は、成功の応答に「アプリのタスク一覧に無い題: …」を添える。
+`importAppTasks` がオンで `cockpit_set_tasks` の題がアプリの基準一覧に無い場合は、成功の応答に「アプリのタスク一覧に無い題: …」を添える。
 完了条件が空のタスクでは件数と一覧を表示せず、操作列の最小幅を維持する。
 題は 200 文字、本文は 2,000 文字、タスクは 50 件、完了条件は 20 件、選択肢は 6 件までに制限する。
 

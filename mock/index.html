@@ -503,6 +503,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
+    <div class="settings-theme-row">
+      <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
+      <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
+    </div>
+    <p class="meta" id="settings-import-app-tasks-note">オフにすると、<code>cockpit_set_tasks</code> で登録したタスクだけを出す。Codex のセッションは取り込まない。</p>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
       <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」と「プルリクエスト」は、3 つのどれより前ならセッションの上、それ以外は下に出る。</p>
@@ -846,6 +851,7 @@ const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); 
 // 読み込み直すと消える案内なので、保存する ui には置かない。
 let refreshConfirmPending = false;
 const ui = Object.assign({ mode: 'kind', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 3, idleHideMinutes: 10, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+ui.importAppTasks ??= true;
 const TRANSIENT_NOTICE_MS = 60_000;
 ui.reservationNotices = ui.reservationNotices && typeof ui.reservationNotices === 'object' && !Array.isArray(ui.reservationNotices) ? ui.reservationNotices : {};
 ui.mergeErrors = ui.mergeErrors && typeof ui.mergeErrors === 'object' && !Array.isArray(ui.mergeErrors) ? ui.mergeErrors : {};
@@ -940,6 +946,7 @@ function shortShaLabel(value) {
 
 const themeSelect = document.getElementById('settings-theme-select');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
+const importAppTasksInput = document.getElementById('settings-import-app-tasks');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
 const settingsButton = document.getElementById('settings-button');
 const settingsClose = document.getElementById('settings-close');
@@ -954,6 +961,7 @@ function captureDisplayPreferences() {
   return {
     mode: ui.mode, order: [...ui.order], pinned: [...ui.pinned], collapsed: [...ui.collapsed], hidden: [...ui.hidden],
     sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
+    importAppTasks: ui.importAppTasks,
     longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes, idleHideMinutes: ui.idleHideMinutes,
     mergeableCondition: ui.mergeableCondition,
   };
@@ -995,6 +1003,7 @@ function applySinceSeenMode(mode) {
 function renderDisplaySettings() {
   for (const { key, input } of DISPLAY_MINUTE_SETTINGS) input.value = String(ui[key]);
   hideFinishedInput.checked = ui.hideFinished;
+  importAppTasksInput.checked = ui.importAppTasks !== false;
   for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
 }
 
@@ -1031,6 +1040,12 @@ for (const { key, input } of DISPLAY_MINUTE_SETTINGS) {
 hideFinishedInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
   ui.hideFinished = hideFinishedInput.checked;
+  if (!saveDisplayPreferences(previous)) return;
+  render();
+});
+importAppTasksInput.addEventListener('change', () => {
+  const previous = captureDisplayPreferences();
+  ui.importAppTasks = importAppTasksInput.checked;
   if (!saveDisplayPreferences(previous)) return;
   render();
 });

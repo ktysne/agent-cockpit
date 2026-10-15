@@ -522,6 +522,11 @@ h3.sub .count { font-weight: normal; }
       <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
+    <div class="settings-theme-row">
+      <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
+      <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
+    </div>
+    <p class="meta" id="settings-import-app-tasks-note">オフにすると、<code>cockpit_set_tasks</code> で登録したタスクだけを出す。Codex のセッションは取り込まない。</p>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
       <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」と「プルリクエスト」は、3 つのどれより前ならセッションの上、それ以外は下に出る。</p>
@@ -658,6 +663,7 @@ for (const { input, min, max } of DISPLAY_MINUTE_SETTINGS) {
   input.max = String(max);
 }
 const hideFinishedInput = document.getElementById('settings-hide-finished');
+const importAppTasksInput = document.getElementById('settings-import-app-tasks');
 const diagnosticsLevelSelect = document.getElementById('diagnostics-level');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
 const sectionOrderList = document.getElementById('settings-section-order');
@@ -854,6 +860,7 @@ function normalizeDisplayPreferences(value) {
       [key, normalizeDisplayMinutes(value?.[key], min, max, fallback)]
     ))),
     hideFinished: value?.hideFinished !== false,
+    importAppTasks: value?.importAppTasks !== false,
     diagnosticsLevel: ['silent', 'error', 'warn', 'info', 'debug'].includes(value?.diagnosticsLevel) ? value.diagnosticsLevel : 'info',
     mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value?.mergeableCondition) ? value.mergeableCondition : 'cross-review',
   };
@@ -877,6 +884,7 @@ function renderDisplaySettings() {
     input.value = String(displayPreferences[key]);
   }
   if (document.activeElement !== hideFinishedInput) hideFinishedInput.checked = displayPreferences.hideFinished;
+  if (document.activeElement !== importAppTasksInput) importAppTasksInput.checked = displayPreferences.importAppTasks !== false;
   if (!mergeableConditionInputs.includes(document.activeElement)) {
     for (const input of mergeableConditionInputs) input.checked = input.value === displayPreferences.mergeableCondition;
   }
@@ -1119,6 +1127,7 @@ for (const { key, input } of DISPLAY_MINUTE_SETTINGS) {
   input.addEventListener('change', () => changeDisplaySetting(key, input));
 }
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
+importAppTasksInput.addEventListener('change', () => changeDisplaySetting('importAppTasks', importAppTasksInput));
 for (const input of mergeableConditionInputs) {
   input.addEventListener('change', () => {
     if (!input.checked || !['operation', 'ci', 'cross-review'].includes(input.value)) return;

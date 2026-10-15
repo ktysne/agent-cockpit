@@ -437,6 +437,7 @@ test('画面は未設定や不正なサーバー値を表示設定の既定値�
     awayAnswerWaitMinutes: 3,
     idleHideMinutes: 10,
     hideFinished: true,
+    importAppTasks: true,
     diagnosticsLevel: 'info',
     mergeableCondition: 'cross-review',
   });
@@ -483,8 +484,12 @@ test('長い待ちの判定は設定値を使い、判断事項と許可待ち�
   assert.match(functionSource(mock, 'decisionCard'), /isLongWait\(d\.waitMin\)/);
   assert.match(web, /長く待たせているとみなす時間 \(1〜120 分\)/);
   assert.match(web, /離席中に質問の回答を待つ時間 \(1〜30 分\)/);
+  assert.match(web, /id="settings-import-app-tasks" name="importAppTasks" type="checkbox"/);
+  assert.match(web, /オフにすると、<code>cockpit_set_tasks<\/code> で登録したタスクだけを出す。Codex のセッションは取り込まない。/);
   assert.match(mock, /長く待たせているとみなす時間 \(1〜120 分\)/);
   assert.match(mock, /離席中に質問の回答を待つ時間 \(1〜30 分\)/);
+  assert.match(mock, /id="settings-import-app-tasks" name="importAppTasks" type="checkbox"/);
+  assert.match(mock, /オフにすると、<code>cockpit_set_tasks<\/code> で登録したタスクだけを出す。Codex のセッションは取り込まない。/);
 });
 
 test('表示時間の保存に失敗した数値設定を元に戻す', async () => {
@@ -1124,6 +1129,7 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {},
   };
   const hideFinishedInput = { checked: false };
+  const importAppTasksInput = { checked: true };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
   const context = pageContext(web, {
     document: { activeElement: longWaitMinutesInput },
@@ -1135,9 +1141,10 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
     DEFAULT_IDLE_HIDE_MINUTES: 10,
     hideFinishedInput,
+    importAppTasksInput,
     mergeableConditionInputs,
     diagnosticsLevelSelect: { value: 'info', closest: () => ({ open: false }) },
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: false, mergeableCondition: 'ci' },
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: false, importAppTasks: true, mergeableCondition: 'ci' },
   });
   vm.runInContext(`${settings}\n${render}`, context);
   context.renderDisplaySettings();
@@ -1146,6 +1153,7 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.equal(awayAnswerWaitMinutesInput.value, '5');
   assert.equal(idleHideMinutesInput.value, '30');
   assert.equal(hideFinishedInput.checked, false);
+  assert.equal(importAppTasksInput.checked, true);
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, true, false]);
 });
 
@@ -1158,6 +1166,7 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
   const awayAnswerWaitMinutesInput = { value: '5' };
   const idleHideMinutesInput = { value: '30' };
   const hideFinishedInput = { checked: true };
+  const importAppTasksInput = { checked: true };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
   const displayPreferences = { mergeableCondition: 'cross-review' };
   let activeElement = null;
@@ -1167,7 +1176,8 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
     hideFinishedInput,
-    displayPreferences,
+    importAppTasksInput,
+    displayPreferences: { ...displayPreferences, importAppTasks: true },
     displayPreferenceSaveStates: new Map(),
     displayPreferencesReady: true,
     DISPLAY_MINUTE_SETTINGS: [

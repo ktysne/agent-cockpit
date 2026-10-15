@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runAwayHook, TASK_CONTEXT, CODEX_TASK_CONTEXT } = require('../src/hooks/away');
+const { runAwayHook, TASK_CONTEXT, SET_TASKS_CONTEXT } = require('../src/hooks/away');
 const { denyAnswerOutput } = require('../src/server/decision-answers');
 const { makeHookEvent } = require('../src/hooks/event');
 const { hookHeaders, uiHeaders, jsonBody, request, startTestServer } = require('./support/server');
@@ -150,7 +150,7 @@ test('Codex の SessionStart と UserPromptSubmit は、タスク登録の文だ
     const codex = await runAwayHook(input, { homeDir: c.homeDir, provider: 'codex' });
     const claude = await runAwayHook(input, { homeDir: c.homeDir });
     assert.equal(codex.hookSpecificOutput.additionalContext,
-      claude.hookSpecificOutput.additionalContext.replace(TASK_CONTEXT, CODEX_TASK_CONTEXT));
+      claude.hookSpecificOutput.additionalContext.replace(TASK_CONTEXT, SET_TASKS_CONTEXT));
     assert.match(codex.hookSpecificOutput.additionalContext, /開発者は離席中/);
     assert.match(codex.hookSpecificOutput.additionalContext, /cockpit_set_tasks/);
     if (fields.source === 'resume') assert.match(codex.hookSpecificOutput.additionalContext, /現在の状態/);

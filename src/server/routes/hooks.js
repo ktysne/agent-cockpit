@@ -215,7 +215,8 @@ function createHookRoutes(ctx) {
       jsonResponse(response, 202, { accepted: true });
       return;
     }
-    if (!rejected && event?.planUpdate && !event.agent_id && event.provider !== 'codex') {
+    if (!rejected && event?.planUpdate && !event.agent_id && event.provider !== 'codex' &&
+      state.getDisplayPreferences().importAppTasks !== false) {
       const tasks = state.planUpdates.apply(event, state.planFor(event.session_id));
       if (tasks) {
         const saved = state.setTasks(event.session_id, tasks);
@@ -267,7 +268,9 @@ function createHookRoutes(ctx) {
     }
 
     if (body.kind === 'tasks') {
-      const unmatchedTitles = state.planUpdates.unmatchedTitles(sessionId, body.tasks);
+      const unmatchedTitles = state.getDisplayPreferences().importAppTasks !== false
+        ? state.planUpdates.unmatchedTitles(sessionId, body.tasks)
+        : [];
       const saved = state.setTasks(sessionId, body.tasks);
       answerDelivery.afterTasksWrite(sessionId, Date.parse(saved.updatedAt));
       jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt, unmatchedTitles });

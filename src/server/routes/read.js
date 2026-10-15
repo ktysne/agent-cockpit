@@ -153,7 +153,9 @@ function createReadRoutes(ctx) {
   }
 
   function handleContext({ response, params }) {
-    jsonResponse(response, 200, { ...away.snapshot(), ...state.planSummary(params[1]) });
+    jsonResponse(response, 200, {
+      ...away.snapshot(), ...state.planSummary(params[1]), importAppTasks: state.getDisplayPreferences().importAppTasks,
+    });
   }
 
   function handleDevFields({ response }) {

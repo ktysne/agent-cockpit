@@ -1818,11 +1818,13 @@ test('終わったもののチェックは表示設定として保存し、失�
   const saveFunctions = ['settleDisplaySaves', 'saveDisplayPreferences'].map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean) && saveFunctions.every(Boolean) && settings);
   assert.match(pageHtml, /id="settings-hide-finished" name="hideFinished" type="checkbox"/);
+  assert.match(pageHtml, /id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note"/);
 
   let activeElement = null;
   let resolveSave;
   let savedPatch;
   const hideFinishedInput = { type: 'checkbox', checked: false };
+  const importAppTasksInput = { type: 'checkbox', checked: true };
   const longWaitMinutesInput = { type: 'number', value: '' };
   const awayAnswerWaitMinutesInput = { type: 'number', value: '' };
   const idleHideMinutesInput = { type: 'number', value: '' };
@@ -1830,7 +1832,7 @@ test('終わったもののチェックは表示設定として保存し、失�
   const awayAnswerWaitMinutesError = { textContent: '', hidden: true };
   const idleHideMinutesError = { textContent: '', hidden: true };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeableCondition: 'cross-review' };
+  const displayPreferences = { hideFinished: false, importAppTasks: true, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeableCondition: 'cross-review' };
   const context = pageContext(pageHtml, {
     displayPreferences,
     SECTION_ORDER_KEYS: new Set(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']),
@@ -1845,6 +1847,7 @@ test('終わったもののチェックは表示設定として保存し、失�
     renderSectionOrder() {},
     render() {},
     hideFinishedInput,
+    importAppTasksInput,
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
@@ -1863,13 +1866,17 @@ test('終わったもののチェックは表示設定として保存し、失�
   vm.runInContext(`${settings}\n${functions.join('\n')}\n${saveFunctions.join('\n')}`, context);
 
   assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
+  assert.equal(context.normalizeDisplayPreferences(null).importAppTasks, true);
   assert.equal(context.normalizeDisplayPreferences(null).idleHideMinutes, 10);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: true }).hideFinished, true);
+  assert.equal(context.normalizeDisplayPreferences({ importAppTasks: false }).importAppTasks, false);
+  assert.equal(context.normalizeDisplayPreferences({ importAppTasks: 'false' }).importAppTasks, true);
   assert.equal(context.normalizeDisplayPreferences({}).mergeableCondition, 'cross-review');
   assert.equal(Object.hasOwn(context.normalizeDisplayPreferences({ mergeAfterReviewDefault: true }), 'mergeAfterReviewDefault'), false);
   context.renderDisplaySettings();
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, false, true]);
+  assert.equal(importAppTasksInput.checked, true);
   activeElement = hideFinishedInput;
   hideFinishedInput.checked = true;
   context.renderDisplaySettings();
@@ -1894,6 +1901,22 @@ test('終わったもののチェックは表示設定として保存し、失�
   await context.changeDisplaySetting('hideFinished', hideFinishedInput);
   assert.equal(displayPreferences.hideFinished, true);
   assert.equal(hideFinishedInput.checked, true);
+
+  context.enqueueDisplayPatch = async (patch) => {
+    savedPatch = patch;
+    return true;
+  };
+  importAppTasksInput.checked = false;
+  await context.changeDisplaySetting('importAppTasks', importAppTasksInput);
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { importAppTasks: false });
+  assert.equal(displayPreferences.importAppTasks, false);
+  assert.equal(importAppTasksInput.checked, false);
+
+  context.enqueueDisplayPatch = async () => false;
+  importAppTasksInput.checked = true;
+  await context.changeDisplaySetting('importAppTasks', importAppTasksInput);
+  assert.equal(displayPreferences.importAppTasks, false);
+  assert.equal(importAppTasksInput.checked, false);
 
 });
 

@@ -60,6 +60,10 @@ class PlanUpdates {
     this.sessions.delete(sessionId);
   }
 
+  clear() {
+    this.sessions.clear();
+  }
+
   apply(event, plan) {
     const { session_id: sessionId, hookAt, tool_use_id: toolId, planUpdate: input } = event;
     let record = this.sessions.get(sessionId);

@@ -140,7 +140,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
     mode: 'kind', order: ['C:\\project'], pinned: ['C:\\project'],
     collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
     sectionOrder: ['now', 'judgment', 'tasks', 'prs', 'sinceSeen'],
-    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, hideFinished: true, mergeableCondition: 'ci',
+    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, hideFinished: true, importAppTasks: true, mergeableCondition: 'ci',
   };
   state.patchDisplayPreferences(display);
   state.registerPullRequest('restored-session', { url: 'https://github.com/example/project/pull/47' }, {
