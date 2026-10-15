@@ -27,29 +27,45 @@ git rev-list --count origin/main..HEAD
 ## タグへの更新
 
 `vX.Y.Z` は利用者が指定した新しいバージョンに置き換えます。
+コマンドは PowerShell か bash で実行します。
+
+更新に使うコミットは、`origin` ではなく配布元から直接取得して決めます。
+`origin` がフォークを指していると、同名のタグが別のコミットを指していることがあるためです。
 
 ```sh
-git fetch --tags origin
-git merge --ff-only vX.Y.Z
+git fetch --no-tags https://github.com/ktysne/agent-cockpit.git "refs/tags/vX.Y.Z:refs/tags/vX.Y.Z"
+git rev-list -n 1 refs/tags/vX.Y.Z
 ```
 
-失敗したら止めて利用者に知らせます。
-成功したら、この `docs/update.md` を必ず読み直し、新しいバージョンの手順に従って残りを進めます。
-続いて、次を実行します。
+`git rev-list` が出力した完全なコミット ID を、以下では `<S>` と書きます。
+`git fetch` が失敗したら、本体を更新せずに止めて利用者に知らせます。
+配布元に接続できないとき、配布元にタグが無いとき、手元の同名のタグが別のコミットを指しているとき(`would clobber existing tag` と出ます)に失敗します。
+手元のタグを消したり、`--force` で上書きしたりして続けません。
+
+次に、`<S>` の `package.json` を表示します。
 
 ```sh
+git show <S>:package.json
+```
+
+`version` が指定されたバージョン（先頭の `v` を除く）と一致しなければ、本体を更新せずに止めて利用者に知らせます。
+
+確かめたコミットへ更新します。
+タグ名ではなく `<S>` を指定し、確かめた後にタグが変わっても別のコミットを適用しないようにします。
+
+```sh
+git merge --ff-only <S>
 git rev-parse HEAD
-git rev-parse "vX.Y.Z^{commit}"
-git ls-remote https://github.com/ktysne/agent-cockpit.git "refs/tags/vX.Y.Z^{}"
 node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version"
 ```
 
-`HEAD` と手元のタグの実体コミットが一致することを確かめます。
-同じバージョン番号でも別のコミットなら、更新の完了にはしません。
-配布元の `refs/tags/vX.Y.Z^{}` の実体コミットも、手元のタグの実体コミットと一致することを確かめます。
-`origin` がフォークを指し、同名のタグが別のコミットを指している場合の取り違えを防ぐためです。
-`package.json` の `version` が指定されたバージョン（先頭の `v` を除く）と一致することも確かめます。
-いずれかが違う場合、配布元のタグを取得できない場合、コマンドが失敗した場合は、止めて利用者に知らせます。
+`git merge` が失敗したら、止めて利用者に知らせます。
+変更やコミットを捨てて続けません。
+`HEAD` が `<S>` と一致し、`package.json` の `version` が指定されたバージョンと一致することを確かめます。
+いずれかが違う場合は、更新の完了にせず、止めて利用者に知らせます。
+
+ここまで確かめてから、この `docs/update.md` を必ず読み直し、新しいバージョンの手順に従って残りを進めます。
+手元のタグ `vX.Y.Z` は、再起動した常駐サーバーが公開したバージョンで動いているかの判定にも使います。
 
 ## バージョンごとの追加作業
 
