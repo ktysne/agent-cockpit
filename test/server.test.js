@@ -112,6 +112,42 @@ test('待機中の Claude サブエージェントと背景 Codex があるセ�
   assert.equal(state.snapshot().sessions.find(session => session.session_id === 'waiting-claude').status, '待機中');
 });
 
+test('メインのイベントを受けても、記録の照合の要否を決めるために状態全体を組み立てない', async (t) => {
+  const measured = [];
+  const state = new DashboardState({ perf: { measure: (name, fn) => { measured.push(name); return fn(); } } });
+  const runtime = await runningServer(t, { state, taskNotificationDelayMs: 1, readTaskNotifications: async () => new Map() });
+  state.syncSessionFiles(['busy-a', 'busy-b'].map(session_id => ({ session_id, cwd: runtime.homeDir })));
+  measured.length = 0;
+  for (const session_id of ['busy-a', 'busy-b']) {
+    for (const hook_event_name of ['UserPromptSubmit', 'SubagentStart', 'Stop']) {
+      await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+        body: JSON.stringify({ session_id, hook_event_name, ...(hook_event_name === 'SubagentStart' ? { agent_id: 'task' } : {}) }) });
+    }
+  }
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.ok(measured.includes('event'));
+  assert.equal(measured.includes('snapshot'), false);
+});
+
+test('1 セッション分の状態は、全体の snapshot の同じセッションと一致する', async (t) => {
+  const state = new DashboardState();
+  const runtime = await runningServer(t, { state, readTaskNotifications: async () => new Map() });
+  state.syncSessionFiles(['file-only', 'hidden', 'closed-agent', 'ended'].map(session_id => ({ session_id, cwd: runtime.homeDir })));
+  const send = (session_id, event) => request(runtime.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify({ session_id, ...event }) });
+  await send('closed-agent', { hook_event_name: 'SubagentStart', agent_id: 'task' });
+  await send('closed-agent', { hook_event_name: 'Stop' });
+  await send('ended', { hook_event_name: 'SessionEnd' });
+  await send('codex-thread', { hook_event_name: 'SessionStart', provider: 'codex', codexPid: 1234 });
+  state.hideSession('hidden');
+  state.closeAgent('closed-agent', 'task');
+  const { sessions } = state.snapshot();
+  assert.ok(sessions.some(session => session.session_id === 'closed-agent'));
+  for (const sessionId of ['file-only', 'hidden', 'closed-agent', 'ended', 'codex-thread', 'unknown']) {
+    assert.deepEqual(state.sessionView(sessionId), sessions.find(session => session.session_id === sessionId) || null, sessionId);
+  }
+});
+
 // 中断の検出は、フックの状態、セッションファイル、transcript の三つがそろったときだけ働く。
 async function interruptionCockpit(t, options = {}) {
   const reads = [];
