@@ -1199,6 +1199,9 @@ const DIAGNOSTIC_LEVEL_ORDER = ['error', 'warn', 'info', 'debug'];
 const DIAGNOSTIC_SOURCE_ORDER = ['server', 'hook', 'mcp', 'web', 'gh', 'merge', 'codex'];
 let diagnosticVersion = '';
 let diagnosticsRefreshSequence = 0;
+let diagnosticsSelectionSequence = 0;
+let diagnosticsListLoading = false;
+let diagnosticsAllExportPending = false;
 let diagnosticRuns = [];
 let diagnosticDeleteScope = null;
 let diagnosticDeleteRunId = null;
@@ -1241,7 +1244,7 @@ function refreshDiagnosticOptions() {
     label: run.current ? `現在の起動 (${diagnosticLocalTime(run.startedAt)})` : diagnosticLocalTime(run.startedAt),
   })), previousRun || runs.find(run => run.current)?.id);
   const previousSource = diagnosticsSourceSelect.value;
-  const knownSources = new Set(diagnosticRuns.flatMap(run => run.entries.map(entry => entry.tag)));
+  const knownSources = new Set(diagnosticRuns.flatMap(run => run.sources || []));
   const sources = DIAGNOSTIC_SOURCE_ORDER.filter(source => knownSources.has(source));
   replaceSelectOptions(diagnosticsSourceSelect, [
     { value: '', label: 'すべて' },
@@ -1250,7 +1253,7 @@ function refreshDiagnosticOptions() {
 }
 
 function filteredDiagnosticEntries(run = selectedDiagnosticRun()) {
-  if (!run || diagnosticsLevelSelect.value === 'silent') return [];
+  if (!run || !Array.isArray(run.entries) || diagnosticsLevelSelect.value === 'silent') return [];
   const levelLimit = DIAGNOSTIC_LEVEL_ORDER.indexOf(diagnosticsLevelSelect.value);
   return run.entries.filter(entry => {
     const levelVisible = entry.level === 'mark' || entry.level === 'error'
@@ -1265,34 +1268,81 @@ function formatDiagnosticEntry(entry) {
 }
 
 function renderDiagnosticEntries() {
-  diagnosticsList.textContent = filteredDiagnosticEntries().map(formatDiagnosticEntry).join('\n') || '(記録はまだありません)';
+  const run = selectedDiagnosticRun();
+  if (!run || !Array.isArray(run.entries)) {
+    diagnosticsList.textContent = '';
+    return;
+  }
+  diagnosticsList.textContent = filteredDiagnosticEntries(run).map(formatDiagnosticEntry).join('\n') || '(記録はまだありません)';
 }
 
 async function refreshDiagnostics() {
   const sequence = ++diagnosticsRefreshSequence;
-  let loaded = false;
+  diagnosticsSelectionSequence += 1;
+  diagnosticsListLoading = true;
   diagnosticsStatus.textContent = '記録を読み込んでいます。';
   diagnosticsList.setAttribute('aria-busy', 'true');
   try {
     const response = await fetchUi('/api/diagnostics', { cache: 'no-store' });
     if (!response.ok) throw new Error('Cannot read diagnostics');
     const data = await response.json();
-    const runs = await Promise.all(data.runs.map(async run => ({ ...run, entries: await loadDiagnosticRun(run.id) })));
     if (sequence !== diagnosticsRefreshSequence) return;
-    diagnosticRuns = runs;
+    diagnosticRuns = data.runs.map(run => ({ ...run, entries: undefined, loadError: false }));
     diagnosticVersion = data.version;
     refreshDiagnosticOptions();
-    diagnosticsStatus.textContent = '';
-    loaded = true;
+    diagnosticsLevelSelect.value = displayPreferences.diagnosticsLevel;
+    diagnosticsListLoading = false;
+    const selectionSequence = ++diagnosticsSelectionSequence;
+    await loadSelectedDiagnosticRun(selectedDiagnosticRun(), selectionSequence);
+    return true;
   } catch {
     if (sequence !== diagnosticsRefreshSequence) return;
+    diagnosticsListLoading = false;
     diagnosticsStatus.textContent = '診断ログを読み込めませんでした。「更新」でやり直してください。';
-  } finally {
-    if (sequence === diagnosticsRefreshSequence) diagnosticsList.setAttribute('aria-busy', 'false');
+    diagnosticsList.setAttribute('aria-busy', 'false');
+    renderDiagnosticEntries();
+    return false;
   }
-  diagnosticsLevelSelect.value = displayPreferences.diagnosticsLevel;
+}
+
+async function loadSelectedDiagnosticRun(run, sequence) {
+  if (!run) {
+    if (sequence === diagnosticsSelectionSequence && !diagnosticsListLoading) {
+      diagnosticsStatus.textContent = '';
+      diagnosticsList.textContent = '(記録はまだありません)';
+      diagnosticsList.setAttribute('aria-busy', 'false');
+    }
+    return true;
+  }
+  if (Array.isArray(run.entries)) {
+    if (sequence === diagnosticsSelectionSequence && !diagnosticsListLoading) {
+      diagnosticsStatus.textContent = '';
+      renderDiagnosticEntries();
+      diagnosticsList.setAttribute('aria-busy', 'false');
+    }
+    return true;
+  }
+  if (sequence !== diagnosticsSelectionSequence || diagnosticsListLoading || selectedDiagnosticRun()?.id !== run.id) return false;
+  if (!diagnosticsAllExportPending) diagnosticsStatus.textContent = '記録を読み込んでいます。';
+  diagnosticsList.setAttribute('aria-busy', 'true');
   renderDiagnosticEntries();
-  return loaded;
+  try {
+    const entries = await loadDiagnosticRun(run.id);
+    if (sequence !== diagnosticsSelectionSequence || diagnosticsListLoading || selectedDiagnosticRun()?.id !== run.id) return false;
+    run.entries = entries;
+    run.loadError = false;
+    if (!diagnosticsAllExportPending) diagnosticsStatus.textContent = '';
+    renderDiagnosticEntries();
+    diagnosticsList.setAttribute('aria-busy', 'false');
+    return true;
+  } catch {
+    if (sequence !== diagnosticsSelectionSequence || diagnosticsListLoading || selectedDiagnosticRun()?.id !== run.id) return false;
+    run.loadError = true;
+    if (!diagnosticsAllExportPending) diagnosticsStatus.textContent = '選んだ起動の記録を読み込めませんでした。「更新」でやり直してください。';
+    renderDiagnosticEntries();
+    diagnosticsList.setAttribute('aria-busy', 'false');
+    return false;
+  }
 }
 
 function openDiagnostics() {
@@ -1321,7 +1371,11 @@ diagnosticsLevelSelect.addEventListener('change', async () => {
   diagnosticsStatus.textContent = saved ? 'レベルを保存しました。' : 'レベルを保存できませんでした。';
   renderDiagnosticEntries();
 });
-diagnosticsRunSelect.addEventListener('change', renderDiagnosticEntries);
+diagnosticsRunSelect.addEventListener('change', () => {
+  const sequence = ++diagnosticsSelectionSequence;
+  if (diagnosticsListLoading) return;
+  return loadSelectedDiagnosticRun(selectedDiagnosticRun(), sequence);
+});
 diagnosticsSourceSelect.addEventListener('change', renderDiagnosticEntries);
 document.getElementById('diagnostics-refresh').addEventListener('click', refreshDiagnostics);
 
@@ -1381,20 +1435,48 @@ function downloadDiagnosticText(runs, suffix) {
 }
 
 document.getElementById('diagnostics-copy').addEventListener('click', async () => {
+  const run = selectedDiagnosticRun();
+  if (!Array.isArray(run?.entries)) {
+    diagnosticsStatus.textContent = run?.loadError
+      ? '選んだ起動の記録を読み込めませんでした。「更新」でやり直してください。'
+      : '選んだ起動の記録を読み込んでいます。完了後にもう一度お試しください。';
+    return;
+  }
+  const runId = run.id;
   const copied = await copyDiagnosticText(filteredDiagnosticEntries().map(formatDiagnosticEntry).join('\n'));
+  if (selectedDiagnosticRun()?.id !== runId) return;
   document.getElementById('diagnostics-copy').focus();
   diagnosticsStatus.textContent = copied ? '表示中の記録をコピーしました。' : 'コピーできませんでした。';
 });
 document.getElementById('diagnostics-export-run').addEventListener('click', () => {
   const run = selectedDiagnosticRun();
-  if (!run) return;
+  if (!Array.isArray(run?.entries)) {
+    diagnosticsStatus.textContent = run?.loadError
+      ? '選んだ起動の記録を読み込めませんでした。「更新」でやり直してください。'
+      : '選んだ起動の記録を読み込んでいます。完了後にもう一度お試しください。';
+    return;
+  }
   downloadDiagnosticText([run], run.id);
   diagnosticsStatus.textContent = '選んだ起動を書き出しました。';
 });
-document.getElementById('diagnostics-export-all').addEventListener('click', () => {
+document.getElementById('diagnostics-export-all').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  if (button.disabled) return;
+  button.disabled = true;
+  diagnosticsAllExportPending = true;
+  diagnosticsStatus.textContent = 'すべての起動の記録を読み込んでいます。';
   const runs = [...diagnosticRuns].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
-  downloadDiagnosticText(runs, 'all');
-  diagnosticsStatus.textContent = 'すべての起動を書き出しました。';
+  try {
+    const loadedRuns = [];
+    for (const run of runs) loadedRuns.push({ ...run, entries: await loadDiagnosticRun(run.id) });
+    downloadDiagnosticText(loadedRuns, 'all');
+    diagnosticsStatus.textContent = 'すべての起動を書き出しました。';
+  } catch {
+    diagnosticsStatus.textContent = 'すべての起動を書き出せませんでした。記録を読み込めない起動があります。「更新」でやり直してください。';
+  } finally {
+    diagnosticsAllExportPending = false;
+    button.disabled = false;
+  }
 });
 
 function beginDiagnosticDeletion(scope) {
@@ -1402,8 +1484,8 @@ function beginDiagnosticDeletion(scope) {
   const selected = selectedDiagnosticRun();
   diagnosticDeleteRunId = scope === 'run' ? selected?.id : null;
   const targetCount = scope === 'all'
-    ? diagnosticRuns.reduce((total, run) => total + run.entries.length, 0)
-    : (selected?.entries.length || 0);
+    ? diagnosticRuns.reduce((total, run) => total + run.count, 0)
+    : (selected?.entries?.length ?? selected?.count ?? 0);
   const targetName = scope === 'all' ? 'すべての起動の' : '選んだ起動の';
   document.getElementById('diagnostics-delete-message').textContent = `${targetName} ${targetCount} 件の記録を削除します。元に戻せません`;
   diagnosticsRunSelect.disabled = true;
@@ -1443,9 +1525,9 @@ document.getElementById('diagnostics-delete-confirm').addEventListener('click', 
   diagnosticsRunSelect.disabled = false;
   diagnosticsDeleteConfirmation.hidden = true;
   diagnosticsDeleteActions.hidden = false;
-  diagnosticsStatus.textContent = await refreshDiagnostics()
-    ? '記録を削除しました。'
-    : '記録を削除しましたが、一覧を読み込めませんでした。「更新」でやり直してください。';
+  const refreshed = await refreshDiagnostics();
+  if (!refreshed) diagnosticsStatus.textContent = '記録を削除しましたが、一覧を読み込めませんでした。「更新」でやり直してください。';
+  else if (!selectedDiagnosticRun()?.loadError) diagnosticsStatus.textContent = '記録を削除しました。';
   document.getElementById('diagnostics-delete-run').focus();
 });
 
