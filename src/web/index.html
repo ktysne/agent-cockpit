@@ -1334,9 +1334,10 @@ async function loadSelectedDiagnosticRun(run, sequence) {
   diagnosticsList.setAttribute('aria-busy', 'true');
   renderDiagnosticEntries();
   try {
-    const entries = await loadDiagnosticRun(run.id);
+    const data = await loadDiagnosticRun(run.id);
     if (sequence !== diagnosticsSelectionSequence || diagnosticsListLoading || selectedDiagnosticRun()?.id !== run.id) return false;
-    run.entries = entries;
+    run.runtime = withLoadedRuntime(run, data).runtime;
+    run.entries = data.entries;
     run.loadError = false;
     if (!diagnosticsAllExportPending) diagnosticsStatus.textContent = '';
     renderDiagnosticEntries();
@@ -1476,7 +1477,10 @@ document.getElementById('diagnostics-export-all').addEventListener('click', asyn
   const deletionGeneration = diagnosticDeletionGeneration;
   try {
     const loadedRuns = [];
-    for (const run of runs) loadedRuns.push({ ...run, entries: await loadDiagnosticRun(run.id) });
+    for (const run of runs) {
+      const data = await loadDiagnosticRun(run.id);
+      loadedRuns.push({ ...withLoadedRuntime(run, data), entries: data.entries });
+    }
     // 取得の途中で削除が終わると、取得済みの分に削除した記録が残るため、書き出さない。
     if (deletionGeneration !== diagnosticDeletionGeneration) {
       diagnosticsStatus.textContent = '書き出しの途中で記録を削除したため、書き出しを取りやめました。もう一度「すべての起動を書き出す」を押してください。';
@@ -1549,7 +1553,14 @@ document.getElementById('diagnostics-delete-confirm').addEventListener('click', 
 async function loadDiagnosticRun(run) {
   const response = await fetchUi('/api/diagnostics?run=' + encodeURIComponent(run), { cache: 'no-store' });
   if (!response.ok) throw new Error('Cannot read diagnostics');
-  return (await response.json()).entries;
+  const data = await response.json();
+  if (data.responseRuntime !== undefined) diagnosticResponseRuntime = data.responseRuntime;
+  return data;
+}
+
+// 一覧の取得後にソースの状態が確定することがあるため、起動ごとの取得で版を差し替える。
+function withLoadedRuntime(run, data) {
+  return data.runtime !== undefined ? { ...run, runtime: data.runtime } : run;
 }
 
 function reportWebFailure(url, operation, status) {

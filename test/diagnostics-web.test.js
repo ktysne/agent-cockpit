@@ -361,6 +361,25 @@ test('起動の選択肢と選択または全起動の書き出しは各起動�
   assert.match(context.diagnosticExportText(runs), /## 起動 legacy .*版不明/);
 });
 
+test('一覧の取得後にソースの状態が確定しても、選択と全起動の書き出しは起動ごとの取得で得た版を使う', async () => {
+  const pendingRuntime = { version: '1.4.0', commit: 'c933f60abcdef', sourceState: 'pending' };
+  const releaseRuntime = { ...pendingRuntime, sourceState: 'release' };
+  const current = { id: '20261013T000000Z-1', current: true, startedAt: '2026-10-13T00:00:00Z', count: 1, sources: ['server'], runtime: pendingRuntime };
+  const { context, node } = diagnosticPage({ runs: [current], fetchImpl: async route => {
+    const runId = new URL(route, 'http://localhost').searchParams.get('run');
+    if (runId === null) return { ok: true, json: async () => ({ runs: [current], version: '1.4.0', responseRuntime: pendingRuntime }) };
+    return { ok: true, json: async () => ({ entries: [], version: '1.4.0', runtime: releaseRuntime, responseRuntime: releaseRuntime }) };
+  } });
+  await context.refreshDiagnostics();
+  assert.equal(context.selectedDiagnosticRun().runtime.sourceState, 'release');
+  let exported = '';
+  context.downloadDiagnosticText = runs => { exported = context.diagnosticExportText(runs); };
+  const button = node('diagnostics-export-all');
+  await button.listeners.click({ currentTarget: button });
+  assert.match(exported, /viewer=v1.4.0 level=/);
+  assert.match(exported, /## 起動 20261013T000000Z-1 .*v1.4.0 commit=c933f60abcdef state=release/);
+});
+
 test('モックと画面の版表示は release 以外で pending も短縮コミットを付ける', () => {
   for (const html of [web, mock]) {
     const context = vm.createContext({});
