@@ -215,6 +215,13 @@ function createHookRoutes(ctx) {
       jsonResponse(response, 202, { accepted: true });
       return;
     }
+    if (!rejected && event?.planUpdate && !event.agent_id && event.provider !== 'codex') {
+      const tasks = state.planUpdates.apply(event, state.planFor(event.session_id));
+      if (tasks) {
+        const saved = state.setTasks(event.session_id, tasks);
+        answerDelivery.afterTasksWrite(event.session_id, Date.parse(saved.updatedAt));
+      }
+    }
     if (event?.hook_event_name === 'PostToolUse' && event.pullRequest && (
       (event.tool_name === 'Bash' && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
       isGithubCreatePullRequestTool(event.tool_name)
@@ -260,9 +267,10 @@ function createHookRoutes(ctx) {
     }
 
     if (body.kind === 'tasks') {
+      const unmatchedTitles = state.planUpdates.unmatchedTitles(sessionId, body.tasks);
       const saved = state.setTasks(sessionId, body.tasks);
       answerDelivery.afterTasksWrite(sessionId, Date.parse(saved.updatedAt));
-      jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt });
+      jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt, unmatchedTitles });
       return;
     }
     if (body.kind === 'add_decision') {

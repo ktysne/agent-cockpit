@@ -1,3 +1,4 @@
+const { planUpdateForTool } = require('../server/plan-updates');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
 const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
@@ -441,6 +442,10 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
   } else if (eventName === 'Notification') {
     event.notification_type = pickString(input.notification_type).slice(0, 100);
     event.message = pickString(input.message).slice(0, 200);
+  }
+  if (!isCodex && eventName === 'PostToolUse' && !input.agent_id) {
+    const update = planUpdateForTool(event.tool_name, input.tool_input);
+    if (update) event.planUpdate = update;
   }
   return event;
 }

@@ -1,8 +1,8 @@
 const TASK_REMINDER_TOOL_COUNT = 5;
 const TASK_REMINDER_INTERVAL_MS = 10 * 60 * 1000;
 
-const NO_TASKS_REMINDER = 'タスクが登録されていない。`cockpit_set_tasks` で今の作業のタスクと完了条件を登録する。';
-const SUBAGENT_REMINDER = 'サブエージェントが終わった後にタスクが書き直されていない。報告に合わせて `cockpit_set_tasks` で状態を更新する。';
+const NO_TASKS_REMINDER = 'タスクが登録されていない。アプリのタスク一覧か `cockpit_set_tasks` で今の作業のタスクを登録し、完了条件は `cockpit_set_tasks` で足す。';
+const SUBAGENT_REMINDER = 'サブエージェントが終わった後にタスクが書き直されていない。報告に合わせてアプリのタスク一覧か `cockpit_set_tasks` で状態を更新する。';
 
 class TaskNudges {
   constructor({ state, now = Date.now } = {}) {

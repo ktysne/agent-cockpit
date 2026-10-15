@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { PlanUpdates } = require('./plan-updates');
 const assert = require('node:assert/strict');
 const { SessionEntries } = require('./session-entries');
 const fs = require('node:fs/promises');
@@ -1484,6 +1485,7 @@ class DashboardState {
     this.sessionFiles = new Map();
     this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
+    this.planUpdates = new PlanUpdates();
     this.askDecisionBindings = new Map();
     // 保存済み、MCP、後続イベントで終えた質問は、開始と終了のフックだけで再現できないため状態を保つ。
     this.finishedOutsideEventsAskDecisionIds = new Map();
@@ -1723,6 +1725,7 @@ class DashboardState {
   }
 
   deleteStoredSession(sessionId, { keepPullRequests = false } = {}) {
+    this.planUpdates.delete(sessionId);
     this.plans.delete(sessionId);
     this.askDecisionBindings.delete(sessionId);
     this.finishedOutsideEventsAskDecisionIds.delete(sessionId);
@@ -2557,6 +2560,7 @@ class DashboardState {
   }
 
   endSession(sessionId, endedAt) {
+    this.planUpdates.delete(sessionId);
     // provider を持たない保存済みの計画は、起点の情報を消す前に補う。
     const plan = this.plans.get(sessionId);
     const planProviderAdded = Boolean(plan && !plan.provider);
@@ -2580,6 +2584,7 @@ class DashboardState {
   }
 
   endSessionByAbsence(sessionId, endedAt) {
+    this.planUpdates.delete(sessionId);
     this.diagnostics?.record('info', 'server', 'session.ended',
       { session: sessionId.slice(0, 8), provider: this.providerForSession(sessionId), reason: 'session-file-absent' });
     this.sessions.delete(sessionId);

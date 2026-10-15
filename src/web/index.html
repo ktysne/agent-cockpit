@@ -3587,7 +3587,7 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
   const text = element('div', 'task-text');
   const actions = element('div', 'task-actions');
   const met = task.criteria.filter((criterion) => criterion.met).length;
-  actions.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}`));
+  if (task.criteria.length) actions.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}`));
   if (task.closedByUser) actions.append(element('span', 'meta', '画面で完了にした'));
   if (task.state !== 'done') {
     const closeKey = `${session.session_id}::${task.title}`;

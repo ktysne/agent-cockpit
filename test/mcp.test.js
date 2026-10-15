@@ -266,3 +266,16 @@ test('時間切れの add_pr、skip_review、plan は結果未確認の文を is
     assert.equal(ensureCalls, 1, name);
   }
 });
+
+
+test('cockpit_set_tasks の成功文はアプリの一覧に無い題を知らせる', async () => {
+  const responses = await exchange([{
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'cockpit_set_tasks', arguments: { tasks: [{ title: '別の題', state: 'todo', criteria: [] }] } },
+  }], {
+    homeDir: 'C:\\temporary-cockpit', environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async () => new Response(JSON.stringify({ tasks: [{ title: '別の題', state: 'todo' }], unmatchedTitles: ['別の題'] }), { status: 200 }),
+  });
+  assert.match(responses[0].result.content[0].text, /アプリのタスク一覧に無い題: 別の題/);
+});

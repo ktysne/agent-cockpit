@@ -4943,3 +4943,30 @@ test('モックの中断の行は画面と同じ文言と点で出し、終わ�
   assert.equal(context.isIdleHiddenSession({ ...session, status: 'wait' }, now), true);
   assert.match(mockHtml, /\.dot\.interrupted \{ background: transparent; box-shadow: inset 0 0 0 2px var\(--warn\); \}/);
 });
+
+
+test('完了条件が空のタスクは実画面とモックで件数と一覧を出さず、操作列の幅を維持する', () => {
+  const element = (tagName, className = '', textContent = '') => ({
+    tagName, className, textContent, children: [], dataset: {}, append(...nodes) { this.children.push(...nodes); },
+  });
+  const context = pageContext(pageHtml, { element, badge: () => element('span'), appendContextTags() {},
+    pendingTaskCloseActions: new Map(), taskCloseActionsInFlight: new Set() });
+  vm.runInContext(functionSource(pageHtml, 'appendTaskItem'), context);
+  const mockContext = pageContext(mockHtml, { taskState: (session, task) => task.state,
+    closedTaskKey: () => 'key', pendingClosedTasks: new Map(), sessionTag: () => '', esc: text => text });
+  vm.runInContext(functionSource(mockHtml, 'taskItem'), mockContext);
+  for (const state of ['todo', 'done']) {
+    const root = element('ul');
+    const task = { title: '段階', state, criteria: [] };
+    context.appendTaskItem(root, task, {}, { session_id: 'session' });
+    const flatten = node => [node, ...node.children.flatMap(flatten)];
+    assert.ok(!flatten(root).some(node => node.textContent.includes('完了条件') || node.className === 'criteria-list'));
+    assert.ok(flatten(root).some(node => node.className === 'task-actions'));
+    const markup = mockContext.taskItem({}, {}, task, false);
+    assert.doesNotMatch(markup, /完了条件|<ul class="criteria">/);
+    assert.match(markup, /class="task-actions"/);
+  }
+  for (const html of [pageHtml, mockHtml]) {
+    assert.equal(new Map(cssDeclarations(html, '.task-actions')).get('min-width'), 'calc(6em + 11px)');
+  }
+});

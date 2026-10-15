@@ -171,7 +171,8 @@ function shortSavedList(toolName, saved) {
     const tasks = Array.isArray(saved.tasks) ? saved.tasks : [];
     const summary = tasks.slice(0, MAX_RESULT_ITEMS).map((task) => `${task.title} (${task.state})`).join('、');
     const remainder = tasks.length > MAX_RESULT_ITEMS ? `、ほか ${tasks.length - MAX_RESULT_ITEMS} 件` : '';
-    return `タスクを記録しました${summary ? `: ${summary}${remainder}` : '。'}`;
+    const unmatched = saved.unmatchedTitles?.length ? `\nアプリのタスク一覧に無い題: ${saved.unmatchedTitles.join('、')}` : '';
+    return `タスクを記録しました${summary ? `: ${summary}${remainder}` : '。'}${unmatched}`;
   }
   const decisions = Array.isArray(saved.decisions)
     ? saved.decisions
