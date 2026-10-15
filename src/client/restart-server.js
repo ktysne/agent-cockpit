@@ -25,6 +25,10 @@ async function restartServer(options = {}) {
   // 照合から停止までの間を空けないよう、待つのは照合の前にする。
   await wait(STORE_SETTLE_MS);
   const info = await readInfo(homeDir);
+  if ((options.expectPid !== undefined && info?.pid !== options.expectPid) ||
+      (options.expectStartedAt !== undefined && info?.startedAt !== options.expectStartedAt)) {
+    fail('stale', '依頼元と異なる起動の常駐サーバーなので、停止しませんでした。');
+  }
   let stoppedPid = null;
   if (info && Number.isInteger(info.pid) && info.pid > 0 &&
       await healthy(info, { fetchImpl: options.fetchImpl, now, deadline: now() + 1000 })) {
@@ -80,7 +84,13 @@ async function main(argv = process.argv.slice(2), options = {}) {
   const logError = options.logError || console.error;
   const json = argv.includes('--json');
   try {
-    const result = await restartServer(options);
+    const value = flag => argv.includes(flag) ? argv[argv.indexOf(flag) + 1] ?? '' : undefined;
+    const pid = value('--expect-pid');
+    const startedAt = value('--expect-started-at');
+    const result = await restartServer({ ...options,
+      ...(pid !== undefined ? { expectPid: Number(pid) } : {}),
+      ...(startedAt !== undefined ? { expectStartedAt: startedAt } : {}),
+    });
     if (json) log(JSON.stringify(result));
     else {
       log(result.commitVerified

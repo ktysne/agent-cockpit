@@ -184,3 +184,22 @@ test('Windows を含む実プロセスを既定の process.kill で終了でき�
   await exited;
   assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
 });
+
+
+test('指定した依頼元の pid や起動時刻が違えば停止も起動もせず stale を返す', async () => {
+  for (const expected of [{ expectPid: 999 }, { expectStartedAt: 'other' }]) {
+    await assert.rejects(restartServer(options({ ...expected,
+      kill: () => assert.fail('別の起動は止めない'),
+      ensureServerRunning: () => assert.fail('別の起動は起こし直さない'),
+    })), { result: 'stale' });
+  }
+});
+
+test('CLI が受け取った依頼元の pid と起動時刻を照合する', async () => {
+  const output = [];
+  const code = await main(['--json', '--expect-pid', '999', '--expect-started-at', info.startedAt], options({
+    log: value => output.push(JSON.parse(value)), kill: () => assert.fail('別の起動は止めない'),
+  }));
+  assert.equal(code, 1);
+  assert.equal(output[0].result, 'stale');
+});

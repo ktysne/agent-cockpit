@@ -102,7 +102,7 @@ function createReadRoutes(ctx) {
 
   function fingerprint() {
     return JSON.stringify([state.version, pullRequestTracker?.inFlightSignature?.() || '',
-      away.snapshot(), routing.snapshot(), ctx.updateChecker?.snapshot() || null, uiVersion, installed, restartRequired(), integrations, ctx.getSourceState()]);
+      away.snapshot(), routing.snapshot(), ctx.updateChecker?.snapshot() || null, uiVersion, installed, restartRequired(), ctx.restartAvailable(), integrations, ctx.getSourceState()]);
   }
 
   function generateState(now) {
@@ -129,7 +129,7 @@ function createReadRoutes(ctx) {
       runtime: { version: ctx.getRuntime().version, commit: ctx.getRuntime().commit,
         sourceState: ctx.getSourceState(), startedAt: ctx.getRuntime().startedAt },
       away: awayState, update: ctx.updateChecker?.snapshot() || null, appVersion: ctx.appVersion,
-      routing: routing.snapshot(), integrations, uiVersion, installed, restartRequired: restartRequired() }), fingerprint: fingerprint(),
+      routing: routing.snapshot(), integrations, uiVersion, installed, restartRequired: restartRequired(), restartAvailable: ctx.restartAvailable() }), fingerprint: fingerprint(),
       expiresAt: Math.min(deadline.at, now + STATE_CACHE_MAX_AGE_MS) };
   }
 
@@ -229,7 +229,7 @@ function createReadRoutes(ctx) {
   }
 
   const measuredHandleState = perf ? (request) => perf.measureAsync('state', () => handleState(request)) : handleState;
-  return { handleHealth, handleState: measuredHandleState, handleTrayState, handleContext, handleDevFields, handleIndex };
+  return { restartRequired, handleHealth, handleState: measuredHandleState, handleTrayState, handleContext, handleDevFields, handleIndex };
 }
 
 module.exports = { createReadRoutes };

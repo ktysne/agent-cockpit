@@ -5127,6 +5127,102 @@ test('再起動待ちの帯はバージョンが違えば配置済みのバー�
   }
 });
 
+function restartNoteHarness(source, response = async () => ({ status: 202 })) {
+  const buttons = [];
+  const note = { hidden: true, value: '', get textContent() { return this.value; },
+    set textContent(value) { this.value = value; buttons.length = 0; this.rebuilt += 1; }, rebuilt: 0,
+    append(button) { buttons.push(button); } };
+  let focused = null;
+  const timers = new Map();
+  const context = pageContext(source, {
+    document: { getElementById: () => note, createElement: () => ({ addEventListener(type, fn) { this.click = fn; }, focus() { focused = this.textContent; } }) },
+    requestServerRestart: response,
+    setTimeout: (fn, ms) => { timers.set(fn, ms); return fn; }, clearTimeout: id => timers.delete(id),
+  });
+  vm.runInContext(functionSource(source, 'renderRestartNote'), context);
+  const state = { restartRequired: true, restartAvailable: true, runtime: { startedAt: 'before' },
+    sessions: [{ permissionWaits: [{}, {}] }] };
+  const render = () => context.renderRestartNote(state);
+  render();
+  const click = label => buttons.find(button => button.textContent === label).click();
+  return { note, buttons, timers, state, render, click, context, focused: () => focused };
+}
+
+for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
+  test(`${label}の再起動は帯で消える行と許可待ちを確認し、やめると元に戻る`, () => {
+    const f = restartNoteHarness(source);
+    f.click('常駐サーバーを再起動する');
+    assert.equal(f.note.textContent, '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。許可待ち 2 件は、再起動後に表示されません。');
+    f.click('やめる');
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+    f.state.restartAvailable = false;
+    f.render();
+    assert.equal(f.buttons.length, 0);
+  });
+
+  test(`${label}の帯は同じ表示なら作り直さず、確認と取り消しで次に押すボタンへフォーカスを移す`, () => {
+    const f = restartNoteHarness(source);
+    const rebuilt = f.note.rebuilt;
+    f.render();
+    assert.equal(f.note.rebuilt, rebuilt);
+    f.click('常駐サーバーを再起動する');
+    assert.equal(f.focused(), '再起動する');
+    f.render();
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['再起動する', 'やめる']);
+    f.click('やめる');
+    assert.equal(f.focused(), '常駐サーバーを再起動する');
+  });
+
+  test(`${label}は受付後に再起動中を示し、起動時刻が変わると帯を消す`, async () => {
+    const f = restartNoteHarness(source);
+    f.click('常駐サーバーを再起動する');
+    await f.click('再起動する');
+    assert.equal(f.note.textContent, '常駐サーバーを再起動しています。');
+    assert.equal(f.buttons.length, 0);
+    f.state.restartAvailable = false;
+    f.render();
+    assert.equal(f.note.textContent, '常駐サーバーを再起動しています。');
+    f.state.runtime.startedAt = 'after';
+    f.state.restartRequired = false;
+    f.render();
+    assert.equal(f.note.hidden, true);
+    assert.equal(f.timers.size, 0);
+  });
+
+  test(`${label}は拒否や通信失敗を帯で案内し再起動ボタンを戻す`, async () => {
+    for (const response of [async () => ({ status: 409 }), async () => { throw new Error('offline'); }]) {
+      const f = restartNoteHarness(source, response);
+      f.click('常駐サーバーを再起動する');
+      await f.click('再起動する');
+      assert.equal(f.note.textContent, '再起動を始められませんでした。タスクトレイのメニューから再起動してください。');
+      assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+    }
+  });
+
+  test(`${label}は起動時刻が変わらなければ 30 秒で失敗を示し、サーバーが受け付けるまで再起動ボタンを出さない`, async () => {
+    const f = restartNoteHarness(source);
+    f.click('常駐サーバーを再起動する');
+    await f.click('再起動する');
+    f.state.restartAvailable = false;
+    const [timeout, ms] = [...f.timers][0];
+    assert.equal(ms, 30_000);
+    timeout();
+    assert.equal(f.note.textContent, '再起動できませんでした。タスクトレイのメニューから再起動してください。');
+    assert.equal(f.buttons.length, 0);
+    f.state.restartAvailable = true;
+    f.render();
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+  });
+}
+
+test('画面の再起動は認証を取り直せる共通の送信を使う', async () => {
+  const sent = [];
+  const context = pageContext(pageHtml, { postUiAction: async (url, body) => { sent.push([url, body]); return { status: 202 }; } });
+  vm.runInContext(functionSource(pageHtml, 'requestServerRestart'), context);
+  assert.equal((await context.requestServerRestart()).status, 202);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [['/api/server/restart', {}]]);
+});
+
 for (const version of ['v1', 'v2', '']) {
   test(`401 で取り直した画面の版 ${version || '空'} と現在の版を照合して再送を決める`, async () => {
     const harness = reloadHarness(version === '' ? '' : 'v1', [[DRAFT_KEY, { choice: 'ok', note: '', picks: [] }]]);
