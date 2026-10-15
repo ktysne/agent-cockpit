@@ -72,7 +72,7 @@ function latestReleaseTag(dependencies = {}) {
 function parseVersion(input) {
   const text = String(input ?? '');
   const tag = text.startsWith('v') ? text : 'v' + text;
-  if (!isReleaseTag(tag)) throw new Error('版は 1.2.3 または v1.2.3 の形式で指定してください: ' + text);
+  if (!isReleaseTag(tag)) throw new Error('バージョンは 1.2.3 または v1.2.3 の形式で指定してください: ' + text);
   return { version: tag.slice(1), tag };
 }
 
@@ -182,10 +182,10 @@ function inspectRelease(input, dependencies = {}) {
       throw new Error('HEAD が origin/main と同じコミットではありません。main を pull してから実行してください。');
     }
     if (atOrBelowLatest) {
-      throw new Error(tag + ' は origin の最新の版 ' + latest + ' 以下です。' + latest + ' より新しい版にしてください。');
+      throw new Error(tag + ' は origin の最新のバージョン ' + latest + ' 以下です。' + latest + ' より新しいバージョンにしてください。');
     }
     if (compareReleaseTags(tag, 'v' + current) <= 0) {
-      throw new Error(tag + ' は package.json の現在の版 ' + current + ' 以下です。' + current + ' より新しい版にしてください。');
+      throw new Error(tag + ' は package.json の現在のバージョン ' + current + ' 以下です。' + current + ' より新しいバージョンにしてください。');
     }
     if (localTag) {
       throw new Error('ローカルに ' + tag + ' があります。git tag -d ' + tag + ' で消してから実行してください。');
@@ -195,14 +195,14 @@ function inspectRelease(input, dependencies = {}) {
 
   const versionCommitPending = head !== originMain;
   if (versionCommitPending && !isVersionCommit(git, originMain)) {
-    throw new Error('HEAD が origin/main と一致せず、版を上げるコミットでもありません。origin/main と同じコミットにしてから実行してください。');
+    throw new Error('HEAD が origin/main と一致せず、バージョンを上げるコミットでもありません。origin/main と同じコミットにしてから実行してください。');
   }
   const remoteAtHead = remoteCommit === head;
   if (remoteCommit !== undefined && !remoteAtHead) {
-    throw new Error('origin の ' + tag + ' は HEAD と別のコミットを指しています。版の番号を上げてから実行してください。');
+    throw new Error('origin の ' + tag + ' は HEAD と別のコミットを指しています。バージョン番号を上げてから実行してください。');
   }
   if (!remoteAtHead && atOrBelowLatest) {
-    throw new Error(tag + ' は origin の最新の版 ' + latest + ' 以下です。' + latest + ' より新しい版にしてください。');
+    throw new Error(tag + ' は origin の最新のバージョン ' + latest + ' 以下です。' + latest + ' より新しいバージョンにしてください。');
   }
   if (!remoteAtHead && localTag && localCommit !== head) {
     throw new Error('ローカルの ' + tag + ' は HEAD 以外を指しています。git tag -d ' + tag + ' で消してから実行してください。');
@@ -239,13 +239,13 @@ function executeStep(step, { version, tag }, dependencies) {
       try {
         updateVersionFiles(version, dependencies);
         git(['add', ...VERSION_FILES]);
-        git(['commit', '-m', 'chore(release): 版を ' + version + ' に上げる']);
+        git(['commit', '-m', 'chore(release): バージョンを ' + version + ' に上げる']);
       } catch (error) {
         try {
           git(['reset', '--quiet', 'HEAD', '--', ...VERSION_FILES]);
           git(['checkout', '--', ...VERSION_FILES]);
         } catch (restoreError) {
-          throw new Error(error.message + ' 版のファイルも戻せませんでした: ' + restoreError.message);
+          throw new Error(error.message + ' バージョンを書いたファイルも戻せませんでした: ' + restoreError.message);
         }
         throw error;
       }
@@ -281,7 +281,7 @@ function planRelease(input, dependencies = {}) {
   const lines = [...state.steps.map(step => describeStep(step, state)), '紹介ページを配信'];
   lines.forEach((line, index) => log('  ' + (index + 1) + '. ' + line));
   if (!hasUpdateNotes(state.tag, dependencies)) {
-    log('[release] 利用者に追加の作業が要る版なら、先に docs/update.md の「版ごとの追加作業」に手順を書いてください。');
+    log('[release] 利用者に追加の作業が要るバージョンなら、先に docs/update.md の「バージョンごとの追加作業」に手順を書いてください。');
   }
   return state;
 }
@@ -306,22 +306,21 @@ async function reportRelease(input, dependencies = {}) {
   const log = dependencies.log ?? console.log;
   try {
     const { version, tag } = parseVersion(input);
-    log(`公開した版: ${tag}`);
+    log(`公開したバージョン: ${tag}`);
     const { cockpitHomeFromOptions } = require('../src/server/identity');
     const { readServerInfo, requestFromServer } = require('../src/client/server-connection');
     const info = await (dependencies.readServerInfo ?? readServerInfo)(cockpitHomeFromOptions(dependencies));
     const response = await requestFromServer(info, '/health', { method: 'GET' }, { fetchImpl: dependencies.fetchImpl });
     const health = response.json;
     if (!response.ok || health?.app !== 'agent-cockpit' || health.pid !== info.pid || health.startedAt !== info.startedAt) {
-      log('常駐サーバーは動いていません。');
+      log('手元の常駐サーバーは動いていません。');
       return;
     }
-    log(`稼働中の常駐サーバー: 版 ${health.version ?? '不明'}、commit ${health.commit?.slice(0, 7) ?? '不明'}`);
     const commit = gitRunner(dependencies)(['rev-parse', `${tag}^{commit}`]).trim();
-    if (health.version === version && health.commit === commit) log('稼働中の常駐サーバーは公開した版です。');
-    else log('公開した版で動かすには常駐サーバーを再起動してください。リリースは稼働中のサーバーを切り替えません。');
+    if (health.version === version && health.commit === commit) log('手元の常駐サーバーは、公開したバージョンで動いています。');
+    else log(`手元の常駐サーバーはバージョン ${health.version ?? '不明'} で動いています。公開したバージョンで動かすには、常駐サーバーを再起動してください。`);
   } catch (error) {
-    log('公開版と稼働中の常駐サーバーを照合できませんでした: ' + error.message);
+    log('公開したバージョンと手元の常駐サーバーを照合できませんでした: ' + error.message);
   }
 }
 

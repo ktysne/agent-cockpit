@@ -29,7 +29,7 @@ test('新しい版だけを通知欄に表示し、通知が無くなれば隠�
   assert.match(html, /id="update-compare" target="_blank" rel="noopener noreferrer"/);
   context.applyUpdateState(update);
   assert.equal(get('update-note').hidden, false);
-  assert.equal(get('update-message').textContent, '新しい版 v1.0.0 があります。');
+  assert.equal(get('update-message').textContent, '新しいバージョン v1.0.0 があります。');
   assert.equal(get('update-compare').href, update.compareUrl);
   for (const value of [{ available: false }, null, undefined]) {
     context.applyUpdateState(value);
@@ -192,7 +192,7 @@ test('更新を確認は、最新なら何も出さず、それ以外は結果�
   const cases = [
     { body: { current: '1.0.1', latest: '1.0.1', available: false, checkedAt: 'x', error: null }, status: 200,
       message: '', applied: [] },
-    { body: latest, status: 200, message: '新しい版 v1.0.0 があります。', applied: [latest] },
+    { body: latest, status: 200, message: '新しいバージョン v1.0.0 があります。', applied: [latest] },
     { body: { current: '1.0.1', latest: null, available: false, checkedAt: 'x', error: 'TIMEOUT' }, status: 200,
       message: '確認できませんでした。時間をおいてやり直してください。', applied: [] },
     { body: { error: 'Internal Server Error' }, status: 500,

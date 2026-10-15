@@ -60,7 +60,7 @@ async function restartServer(options = {}) {
   if (verification.result === 'start-failed') fail('start-failed', '起動後の常駐サーバーの health を期限内に取得できませんでした。');
   result.running = verification.running;
   if (verification.result === 'mismatch' && !verification.identityMatches) {
-    fail('mismatch', '起動後の health の pid または startedAt、アプリ名が起動情報と一致しません。' + mismatchMessage(expected, result.running));
+    fail('mismatch', mismatchMessage(expected, result.running));
   }
   if (verification.result === 'mismatch') fail('mismatch', mismatchMessage(expected, result.running));
   result.commitVerified = verification.commitVerified;
@@ -68,7 +68,7 @@ async function restartServer(options = {}) {
 }
 
 function mismatchMessage(expected, running) {
-  return `別のチェックアウトから起動した常駐サーバーか、更新前のコードで動いている可能性があります。期待: 版 ${expected.version}、commit ${expected.commit ?? '不明'}。実際: 版 ${running.version ?? '不明'}、commit ${running.commit ?? '不明'}。`;
+  return `再起動した常駐サーバーは、このフォルダーのコードで動いていません(このフォルダー: バージョン ${expected.version}、動いているサーバー: バージョン ${running.version ?? '不明'})。別のフォルダーの agent-cockpit の常駐サーバーが動いていないか確かめてください。`;
 }
 
 async function main(argv = process.argv.slice(2), options = {}) {
@@ -79,9 +79,9 @@ async function main(argv = process.argv.slice(2), options = {}) {
     const result = await restartServer(options);
     if (json) log(JSON.stringify(result));
     else {
-      log(`停止した pid: ${result.stoppedPid ?? 'なし'}、起動後の pid: ${result.pid}`);
-      log(`起動した常駐サーバー: 版 ${result.running.version}、commit ${result.running.commit?.slice(0, 7) ?? '不明'}、sourceState ${result.running.sourceState ?? '不明'}`);
-      log(result.commitVerified ? '版とコミットが一致しました。' : '版は一致しましたが、commit を照合できませんでした。');
+      log(result.commitVerified
+        ? `常駐サーバーを再起動しました(バージョン ${result.running.version})。`
+        : `常駐サーバーを再起動しました(バージョン ${result.running.version})。このフォルダーのコミットを読めなかったため、更新後のコードで動いているかは確かめられませんでした。`);
     }
     return 0;
   } catch (error) {
@@ -89,7 +89,9 @@ async function main(argv = process.argv.slice(2), options = {}) {
       result: 'start-failed', stoppedPid: null, pid: null,
       expected: { version: null, commit: null }, running: null, commitVerified: false,
     }));
-    else logError(`常駐サーバーの再起動に失敗しました: ${error.message}`);
+    else logError(error.result === 'mismatch'
+      ? error.message
+      : `常駐サーバーの再起動に失敗しました: ${error.message}`);
     return 1;
   }
 }

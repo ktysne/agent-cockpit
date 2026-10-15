@@ -5106,7 +5106,7 @@ test('取り込み確認を直接閉じても取り込まない回答を送り�
   assert.deepEqual(JSON.parse(JSON.stringify(patches)), [{ importAppTasks: false }]);
 });
 
-test('再起動待ちの帯は差のある版とコミットを表示し、解消したら消す', () => {
+test('再起動待ちの帯はバージョンが違えば配置済みのバージョンを示し、コミットは出さず、解消したら消す', () => {
   for (const source of [pageHtml, mockHtml]) {
     const note = { hidden: true, textContent: '' };
     const context = pageContext(source, { document: { getElementById: () => note } });
@@ -5114,10 +5114,13 @@ test('再起動待ちの帯は差のある版とコミットを表示し、解�
     context.renderRestartNote({ restartRequired: true,
       runtime: { version: '1.4.0', commit: 'c933f60' }, installed: { version: '1.5.0', commit: 'a1b2c3d' } });
     assert.equal(note.hidden, false);
-    assert.match(note.textContent, /実行中 v1.4.0\+c933f60 \/ 配置済み v1.5.0\+a1b2c3d/);
+    assert.equal(note.textContent, 'バージョン 1.5.0 のファイルが配置されています。常駐サーバーを再起動すると反映されます。');
+    context.renderRestartNote({ restartRequired: true,
+      runtime: { version: '1.4.0', commit: 'c933f60' }, installed: { version: '1.4.0', commit: 'a1b2c3d' } });
+    assert.equal(note.textContent, '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
     context.renderRestartNote({ restartRequired: true, uiVersion: 'old', installed: { uiVersion: 'new' } });
-    assert.match(note.textContent, /画面のファイルが更新されています/);
-    assert.doesNotMatch(note.textContent, /実行中/);
+    assert.equal(note.textContent, '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
+    assert.doesNotMatch(note.textContent, /実行中|配置済み|c933f60|a1b2c3d/);
     context.renderRestartNote({ restartRequired: false });
     assert.equal(note.hidden, true);
     assert.equal(note.textContent, '');
