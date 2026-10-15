@@ -216,7 +216,7 @@ function createHookRoutes(ctx) {
       return;
     }
     if (!rejected && event?.planUpdate && !event.agent_id && event.provider !== 'codex' &&
-      state.getDisplayPreferences().importAppTasks !== false) {
+      state.getDisplayPreferences().importAppTasks === true) {
       const tasks = state.planUpdates.apply(event, state.planFor(event.session_id),
         state.sessionNameFor(event.session_id) || state.sessions.get(event.session_id)?.title);
       if (tasks) {
@@ -273,7 +273,7 @@ function createHookRoutes(ctx) {
       const incoming = body.tasks.map(task => ({ ...task, criteria: task.criteria || [] }));
       // 取り込みの無い CLI などは一覧全体を書くので置き換える。2 件以上も一覧全体を書く形として扱う。
       const merging = incoming.length === 1 && state.planFor(sessionId).appTasks === true &&
-        state.getDisplayPreferences().importAppTasks !== false && state.providerForSession(sessionId) !== 'codex';
+        state.getDisplayPreferences().importAppTasks === true && state.providerForSession(sessionId) !== 'codex';
       const tasks = merging ? state.planUpdates.merge(sessionId, state.planFor(sessionId), incoming) : incoming;
       const saved = state.setTasks(sessionId, tasks);
       // 置き換えより前の基準から組み立て直すと、置き換えた内容が消えるため、基準を置き換えた一覧にする。

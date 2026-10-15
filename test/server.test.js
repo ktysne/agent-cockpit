@@ -535,7 +535,7 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
 
   const away = await request(runtime.info.port, { path: '/api/away' });
   assert.deepEqual(Object.keys(jsonBody(away)).sort(), ['enabled', 'importAppTasks', 'periods', 'since']);
-  assert.deepEqual(jsonBody(away), { ...disabledState, importAppTasks: true });
+  assert.deepEqual(jsonBody(away), { ...disabledState, importAppTasks: false });
   const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   assert.deepEqual(state.away, disabledState);
   assert.equal(away.headers['access-control-allow-origin'], undefined);
@@ -940,7 +940,7 @@ test('離席状態は同じ置き場でサーバーを再起動しても残る',
 
   const second = await startServer({ homeDir, claudeHome, port: 0 });
   t.after(() => second.close());
-  assert.deepEqual(jsonBody(await request(second.info.port, { path: '/api/away' })), { ...saved, importAppTasks: true });
+  assert.deepEqual(jsonBody(await request(second.info.port, { path: '/api/away' })), { ...saved, importAppTasks: false });
   assert.deepEqual(jsonBody(await request(second.info.port, { path: '/api/state' })).away, saved);
 });
 
@@ -1044,7 +1044,7 @@ test('壊れた離席状態は離席中ではない状態として読む', async
   const runtime = await startServer({ homeDir, claudeHome, port: 0 });
   t.after(() => runtime.close());
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/away' })), {
-    enabled: false, since: null, periods: [], importAppTasks: true,
+    enabled: false, since: null, periods: [], importAppTasks: false,
   });
 });
 
@@ -2130,8 +2130,8 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   };
 
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, null);
-  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/away' })).importAppTasks, true);
-  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/sessions/display-default/context' })).importAppTasks, true);
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/away' })).importAppTasks, false);
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/sessions/display-default/context' })).importAppTasks, false);
   const unauthorized = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', origin } });
   assert.equal(unauthorized.status, 401);
   const forbidden = await request(runtime.info.port, {
@@ -2154,8 +2154,8 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 3);
   assert.equal(jsonBody(mode).display.idleHideMinutes, 10);
   assert.equal(jsonBody(mode).display.hideFinished, true);
-  assert.equal(jsonBody(mode).display.importAppTasks, true);
-  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display.importAppTasks, true);
+  assert.equal(jsonBody(mode).display.importAppTasks, false);
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display.importAppTasks, false);
   assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
   assert.equal(Object.hasOwn(jsonBody(mode).display, 'mergeAfterReviewDefault'), false);
   const hidden = await request(runtime.info.port, {
@@ -2230,6 +2230,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   });
   assert.equal(importOn.status, 200);
   assert.equal(jsonBody(importOn).display.importAppTasks, true);
+  assert.equal(jsonBody(importOn).display.importAppTasksAsked, true);
   for (const mergeableCondition of ['operation', 'ci', 'cross-review']) {
     const selected = await request(runtime.info.port, {
       method: 'POST', path: endpoint, body: JSON.stringify({ mergeableCondition }), headers: validHeaders,
@@ -2244,7 +2245,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'sinceSeen', 'judgment', 'prs', 'now'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, importAppTasks: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info',
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, importAppTasks: true, importAppTasksAsked: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info',
   });
 });
 

@@ -539,6 +539,14 @@ h3.sub .count { font-weight: normal; }
   <div class="settings-save-error" id="settings-save-error" role="alert" hidden></div>
   <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="https://ktysne.info/agent-cockpit/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a><button type="button" class="link-btn settings-manual-link" id="update-check">更新を確認</button><span id="update-check-status" role="status" aria-live="polite"></span></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
+<dialog class="settings-dialog" id="import-app-tasks-dialog" aria-labelledby="import-app-tasks-title" aria-describedby="import-app-tasks-description">
+  <h2 id="import-app-tasks-title">デスクトップアプリのタスク一覧を取り込みますか</h2>
+  <p id="import-app-tasks-description">オンにすると、アプリのタスク一覧を 1 つのタスクの完了条件として取り込み、題はモデルが付けます。<br>オフにすると、従来どおり、モデルが Agent Cockpit に直接登録したタスクを表示します。<br>あとから設定で変えられます。</p>
+  <div class="settings-actions">
+    <button type="button" id="import-app-tasks-no" autofocus>取り込まない</button>
+    <button type="button" id="import-app-tasks-yes">取り込む</button>
+  </div>
+</dialog>
 <main>
   <div class="mode-row">
     <div class="seg" role="group" aria-label="表示モード">
@@ -680,6 +688,7 @@ let updatePrompt = '';
 let appVersion = '';
 const header = document.querySelector('header.top');
 const settingsDialog = document.getElementById('settings-dialog');
+const importAppTasksDialog = document.getElementById('import-app-tasks-dialog');
 const settingsClose = document.getElementById('settings-close');
 const settingsSaveError = document.getElementById('settings-save-error');
 const updateCheckButton = document.getElementById('update-check');
@@ -863,7 +872,8 @@ function normalizeDisplayPreferences(value) {
       [key, normalizeDisplayMinutes(value?.[key], min, max, fallback)]
     ))),
     hideFinished: value?.hideFinished !== false,
-    importAppTasks: value?.importAppTasks !== false,
+    importAppTasks: value?.importAppTasksAsked === true && value?.importAppTasks === true,
+    importAppTasksAsked: value?.importAppTasksAsked === true,
     diagnosticsLevel: ['silent', 'error', 'warn', 'info', 'debug'].includes(value?.diagnosticsLevel) ? value.diagnosticsLevel : 'info',
     mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value?.mergeableCondition) ? value.mergeableCondition : 'cross-review',
   };
@@ -873,6 +883,8 @@ let displayPreferences = normalizeDisplayPreferences(null);
 renderSectionOrder();
 renderDisplaySettings();
 let displayPreferencesReady = false;
+let importAppTasksPromptShown = false;
+let importAppTasksPromptAnswered = false;
 let displayMigrationPending = false;
 let displayMigrationData = null;
 let pendingDisplayChanges = {};
@@ -887,7 +899,7 @@ function renderDisplaySettings() {
     input.value = String(displayPreferences[key]);
   }
   if (document.activeElement !== hideFinishedInput) hideFinishedInput.checked = displayPreferences.hideFinished;
-  if (document.activeElement !== importAppTasksInput) importAppTasksInput.checked = displayPreferences.importAppTasks !== false;
+  if (document.activeElement !== importAppTasksInput) importAppTasksInput.checked = displayPreferences.importAppTasks === true;
   if (!mergeableConditionInputs.includes(document.activeElement)) {
     for (const input of mergeableConditionInputs) input.checked = input.value === displayPreferences.mergeableCondition;
   }
@@ -990,6 +1002,20 @@ function changeDisplaySetting(key, input) {
   return saveDisplayPreferences({ [key]: value }, { key, input });
 }
 
+function maybeAskImportAppTasks() {
+  if (importAppTasksPromptShown || displayPreferences.importAppTasksAsked === true) return;
+  importAppTasksPromptShown = true;
+  importAppTasksDialog.showModal();
+}
+
+async function answerImportAppTasks(value) {
+  if (importAppTasksPromptAnswered) return;
+  importAppTasksPromptAnswered = true;
+  importAppTasksDialog.close();
+  const saved = await saveDisplayPreferences({ importAppTasks: value }, { key: 'importAppTasks', input: importAppTasksInput });
+  if (saved) displayPreferences.importAppTasksAsked = true;
+}
+
 function clearLegacyDisplayPreferences() {
   try {
     localStorage.removeItem(DISPLAY_STORAGE_KEY);
@@ -1004,10 +1030,15 @@ async function syncDisplayPreferences(serverDisplay) {
       : normalizeDisplayPreferences(serverDisplay);
     for (const [key, state] of displayPreferenceSaveStates) state.savedValue = current[key] ?? state.savedValue;
     displayPreferences = { ...current, ...pendingDisplayChanges };
+    if (Object.hasOwn(pendingDisplayChanges, 'importAppTasks')) displayPreferences.importAppTasksAsked = true;
     renderSectionOrder();
     renderDisplaySettings();
     displayPreferencesReady = true;
-    const patch = serverDisplay === null ? displayPreferences : pendingDisplayChanges;
+    const patch = serverDisplay === null ? { ...displayPreferences } : pendingDisplayChanges;
+    if (serverDisplay === null && displayPreferences.importAppTasksAsked !== true) {
+      delete patch.importAppTasks;
+      delete patch.importAppTasksAsked;
+    }
     const pendingSaves = [...displayPreferenceSaveStates].map(([key, state]) => ({ key, state, sequence: state.sequence, value: state.latestValue }));
     pendingDisplayChanges = {};
     if (Object.keys(patch).length) {
@@ -1019,12 +1050,13 @@ async function syncDisplayPreferences(serverDisplay) {
       }
       if (serverDisplay === null) {
         displayMigrationPending = !saved;
-        displayMigrationData = displayPreferences;
+        displayMigrationData = patch;
         if (saved) clearLegacyDisplayPreferences();
       }
     } else if (serverDisplay !== null) {
       clearLegacyDisplayPreferences();
     }
+    maybeAskImportAppTasks();
     return;
   }
   if (serverDisplay === null && displayMigrationPending) {
@@ -1041,6 +1073,7 @@ async function syncDisplayPreferences(serverDisplay) {
     displayMigrationPending = false;
     displayMigrationData = null;
     clearLegacyDisplayPreferences();
+    maybeAskImportAppTasks();
   }
 }
 
@@ -1130,7 +1163,16 @@ for (const { key, input } of DISPLAY_MINUTE_SETTINGS) {
   input.addEventListener('change', () => changeDisplaySetting(key, input));
 }
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
-importAppTasksInput.addEventListener('change', () => changeDisplaySetting('importAppTasks', importAppTasksInput));
+importAppTasksInput.addEventListener('change', async () => {
+  if (await changeDisplaySetting('importAppTasks', importAppTasksInput)) displayPreferences.importAppTasksAsked = true;
+});
+document.getElementById('import-app-tasks-no').addEventListener('click', () => { void answerImportAppTasks(false); });
+document.getElementById('import-app-tasks-yes').addEventListener('click', () => { void answerImportAppTasks(true); });
+importAppTasksDialog.addEventListener('close', () => { void answerImportAppTasks(false); });
+importAppTasksDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  void answerImportAppTasks(false);
+});
 for (const input of mergeableConditionInputs) {
   input.addEventListener('change', () => {
     if (!input.checked || !['operation', 'ci', 'cross-review'].includes(input.value)) return;

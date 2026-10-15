@@ -11,6 +11,7 @@ const items = (statuses = ['in_progress', 'pending', 'pending']) => ({
 
 async function setup(t) {
   const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
   const { info } = await startTestServer(t, { state });
   const post = async (path, body) => request(info.port, {
     method: 'POST', path, headers: hookHeaders(info.secret), body: JSON.stringify(body),

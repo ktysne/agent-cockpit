@@ -20,7 +20,8 @@ const DISPLAY_SCHEMA = Object.freeze({
   awayAnswerWaitMinutes: Object.freeze({ type: 'integer', default: 3, minimum: 1, maximum: 30 }),
   idleHideMinutes: Object.freeze({ type: 'integer', default: 10, minimum: 5, maximum: 1440 }),
   hideFinished: Object.freeze({ type: 'boolean', default: true }),
-  importAppTasks: Object.freeze({ type: 'boolean', default: true }),
+  importAppTasks: Object.freeze({ type: 'boolean', default: false }),
+  importAppTasksAsked: Object.freeze({ type: 'boolean', default: false }),
   mergeableCondition: Object.freeze({ type: 'enum', default: 'cross-review', values: Object.freeze(['operation', 'ci', 'cross-review']) }),
 });
 
@@ -92,6 +93,7 @@ function normalizeDisplay(value) {
       result[key] = field;
     }
   }
+  if (result.importAppTasksAsked !== true) result.importAppTasks = false;
   return result;
 }
 
