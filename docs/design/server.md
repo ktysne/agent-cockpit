@@ -377,7 +377,7 @@ cwd の worktree の GitHub の remote のどれも PR のリポジトリと一�
 クロスレビュー不要記録は PR の owner/repo/番号、head SHA、理由を `store.json` の `crossReviewSkips` に保存する。MCP の `cockpit_skip_review` は登録元セッションからのみ記録でき、ダッシュボードの操作は起動時の秘密値と必須 Origin を照合して記録または取り消す。どちらもサーバーが最新の PR head を取り直して照合し、別の head には適用しない。head が変われば記録を無効にし、PR 登録の保持期限に合わせて削除する。
 メインセッションの Stop 開始時だけ、登録先 repo の進行中の再取得を待ってからローカルのレビュー記録を読み直し、記録の無い PR があればレビュー不要の記録を促す。
 `stop-start` は判定を待たずに generation を返し、判定は Claude の最初の `stop-poll` と Codex の `stop-check` で待つ。`stop-start` のフックは 1 秒で打ち切るため。
-待機と読み直しの合計上限は 3 秒とし、失敗や時間切れでは催促せず Stop を続ける。Codex の `stop-check` のフックは、この上限に 2 秒を足した時間まで応答を待つ。
+待機と読み直しの合計上限は 3 秒とし、失敗や時間切れでは催促せず Stop を続ける。Codex の `stop-check` のフックは、この上限に 2 秒を足した時間まで応答を待つ。Claude の `stop-poll` のフックは、この上限と long-poll の上限を足した時間まで待つ。
 登録済みの open な PR のうち `crossReview === null` だけを対象とし、開発者の回答を待つ判断事項（waiting）があるセッションには催促しない。推奨を仮に適用した判断事項（provisional）は自走中に残り続けるので、抑止の条件にしない。
 催促は Stop の generation に紐づけて返す。通常の通知キューには入れず、待機中の再取得完了やポーリングでは再判定しない。
 同じセッション、PR、head への配信はメモリー上で一度だけに制限し、セッション終了で記録を消す。本文に head SHA は含めず、現在の head を確かめて `cockpit_skip_review` に理由と渡すよう促す。
