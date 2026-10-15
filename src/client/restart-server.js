@@ -1,10 +1,22 @@
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { readSourceCommit } = require('../server/source-revision');
 const { setTimeout: sleep } = require('node:timers/promises');
 const { cockpitHomeFromOptions } = require('../server/identity');
-const { readServerInfo, serverIsHealthy, ensureServerRunning } = require('./server-connection');
+const { readServerInfo, serverIsHealthy, ensureServerRunning, requestFromServer } = require('./server-connection');
 
 const STORE_SETTLE_MS = 1000;
 
 async function restartServer(options = {}) {
+  const root = path.resolve(__dirname, '../..');
+  const expected = {
+    version: options.expectedVersion ?? JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version,
+    commit: await (options.readSourceCommit || readSourceCommit)(root),
+  };
+  const result = { result: 'ok', stoppedPid: null, pid: null, expected, running: null, commitVerified: false };
+  const fail = (classification, message) => {
+    throw Object.assign(new Error(message), { result: classification, details: { ...result, result: classification } });
+  };
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const readInfo = options.readInfo || readServerInfo;
   const healthy = options.serverIsHealthy || serverIsHealthy;
@@ -22,35 +34,77 @@ async function restartServer(options = {}) {
     try {
       kill(info.pid);
       stoppedPid = info.pid;
+      result.stoppedPid = stoppedPid;
     } catch (error) {
-      if (error.code !== 'ESRCH') throw error;
+      if (error.code !== 'ESRCH') fail('stop-timeout', `旧サーバーを停止できず、終了を確認できませんでした: ${error.message}`);
     }
     const deadline = now() + 15_000;
     while (true) {
       try { kill(info.pid, 0); }
       catch (error) {
         if (error.code === 'ESRCH') break;
-        throw error;
+        fail('stop-timeout', `旧サーバーの終了を確認できませんでした: ${error.message}`);
       }
-      if (now() >= deadline) throw new Error('常駐サーバーの終了を確認できませんでした。');
+      if (now() >= deadline) fail('stop-timeout', '旧サーバーの終了を確認できませんでした。');
       await wait(50);
     }
   }
-  const started = await ensure({ homeDir, fetchImpl: options.fetchImpl, now, deadline: now() + 15_000 });
-  if (!started) throw new Error('常駐サーバーを起動できませんでした。');
-  if (stoppedPid === null && info && started.pid === info.pid && started.startedAt === info.startedAt) {
-    throw new Error('動いている常駐サーバーを確認できなかったため、再起動していません。もう一度実行してください。');
+  let started;
+  try {
+    started = await ensure({ homeDir, fetchImpl: options.fetchImpl, now, deadline: now() + 15_000 });
+  } catch {
+    fail('start-failed', '常駐サーバーを起動できませんでした。');
   }
-  return { stoppedPid, pid: started.pid };
+  if (!started) fail('start-failed', '常駐サーバーを起動できませんでした。');
+  result.pid = started.pid;
+  if (info && started.pid === info.pid && started.startedAt === info.startedAt) {
+    fail('stale', '元と同じ起動の常駐サーバーが返されたため、再起動していません。もう一度実行してください。');
+  }
+  const response = await requestFromServer(started, '/health', { method: 'GET' }, {
+    fetchImpl: options.fetchImpl, now, deadline: now() + 1000,
+  });
+  const health = response.json;
+  if (!response.ok || !health) fail('start-failed', '起動後の常駐サーバーの health を期限内に取得できませんでした。');
+  result.running = { version: health.version ?? null, commit: health.commit ?? null, sourceState: health.sourceState ?? null };
+  if (health.app !== 'agent-cockpit' || health.pid !== started.pid || health.startedAt !== started.startedAt) {
+    fail('mismatch', '起動後の health の pid または startedAt、アプリ名が起動情報と一致しません。' + mismatchMessage(expected, result.running));
+  }
+  if (health.version !== expected.version || (expected.commit !== null && health.commit !== expected.commit)) {
+    fail('mismatch', mismatchMessage(expected, result.running));
+  }
+  result.commitVerified = expected.commit !== null;
+  return result;
+}
+
+function mismatchMessage(expected, running) {
+  return `別のチェックアウトから起動した常駐サーバーか、更新前のコードで動いている可能性があります。期待: 版 ${expected.version}、commit ${expected.commit ?? '不明'}。実際: 版 ${running.version ?? '不明'}、commit ${running.commit ?? '不明'}。`;
+}
+
+async function main(argv = process.argv.slice(2), options = {}) {
+  const log = options.log || console.log;
+  const logError = options.logError || console.error;
+  const json = argv.includes('--json');
+  try {
+    const result = await restartServer(options);
+    if (json) log(JSON.stringify(result));
+    else {
+      log(`停止した pid: ${result.stoppedPid ?? 'なし'}、起動後の pid: ${result.pid}`);
+      log(`起動した常駐サーバー: 版 ${result.running.version}、commit ${result.running.commit?.slice(0, 7) ?? '不明'}、sourceState ${result.running.sourceState ?? '不明'}`);
+      log(result.commitVerified ? '版とコミットが一致しました。' : '版は一致しましたが、commit を照合できませんでした。');
+    }
+    return 0;
+  } catch (error) {
+    if (json) log(JSON.stringify(error.details || {
+      result: 'start-failed', stoppedPid: null, pid: null,
+      expected: { version: null, commit: null }, running: null, commitVerified: false,
+    }));
+    else logError(`常駐サーバーの再起動に失敗しました: ${error.message}`);
+    return 1;
+  }
 }
 
 if (require.main === module) {
-  restartServer().then(({ stoppedPid, pid }) => {
-    console.log(`停止した pid: ${stoppedPid ?? 'なし'}、起動後の pid: ${pid}`);
-  }).catch((error) => {
-    console.error(`常駐サーバーの再起動に失敗しました: ${error.message}`);
-    process.exitCode = 1;
-  });
+  main().then(code => { process.exitCode = code; });
 }
 
-module.exports = { restartServer };
+module.exports = { restartServer, main };
