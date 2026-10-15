@@ -2065,6 +2065,37 @@ test('/plan はタスクと判断事項を記録し、読み取り用の要約�
   assert.deepEqual(context.decisions, [{ id: decision.id, title: '状態を選ぶ', state: 'provisional' }]);
 });
 
+test('/plan は作業中の完了条件を状態の取得に返す', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'criteria-doing';
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  runtime.state.syncSessionFiles([{ session_id: sessionId, cwd: 'C:\\project', name: '条件の作業中表示' }]);
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: `/api/sessions/${sessionId}/plan`, headers,
+    body: JSON.stringify({ kind: 'tasks', tasks: [{
+      title: '実装する', state: 'doing', criteria: [{ text: '状態を一覧へ返す', met: false, doing: true }],
+    }] }),
+  });
+  assert.equal(response.status, 200);
+
+  const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.deepEqual(state.sessions.find((session) => session.session_id === sessionId).tasks[0].criteria, [
+    { text: '状態を一覧へ返す', met: false, doing: true },
+  ]);
+});
+
+test('/plan は完了条件の doing に真偽値以外を拒む', async (t) => {
+  const runtime = await runningServer(t);
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/invalid-criteria-doing/plan',
+    body: JSON.stringify({ kind: 'tasks', tasks: [{
+      title: '実装する', state: 'doing', criteria: [{ text: '状態を確認する', met: false, doing: 'yes' }],
+    }] }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(response.status, 400);
+});
+
 test('/plan は同じ題を持つタスク一覧を拒む', async (t) => {
   const runtime = await runningServer(t);
   const response = await request(runtime.info.port, {

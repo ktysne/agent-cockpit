@@ -39,7 +39,7 @@ const REVIEW_SKIP_ERROR_MESSAGES = new Map([
 const TOOL_DEFINITIONS = [
   {
     name: 'cockpit_set_tasks',
-    description: 'タスクと完了条件の一覧をセッションに記録します。タスクの状態や完了条件が変わったときは、一覧全体を新しい内容に置き換えます。',
+    description: 'タスクと完了条件の一覧をセッションに記録します。タスクの状態や完了条件が変わったときは、一覧全体を新しい内容に置き換えます。完了条件は met が true なら達成、met が false で doing が true なら作業中として表示します。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -54,7 +54,7 @@ const TOOL_DEFINITIONS = [
                 type: 'array',
                 items: {
                   type: 'object',
-                  properties: { text: { type: 'string', maxLength: 2000 }, met: { type: 'boolean' } },
+                  properties: { text: { type: 'string', maxLength: 2000 }, met: { type: 'boolean' }, doing: { type: 'boolean' } },
                   required: ['text', 'met'],
                   additionalProperties: false,
                 },

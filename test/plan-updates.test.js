@@ -88,7 +88,7 @@ test('同じ tool_use_id が重複しても差分を重ねない', async t => {
 
 test('前後の空白を除いた題が同じなら完了条件を引き継ぐ', async t => {
   const { send, tasks, write } = await setup(t);
-  const criteria = [{ text: '確認できる', met: true }];
+  const criteria = [{ text: '確認できる', met: true, doing: true }];
   await write([{ title: '段階1 ', state: 'todo', criteria }]);
   await send(items(), 100);
   assert.deepEqual(tasks()[0].criteria, criteria);

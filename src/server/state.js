@@ -66,7 +66,8 @@ function validStoredPlan(plan) {
     (plan.provider === undefined || ['claude', 'codex'].includes(plan.provider)) &&
     plan.tasks.every((task) => isRecord(task) && typeof task.title === 'string' && task.title.length <= 200 &&
       ['todo', 'doing', 'done'].includes(task.state) && Array.isArray(task.criteria) &&
-      task.criteria.every((item) => isRecord(item) && typeof item.text === 'string' && typeof item.met === 'boolean') &&
+      task.criteria.every((item) => isRecord(item) && typeof item.text === 'string' && typeof item.met === 'boolean' &&
+        (item.doing === undefined || typeof item.doing === 'boolean')) &&
       (task.completedAt === undefined || validTimestamp(task.completedAt))) &&
     Array.isArray(plan.decisions) && plan.decisions.every((decision) => isRecord(decision) &&
       typeof decision.id === 'string' && typeof decision.title === 'string' && typeof decision.state === 'string' &&
@@ -286,7 +287,11 @@ function normalizeStore(value) {
       tasks: plan.tasks.map((task) => ({
         title: task.title,
         state: task.state,
-        criteria: task.criteria.map((item) => ({ text: item.text, met: item.met })),
+        criteria: task.criteria.map((item) => ({
+          text: item.text,
+          met: item.met,
+          ...(item.doing === true ? { doing: true } : {}),
+        })),
         ...(task.completedAt ? { completedAt: task.completedAt } : {}),
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
@@ -1763,7 +1768,11 @@ class DashboardState {
       tasks: plan.tasks.map((task) => ({
         title: task.title,
         state: task.state,
-        criteria: task.criteria.map((item) => ({ text: item.text, met: item.met })),
+        criteria: task.criteria.map((item) => ({
+          text: item.text,
+          met: item.met,
+          ...(item.doing === true ? { doing: true } : {}),
+        })),
         ...(task.completedAt ? { completedAt: task.completedAt } : {}),
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
@@ -3076,7 +3085,11 @@ class DashboardState {
     plan.tasks = tasks.map((task) => ({
       title: task.title,
       state: task.state,
-      criteria: task.criteria.map((criterion) => ({ text: criterion.text, met: criterion.met })),
+      criteria: task.criteria.map((criterion) => ({
+        text: criterion.text,
+        met: criterion.met,
+        ...(criterion.doing === true ? { doing: true } : {}),
+      })),
       ...(task.state === 'done' ? {
         completedAt: previousTasks.get(task.title)?.state === 'done'
           ? previousTasks.get(task.title).completedAt || previousUpdatedAt || updatedAt

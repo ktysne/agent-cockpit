@@ -4993,3 +4993,31 @@ test('完了条件が空のタスクは実画面とモックで件数と一覧�
     assert.equal(new Map(cssDeclarations(html, '.task-actions')).get('min-width'), 'calc(6em + 11px)');
   }
 });
+
+test('作業中の完了条件は実画面とモックで doing クラスを付け、達成済みを優先する', () => {
+  const element = (tagName, className = '', textContent = '') => ({
+    tagName, className, textContent, children: [], dataset: {}, append(...nodes) { this.children.push(...nodes); },
+  });
+  const context = pageContext(pageHtml, { element, badge: () => element('span'), appendContextTags() {},
+    pendingTaskCloseActions: new Map(), taskCloseActionsInFlight: new Set() });
+  vm.runInContext(functionSource(pageHtml, 'appendTaskItem'), context);
+  const mockContext = pageContext(mockHtml, { taskState: (session, task) => task.state,
+    closedTaskKey: () => 'key', pendingClosedTasks: new Map(), sessionTag: () => '', esc: text => text });
+  vm.runInContext(functionSource(mockHtml, 'taskItem'), mockContext);
+  const task = {
+    title: '実装する', state: 'doing', criteria: [
+      { text: '作業中の条件', met: false, doing: true },
+      { text: '達成済みの条件', met: true, doing: true },
+    ],
+  };
+  const root = element('ul');
+  context.appendTaskItem(root, task, {}, { session_id: 'session' });
+  const flatten = node => [node, ...node.children.flatMap(flatten)];
+  assert.deepEqual(flatten(root).filter(node => ['doing', 'met'].includes(node.className)).map(node => node.className), ['doing', 'met']);
+
+  const markup = mockContext.taskItem({}, {}, {
+    ...task, criteria: task.criteria.map(criterion => ({ ...criterion, t: criterion.text })),
+  }, false);
+  assert.match(markup, /<li class="doing">作業中の条件<\/li>/);
+  assert.match(markup, /<li class="met">達成済みの条件<\/li>/);
+});

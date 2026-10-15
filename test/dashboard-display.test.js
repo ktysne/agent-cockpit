@@ -102,6 +102,12 @@ test('モックに合わせた配色、札、タスク行を表示する', () =>
   assert.equal(Object.fromEntries(cssDeclarations(web, '.settings-dialog')).width, 'min(440px, calc(100vw - 32px))');
   assert.equal(Object.fromEntries(cssDeclarations(web, '.away-toggle'))['min-height'], '40px');
   assert.equal(Object.fromEntries(cssDeclarations(web, '.criteria-list li::marker')).content, '"・"');
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.criteria-list li.doing')).color, 'var(--text)');
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.criteria-list li.doing::marker')).content, '"→ "');
+  assert.deepEqual(Object.fromEntries(cssDeclarations(web, '.criteria-list li.doing')),
+    Object.fromEntries(cssDeclarations(mock, '.criteria li.doing')));
+  assert.deepEqual(Object.fromEntries(cssDeclarations(web, '.criteria-list li.doing::marker')),
+    Object.fromEntries(cssDeclarations(mock, '.criteria li.doing::marker')));
 
   const taskRowStyle = Object.fromEntries(cssDeclarations(web, '.task-item'));
   const taskTitleStyle = Object.fromEntries(cssDeclarations(web, '.task-title'));

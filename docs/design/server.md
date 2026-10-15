@@ -479,8 +479,10 @@ PostToolUse は `resolved` と回答内容、PostToolUseFailure は `withdrawn` 
 MCP で終えた判断事項は `finishedByToolUseId` を書き換えないので、終えた時刻より新しい時刻で、結び付いた別の呼び出しの開始が重複して届くと、waiting に戻りうる。
 サブエージェントの `agent_id` があるイベントは判断事項にしない。
 
-タスクは `[{title, state, criteria: [{text, met}]}]` の配列で持つ。
+タスクは `[{title, state, criteria: [{text, met, doing?}]}]` の配列で持つ。
 `state` は `todo`、`doing`、`done` のいずれかにする。
+完了条件の `doing` は省略可能な真偽値であり、`met` が true なら達成、`met` が false で `doing` が true なら作業中として表示する。
+保存時は `doing` が true の完了条件だけに `doing` を記録する。
 MCP の `cockpit_set_tasks` は配列全体を置き換え、成功時に `tasksUpdatedAt` を更新する。
 Claude のメインセッションの `PostToolUse` で `mcp__ccd_turn__update_plan` が届き、設定 `importAppTasks` がオンの場合も、`state.setTasks` で同じ一覧を置き換える。
 この設定は既定でオンであり、オフにするとアプリの一覧を取り込まず、タスクは `cockpit_set_tasks` で登録する。

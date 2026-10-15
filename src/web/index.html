@@ -226,8 +226,10 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .task-title { flex: 0 1 auto; min-width: 0; }
 .criteria-list { margin: 4px 0 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
 .criteria-list li.met { color: var(--ok); }
+.criteria-list li.doing { color: var(--text); }
 .criteria-list li::marker { content: "・"; }
 .criteria-list li.met::marker { content: "✓ "; }
+.criteria-list li.doing::marker { content: "→ "; }
 .empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
 .group-frame > .empty, .pr-repo-content > .empty, .pr-repo-content > .stack, .pr-repo-content > .merged-list { padding-inline: 0; }
 .error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
@@ -3622,7 +3624,7 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
   if (task.criteria.length) {
     const criteria = element('ul', 'criteria-list');
     for (const criterion of task.criteria) {
-      const row = element('li', criterion.met ? 'met' : '', criterion.text);
+      const row = element('li', criterion.met ? 'met' : criterion.doing ? 'doing' : '', criterion.text);
       criteria.append(row);
     }
     item.append(criteria);
