@@ -400,6 +400,41 @@ test('起動の上限を超えると古い起動を消し、読み出しは開�
   assert.deepEqual(data.runs.map(run => run.id), [runtime.diagnostics.run, '20200102T000000Z-1']);
 });
 
+test('一覧は件数と出どころを返し、変更のないファイルを再利用して削除後は読み直す', async t => {
+  const { runtime } = await startTestServer(t);
+  const runId = '20200103T000000Z-1';
+  const filePath = path.join(runtime.diagnostics.directory, `${runId}.1.jsonl`);
+  const firstText = JSON.stringify({ ts: 1, level: 'mark', tag: 'server', msg: 'server.start', data: { pid: 1 } }) + '\n';
+  await fs.writeFile(filePath, firstText);
+  const originalStat = await fs.stat(filePath);
+  const reads = [];
+  const readFile = runtime.diagnostics.readFile.bind(runtime.diagnostics);
+  runtime.diagnostics.readFile = async name => { reads.push(name); return readFile(name); };
+  const runReadCount = () => reads.filter(name => name === path.basename(filePath)).length;
+  const list = async () => jsonBody(await request(runtime.info.port, { path: '/api/diagnostics' }));
+  const initial = (await list()).runs.find(run => run.id === runId);
+  assert.equal(initial.count, 1);
+  assert.deepEqual(initial.sources, ['server']);
+  await list();
+  assert.equal(runReadCount(), 1);
+
+  await fs.appendFile(filePath, JSON.stringify({ ts: 2, level: 'mark', tag: 'hook', msg: 'server.stop', data: { pid: 2 } }) + '\n');
+  const appended = (await list()).runs.find(run => run.id === runId);
+  assert.equal(appended.count, 2);
+  assert.deepEqual(appended.sources.sort(), ['hook', 'server']);
+  assert.equal(runReadCount(), 2);
+
+  await fs.unlink(filePath);
+  assert.equal((await list()).runs.some(run => run.id === runId), false);
+  const replacement = firstText.replace('"tag":"server"', '"tag":"web"');
+  await fs.writeFile(filePath, replacement);
+  await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+  const recreated = (await list()).runs.find(run => run.id === runId);
+  assert.equal(recreated.count, 1);
+  assert.deepEqual(recreated.sources, ['web']);
+  assert.equal(runReadCount(), 3);
+});
+
 test('削除は ui の秘密値と同一 Origin を求め、経路を指定しても診断ログの外に触れない', async t => {
   const { runtime } = await startTestServer(t);
   const outside = path.join(runtime.homeDir, 'keep.jsonl');

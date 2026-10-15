@@ -59,6 +59,7 @@ class Diagnostics {
     this.segment = 0;
     this.lines = 0;
     this.queue = Promise.resolve();
+    this.fileSummaries = new Map();
     this.repeatWindowMs = repeatWindowMs;
     this.maxRepeatKeys = Math.max(1, maxRepeatKeys);
     this.repeated = new Map();
@@ -204,13 +205,27 @@ class Diagnostics {
   listRuns() {
     return this.enqueue(async () => {
       const files = await this.files();
-      const runs = new Map([[this.run, { id: this.run, startedAt: runStartedAt(this.run), count: 0, current: true }]]);
-      for (const file of files) {
-        if (!runs.has(file.run)) runs.set(file.run, { id: file.run, startedAt: runStartedAt(file.run), count: 0, current: false });
-        const entries = await this.readFile(file.name);
-        runs.get(file.run).count += entries.length;
+      const currentFiles = new Set(files.map(file => file.name));
+      for (const name of this.fileSummaries.keys()) {
+        if (!currentFiles.has(name)) this.fileSummaries.delete(name);
       }
-      return [...runs.values()].sort((a, b) => Number(b.current) - Number(a.current) || b.id.localeCompare(a.id));
+      const runs = new Map([[this.run, { id: this.run, startedAt: runStartedAt(this.run), count: 0, sources: new Set(), current: true }]]);
+      for (const file of files) {
+        if (!runs.has(file.run)) runs.set(file.run, { id: file.run, startedAt: runStartedAt(file.run), count: 0, sources: new Set(), current: false });
+        const stat = await fs.stat(path.join(this.directory, file.name));
+        let summary = this.fileSummaries.get(file.name);
+        if (!summary || summary.size !== stat.size || summary.mtimeMs !== stat.mtimeMs) {
+          const entries = await this.readFile(file.name);
+          summary = { size: stat.size, mtimeMs: stat.mtimeMs, count: entries.length,
+            sources: [...new Set(entries.map(entry => entry.tag))] };
+          this.fileSummaries.set(file.name, summary);
+        }
+        const run = runs.get(file.run);
+        run.count += summary.count;
+        for (const source of summary.sources) run.sources.add(source);
+      }
+      return [...runs.values()].map(run => ({ ...run, sources: [...run.sources] }))
+        .sort((a, b) => Number(b.current) - Number(a.current) || b.id.localeCompare(a.id));
     });
   }
 
