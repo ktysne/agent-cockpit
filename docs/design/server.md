@@ -489,7 +489,9 @@ Claude のメインセッションの `PostToolUse` で `mcp__ccd_turn__update_p
 両方が書く場合は後の書き込みを使い、保存形式と画面では出どころを分けない。
 取り込み中は、`cockpit_set_tasks` をアプリの一覧と同じ題で完了条件を足すときに使う。
 取り込みが無い CLI、Codex、サブエージェントでは `cockpit_set_tasks` で登録する。
-Codex の計画ツールは設定にかかわらず取り込まない。
+Codex のセッションは設定にかかわらず取り込まない。
+Codex 0.162 の exec と TUI には段階の一覧を書くツール(`update_plan`)が無く、計画に使えるのは目標の文 1 つと状態だけを持つゴールのツール(`create_goal`、`update_goal`)だけであり、タスクの一覧に対応しないためである。
+Codex デスクトップのセッションの記録にも、段階の一覧を書くツールの呼び出しは無い。
 Claude と Codex のどちらも、取り込みが無いときはタスク登録の指示と催促に `cockpit_set_tasks` だけを案内する。
 
 `update_plan` の `items` は 12 件、`content` は 200 文字までとし、状態は `pending`→`todo`、`in_progress`→`doing`、`completed`→`done` に対応させる。
