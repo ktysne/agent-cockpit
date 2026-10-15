@@ -3,7 +3,7 @@
   "scenario": "basic",
   "window": {
     "width": 850,
-    "height": 1200
+    "height": 1320
   },
   "theme": "dark",
   "integrations": {
@@ -30,6 +30,8 @@
         "settings.long-wait": ".settings-theme-row:has(#settings-long-wait-minutes)",
         "settings.idle": ".settings-theme-row:has(#settings-idle-hide-minutes)",
         "settings.away-wait": ".settings-theme-row:has(#settings-away-answer-wait-minutes)",
+        "settings.gh-concurrency": ".settings-theme-row:has(#settings-gh-concurrency-limit)",
+        "settings.import-app-tasks": ".settings-theme-row:has(#settings-import-app-tasks)",
         "settings.order": ".settings-section-order",
         "settings.manual": ".settings-manual-link",
         "settings.close": "#settings-close"
