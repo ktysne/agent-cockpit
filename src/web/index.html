@@ -1202,6 +1202,7 @@ let diagnosticsRefreshSequence = 0;
 let diagnosticsSelectionSequence = 0;
 let diagnosticsListLoading = false;
 let diagnosticsAllExportPending = false;
+let diagnosticDeletionGeneration = 0;
 let diagnosticRuns = [];
 let diagnosticDeleteScope = null;
 let diagnosticDeleteRunId = null;
@@ -1466,9 +1467,15 @@ document.getElementById('diagnostics-export-all').addEventListener('click', asyn
   diagnosticsAllExportPending = true;
   diagnosticsStatus.textContent = 'すべての起動の記録を読み込んでいます。';
   const runs = [...diagnosticRuns].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  const deletionGeneration = diagnosticDeletionGeneration;
   try {
     const loadedRuns = [];
     for (const run of runs) loadedRuns.push({ ...run, entries: await loadDiagnosticRun(run.id) });
+    // 取得の途中で削除が終わると、取得済みの分に削除した記録が残るため、書き出さない。
+    if (deletionGeneration !== diagnosticDeletionGeneration) {
+      diagnosticsStatus.textContent = '書き出しの途中で記録を削除したため、書き出しを取りやめました。もう一度「すべての起動を書き出す」を押してください。';
+      return;
+    }
     downloadDiagnosticText(loadedRuns, 'all');
     diagnosticsStatus.textContent = 'すべての起動を書き出しました。';
   } catch {
@@ -1518,7 +1525,8 @@ document.getElementById('diagnostics-delete-confirm').addEventListener('click', 
     return;
   } finally { confirmButton.disabled = false; }
   // 再取得に失敗しても、削除した記録をコピーや書き出しの対象に残さないため、先に手元から外す。
-  diagnosticRuns = scope === 'all' ? [] : diagnosticRuns.filter(run => run.id !== runId);
+  diagnosticDeletionGeneration += 1;
+  diagnosticRuns =scope === 'all' ? [] : diagnosticRuns.filter(run => run.id !== runId);
   refreshDiagnosticOptions();
   diagnosticDeleteScope = null;
   diagnosticDeleteRunId = null;

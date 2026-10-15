@@ -221,6 +221,29 @@ test('全起動の一部を取得できない場合は書き出さない', async
   assert.equal(button.disabled, false);
 });
 
+test('全起動の書き出しの途中で削除が終わると、取得済みの記録を書き出さない', async () => {
+  const current = { id: '20261013T000000Z-1', current: true, startedAt: '2026-10-13T00:00:00Z', count: 1, sources: ['server'] };
+  const previous = { id: '20261012T000000Z-1', current: false, startedAt: '2026-10-12T00:00:00Z', count: 1, sources: ['hook'] };
+  let respondToPrevious;
+  const { context, node, appended } = diagnosticPage({ runs: [current, previous], fetchImpl: async route => {
+    const runId = new URL(route, 'http://localhost').searchParams.get('run');
+    if (runId === null) return { ok: true, json: async () => ({ runs: [current, previous], version: '1.2.3' }) };
+    if (runId === previous.id) return new Promise(resolve => { respondToPrevious = resolve; });
+    return { ok: true, json: async () => ({ entries: [{ ts: 1, level: 'mark', tag: 'server', msg: 'server.start', data: {} }] }) };
+  } });
+  await context.refreshDiagnostics();
+  const button = node('diagnostics-export-all');
+  const exportRequest = button.listeners.click({ currentTarget: button });
+  await new Promise(resolve => setImmediate(resolve));
+  node('diagnostics-delete-all').listeners.click();
+  await node('diagnostics-delete-confirm').listeners.click();
+  respondToPrevious({ ok: true, json: async () => ({ entries: [{ ts: 2, level: 'info', tag: 'hook', msg: 'hook.input', data: {} }] }) });
+  await exportRequest;
+  assert.equal(appended.some(link => link.download === 'agent-cockpit-diagnostics-all.txt'), false);
+  assert.match(node('diagnostics-status').textContent, /書き出しを取りやめました/);
+  assert.equal(button.disabled, false);
+});
+
 test('出どころとレベルの絞り込みは mark と error を残し、silent は表示を空にする', () => {
   const context = vm.createContext({ diagnosticsLevelSelect: { value: 'error' }, diagnosticsSourceSelect: { value: 'server' },
     DIAGNOSTIC_LEVEL_ORDER: ['error', 'warn', 'info', 'debug'] });
