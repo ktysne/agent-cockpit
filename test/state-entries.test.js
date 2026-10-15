@@ -3,13 +3,13 @@ const assert = require('node:assert/strict');
 const { performance } = require('node:perf_hooks');
 const { DashboardState } = require('../src/server/state');
 
-function syntheticEvents() {
+function syntheticEvents(count = 10000) {
   const events = [];
   const add = (name, fields = {}) => events.push({
     session_id: 'compact', hook_event_name: name, hookAt: 1000 + events.length, ...fields,
   });
   add('SessionStart');
-  for (let turn = 0; events.length < 10000; turn++) {
+  for (let turn = 0; events.length < count; turn++) {
     add('UserPromptSubmit');
     if (turn === 0) {
       add('SubagentStart', { agent_id: 'worker', agent_type: 'Explore' });
@@ -23,7 +23,7 @@ function syntheticEvents() {
       add('Stop');
       add('PostToolUse', { tool_name: 'AskUserQuestion', tool_use_id: 'ask', hookAt: questionAt - 0.5, decisionResolution: { chosen: 'はい' } });
     }
-    for (let tool = 0; tool < 100 && events.length < 9999; tool++) {
+    for (let tool = 0; tool < 100 && events.length < count - 1; tool++) {
       const fields = { tool_name: 'Read', tool_use_id: `tool-${turn}-${tool}` };
       const preAt = 1000 + events.length;
       if (tool === 0) {
@@ -36,12 +36,13 @@ function syntheticEvents() {
     }
     add('Stop');
   }
-  return events.slice(0, 10000);
+  return events.slice(0, count);
 }
 
-test('遅延した開始と質問の完了を含む一万イベントの表示が畳み込み後も全件の再構築と一致する', () => {
+// 検証はイベントごとに全件から組み立て直すので、件数の 2 乗で遅くなる。畳み込みが 2 回起きる 4,000 件に抑える。
+test('遅延した開始と質問の完了を含む四千イベントの表示が畳み込み後も全件の再構築と一致する', () => {
   const state = new DashboardState({ verifyEntries: true });
-  for (const event of syntheticEvents()) {
+  for (const event of syntheticEvents(4000)) {
     state.addEvent(event);
     state.wasPullRequestCreate('compact', event.tool_use_id);
     state.wasPullRequestRefreshCommand('compact', event.tool_use_id);
