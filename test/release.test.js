@@ -375,10 +375,39 @@ test('report は版とタグのコミットが一致する稼働中サーバー�
   const info = { port: 47821, pid: 123, startedAt: 'now' };
   await main(['report', 'v1.0.2'], { log: line => lines.push(line),
     readServerInfo: async () => info,
-    fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD }) }),
+    fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD, sourceState: 'release' }) }),
     execFileSync(file, args) { assert.deepEqual(args, ['rev-parse', 'v1.0.2^{commit}']); return HEAD; },
   });
   assert.deepEqual(lines, ['公開したバージョン: v1.0.2', '手元の常駐サーバーは、公開したバージョンで動いています。']);
+});
+
+test('report は起動時に未コミットの変更があれば同じコードか確かめられないと案内する', async () => {
+  const lines = [];
+  const info = { port: 47821, pid: 123, startedAt: 'now' };
+  await main(['report', 'v1.0.2'], { log: line => lines.push(line), readServerInfo: async () => info,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD, sourceState: 'dirty' }) }),
+    execFileSync: () => HEAD,
+  });
+  assert.deepEqual(lines, [
+    '公開したバージョン: v1.0.2',
+    '手元の常駐サーバーは公開したバージョンのコミットで動いていますが、起動したときに未コミットの変更があったため、公開したバージョンと同じコードかは確かめられませんでした。',
+  ]);
+});
+
+test('report は release と確認できないソース状態では同じコードか確かめられないと案内する', async () => {
+  for (const sourceState of ['diverged', 'unknown', 'pending', undefined]) {
+    const lines = [];
+    const info = { port: 47821, pid: 123, startedAt: 'now' };
+    await main(['report', 'v1.0.2'], { log: line => lines.push(line), readServerInfo: async () => info,
+      fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD, ...(sourceState === undefined ? {} : { sourceState }) }) }),
+      sourceStateTimeoutMs: 0,
+      execFileSync: () => HEAD,
+    });
+    assert.deepEqual(lines, [
+      '公開したバージョン: v1.0.2',
+      '手元の常駐サーバーは公開したバージョンのコミットで動いていますが、公開したバージョンと同じコードかは確かめられませんでした。常駐サーバーを再起動すると確かめ直せます。',
+    ]);
+  }
 });
 
 test('report は版またはコミットが違うサーバーを切り替えず再起動を案内する', async () => {
@@ -400,7 +429,7 @@ test('report は公開したバージョンと手元の常駐サーバーを照�
   const lines = [];
   const info = { port: 47821, pid: 123, startedAt: 'now' };
   await main(['report', 'v1.0.2'], { log: line => lines.push(line), readServerInfo: async () => info,
-    fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD }) }),
+    fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD, sourceState: 'release' }) }),
     execFileSync: () => { throw new Error('tag unavailable'); },
   });
   assert.deepEqual(lines, [

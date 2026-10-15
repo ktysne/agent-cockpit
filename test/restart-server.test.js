@@ -9,7 +9,7 @@ const { restartServer, main } = require('../src/client/restart-server');
 const commit = 'a'.repeat(40);
 const info = { pid: 123, port: 47821, startedAt: '2026-10-14T00:00:00.000Z' };
 const started = { ...info, pid: 456, startedAt: '2026-10-15T00:00:00.000Z' };
-const running = { version: '1.4.0', commit, sourceState: 'pending' };
+const running = { version: '1.4.0', commit, sourceState: 'release' };
 const missingProcess = () => Object.assign(new Error('gone'), { code: 'ESRCH' });
 const health = body => async () => ({ ok: true, json: async () => body });
 
@@ -36,7 +36,7 @@ test('停止を待ってから起動し、版とコミットと起動情報が�
     ensureServerRunning: async value => { assert.equal(value.homeDir, 'test-home'); steps.push('start'); return started; },
   }));
   assert.deepEqual(result, { result: 'ok', stoppedPid: 123, pid: 456,
-    expected: { version: running.version, commit }, running, commitVerified: true });
+    expected: { version: running.version, commit }, running, commitVerified: true, releaseVerified: true });
   assert.deepEqual(steps, ['wait', 'stop', 'wait', 'start']);
 });
 
@@ -159,6 +159,7 @@ test('--json は成功と失敗を一行の JSON だけで返し終了コード�
   for (const overrides of [{}, { readSourceCommit: async () => null },
     { fetchImpl: health({ app: 'agent-cockpit', ...started, ...running, version: 'old' }) },
     { ensureServerRunning: async () => null }, { ensureServerRunning: async () => info },
+    { readSourceCommit: async () => { throw new Error('expected unavailable'); } },
     { kill() {}, now: (() => { let time = 0; return () => time += 15_000; })() }]) {
     const lines = [];
     const code = await main(['--json'], options({ ...overrides,
@@ -167,7 +168,8 @@ test('--json は成功と失敗を一行の JSON だけで返し終了コード�
     assert.equal(lines.length, 1);
     const result = JSON.parse(lines[0]);
     assert.equal(code, result.result === 'ok' ? 0 : 1);
-    assert.deepEqual(Object.keys(result), ['result', 'stoppedPid', 'pid', 'expected', 'running', 'commitVerified']);
+    assert.deepEqual(Object.keys(result), ['result', 'stoppedPid', 'pid', 'expected', 'running', 'commitVerified', 'releaseVerified']);
+    if (result.result !== 'ok') assert.equal(result.releaseVerified, false);
   }
 });
 

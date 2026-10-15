@@ -107,11 +107,20 @@ Windows では `process.kill(pid)` は対象を終了させるため、停止の
 このスクリプトのチェックアウトの `package.json` を JSON として読み取った version と、`readSourceCommit` で得た commit を期待値にする。
 バージョンが無い応答や、バージョンまたは取得できた期待の commit が違う応答は `mismatch` とし、このフォルダーのコードで動いていないことを伝えて、別のフォルダーの常駐サーバーを確かめるよう案内する。
 期待の commit を取得できなければ、バージョンだけを照合して成功にし、更新後のコードで動いているか確かめられないことを明示する。
+更新用の再起動では sourceState が pending の間、最大 10 秒まで 1 秒以内の `/health` 要求で取り直す。
+取り直しで app、pid、startedAt のいずれかが起動情報と合わなくなった場合は、その応答を `mismatch` とする。
+sourceState が無い応答は取り直さず、期限内に確定しない場合は最後の応答を返して `releaseVerified` を false にする。
+取り直し中に `/health` を取得できなくなった場合も最後の応答を返す。一時的な通信失敗で起動確認全体を失敗にしないためである。
+`releaseVerified` は `result` が `ok`、`commitVerified` が true、sourceState が release の場合だけ true とする。
 成功時は再起動したこととバージョンを出し、commit が未照合なら更新後のコードで動いているか確かめられないことを添える。
 失敗は `stop-timeout`（旧サーバーの終了未確認）、`start-failed`（起動失敗または起動後の health 取得失敗）、`stale`（旧起動の再利用）、`mismatch`（起動情報、版、コミットの不一致）に分ける。
-`--json` は人向けの文を付けずに `{result, stoppedPid, pid, expected: {version, commit}, running: {version, commit, sourceState} | null, commitVerified}` を 1 行で出し、失敗時は終了コード 1 を返す。
+`--json` は人向けの文を付けずに `{result, stoppedPid, pid, expected: {version, commit}, running: {version, commit, sourceState} | null, commitVerified, releaseVerified}` を 1 行で出し、失敗時は終了コード 1 を返す。
 `restartServer` も成功時には同じ形を返し、失敗時の例外には分類を `result`、同じ形の情報を `details` に持たせる。
-リリースの `report` は公開したバージョンと手元の常駐サーバーの状態を案内する。バージョンとタグの実体コミットが一致するときは公開したバージョンで動いていると伝え、一致しないときは稼働中のバージョンと再起動の案内を出す。稼働していない場合と照合できない場合も、それぞれの状態を知らせる。
+更新用の再起動は `releaseVerified` を返すために sourceState の確定を待つが、タスクトレイの `ensure-server.js --verify` は待たない。
+リリースの `report` は server.json と `/health` の起動識別をタグの実体コミット取得前に確かめる。
+公開したバージョンと手元の常駐サーバーの状態を案内し、バージョンとタグの実体コミットが一致して `releaseVerified` が true のときは公開したバージョンで動いていると伝える。
+sourceState が dirty の場合は起動時に未コミットの変更があったことを伝え、その他の sourceState で同じコードと確認できない場合は常駐サーバーの再起動を案内する。
+バージョンかコミットが一致しないときは稼働中のバージョンと再起動の案内を出す。稼働していない場合と照合できない場合も、それぞれの状態を知らせる。
 この案内はサーバーを停止も再起動もせず、照合できなくてもリリースの成否を変えない。
 これは [常駐サーバーの再起動の判断](../handover/2026-10-02.md#決定済みの判断)と同じく、常駐サーバー自身から代わりを起動せず、画面に再起動の口を増やさない構成である。
 トレイの再起動は、確認ダイアログの前に `server.json` の PID が生存し、コマンドラインを読める場合に、`src\server\server.js` の起動元フォルダーを調べる。

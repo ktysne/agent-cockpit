@@ -309,16 +309,40 @@ async function reportRelease(input, dependencies = {}) {
     log(`公開したバージョン: ${tag}`);
     const { cockpitHomeFromOptions } = require('../src/server/identity');
     const { readServerInfo, requestFromServer } = require('../src/client/server-connection');
+    const { verifyServer } = require('../src/client/server-verification');
     const info = await (dependencies.readServerInfo ?? readServerInfo)(cockpitHomeFromOptions(dependencies));
-    const response = await requestFromServer(info, '/health', { method: 'GET' }, { fetchImpl: dependencies.fetchImpl });
+    const request = dependencies.requestFromServer ?? requestFromServer;
+    const now = dependencies.now ?? Date.now;
+    const response = await request(info, '/health', { method: 'GET' }, {
+      fetchImpl: dependencies.fetchImpl, now, deadline: now() + 1000,
+    });
     const health = response.json;
-    if (!response.ok || health?.app !== 'agent-cockpit' || health.pid !== info.pid || health.startedAt !== info.startedAt) {
+    if (!response.ok || !health || health.app !== 'agent-cockpit' || health.pid !== info.pid || health.startedAt !== info.startedAt) {
       log('手元の常駐サーバーは動いていません。');
       return;
     }
     const commit = gitRunner(dependencies)(['rev-parse', `${tag}^{commit}`]).trim();
-    if (health.version === version && health.commit === commit) log('手元の常駐サーバーは、公開したバージョンで動いています。');
-    else log(`手元の常駐サーバーはバージョン ${health.version ?? '不明'} で動いています。公開したバージョンで動かすには、常駐サーバーを再起動してください。`);
+    const verification = await verifyServer(info, {
+      expected: { version, commit },
+      fetchImpl: dependencies.fetchImpl,
+      now,
+      sleep: dependencies.sleep,
+      settleSourceState: true,
+      sourceStateTimeoutMs: dependencies.sourceStateTimeoutMs,
+      sourceStateIntervalMs: dependencies.sourceStateIntervalMs,
+      requestFromServer: request,
+    });
+    if (verification.result === 'start-failed' || !verification.identityMatches) {
+      log('手元の常駐サーバーは動いていません。');
+    } else if (verification.result === 'mismatch') {
+      log(`手元の常駐サーバーはバージョン ${verification.running.version ?? '不明'} で動いています。公開したバージョンで動かすには、常駐サーバーを再起動してください。`);
+    } else if (verification.releaseVerified) {
+      log('手元の常駐サーバーは、公開したバージョンで動いています。');
+    } else if (verification.running.sourceState === 'dirty') {
+      log('手元の常駐サーバーは公開したバージョンのコミットで動いていますが、起動したときに未コミットの変更があったため、公開したバージョンと同じコードかは確かめられませんでした。');
+    } else {
+      log('手元の常駐サーバーは公開したバージョンのコミットで動いていますが、公開したバージョンと同じコードかは確かめられませんでした。常駐サーバーを再起動すると確かめ直せます。');
+    }
   } catch (error) {
     log('公開したバージョンと手元の常駐サーバーを照合できませんでした: ' + error.message);
   }

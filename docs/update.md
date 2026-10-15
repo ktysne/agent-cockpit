@@ -110,14 +110,16 @@ cp skills/codex/agent-cockpit/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/agent
 node src/client/restart-server.js --json
 ```
 
-コマンドが終了コード `0` で、出力 JSON の `result` が `ok`、`commitVerified` が `true` であることを確かめます。
+コマンドが終了コード `0` で、出力 JSON の `result` が `ok`、`commitVerified` と `releaseVerified` が `true` であることを確かめます。
 さらに、`running.version` が指定されたバージョン（先頭の `v` を除く）と一致し、`running.commit` が更新後の `HEAD` と一致することを更新完了の条件にします。
 `commitVerified` が `false` の成功は、更新後のコードで動いているかを確認できていないため、更新完了とせず利用者に知らせます。
+`commitVerified` が `true` でも `releaseVerified` が `false` なら、`running.sourceState` を利用者に伝えて更新完了にしません。
+`dirty` は起動したときに未コミットの変更があった状態、`diverged` は手元のタグ `vX.Y.Z` が別のコミットを指している状態、`unknown` は手元にタグが無いか Git で確かめられなかった状態、`pending` は期限内に確定しなかった状態です。
 `mismatch` などの失敗は、コマンドの出力を利用者に伝えて止めます。
 更新通知は外部のタグ確認の結果なので、通知が消えたことを稼働中のコードの照合には使いません。
 
 利用者への報告は、次の 3 つに分けます。
 
-- **常駐サーバー**：照合したバージョンとコミット、および照合の結果を報告します。
+- **常駐サーバー**：照合したバージョンとコミット、ソースの状態、および照合の結果を報告します。
 - **画面**：利用者に、ダッシュボードのタイトルのバージョンが更新先と一致し、再起動待ちの帯が出ていないことを確かめてもらいます。開いたままの画面は自動で読み込み直しますが、書きかけの回答があると案内が出ることも伝えます。画面を見ていない AI は画面の更新完了を報告しません。
 - **連携**：Claude Code と Codex の実行中のセッションは古い MCP とフックの読み込みを使っているため、利用者にセッションを開き直してもらいます。
