@@ -21,7 +21,7 @@ async function temporaryHome(testContext, withServerInfo = true) {
 }
 
 function awayResponse(enabled = true, since = Date.parse('2026-10-02T01:02:03.000Z')) {
-  return new Response(JSON.stringify({ enabled, since: enabled ? since : null }), { status: 200 });
+  return new Response(JSON.stringify({ enabled, since: enabled ? since : null, importAppTasks: true }), { status: 200 });
 }
 
 test('離席中の AskUserQuestion は常駐サーバーの回答待ちに登録し、期限後の JSON を返す', async (t) => {
@@ -115,7 +115,7 @@ test('server.json が無くてもメインセッションへタスク登録の�
     homeDir,
     fetchImpl: async () => { fetchCount += 1; return awayResponse(); },
   });
-  assert.equal(result.hookSpecificOutput.additionalContext, TASK_CONTEXT);
+  assert.equal(result.hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
   assert.equal(fetchCount, 0);
 });
 
@@ -134,13 +134,13 @@ test('取り込み設定がオフなら Claude に cockpit_set_tasks だけで�
   assert.equal(result.hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
 });
 
-test('取り込み設定が真偽値でない応答では既定どおり Claude の一覧取り込みを案内する', async (t) => {
+test('取り込み設定が真偽値でない応答では直接のタスク登録を案内する', async (t) => {
   const homeDir = await temporaryHome(t);
   const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit' }, {
     homeDir,
     fetchImpl: async () => new Response(JSON.stringify({ enabled: false, since: null, importAppTasks: 'false' })),
   });
-  assert.equal(result.hookSpecificOutput.additionalContext, TASK_CONTEXT);
+  assert.equal(result.hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
 });
 
 test('サブエージェントの UserPromptSubmit にはタスク登録の決まりを足さない', async (t) => {
@@ -230,7 +230,7 @@ test('常駐サーバーの応答が無くてもタスク登録の決まりは�
       signal.addEventListener('abort', () => { aborted = true; }, { once: true });
     }),
   });
-  assert.equal(result.hookSpecificOutput.additionalContext, TASK_CONTEXT);
+  assert.equal(result.hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
   assert.equal(aborted, true);
   assert.ok(performance.now() - startedAt < 1300);
 });

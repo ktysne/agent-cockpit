@@ -97,7 +97,7 @@ class TaskNudges {
     session.lastNudgeAt = now;
     if (subagentReportIsStale) session.nudgedSubagentStopAt = session.lastSubagentStopAt;
     const setTasksOnly = this.state.providerForSession?.(sessionId) === 'codex' ||
-      this.state.getDisplayPreferences?.()?.importAppTasks === false;
+      this.state.getDisplayPreferences?.()?.importAppTasks !== true;
     if (subagentReportIsStale) return setTasksOnly ? SET_TASKS_SUBAGENT_REMINDER : SUBAGENT_REMINDER;
     return setTasksOnly ? SET_TASKS_NO_TASKS_REMINDER : NO_TASKS_REMINDER;
   }

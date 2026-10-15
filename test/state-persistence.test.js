@@ -164,7 +164,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
   assert.deepEqual(session.decisions[0].answer, answer);
   assert.equal(session.decisions[0].awaitingAnswerUntil, undefined);
   assert.equal(session.hidden, true);
-  assert.deepEqual(snapshot.display, { diagnosticsLevel: 'info', ...display });
+  assert.deepEqual(snapshot.display, { diagnosticsLevel: 'info', ...display, importAppTasksAsked: true });
   assert.deepEqual(restored.crossReviewSkip('example', 'project', 47), reviewSkip);
   const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
   assert.deepEqual(saved.crossReviewSkips, [reviewSkip]);
@@ -1391,4 +1391,36 @@ test('自動の題の印は保存と復元で残り、印の無い既存タス�
   const tasks = restored.planFor('persist-auto-title').tasks;
   assert.equal(tasks[0].autoTitle, undefined);
   assert.equal(tasks[1].autoTitle, true);
+});
+
+
+test('新規の状態ではアプリの一覧を取り込まず確認を待つ', () => {
+  const state = new DashboardState();
+  assert.equal(state.getDisplayPreferences().importAppTasks, false);
+  assert.equal(state.getDisplayPreferences().importAppTasksAsked, false);
+});
+
+test('確認済みの印が無い保存値はオンでもオフとして読み込む', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = new DashboardState({ homeDir });
+  state.patchDisplayPreferences({ importAppTasks: true });
+  await state.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  delete saved.display.importAppTasksAsked;
+  await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify(saved));
+  const restored = await DashboardState.load(homeDir);
+  assert.equal(restored.getDisplayPreferences().importAppTasks, false);
+  assert.equal(restored.getDisplayPreferences().importAppTasksAsked, false);
+});
+
+test('取り込みだけの更新でオンになり確認済みとして復元する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = new DashboardState({ homeDir });
+  const display = state.patchDisplayPreferences({ importAppTasks: true });
+  assert.equal(display.importAppTasks, true);
+  assert.equal(display.importAppTasksAsked, true);
+  await state.flushPersistence();
+  const restored = await DashboardState.load(homeDir);
+  assert.equal(restored.getDisplayPreferences().importAppTasks, true);
+  assert.equal(restored.getDisplayPreferences().importAppTasksAsked, true);
 });

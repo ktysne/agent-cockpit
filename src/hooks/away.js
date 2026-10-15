@@ -31,7 +31,7 @@ function outputForAway(input, away, snapshot = null, provider = 'claude') {
   }
   if (!input.agent_id && ['SessionStart', 'UserPromptSubmit'].includes(hookEventName)) {
     const importAppTasks = typeof away.importAppTasks === 'boolean' ? away.importAppTasks
-      : typeof snapshot?.importAppTasks === 'boolean' ? snapshot.importAppTasks : true;
+      : typeof snapshot?.importAppTasks === 'boolean' ? snapshot.importAppTasks : false;
     context.push(provider === 'codex' || !importAppTasks ? SET_TASKS_CONTEXT : TASK_CONTEXT);
   }
   if (away.enabled === true && Number.isFinite(away.since)) {

@@ -251,6 +251,7 @@ PostToolUse の出力全文は送らない。
 - タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
 - イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、離席中の `AskUserQuestion` から作る判断事項、それらへの回答記録、完了タスク、外したセッション、削除時刻の `deletedSessions`、表示設定、クロスレビュー不要記録は `store.json` に保存する。判断事項の質問、状態、作成・更新・解決時刻、解決内容は `plans.decisions` に、回答と配信時刻は `decisionLifecycles` に置く。離席中の質問の `tool_use_id` と判断事項 ID の対応は `askDecisionBindings` に置く。この項目が無い旧形式の `store.json` は、結び付きが無いものとして読み込む。`crossReviewSkips` が無い旧形式は空として読み込む。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。`display.mode` は `product` または `kind` で、初期値は `kind` とする。`display.sectionOrder` は 5 種類のセクションを表示する順で、未知の値や重複を除いて `sinceSeen`、`judgment`、`prs`、`tasks`、`now` の順で不足分を補う。`display.hideFinished` は完了済みの情報を隠す設定で、既定は `true` で、古い保存ファイルでも `true` として補う。`display.mergeableCondition` は `operation`、`ci`、`cross-review` のいずれかで、旧形式では既定の `cross-review` として補う。テーマと「前回見てから」の表示モードはブラウザーごとの `localStorage` に残す。「前回見てから」の初期値は「離席中のみ」とする。離席状態と期間は `{enabled, since, periods}` として `away.json` に保存し、起動時に読む。期間は `{start, end}` の数値ミリ秒で、離席中の期間の `end` は `null` にする。旧形式の `{enabled, since}` は、離席中なら `since` から現在まで、離席中でなければ期間なしとして読む。既読済みの期間、14 日の保持期限を過ぎた期間、50 件を超える古い期間を整理する。期間の記録だけが壊れているか食い違うときは、旧形式と同じく `enabled` と `since` から期間を作り直す。`enabled` と `since` が壊れているときは離席中ではない状態として扱う。
 - 旧 `store.json` に残る `display.mergeAfterReviewDefault` は読み込み時に無視する。`mergeReservations` は登録セッション、リポジトリ、PR、方式、ブランチ削除の有無、予約時刻を `store.json` に保存する。旧 GitHub 自動マージ形式は予約として復元せず、そのまま捨てる。
+- 表示設定 `display.importAppTasks` と `display.importAppTasksAsked` は真偽値で、既定はともに false とする。保存値の互換補正と確認の扱いは「タスクと判断事項」に記す。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 10 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 10 分へ戻し、書き込み時は拒む。
 - 表示設定 `display.awayAnswerWaitMinutes` は離席中の質問への回答を待つ時間で、既定は 3 分、範囲は 1〜30 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 3 分へ戻し、書き込み時は拒む。
 - `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, routing, integrations, uiVersion}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`GET /api/tray` はトレイ用に `{permissionKeys, decisionKeys, awayEnabled}` を返し、PR や「前回見てから」の情報を計算しない。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
@@ -484,7 +485,13 @@ MCP で終えた判断事項は `finishedByToolUseId` を書き換えないの�
 完了条件の `doing` は省略可能な真偽値であり、`met` が true なら達成、`met` が false で `doing` が true なら作業中として表示する。
 保存時は `doing` が true の完了条件だけに `doing` を記録する。
 Claude のメインセッションで設定 `importAppTasks` がオンのとき、アプリの 1 つの一覧を cockpit の 1 つのタスクとし、各項目をその完了条件として取り込む。
-設定は既定でオンであり、Codex、サブエージェント、オフのときは取り込まない。
+設定は既定でオフであり、明示的にオンのときだけ取り込む。
+Codex、サブエージェント、オフのときは取り込まない。
+表示設定には真偽値 `importAppTasksAsked`（既定 false）を保存する。
+この値が true でない保存値は、`importAppTasks: true` があってもオフとして読む。
+ダッシュボードは未確認ならページを開いている間に一度だけ確認ダイアログを出し、Esc で閉じた場合も「取り込まない」として保存する。
+確認への回答や設定画面からの切り替えで `importAppTasks` を更新すると、正規化する前に `importAppTasksAsked` を true にする。
+あとから設定画面で取り込みの有無を変更できる。
 取り込みが無い場合の `cockpit_set_tasks` は配列全体を置き換える。
 Codex には取り込める段階の一覧が無いため、設定にかかわらず `cockpit_set_tasks` で登録する。
 

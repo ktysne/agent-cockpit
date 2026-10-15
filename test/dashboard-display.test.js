@@ -363,7 +363,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     displayPreferenceSaveStates: new Map(),
     readDisplayPreferences: () => {
       legacyReads += 1;
-      return { mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [], sectionOrder: ['now', 'judgment', 'tasks', 'sinceSeen', 'prs'] };
+      return { mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [], sectionOrder: ['now', 'judgment', 'tasks', 'sinceSeen', 'prs'], importAppTasks: false, importAppTasksAsked: false };
     },
     normalizeDisplayPreferences: (value) => value,
     renderSectionOrder() {},
@@ -371,6 +371,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     settleDisplaySaves() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
+    maybeAskImportAppTasks() {},
   });
   vm.runInContext(`${sync}\nthis.syncDisplayPreferences = syncDisplayPreferences;`, context);
   await context.syncDisplayPreferences(null);
@@ -394,6 +395,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     settleDisplaySaves() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
+    maybeAskImportAppTasks() {},
   });
   vm.runInContext(`${sync}\nthis.syncDisplayPreferences = syncDisplayPreferences;`, readyContext);
   await readyContext.syncDisplayPreferences({ mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'] });
@@ -443,7 +445,8 @@ test('画面は未設定や不正なサーバー値を表示設定の既定値�
     awayAnswerWaitMinutes: 3,
     idleHideMinutes: 10,
     hideFinished: true,
-    importAppTasks: true,
+    importAppTasks: false,
+    importAppTasksAsked: false,
     diagnosticsLevel: 'info',
     mergeableCondition: 'cross-review',
   });
