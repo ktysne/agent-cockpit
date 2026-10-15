@@ -13,7 +13,7 @@ function createHookRoutes(ctx) {
   const { state, answerDelivery, claudeHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
 
   function refreshPullRequestsAfterCommand(event) {
-    const registrations = state.pullRequestRegistrations();
+    const registrations = state.readOnlyPullRequestRegistrations();
     let scopedRegistrations = null;
     if (event.refreshScopeUnknown) {
       // 対象を 1 つに決められないコマンドは、下の全体の取り直しへ回す。
