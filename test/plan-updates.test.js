@@ -156,6 +156,29 @@ test('アプリの一覧を取り込んでいないセッションの 1 件の s
   assert.deepEqual(tasks().map(task => `${task.title}:${task.state}`), ['B:doing']);
 });
 
+test('取り込みの印が無い保存済みの複数タスクは最初の items で一覧ごと置き換える', async t => {
+  const { state, send, tasks } = await setup(t);
+  state.setTasks('plan-session', [
+    { title: '旧1', state: 'done', criteria: [] },
+    { title: '旧2', state: 'doing', criteria: [] },
+    { title: '旧3', state: 'todo', criteria: [] },
+  ]);
+  await send(items());
+  assert.equal(tasks().length, 1);
+  assert.ok(!tasks()[0].title.startsWith('旧'));
+  assert.deepEqual(tasks()[0].criteria, criteria());
+  await send(items(['completed', 'in_progress', 'pending']));
+  assert.equal(tasks().length, 1);
+});
+
+test('取り込みの印が無い題だけのタスク 1 件は最初の items の題として引き継ぐ', async t => {
+  const { state, send, tasks } = await setup(t);
+  state.setTasks('plan-session', [{ title: '依頼', state: 'doing', criteria: [] }]);
+  await send(items());
+  assert.deepEqual(tasks().map(task => task.title), ['依頼']);
+  assert.deepEqual(tasks()[0].criteria, criteria());
+});
+
 test('一覧を置き換えた後の差分は置き換えた完了条件から進める', async t => {
   const { send, write, tasks } = await setup(t);
   await send({ items: [{ content: '古い段階', status: 'in_progress' }] });
