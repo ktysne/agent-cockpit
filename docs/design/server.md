@@ -79,7 +79,8 @@ git は対話を無効にし、15 秒の期限と 1MB の出力上限を設け�
 
 起動時の版は `/api/state` の `runtime: {version, commit, sourceState, startedAt}` で渡す。
 互換のため `appVersion` も残す。
-画面のタイトルは `v1.4.0` を基本とし、sourceState が release 以外で commit があれば `v1.4.0+c933f60` の形にする。
+画面のタイトルは `v1.4.0` の形で版だけを出し、commit は出さない。commit は利用者が読む情報ではないためである。
+診断の記録と再起動待ちの帯は、sourceState が release 以外で commit があれば `v1.4.0+c933f60` の形にする。
 version が無ければ名前だけにする。
 runtime を返さない旧サーバーでは appVersion を使う。
 デモの常駐サーバーは `appVersion` を `null` にし、commit も読まずに版を出さない。マニュアルと紹介ページの画像が、版を上げるたびに変わらないためである。
