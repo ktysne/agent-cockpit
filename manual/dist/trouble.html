@@ -125,6 +125,7 @@
         <li><a href="#trouble-answer">回答がセッションに届かない</a></li>
         <li><a href="#trouble-settings">設定が保存されない、戻ってしまう</a></li>
         <li><a href="#trouble-restart">「常駐サーバーを再起動すると反映されます」と出た</a></li>
+        <li><a href="#trouble-other-checkout">別のフォルダーの agent-cockpit の常駐サーバーが動いている</a></li>
         <li><a href="#trouble-reload">「画面が新しくなりました」と出た</a></li>
         <li><a href="#trouble-tray">タスクトレイが動かない、通知が出ない</a></li>
         <li><a href="#trouble-diagnostics">不具合を調べるための記録</a></li></ol>
@@ -251,6 +252,12 @@
   常駐サーバーは起動したときのファイルで動き続けるので、再起動するまで、画面も機能も更新前のままです。
   <a href="tray.html#tray-restart">常駐サーバーを再起動する</a> と、表示が消えます。</p>
 
+  <h2 id="trouble-other-checkout">別のフォルダーの agent-cockpit の常駐サーバーが動いている</h2>
+  <p>再起動の通知に別のフォルダーが表示されたときは、そのフォルダーから起動した常駐サーバーが動いています。
+  フックの登録先が別のフォルダーを指しているか、そのフォルダーのタスクトレイから常駐サーバーが起動した可能性があります。
+  通知に表示されたフォルダーのタスクトレイから再起動してください。
+  今使いたいフォルダーが別にある場合は、フックの登録先をそのフォルダーに合わせてから、セッションを開き直してください(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>)。</p>
+
   <h2 id="trouble-reload">「画面が新しくなりました」と出た</h2>
   <p>画面の上に <span class="ui">画面が新しくなりました。この画面からは送信できないので、書きかけの回答を控えてから読み込み直してください。</span> と出たときです。
   常駐サーバーを再起動して、配信される画面の版が変わったときに出ます。
@@ -283,6 +290,7 @@
         <li><a href="#trouble-answer">回答がセッションに届かない</a></li>
         <li><a href="#trouble-settings">設定が保存されない、戻ってしまう</a></li>
         <li><a href="#trouble-restart">「常駐サーバーを再起動すると反映されます」と出た</a></li>
+        <li><a href="#trouble-other-checkout">別のフォルダーの agent-cockpit の常駐サーバーが動いている</a></li>
         <li><a href="#trouble-reload">「画面が新しくなりました」と出た</a></li>
         <li><a href="#trouble-tray">タスクトレイが動かない、通知が出ない</a></li>
         <li><a href="#trouble-diagnostics">不具合を調べるための記録</a></li></ol>

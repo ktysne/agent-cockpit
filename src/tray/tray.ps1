@@ -462,11 +462,57 @@ function Set-AwayStatus([bool]$Enabled) {
   Update-TrayState
 }
 
+function Get-ResidentServerFolderFromCommandLine([string]$CommandLine) {
+  if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $null }
+  $normalized = $CommandLine.Replace('/', '\')
+  $suffix = '\src\server\server.js'
+  $scriptEnd = $normalized.IndexOf($suffix, [System.StringComparison]::OrdinalIgnoreCase)
+  if ($scriptEnd -lt 1) { return $null }
+
+  $quoteStart = $normalized.LastIndexOf('"', $scriptEnd)
+  if ($quoteStart -ge 0) {
+    $scriptStart = $quoteStart + 1
+  } else {
+    $scriptStart = $normalized.LastIndexOf(' ', $scriptEnd) + 1
+  }
+  $scriptPath = $normalized.Substring($scriptStart, $scriptEnd + $suffix.Length - $scriptStart)
+  if ($scriptPath -notmatch '^(?:[A-Za-z]:\\|\\\\)') { return $null }
+  $folder = $scriptPath.Substring(0, $scriptPath.Length - $suffix.Length)
+  if ($folder -match '^[A-Za-z]:$') { $folder += '\' }
+  try { return [System.IO.Path]::GetFullPath($folder) } catch { return $null }
+}
+
+function Format-ResidentServerFolder([string]$Folder) {
+  if ($Folder.Length -le 90) { return $Folder }
+  return $Folder.Substring(0, 43) + '…' + $Folder.Substring($Folder.Length - 46)
+}
+
 function Restart-ResidentServer {
   if ($script:restartInProgress) { return }
   $script:restartInProgress = $true
   try {
     $previousServer = Get-ServerInfo
+    $previousProcess = $null
+    if ($previousServer -and $previousServer.ProcessId -gt 0) {
+      $previousProcess = Get-Process -Id $previousServer.ProcessId -ErrorAction SilentlyContinue
+      if ($previousProcess) {
+        $previousProcessInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$($previousServer.ProcessId)" -ErrorAction SilentlyContinue
+        $previousCommandLine = if ($previousProcessInfo) { [string]$previousProcessInfo.CommandLine } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($previousCommandLine)) {
+          $previousFolder = Get-ResidentServerFolderFromCommandLine $previousCommandLine
+          $serverScriptPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\server\server.js'))
+          $normalizedCommandLine = $previousCommandLine.Replace('/', '\')
+          $normalizedServerScriptPath = $serverScriptPath.Replace('/', '\')
+          $isResidentServer = $normalizedCommandLine.IndexOf($normalizedServerScriptPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+          $isAgentCockpitServer = $normalizedCommandLine.IndexOf('\src\server\server.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+          if ($isAgentCockpitServer -and -not $isResidentServer) {
+            $folderNotice = if ($previousFolder) { "($(Format-ResidentServerFolder $previousFolder))" } else { '' }
+            Show-TrayNotice "別のフォルダーの agent-cockpit の常駐サーバーが動いているため、再起動しませんでした$folderNotice。そのフォルダーのタスクトレイから再起動してください。" ([System.Windows.Forms.ToolTipIcon]::Warning)
+            return
+          }
+        }
+      }
+    }
     $state = Get-DashboardState $previousServer
     $confirmationText = '常駐サーバーを再起動します。タスク、判断事項、回答の記録、表示の設定、一覧から外したセッション、離席中の切り替えは残ります。実行中のツール、サブエージェントの行、画面で終了にしたサブエージェントは消え、次のイベントから組み立て直されます。'
     if ($state.Connected -and $state.PermissionCount -gt 0) {
@@ -508,7 +554,7 @@ function Restart-ResidentServer {
     $ensureScript = Join-Path $PSScriptRoot 'ensure-server.js'
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { $output = @(& $nodePath $ensureScript 2>$null) } finally { $ErrorActionPreference = $previousPreference }
+    try { $output = @(& $nodePath $ensureScript --verify 2>$null) } finally { $ErrorActionPreference = $previousPreference }
     if ($LASTEXITCODE -ne 0 -or $output.Count -ne 1) { throw 'ensure-server.js を実行できません。' }
 
     $server = $null
@@ -531,6 +577,29 @@ function Restart-ResidentServer {
       if ($previousServer) { throw '常駐サーバーの PID が切り替わりませんでした。' }
       throw '起動後の server.json を読み取れません。'
     }
+
+    if ($server.result -eq 'mismatch') {
+      $currentProcessInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$($currentServer.ProcessId)" -ErrorAction SilentlyContinue
+      $currentCommandLine = if ($currentProcessInfo) { [string]$currentProcessInfo.CommandLine } else { '' }
+      $currentFolder = Get-ResidentServerFolderFromCommandLine $currentCommandLine
+      $normalizedCurrentCommandLine = $currentCommandLine.Replace('/', '\')
+      $normalizedLocalServerScriptPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\server\server.js')).Replace('/', '\')
+      $isLocalServerCommand = $normalizedCurrentCommandLine.IndexOf($normalizedLocalServerScriptPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+      $isAgentCockpitServer = $normalizedCurrentCommandLine.IndexOf('\src\server\server.js', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+      if ($isAgentCockpitServer -and -not $isLocalServerCommand) {
+        $folderNotice = if ($currentFolder) { "($(Format-ResidentServerFolder $currentFolder))" } else { '' }
+        Show-TrayNotice "別のフォルダーの agent-cockpit の常駐サーバーが起動しました$folderNotice。フックの登録先がこのフォルダーになっているか確かめてください。" ([System.Windows.Forms.ToolTipIcon]::Warning)
+        return
+      }
+      # このフォルダーから起動していて食い違うのは、再起動の途中でファイルが更新されたときである。
+      if ($isLocalServerCommand) {
+        Show-TrayNotice '常駐サーバーを再起動しましたが、更新の途中のファイルで起動した可能性があります。もう一度再起動してください。' ([System.Windows.Forms.ToolTipIcon]::Warning)
+      } else {
+        Show-TrayNotice '常駐サーバーを再起動しましたが、このフォルダーの agent-cockpit で動いているかを確かめられませんでした。もう一度再起動し、続くときはフックの登録先を確かめてください。' ([System.Windows.Forms.ToolTipIcon]::Warning)
+      }
+      return
+    }
+    if ($server.result -ne 'ok') { throw '起動後の常駐サーバーを確認できませんでした。' }
 
     Show-TrayNotice '常駐サーバーを再起動しました'
   } catch {

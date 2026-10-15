@@ -1,18 +1,14 @@
-const fs = require('node:fs/promises');
 const path = require('node:path');
-const { readSourceCommit } = require('../server/source-revision');
 const { setTimeout: sleep } = require('node:timers/promises');
 const { cockpitHomeFromOptions } = require('../server/identity');
-const { readServerInfo, serverIsHealthy, ensureServerRunning, requestFromServer } = require('./server-connection');
+const { readServerInfo, serverIsHealthy, ensureServerRunning } = require('./server-connection');
+const { readExpected, verifyServer } = require('./server-verification');
 
 const STORE_SETTLE_MS = 1000;
 
 async function restartServer(options = {}) {
   const root = path.resolve(__dirname, '../..');
-  const expected = {
-    version: options.expectedVersion ?? JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version,
-    commit: await (options.readSourceCommit || readSourceCommit)(root),
-  };
+  const expected = await readExpected(root, options);
   const result = { result: 'ok', stoppedPid: null, pid: null, expected, running: null, commitVerified: false };
   const fail = (classification, message) => {
     throw Object.assign(new Error(message), { result: classification, details: { ...result, result: classification } });
@@ -60,19 +56,14 @@ async function restartServer(options = {}) {
   if (info && started.pid === info.pid && started.startedAt === info.startedAt) {
     fail('stale', '元と同じ起動の常駐サーバーが返されたため、再起動していません。もう一度実行してください。');
   }
-  const response = await requestFromServer(started, '/health', { method: 'GET' }, {
-    fetchImpl: options.fetchImpl, now, deadline: now() + 1000,
-  });
-  const health = response.json;
-  if (!response.ok || !health) fail('start-failed', '起動後の常駐サーバーの health を期限内に取得できませんでした。');
-  result.running = { version: health.version ?? null, commit: health.commit ?? null, sourceState: health.sourceState ?? null };
-  if (health.app !== 'agent-cockpit' || health.pid !== started.pid || health.startedAt !== started.startedAt) {
+  const verification = await verifyServer(started, { expected, fetchImpl: options.fetchImpl, now });
+  if (verification.result === 'start-failed') fail('start-failed', '起動後の常駐サーバーの health を期限内に取得できませんでした。');
+  result.running = verification.running;
+  if (verification.result === 'mismatch' && !verification.identityMatches) {
     fail('mismatch', '起動後の health の pid または startedAt、アプリ名が起動情報と一致しません。' + mismatchMessage(expected, result.running));
   }
-  if (health.version !== expected.version || (expected.commit !== null && health.commit !== expected.commit)) {
-    fail('mismatch', mismatchMessage(expected, result.running));
-  }
-  result.commitVerified = expected.commit !== null;
+  if (verification.result === 'mismatch') fail('mismatch', mismatchMessage(expected, result.running));
+  result.commitVerified = verification.commitVerified;
   return result;
 }
 
