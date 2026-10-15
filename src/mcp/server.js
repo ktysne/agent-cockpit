@@ -36,10 +36,12 @@ const REVIEW_SKIP_ERROR_MESSAGES = new Map([
   [502, 'GitHub から PR の状態を確認できませんでした'],
 ]);
 
+const SET_TASKS_DESCRIPTION = 'タスクと完了条件の一覧をセッションに記録します。タスクの状態や完了条件が変わったときは、一覧全体を新しい内容に置き換えます。完了条件は met が true なら達成、met が false で doing が true なら作業中として表示します。';
+
 const TOOL_DEFINITIONS = [
   {
     name: 'cockpit_set_tasks',
-    description: 'タスクと完了条件の一覧をセッションに記録します。タスクの状態や完了条件が変わったときは、一覧全体を新しい内容に置き換えます。完了条件は met が true なら達成、met が false で doing が true なら作業中として表示します。',
+    description: 'タスクと完了条件の一覧をセッションに記録します。このアプリのタスク一覧を使うターンで取り込みがオンなら、その一覧が cockpit の 1 つのタスクの完了条件になります。依頼ごとに題だけを 1 件 ([{title, state:"doing"}]) 登録し、完了条件は省略できます。この場合は同じ題を更新し、既存のタスクは残します。取り込みが無いときは、タスクの状態や完了条件が変わったら一覧全体を新しい内容に置き換えます。完了条件は met が true なら達成、met が false で doing が true なら作業中として表示します。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -61,7 +63,7 @@ const TOOL_DEFINITIONS = [
                 maxItems: 20,
               },
             },
-            required: ['title', 'state', 'criteria'],
+            required: ['title', 'state'],
             additionalProperties: false,
           },
           maxItems: 50,
@@ -171,8 +173,7 @@ function shortSavedList(toolName, saved) {
     const tasks = Array.isArray(saved.tasks) ? saved.tasks : [];
     const summary = tasks.slice(0, MAX_RESULT_ITEMS).map((task) => `${task.title} (${task.state})`).join('、');
     const remainder = tasks.length > MAX_RESULT_ITEMS ? `、ほか ${tasks.length - MAX_RESULT_ITEMS} 件` : '';
-    const unmatched = saved.unmatchedTitles?.length ? `\nアプリのタスク一覧に無い題: ${saved.unmatchedTitles.join('、')}` : '';
-    return `タスクを記録しました${summary ? `: ${summary}${remainder}` : '。'}${unmatched}`;
+    return `タスクを記録しました${summary ? `: ${summary}${remainder}` : '。'}`;
   }
   const decisions = Array.isArray(saved.decisions)
     ? saved.decisions
@@ -337,7 +338,8 @@ async function handleRequest(request, options = {}) {
   }
   if (request.method === 'ping') return { jsonrpc: '2.0', id: request.id, result: {} };
   if (request.method === 'tools/list') {
-    return { jsonrpc: '2.0', id: request.id, result: { tools: TOOL_DEFINITIONS } };
+    return { jsonrpc: '2.0', id: request.id, result: { tools: TOOL_DEFINITIONS.map(tool => codexClient && tool.name === 'cockpit_set_tasks'
+      ? { ...tool, description: SET_TASKS_DESCRIPTION } : tool) } };
   }
   if (request.method === 'tools/call') {
     const name = request.params?.name;

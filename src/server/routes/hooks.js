@@ -217,9 +217,11 @@ function createHookRoutes(ctx) {
     }
     if (!rejected && event?.planUpdate && !event.agent_id && event.provider !== 'codex' &&
       state.getDisplayPreferences().importAppTasks !== false) {
-      const tasks = state.planUpdates.apply(event, state.planFor(event.session_id));
+      const tasks = state.planUpdates.apply(event, state.planFor(event.session_id),
+        state.sessionNameFor(event.session_id) || state.sessions.get(event.session_id)?.title);
       if (tasks) {
         const saved = state.setTasks(event.session_id, tasks);
+        state.markAppTasks(event.session_id);
         answerDelivery.afterTasksWrite(event.session_id, Date.parse(saved.updatedAt));
       }
     }
@@ -268,12 +270,16 @@ function createHookRoutes(ctx) {
     }
 
     if (body.kind === 'tasks') {
-      const unmatchedTitles = state.getDisplayPreferences().importAppTasks !== false
-        ? state.planUpdates.unmatchedTitles(sessionId, body.tasks)
-        : [];
-      const saved = state.setTasks(sessionId, body.tasks);
+      const incoming = body.tasks.map(task => ({ ...task, criteria: task.criteria || [] }));
+      // 取り込みの無い CLI などは一覧全体を書くので置き換える。2 件以上も一覧全体を書く形として扱う。
+      const merging = incoming.length === 1 && state.planFor(sessionId).appTasks === true &&
+        state.getDisplayPreferences().importAppTasks !== false && state.providerForSession(sessionId) !== 'codex';
+      const tasks = merging ? state.planUpdates.merge(sessionId, state.planFor(sessionId), incoming) : incoming;
+      const saved = state.setTasks(sessionId, tasks);
+      // 置き換えより前の基準から組み立て直すと、置き換えた内容が消えるため、基準を置き換えた一覧にする。
+      if (!merging) state.planUpdates.replaced(sessionId, saved.tasks, Date.parse(saved.updatedAt));
       answerDelivery.afterTasksWrite(sessionId, Date.parse(saved.updatedAt));
-      jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt, unmatchedTitles });
+      jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt });
       return;
     }
     if (body.kind === 'add_decision') {

@@ -286,6 +286,7 @@ function normalizeStore(value) {
     plans.set(sessionId, {
       tasks: plan.tasks.map((task) => ({
         title: task.title,
+        ...(task.autoTitle === true ? { autoTitle: true } : {}),
         state: task.state,
         criteria: task.criteria.map((item) => ({
           text: item.text,
@@ -295,6 +296,7 @@ function normalizeStore(value) {
         ...(task.completedAt ? { completedAt: task.completedAt } : {}),
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
+      ...(plan.appTasks === true ? { appTasks: true } : {}),
       product: cloneProduct(plan.product),
       ...(plan.provider ? { provider: plan.provider } : {}),
       decisions: plan.decisions.map(cloneDecision),
@@ -1767,6 +1769,7 @@ class DashboardState {
     const plans = Object.fromEntries([...this.plans].map(([sessionId, plan]) => [sessionId, {
       tasks: plan.tasks.map((task) => ({
         title: task.title,
+        ...(task.autoTitle === true ? { autoTitle: true } : {}),
         state: task.state,
         criteria: task.criteria.map((item) => ({
           text: item.text,
@@ -1776,6 +1779,7 @@ class DashboardState {
         ...(task.completedAt ? { completedAt: task.completedAt } : {}),
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
+      ...(plan.appTasks === true ? { appTasks: true } : {}),
       product: cloneProduct(plan.product),
       ...(plan.provider ? { provider: plan.provider } : {}),
       decisions: plan.decisions.map(cloneDecision),
@@ -3084,6 +3088,7 @@ class DashboardState {
     const updatedAt = isoTime(now);
     plan.tasks = tasks.map((task) => ({
       title: task.title,
+      ...(task.autoTitle === true ? { autoTitle: true } : {}),
       state: task.state,
       criteria: task.criteria.map((criterion) => ({
         text: criterion.text,
@@ -3109,6 +3114,14 @@ class DashboardState {
     this.touch();
     this.requestStoreWrite();
     return { tasks: plan.tasks.map((task) => ({ ...task, criteria: task.criteria.map((item) => ({ ...item })) })), updatedAt: plan.tasksUpdatedAt };
+  }
+
+  // アプリの一覧を取り込んだセッションだけ、1 件の cockpit_set_tasks を題でのまとめ書きにする。
+  markAppTasks(sessionId) {
+    const plan = this.planFor(sessionId);
+    if (plan.appTasks === true) return;
+    plan.appTasks = true;
+    this.requestStoreWrite();
   }
 
   addDecision(sessionId, input, now = Date.now()) {

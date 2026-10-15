@@ -28,175 +28,278 @@ async function setup(t) {
     headers: { ...uiHeaders(info, `http://127.0.0.1:${info.port}`), 'content-type': 'application/json' },
     body: JSON.stringify({ importAppTasks }),
   });
+  await post('/api/events', { session_id: 'plan-session', hook_event_name: 'SessionStart', hookAt: 0 });
   return { state, send, tasks, write, post, display };
 }
 
-test('items は一覧と状態を置き換え、同じ呼び出しの差分と不要なキーを使わない', async t => {
+const criteria = () => [
+  { text: '段階1', met: false, doing: true },
+  { text: '段階2', met: false },
+  { text: '段階3', met: false },
+];
+const progress = tasks => tasks.at(-1)?.criteria.map(item => item.met ? 'done' : item.doing ? 'doing' : 'todo');
+
+test('items は題だけのタスクへ完了条件を入れ、同じ入力の差分は使わない', async t => {
   const { send, tasks, write } = await setup(t);
-  await write([{ title: '置き換える前の題', state: 'todo', criteria: [] }]);
-  await send({ ...items(), advance: true });
-  assert.deepEqual(tasks().map(({ title, state, criteria }) => ({ title, state, criteria })), [
-    { title: '段階1', state: 'doing', criteria: [] },
-    { title: '段階2', state: 'todo', criteria: [] },
-    { title: '段階3', state: 'todo', criteria: [] },
-  ]);
+  await write([{ title: '依頼', state: 'doing' }]);
+  await send({ ...items(), scope: 'new_task', advance: true });
+  assert.equal(tasks().length, 1);
+  assert.equal(tasks()[0].title, '依頼');
+  assert.deepEqual(tasks()[0].criteria, criteria());
 });
 
-test('advance は作業中を完了にし、その後ろの未着手を開始する', async t => {
+test('全項目が completed ならタスクが done になる', async t => {
+  const { send, tasks } = await setup(t);
+  await send(items(['completed', 'completed']), 100);
+  assert.equal(tasks()[0].state, 'done');
+  assert.deepEqual(progress(tasks()), ['done', 'done']);
+});
+
+test('new_task は前の完了条件を保って done にし、番号付きの新しい題を足す', async t => {
+  const { send, tasks } = await setup(t);
+  await send(items(), 100);
+  await send({ ...items(), scope: 'new_task' }, 200);
+  await send({ ...items(), scope: 'new_task' }, 300);
+  assert.deepEqual(tasks().map(task => task.title), ['作業', '作業 (2)', '作業 (3)']);
+  assert.deepEqual(tasks().map(task => task.state), ['done', 'done', 'doing']);
+  assert.deepEqual(tasks()[0].criteria, criteria());
+});
+
+for (const scope of ['continuation', 'first_task', undefined]) {
+  test('scope が ' + scope + ' の items は今の完了条件を置き換える', async t => {
+    const { send, tasks } = await setup(t);
+    await send(items(), 100);
+    await send({ ...items(['pending']), scope }, 200);
+    assert.equal(tasks().length, 1);
+    assert.deepEqual(progress(tasks()), ['todo']);
+  });
+}
+
+test('自動の題は状態のセッション名とセッション一覧の名前を使う', async t => {
+  const { send, tasks, post, state } = await setup(t);
+  state.addEvent({ session_id: 'plan-session', hook_event_name: 'SessionStart', hookAt: 1 }, { sessionName: '状態の名前' });
+  await send(items(), 100);
+  assert.equal(tasks()[0].title, '状態の名前');
+  state.sessionFiles.set('plan-session', { name: '一覧の名前' });
+  await send({ ...items(), scope: 'new_task' }, 200);
+  assert.equal(tasks()[1].title, '一覧の名前');
+});
+
+test('advance は作業中を達成にして次の未着手を開始する', async t => {
   const { send, tasks } = await setup(t);
   await send(items(), 100);
   await send({ advance: true }, 200);
-  assert.deepEqual(tasks().map(task => task.state), ['done', 'doing', 'todo']);
+  assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
 });
 
 test('作業中が無い advance は最初の未着手を開始する', async t => {
   const { send, tasks } = await setup(t);
   await send(items(['completed', 'pending', 'pending']), 100);
   await send({ advance: true }, 200);
-  assert.deepEqual(tasks().map(task => task.state), ['done', 'doing', 'todo']);
+  assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
 });
 
-test('done と start は 1 始まりの番号で更新し、範囲外を無視する', async t => {
+test('done と start は完了条件の番号を更新し、範囲外を無視する', async t => {
   const { send, tasks } = await setup(t);
   await send(items(), 100);
   await send({ done: [1, 2, 99, -1], start: 3 }, 200);
-  assert.deepEqual(tasks().map(task => task.state), ['done', 'done', 'doing']);
+  assert.deepEqual(progress(tasks()), ['done', 'done', 'doing']);
+  await send({ done: [3] }, 300);
+  assert.equal(tasks()[0].state, 'done');
 });
 
-test('差分が順不同に届いても hookAt 順に当て直す', async t => {
+test('差分が items より先に届いても hookAt 順で再構成する', async t => {
   const { send, tasks } = await setup(t);
   await send({ advance: true }, 300);
   await send(items(), 100);
   await send({ advance: true }, 200);
-  assert.deepEqual(tasks().map(task => task.state), ['done', 'done', 'doing']);
+  assert.deepEqual(progress(tasks()), ['done', 'done', 'doing']);
 });
 
-test('古い items は最新の items を置き換えない', async t => {
-  const { send, tasks } = await setup(t);
-  await send(items(['completed']), 300);
-  await send(items(), 100);
-  assert.deepEqual(tasks().map(task => task.state), ['done']);
-});
-
-test('同じ tool_use_id が重複しても差分を重ねない', async t => {
+test('古い items と同じ tool_use_id は現在の完了条件を変えない', async t => {
   const { send, tasks } = await setup(t);
   await send(items(), 100);
   await send({ advance: true }, 200, { tool_use_id: 'same' });
   await send({ advance: true }, 300, { tool_use_id: 'same' });
-  assert.deepEqual(tasks().map(task => task.state), ['done', 'doing', 'todo']);
+  await send(items(['completed']), 50);
+  assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
 });
 
-test('前後の空白を除いた題が同じなら完了条件を引き継ぐ', async t => {
+test('後から登録した題で自動の題を改名し、差分後も保つ', async t => {
   const { send, tasks, write } = await setup(t);
-  const criteria = [{ text: '確認できる', met: true, doing: true }];
-  await write([{ title: '段階1 ', state: 'todo', criteria }]);
   await send(items(), 100);
-  assert.deepEqual(tasks()[0].criteria, criteria);
+  const response = await write([{ title: '依頼の題', state: 'doing' }]);
+  assert.equal(jsonBody(response).unmatchedTitles, undefined);
+  await send({ advance: true }, 200);
+  assert.equal(tasks().length, 1);
+  assert.equal(tasks()[0].title, '依頼の題');
+  assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
 });
 
-test('new_task の items は題が同じでも完了条件を引き継がない', async t => {
-  const { send, tasks, write } = await setup(t);
-  await write([{ title: '段階1', state: 'todo', criteria: [{ text: '確認できる', met: true }] }]);
-  await send({ ...items(), scope: 'new_task' }, 100);
-  assert.deepEqual(tasks()[0].criteria, []);
+test('同じ題をまとめ書きし、空でない完了条件だけ置き換えて他の題を残す', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '段階1', status: 'in_progress' }] });
+  await write([{ title: '前の依頼', state: 'doing', criteria: criteria() }]);
+  await write([{ title: '次の依頼', state: 'doing', criteria: criteria() }]);
+  await write([{ title: ' 前の依頼 ', state: 'done', criteria: [] }]);
+  assert.deepEqual(tasks().map(task => task.title), ['前の依頼', '次の依頼']);
+  assert.equal(tasks()[0].state, 'done');
+  assert.deepEqual(tasks()[0].criteria, criteria());
+  await write([{ title: '次の依頼', state: 'doing', criteria: [{ text: '確認', met: true }] }]);
+  assert.deepEqual(tasks()[1].criteria, [{ text: '確認', met: true }]);
 });
 
-test('取り込み後の PostToolBatch はタスク未登録の催促を返さない', async t => {
-  const { send, post } = await setup(t);
-  await post('/api/events', { session_id: 'plan-session', hook_event_name: 'PreToolUse', tool_name: 'Agent' });
-  await send(items());
-  const response = await post('/api/hooks/answers', { action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: 'plan-session', id: 'batch' });
-  assert.equal(jsonBody(response).hookOutput, null);
+test('アプリの一覧を取り込んでいないセッションの 1 件の set_tasks は一覧を置き換える', async t => {
+  const { write, tasks } = await setup(t);
+  await write([{ title: 'A', state: 'doing', criteria: criteria() }]);
+  await write([{ title: 'B', state: 'doing', criteria: [] }]);
+  assert.deepEqual(tasks().map(task => `${task.title}:${task.state}`), ['B:doing']);
 });
 
-test('agent_id 付きと codex のイベントは一覧を取り込まない', async t => {
+test('一覧を置き換えた後の差分は置き換えた完了条件から進める', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '古い段階', status: 'in_progress' }] });
+  await write([
+    { title: '依頼', state: 'doing', criteria: criteria() },
+    { title: '別の依頼', state: 'todo', criteria: [] },
+  ]);
+  await write([{ title: '依頼', state: 'doing', criteria: criteria() }, { title: '最後', state: 'doing', criteria: criteria() }]);
+  await send({ advance: true });
+  assert.deepEqual(tasks().map(task => task.title), ['依頼', '最後']);
+  assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
+});
+
+test('終えた題を作業中で登録し直すと末尾へ移り、次の一覧がそこへ入る', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '段階1', status: 'in_progress' }] });
+  await write([{ title: '依頼A', state: 'doing' }]);
+  await send({ items: [{ content: '段階1', status: 'completed' }] });
+  await write([{ title: '依頼B', state: 'doing' }]);
+  await send({ items: [{ content: 'B の段階', status: 'in_progress' }], scope: 'continuation' });
+  await write([{ title: '依頼A', state: 'doing' }]);
+  await send({ items: [{ content: 'A の再開', status: 'in_progress' }], scope: 'continuation' });
+  assert.deepEqual(tasks().map(task => `${task.title}:${task.state}`), ['依頼B:done', '依頼A:doing']);
+  assert.deepEqual(tasks().at(-1).criteria.map(item => item.text), ['A の再開']);
+});
+
+test('一覧を置き換える前に作られた items が遅れて届いても置き換えた内容を保つ', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '古い段階', status: 'in_progress' }] });
+  const beforeReplace = Date.now() - 1000;
+  await write([{ title: '依頼', state: 'doing', criteria: criteria() }, { title: '最後', state: 'doing', criteria: criteria() }]);
+  await send({ items: [{ content: '遅れた段階', status: 'in_progress' }] }, beforeReplace);
+  assert.deepEqual(tasks().map(task => task.title), ['依頼', '最後']);
+  assert.deepEqual(tasks().at(-1).criteria, criteria());
+});
+
+test('未完了のタスクを未完了のまま更新しても並びと他の状態を保つ', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send({ items: [{ content: '段階1', status: 'in_progress' }] });
+  await write([{ title: 'A', state: 'todo', criteria: [] }, { title: 'B', state: 'doing', criteria: [] }]);
+  await write([{ title: 'A', state: 'todo' }]);
+  assert.deepEqual(tasks().map(task => `${task.title}:${task.state}`), ['A:todo', 'B:doing']);
+});
+
+test('取り込み中でも 2 件以上の set_tasks は一覧全体を置き換える', async t => {
+  const { write, tasks } = await setup(t);
+  await write([{ title: '前の依頼', state: 'doing', criteria: criteria() }]);
+  await write([
+    { title: 'A', state: 'doing', criteria: [] },
+    { title: 'B', state: 'todo', criteria: [] },
+    { title: 'C', state: 'todo', criteria: [] },
+  ]);
+  assert.deepEqual(tasks().map(task => `${task.title}:${task.state}`), ['A:doing', 'B:todo', 'C:todo']);
+});
+
+test('wrap_up は今のタスクだけを完了にし、先に届いても items の後に適用する', async t => {
+  const { send, tasks } = await setup(t);
+  await send(undefined, 300, { tool_name: 'mcp__ccd_turn__wrap_up' });
+  await send(items(), 100);
+  assert.deepEqual(progress(tasks()), ['done', 'done', 'done']);
+  assert.equal(tasks()[0].state, 'done');
+});
+
+test('今のタスクが無い差分と wrap_up は新しいタスクを作らない', async t => {
+  const { send, tasks } = await setup(t);
+  await send({ advance: true }, 100);
+  await send(undefined, 200, { tool_name: 'mcp__ccd_turn__wrap_up' });
+  assert.deepEqual(tasks(), []);
+});
+
+test('サブエージェントと Codex のイベントは取り込まない', async t => {
   const { send, state } = await setup(t);
-  for (const extra of [{ agent_id: 'child' }, { provider: 'codex', session_id: 'codex-session' }]) await send(items(), undefined, extra);
+  for (const extra of [{ agent_id: 'child' }, { provider: 'codex', session_id: 'codex-session' }]) {
+    await send(items(), undefined, extra);
+    await send(undefined, undefined, { ...extra, tool_name: 'mcp__ccd_turn__wrap_up' });
+  }
   assert.deepEqual(state.snapshot().sessions.flatMap(session => session.tasks), []);
 });
 
-test('取り込みオフでは update_plan が一覧を書き換えない', async t => {
+test('取り込みオフと Codex の set_tasks は従来どおり一覧を置き換える', async t => {
   const { send, tasks, write, display } = await setup(t);
-  await write([{ title: '手動登録', state: 'doing', criteria: [] }]);
-  assert.equal((await display(false)).status, 200);
-  await send(items(), Date.now());
-  assert.deepEqual(tasks().map(task => task.title), ['手動登録']);
+  await display(false);
+  await write([{ title: '元', state: 'doing', criteria: criteria() }]);
+  await write([{ title: '新', state: 'doing', criteria: [] }]);
+  await send(items());
+  await send(undefined, undefined, { tool_name: 'mcp__ccd_turn__wrap_up' });
+  assert.equal(tasks()[0].state, 'doing');
+  assert.deepEqual(tasks().map(task => task.title), ['新']);
+  await display(true);
+  await send(items(), undefined, { provider: 'codex', session_id: 'codex-session' });
+  await write([{ title: '元', state: 'doing', criteria: [] }], 'codex-session');
+  await write([{ title: '新', state: 'doing', criteria: [] }], 'codex-session');
+  assert.deepEqual(tasks('codex-session').map(task => task.title), ['新']);
 });
 
-test('取り込みオフの cockpit_set_tasks はアプリの未登録題を応答に含めない', async t => {
-  const { send, write, display } = await setup(t);
-  await send(items(), Date.now());
-  assert.equal((await display(false)).status, 200);
-  const saved = await write([{ title: '手動登録', state: 'doing', criteria: [] }]);
-  assert.deepEqual(jsonBody(saved).unmatchedTitles, []);
-});
-
-test('設定を切り替えた後の update_plan 差分は切り替え前の基準を使わない', async t => {
+test('設定の切り替え後は保存済みの完了条件を基準に差分を適用する', async t => {
   const { send, tasks, write, display } = await setup(t);
-  const beforeToggle = Date.now();
-  await send(items(), beforeToggle);
-  await send(items(), beforeToggle + 1, { session_id: 'other-session' });
-  assert.equal((await display(false)).status, 200);
-  const manualTasks = [
-    { title: '手動の一段目', state: 'todo', criteria: [] },
-    { title: '手動の二段目', state: 'doing', criteria: [] },
-    { title: '手動の三段目', state: 'todo', criteria: [] },
-  ];
-  await write(manualTasks);
-  await write(manualTasks, 'other-session');
-  assert.equal((await display(true)).status, 200);
-  const afterToggle = Date.now() + 10_000;
-  await send({ advance: true }, afterToggle);
-  await send({ advance: true }, afterToggle + 1, { session_id: 'other-session' });
-  const expected = [
-    { title: '手動の一段目', state: 'todo' },
-    { title: '手動の二段目', state: 'done' },
-    { title: '手動の三段目', state: 'doing' },
-  ];
-  assert.deepEqual(tasks().map(({ title, state }) => ({ title, state })), expected);
-  assert.deepEqual(tasks('other-session').map(({ title, state }) => ({ title, state })), expected);
-});
-
-test('形が違う入力は丸ごと無視してタスクを書き換えない', async t => {
-  const { send, tasks } = await setup(t);
   await send(items(), 100);
-  const before = tasks();
-  for (const invalid of [null, { items: {} }, { items: [{ content: '段階', status: 'unknown' }] },
-    { items: [{ content: 'x'.repeat(201), status: 'pending' }] }, { items: Array(13).fill({ content: '段階', status: 'pending' }) },
-    { items: Array(2).fill({ content: '重複する題', status: 'pending' }) },
-    { done: ['1'], start: 2 }, { advance: false }, { start: 1.5 }]) await send(invalid, 200);
-  assert.deepEqual(tasks(), before);
+  await display(false);
+  await write([{ title: '手動', state: 'doing', criteria: criteria().slice(0, 2) }]);
+  await display(true);
+  await send({ advance: true }, Date.now() + 10000);
+  assert.equal(tasks()[0].title, '手動');
+  assert.deepEqual(progress(tasks()), ['done', 'doing']);
 });
 
-test('cockpit_set_tasks は後から一覧を置き換え、基準に無い題を応答に添える', async t => {
-  const { send, tasks, write } = await setup(t);
-  await send(items(), 100);
-  const response = await write([{ title: '別の題', state: 'doing', criteria: [] }]);
-  assert.deepEqual(jsonBody(response).unmatchedTitles, ['別の題']);
-  assert.deepEqual(tasks().map(task => task.title), ['別の題']);
-});
-
-test('items が無い差分は最初の保存済み一覧を固定した基準として再構成する', async t => {
+test('items が無いときは tasksUpdatedAt より後の差分だけを順番に適用する', async t => {
   const { state, send, tasks } = await setup(t);
-  state.setTasks('plan-session', [1, 2, 3].map(index => ({ title: '段階' + index, state: 'todo', criteria: [] })), 100);
+  state.setTasks('plan-session', [{ title: '依頼', state: 'doing', criteria: criteria() }], 100);
   await send({ advance: true }, 300);
   await send({ advance: true }, 200);
   await send({ done: [3] }, 50);
-  assert.deepEqual(tasks().map(task => task.state), ['done', 'doing', 'todo']);
+  assert.deepEqual(progress(tasks()), ['done', 'done', 'doing']);
+});
+
+test('不正な items と差分は全体を無視する', async t => {
+  const { send, tasks } = await setup(t);
+  await send(items(), 100);
+  const before = tasks();
+  for (const input of [null, { items: {} }, { items: [{ content: '段階', status: 'unknown' }] },
+    { items: [{ content: 'x'.repeat(201), status: 'pending' }] },
+    { items: Array(13).fill({ content: '段階', status: 'pending' }) },
+    { done: ['1'] }, { advance: false }, { start: 1.5 }]) await send(input, 200);
+  assert.deepEqual(tasks(), before);
+});
+
+test('タスクが上限を超えたら古い done を捨てる', async t => {
+  const { write, send, tasks } = await setup(t);
+  await write(Array.from({ length: 50 }, (_, i) => ({ title: '依頼' + i, state: 'done', criteria: [] })));
+  await send(items());
+  assert.equal(tasks().length, 50);
+  assert.equal(tasks()[0].title, '依頼1');
 });
 
 for (const lifecycle of ['終了', '削除']) {
-  test('セッション' + lifecycle + '後はアプリの基準と重複記録を引き継がない', async t => {
-    const { send, write, post, state } = await setup(t);
+  test('セッション' + lifecycle + '後は同じ tool_use_id を再利用できる', async t => {
+    const { send, post, state, tasks } = await setup(t);
     const at = Date.now();
     await send(items(), at, { tool_use_id: 'reused' });
     if (lifecycle === '終了') await post('/api/events', { session_id: 'plan-session', hook_event_name: 'SessionEnd', hookAt: at + 1 });
     else state.deleteSession('plan-session', at + 1);
-    const response = await write([{ title: '別の題', state: 'todo', criteria: [] }]);
-    assert.deepEqual(jsonBody(response).unmatchedTitles, []);
     await post('/api/events', { session_id: 'plan-session', hook_event_name: 'SessionStart', hookAt: at + 2 });
-    await send(items(), at + 3, { tool_use_id: 'reused' });
-    assert.deepEqual(jsonBody(await write([{ title: '別の題', state: 'todo', criteria: [] }])).unmatchedTitles, ['別の題']);
+    await send(items(['completed']), at + 3, { tool_use_id: 'reused' });
+    assert.equal(tasks().at(-1).state, 'done');
   });
 }
 
@@ -210,4 +313,40 @@ test('フックは Claude メインの PostToolUse の update_plan だけ検査�
     assert.equal(makeHookEvent({ ...input, ...patch }, 100).planUpdate, undefined);
   }
   assert.equal(makeHookEvent(input, 100, { provider: 'codex' }).planUpdate, undefined);
+});
+
+test('wrap_up のフックは本文を送らず、完了の印だけを送る', () => {
+  const event = makeHookEvent({ session_id: 'plan-session', hook_event_name: 'PostToolUse',
+    tool_name: 'mcp__ccd_turn__wrap_up', tool_input: { text: '秘密の本文' }, tool_response: '秘密の結果' }, 100);
+  assert.deepEqual(event.planUpdate, { wrapUp: true });
+  assert.ok(!JSON.stringify(event).includes('秘密'));
+});
+
+test('差分で完了した後の題登録は履歴を残して次の取り込みを待つ', async t => {
+  const { send, write, tasks } = await setup(t);
+  await send(items(), 100);
+  await send({ done: [1, 2, 3] }, 200);
+  await write([{ title: '次の依頼', state: 'doing' }]);
+  await send({ ...items(), scope: 'new_task' }, 300);
+  assert.deepEqual(tasks().map(task => task.title), ['作業', '次の依頼']);
+  assert.deepEqual(tasks().map(task => task.state), ['done', 'doing']);
+  assert.deepEqual(tasks()[1].criteria, criteria());
+});
+
+test('完了条件をまとめ書きした後の差分は新しい完了条件から進める', async t => {
+  const { send, write, tasks } = await setup(t);
+  await write([{ title: '依頼', state: 'doing' }]);
+  await send(items());
+  await send({ advance: true });
+  await write([{ title: '依頼', state: 'doing', criteria: criteria() }]);
+  await send({ advance: true });
+  assert.deepEqual(progress(tasks()), ['done', 'doing', 'todo']);
+});
+
+test('取り込み後の PostToolBatch はタスク未登録の催促を返さない', async t => {
+  const { send, post } = await setup(t);
+  await post('/api/events', { session_id: 'plan-session', hook_event_name: 'PreToolUse', tool_name: 'Agent' });
+  await send(items());
+  const response = await post('/api/hooks/answers', { action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: 'plan-session', id: 'batch' });
+  assert.equal(jsonBody(response).hookOutput, null);
 });
