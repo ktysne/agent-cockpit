@@ -115,7 +115,8 @@ test('届かないフックは安全な一行だけ退避し、走査は壊れ�
   const text = await fs.readFile(file, 'utf8');
   const pending = JSON.parse(text);
   assert.match(pending.data.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-  assert.deepEqual(pending, { msg: 'hook.delivery', data: { failure: 'unreachable', at: pending.data.at } });
+  assert.deepEqual(pending, { msg: 'hook.delivery', data: { failure: 'unreachable', at: pending.data.at, event: 'Stop',
+    ensureMs: pending.data.ensureMs, postMs: pending.data.postMs, sinceHookMs: pending.data.sinceHookMs } });
   await fs.appendFile(file, 'broken\n' + JSON.stringify({ msg: 'server.start', data: { secret: 'private' } }) + '\n');
   await Promise.all([runtime.refreshSessionFiles(), appendPendingHook(runtime.homeDir, { msg: 'hook.input', data: { result: 'invalid', input: 'private' } })]);
   await runtime.refreshSessionFiles();
@@ -124,6 +125,23 @@ test('届かないフックは安全な一行だけ退避し、走査は壊れ�
   assert.deepEqual(imported.map(entry => entry.msg).sort(), ['hook.delivery', 'hook.input']);
   assert.equal(imported.find(entry => entry.msg === 'hook.delivery').data.at, pending.data.at);
   await assert.rejects(fs.stat(file), { code: 'ENOENT' });
+});
+
+test('期限切れのフックは、常駐サーバーの確認と送信のそれぞれにかかった時間を退避する', async t => {
+  const { runtime } = await startTestServer(t);
+  const ensureDelayMs = 60;
+  const hookAt = Date.now();
+  await runHook({ session_id: 'slow-session', hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read' }, {
+    homeDir: runtime.homeDir, now: hookAt, deadline: hookAt + 300,
+    ensureServerRunning: async () => { await new Promise(resolve => setTimeout(resolve, ensureDelayMs)); return runtime.info; },
+    fetchImpl: (_url, init) => new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason))),
+  });
+  const pending = JSON.parse(await fs.readFile(path.join(runtime.homeDir, 'diagnostics/hooks-pending.jsonl'), 'utf8'));
+  assert.equal(pending.data.failure, 'timeout');
+  assert.equal(pending.data.event, 'PostToolUse');
+  assert.ok(pending.data.ensureMs >= ensureDelayMs - 5, `ensureMs=${pending.data.ensureMs}`);
+  assert.ok(pending.data.postMs > 0);
+  assert.ok(pending.data.sinceHookMs >= pending.data.ensureMs + pending.data.postMs - 5);
 });
 
 test('退避が上限を超えていると届かないフックは追記せず正常に終わる', async t => {
