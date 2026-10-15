@@ -9,7 +9,8 @@ const STORE_SETTLE_MS = 1000;
 async function restartServer(options = {}) {
   const root = path.resolve(__dirname, '../..');
   const expected = await readExpected(root, options);
-  const result = { result: 'ok', stoppedPid: null, pid: null, expected, running: null, commitVerified: false };
+  const result = { result: 'ok', stoppedPid: null, pid: null, expected, running: null,
+    commitVerified: false, releaseVerified: false };
   const fail = (classification, message) => {
     throw Object.assign(new Error(message), { result: classification, details: { ...result, result: classification } });
   };
@@ -56,9 +57,12 @@ async function restartServer(options = {}) {
   if (info && started.pid === info.pid && started.startedAt === info.startedAt) {
     fail('stale', '元と同じ起動の常駐サーバーが返されたため、再起動していません。もう一度実行してください。');
   }
-  const verification = await verifyServer(started, { expected, fetchImpl: options.fetchImpl, now });
+  const verification = await verifyServer(started, {
+    expected, fetchImpl: options.fetchImpl, now, sleep: wait, settleSourceState: true,
+  });
   if (verification.result === 'start-failed') fail('start-failed', '起動後の常駐サーバーの health を期限内に取得できませんでした。');
   result.running = verification.running;
+  result.releaseVerified = verification.releaseVerified;
   if (verification.result === 'mismatch' && !verification.identityMatches) {
     fail('mismatch', mismatchMessage(expected, result.running));
   }
@@ -87,7 +91,7 @@ async function main(argv = process.argv.slice(2), options = {}) {
   } catch (error) {
     if (json) log(JSON.stringify(error.details || {
       result: 'start-failed', stoppedPid: null, pid: null,
-      expected: { version: null, commit: null }, running: null, commitVerified: false,
+      expected: { version: null, commit: null }, running: null, commitVerified: false, releaseVerified: false,
     }));
     else logError(error.result === 'mismatch'
       ? error.message
