@@ -293,9 +293,14 @@ class Diagnostics {
     });
   }
 
+  // 稼働を続けたまま、まとめている件数だけを書き出す。定期の書き出しは止めない。
+  writeRepeated() {
+    return this.enqueue(() => this.flushRepeated()).catch(() => {});
+  }
+
   flush() {
     clearInterval(this.repeatTimer);
-    return this.enqueue(() => this.flushRepeated()).catch(() => {});
+    return this.writeRepeated();
   }
 }
 

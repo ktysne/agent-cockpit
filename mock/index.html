@@ -2742,7 +2742,7 @@ async function requestServerRestart() {
 
 function renderRestartNote(state) {
   const note = document.getElementById('restart-note');
-  const ui = renderRestartNote.ui ||= { phase: 'idle', error: '', timer: null };
+  const ui = renderRestartNote.ui ||= { phase: 'idle', error: '', timer: null, view: '', focus: '' };
   ui.state = state;
   if (ui.phase === 'waiting' && state.runtime?.startedAt !== ui.startedAt) {
     clearTimeout(ui.timer);
@@ -2750,27 +2750,17 @@ function renderRestartNote(state) {
     ui.error = '';
   }
   note.hidden = !state.restartRequired && ui.phase !== 'waiting';
-  note.textContent = '';
-  if (note.hidden) { ui.phase = 'idle'; ui.error = ''; return; }
+  if (note.hidden) { ui.phase = 'idle'; ui.error = ''; ui.view = ''; note.textContent = ''; return; }
+  let text;
+  const buttons = [];
   if (ui.phase === 'waiting') {
-    note.textContent = '常駐サーバーを再起動しています。';
-    return;
-  }
-  const addButton = (text, action) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'link-btn';
-    button.textContent = text;
-    button.disabled = ui.phase === 'sending';
-    button.addEventListener('click', action);
-    note.append(button);
-  };
-  if (ui.phase === 'confirm' || ui.phase === 'sending') {
+    text = '常駐サーバーを再起動しています。';
+  } else if (ui.phase === 'confirm' || ui.phase === 'sending') {
     const sessions = state.sessions || (state.products || []).flatMap(product => product.sessions);
     const permissions = sessions.reduce((sum, session) => sum + (session.permissionWaits || session.perms || []).length, 0);
-    note.textContent = '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。'
+    text = '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。'
       + (permissions ? `許可待ち ${permissions} 件は、再起動後に表示されません。` : '');
-    addButton('再起動する', async () => {
+    buttons.push(['再起動する', async () => {
       if (ui.phase !== 'confirm') return;
       ui.phase = 'sending';
       ui.startedAt = ui.state.runtime?.startedAt;
@@ -2782,28 +2772,48 @@ function renderRestartNote(state) {
         ui.timer = setTimeout(() => {
           ui.phase = 'idle';
           ui.error = '再起動できませんでした。タスクトレイのメニューから再起動してください。';
+          ui.focus = '常駐サーバーを再起動する';
           renderRestartNote(ui.state);
         }, 30_000);
       } catch {
         ui.phase = 'idle';
         ui.error = '再起動を始められませんでした。タスクトレイのメニューから再起動してください。';
+        ui.focus = '常駐サーバーを再起動する';
       }
       renderRestartNote(ui.state);
-    });
-    addButton('やめる', () => { ui.phase = 'idle'; renderRestartNote(ui.state); });
-    return;
+    }]);
+    buttons.push(['やめる', () => {
+      ui.phase = 'idle'; ui.focus = '常駐サーバーを再起動する'; renderRestartNote(ui.state);
+    }]);
+  } else {
+    const running = state.runtime || {};
+    const installed = state.installed || {};
+    const versionChanged = running.version != null && installed.version != null && running.version !== installed.version;
+    text = ui.error || (versionChanged
+      ? `バージョン ${installed.version} のファイルが配置されています。常駐サーバーを再起動すると反映されます。`
+      : '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
+    if (state.restartRequired && state.restartAvailable) {
+      buttons.push(['常駐サーバーを再起動する', () => {
+        ui.phase = 'confirm'; ui.error = ''; ui.focus = '再起動する'; renderRestartNote(ui.state);
+      }]);
+    }
   }
-  const running = state.runtime || {};
-  const installed = state.installed || {};
-  const versionChanged = running.version != null && installed.version != null && running.version !== installed.version;
-  note.textContent = ui.error || (versionChanged
-    ? `バージョン ${installed.version} のファイルが配置されています。常駐サーバーを再起動すると反映されます。`
-    : '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
-  if (state.restartRequired && state.restartAvailable) {
-    addButton('常駐サーバーを再起動する', () => {
-      ui.phase = 'confirm'; ui.error = ''; renderRestartNote(ui.state);
-    });
+  // ポーリングのたびに作り直すとボタンのフォーカスが外れるため、表示が変わったときだけ作り直す。
+  const view = JSON.stringify([text, buttons.map(([label]) => label), ui.phase === 'sending']);
+  if (view === ui.view) return;
+  ui.view = view;
+  note.textContent = text;
+  for (const [label, action] of buttons) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'link-btn';
+    button.textContent = label;
+    button.disabled = ui.phase === 'sending';
+    button.addEventListener('click', action);
+    note.append(button);
+    if (label === ui.focus) button.focus?.();
   }
+  ui.focus = '';
 }
 
 function renderReloadNote() {

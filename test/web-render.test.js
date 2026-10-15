@@ -5130,10 +5130,12 @@ test('再起動待ちの帯はバージョンが違えば配置済みのバー�
 function restartNoteHarness(source, response = async () => ({ status: 202 })) {
   const buttons = [];
   const note = { hidden: true, value: '', get textContent() { return this.value; },
-    set textContent(value) { this.value = value; buttons.length = 0; }, append(button) { buttons.push(button); } };
+    set textContent(value) { this.value = value; buttons.length = 0; this.rebuilt += 1; }, rebuilt: 0,
+    append(button) { buttons.push(button); } };
+  let focused = null;
   const timers = new Map();
   const context = pageContext(source, {
-    document: { getElementById: () => note, createElement: () => ({ addEventListener(type, fn) { this.click = fn; } }) },
+    document: { getElementById: () => note, createElement: () => ({ addEventListener(type, fn) { this.click = fn; }, focus() { focused = this.textContent; } }) },
     requestServerRestart: response,
     setTimeout: (fn, ms) => { timers.set(fn, ms); return fn; }, clearTimeout: id => timers.delete(id),
   });
@@ -5143,7 +5145,7 @@ function restartNoteHarness(source, response = async () => ({ status: 202 })) {
   const render = () => context.renderRestartNote(state);
   render();
   const click = label => buttons.find(button => button.textContent === label).click();
-  return { note, buttons, timers, state, render, click, context };
+  return { note, buttons, timers, state, render, click, context, focused: () => focused };
 }
 
 for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
@@ -5156,6 +5158,19 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     f.state.restartAvailable = false;
     f.render();
     assert.equal(f.buttons.length, 0);
+  });
+
+  test(`${label}の帯は同じ表示なら作り直さず、確認と取り消しで次に押すボタンへフォーカスを移す`, () => {
+    const f = restartNoteHarness(source);
+    const rebuilt = f.note.rebuilt;
+    f.render();
+    assert.equal(f.note.rebuilt, rebuilt);
+    f.click('常駐サーバーを再起動する');
+    assert.equal(f.focused(), '再起動する');
+    f.render();
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['再起動する', 'やめる']);
+    f.click('やめる');
+    assert.equal(f.focused(), '常駐サーバーを再起動する');
   });
 
   test(`${label}は受付後に再起動中を示し、起動時刻が変わると帯を消す`, async () => {

@@ -105,7 +105,7 @@ startServer はこの判定を待たずに返し、close は判定と診断記�
 `startServer` の `serverRestart` を明示した場合だけ有効にし、CLI は `{}` を渡す。dev では無効にする。
 無効なら `409 Restart unavailable`、更新が不要なら `409 Restart not required`、開始から 60 秒以内なら `409 Restart in progress` を返す。
 開始時刻は保存の書き出し前に記録し、60 秒で再試行できるようにする。
-起動直前に `state.flushPersistence()`、`away.flushPersistence()`、`routing.flush()` と `diagnostics.flush()` を待つ。
+起動直前に `state.flushPersistence()`、`away.flushPersistence()`、`routing.flush()` と `diagnostics.writeRepeated()` を待つ。子が停止を見送ると旧サーバーが動き続けるため、診断ログの定期の書き出しを止める `diagnostics.flush()` は使わない。
 `process.execPath` で再起動スクリプトに `--json --expect-pid <pid> --expect-started-at <startedAt>` を渡す。
 子は `detached: true`、`windowsHide: true` とし、標準入力を無視し、出力を `server.log` に追記する。
 作業場所は保存先とし、`childEnvironment` で除いた環境に `AGENT_COCKPIT_HOME` と `AGENT_COCKPIT_PORT` を渡す。

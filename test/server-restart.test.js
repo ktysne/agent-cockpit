@@ -62,14 +62,17 @@ test('再起動の口は JSON オブジェクトだけを受け付ける', async
 test('保存の書き出し後に同じ保存先とポートで再起動の子を起動する', async t => {
   const flushed = [];
   const f = await restartFixture(t, { onSpawn: () => {
-    assert.deepEqual([...flushed].sort(), ['flush', 'flush', 'flushPersistence', 'flushPersistence']);
+    assert.deepEqual([...flushed].sort(), ['flush', 'flushPersistence', 'flushPersistence', 'writeRepeated']);
   } });
   for (const [target, method] of [[f.runtime.state, 'flushPersistence'], [f.runtime.away, 'flushPersistence'],
-    [f.runtime.routing, 'flush'], [f.runtime.diagnostics, 'flush']]) {
+    [f.runtime.routing, 'flush'], [f.runtime.diagnostics, 'writeRepeated']]) {
     const original = target[method].bind(target);
     target[method] = async () => { await original(); flushed.push(method); };
   }
+  const { flush } = f.runtime.diagnostics;
+  f.runtime.diagnostics.flush = () => assert.fail('定期の書き出しは止めない');
   const response = await f.post();
+  f.runtime.diagnostics.flush = flush;
   assert.equal(response.status, 202);
   assert.deepEqual(jsonBody(response), { restarting: true });
   const [command, args, options] = f.calls[0];

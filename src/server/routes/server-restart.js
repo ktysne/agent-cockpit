@@ -26,7 +26,8 @@ function createServerRestart(ctx, options) {
     let log;
     try {
       await Promise.all([ctx.state.flushPersistence(), ctx.away.flushPersistence(), ctx.routing.flush()]);
-      await ctx.diagnostics.flush();
+      // 子が停止を見送ると旧サーバーが動き続けるため、定期の書き出しを止める flush() は使わない。
+      await ctx.diagnostics.writeRepeated();
       log = await fs.open(path.join(ctx.homeDir, 'server.log'), 'a');
       const child = (options.spawnImpl || spawn)(process.execPath, [
         path.resolve(__dirname, '../../client/restart-server.js'), '--json',
