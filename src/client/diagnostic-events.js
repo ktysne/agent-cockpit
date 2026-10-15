@@ -1,12 +1,15 @@
 const MAX_DIAGNOSTICS_PER_EVENT = 8;
 const MAX_DIAGNOSTICS_BODY_BYTES = 16 * 1024;
+const HOOK_EVENT_NAMES = ['SessionStart', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop',
+  'Stop', 'SessionEnd', 'UserPromptSubmit', 'PostToolBatch', 'PermissionRequest', 'Interrupt'];
 const TOOL_NAMES = ['cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_update_decision', 'cockpit_add_pr', 'cockpit_skip_review'];
 const CLIENT_EVENTS = Object.freeze({
   'hook.input': { tag: 'hook', level: 'info', fields: { result: ['parsed', 'invalid'] } },
   'hook.pid': { tag: 'hook', level: 'info', fields: { result: ['found', 'missing', 'timeout', 'failed'], durationMs: 'number' } },
   'hook.server': { tag: 'hook', level: 'info', fields: { started: 'boolean' } },
   // 退避した行は常駐サーバーの次の起動まで取り込まれないことがあるため、発生時刻を持たせる。
-  'hook.delivery': { tag: 'hook', level: 'warn', fields: { failure: ['unreachable', 'timeout'], at: 'timestamp' } },
+  'hook.delivery': { tag: 'hook', level: 'warn', fields: { failure: ['unreachable', 'timeout'], at: 'timestamp',
+    event: HOOK_EVENT_NAMES, ensureMs: 'number', postMs: 'number', sinceHookMs: 'number' } },
   'mcp.write': { tag: 'mcp', level: 'info', fields: { tool: TOOL_NAMES, phase: ['attempt', 'result'], ok: 'boolean', failure: ['http', 'timeout', 'unreachable'], status: 'status' } },
   'web.failed': { tag: 'web', level: 'warn', fields: { operation: ['fetch', 'save'], path: 'path', status: 'status' } },
 });

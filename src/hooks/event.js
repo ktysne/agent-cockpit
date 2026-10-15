@@ -450,6 +450,10 @@ async function postEvent(event, options = {}) {
   event.diagnostics ||= [];
   const startServer = options.startServer || ((args) => launchServer(args));
   const deadline = options.deadline || Date.now() + HOOK_TIMEOUT_MS;
+  // 期限切れのとき、常駐サーバーの確認と送信のどちらで時間を使ったかを診断記録に残す。
+  const startedAt = Date.now();
+  let ensureMs = options.ensureMs || 0;
+  const ensure = options.ensureServerRunning || ensureServerRunning;
   const result = await postToServer('/api/events', event, {
     homeDir,
     fetchImpl: options.fetchImpl || fetch,
@@ -462,16 +466,28 @@ async function postEvent(event, options = {}) {
     environment: options.environment || process.env,
     deadline,
     attemptTimeoutMs: 500,
-    ensureServerRunning: options.ensureServerRunning,
+    ensureServerRunning: async (args) => {
+      const ensureStartedAt = Date.now();
+      try {
+        return await ensure(args);
+      } finally {
+        ensureMs += Date.now() - ensureStartedAt;
+      }
+    },
     readServerInfo: options.readServerInfo,
     ensure: options.ensure ?? true,
     parseJson: false,
     reuseInfoOnUnauthorized: true,
     ...(Object.hasOwn(options, 'initialInfo') ? { initialInfo: options.initialInfo } : {}),
   });
-  if (!result.ok && result.status === null) await appendPendingHook(homeDir, { msg: 'hook.delivery', data: {
-    failure: result.timedOut || Date.now() >= deadline ? 'timeout' : 'unreachable', at: new Date().toISOString(),
-  } });
+  if (!result.ok && result.status === null) {
+    const finishedAt = Date.now();
+    await appendPendingHook(homeDir, { msg: 'hook.delivery', data: {
+      failure: result.timedOut || finishedAt >= deadline ? 'timeout' : 'unreachable', at: new Date(finishedAt).toISOString(),
+      event: event.hook_event_name, ensureMs, postMs: Math.max(0, finishedAt - startedAt - (ensureMs - (options.ensureMs || 0))),
+      sinceHookMs: Math.max(0, finishedAt - event.hookAt),
+    } });
+  }
   return result.ok;
 }
 
@@ -492,6 +508,7 @@ async function runHook(input, options = {}) {
 
   if (event.hook_event_name === 'SessionStart') {
     const deadline = Date.now() + HOOK_TIMEOUT_MS;
+    const ensureStartedAt = Date.now();
     const info = await ensureServerRunning({
       homeDir,
       fetchImpl: options.fetchImpl || fetch,
@@ -502,12 +519,14 @@ async function runHook(input, options = {}) {
       environment: options.environment || process.env,
       deadline,
     });
+    const ensureMs = Date.now() - ensureStartedAt;
     if (info) dashboardUrl = `http://127.0.0.1:${info.port}/`;
     await postEvent(event, {
       ...options,
       homeDir,
       deadline,
       initialInfo: info,
+      ensureMs,
     });
   } else {
     await postEvent(event, { ...options, homeDir });
