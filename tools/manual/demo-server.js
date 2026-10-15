@@ -156,8 +156,10 @@ async function startDemoServer(options = {}) {
       codexHome,
       userHome,
       port: options.port ?? 0,
-      // 画像が版ごとに変わらないよう、見出しに版を出さない。
+      // 画像がリリースごとに変わらないよう、実行環境の版を使わない。
       appVersion: null,
+      readSourceCommit: async () => null,
+      readSourceState: () => 'unknown',
       pullRequestOptions: { execFileImpl: gh.execFileImpl },
       codexAgentScriptExists: async () => integrations.codexAgent,
       crossReviewToolExists: async () => integrations.crossReview,

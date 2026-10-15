@@ -1197,7 +1197,7 @@ function showWriteError(message) {
 
 const DIAGNOSTIC_LEVEL_ORDER = ['error', 'warn', 'info', 'debug'];
 const DIAGNOSTIC_SOURCE_ORDER = ['server', 'hook', 'mcp', 'web', 'gh', 'merge', 'codex'];
-let diagnosticVersion = '';
+let diagnosticResponseRuntime = null;
 let diagnosticsRefreshSequence = 0;
 let diagnosticsSelectionSequence = 0;
 let diagnosticsListLoading = false;
@@ -1216,6 +1216,12 @@ const diagnosticsDeleteActions = document.getElementById('diagnostics-delete-act
 const diagnosticsDeleteConfirmation = document.getElementById('diagnostics-delete-confirmation');
 
 displayPreferences.diagnosticsLevel = ['silent', 'error', 'warn', 'info', 'debug'].includes(displayPreferences.diagnosticsLevel) ? displayPreferences.diagnosticsLevel : 'info';
+
+function formatRuntime(runtime) {
+  if (!runtime?.version) return '版不明';
+  const suffix = runtime.sourceState !== 'release' && runtime.commit ? `+${runtime.commit.slice(0, 7)}` : '';
+  return `v${runtime.version}${suffix}`;
+}
 
 function diagnosticLocalTime(value, seconds = false) {
   const date = new Date(value);
@@ -1242,7 +1248,7 @@ function refreshDiagnosticOptions() {
   const runs = [...diagnosticRuns].sort((a, b) => Number(b.current) - Number(a.current) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
   replaceSelectOptions(diagnosticsRunSelect, runs.map(run => ({
     value: run.id,
-    label: run.current ? `現在の起動 (${diagnosticLocalTime(run.startedAt)})` : diagnosticLocalTime(run.startedAt),
+    label: `${run.current ? `現在の起動 (${diagnosticLocalTime(run.startedAt)})` : diagnosticLocalTime(run.startedAt)} ${formatRuntime(run.runtime)}`,
   })), previousRun || runs.find(run => run.current)?.id);
   const previousSource = diagnosticsSourceSelect.value;
   const knownSources = new Set(diagnosticRuns.flatMap(run => run.sources || []));
@@ -1289,7 +1295,7 @@ async function refreshDiagnostics() {
     const data = await response.json();
     if (sequence !== diagnosticsRefreshSequence) return;
     diagnosticRuns = data.runs.map(run => ({ ...run, entries: undefined, loadError: false }));
-    diagnosticVersion = data.version;
+    diagnosticResponseRuntime = data.responseRuntime;
     refreshDiagnosticOptions();
     diagnosticsLevelSelect.value = displayPreferences.diagnosticsLevel;
     diagnosticsListLoading = false;
@@ -1328,9 +1334,10 @@ async function loadSelectedDiagnosticRun(run, sequence) {
   diagnosticsList.setAttribute('aria-busy', 'true');
   renderDiagnosticEntries();
   try {
-    const entries = await loadDiagnosticRun(run.id);
+    const data = await loadDiagnosticRun(run.id);
     if (sequence !== diagnosticsSelectionSequence || diagnosticsListLoading || selectedDiagnosticRun()?.id !== run.id) return false;
-    run.entries = entries;
+    run.runtime = withLoadedRuntime(run, data).runtime;
+    run.entries = data.entries;
     run.loadError = false;
     if (!diagnosticsAllExportPending) diagnosticsStatus.textContent = '';
     renderDiagnosticEntries();
@@ -1412,11 +1419,11 @@ function diagnosticExportText(runs) {
   const runLabel = runs.length === 1 ? runs[0].id : 'all';
   const lines = [
     '# agent-cockpit 診断ログ',
-    `# version=${diagnosticVersion} level=${displayPreferences.diagnosticsLevel} run=${runLabel} exported=${diagnosticLocalTime(Date.now(), true)}`,
+    `# viewer=${formatRuntime(diagnosticResponseRuntime)} level=${displayPreferences.diagnosticsLevel} run=${runLabel} exported=${diagnosticLocalTime(Date.now(), true)}`,
     '',
   ];
   for (const run of runs) {
-    lines.push(`## 起動 ${run.id} (${diagnosticLocalTime(run.startedAt)})`);
+    lines.push(`## 起動 ${run.id} (${diagnosticLocalTime(run.startedAt)}) ${formatRuntime(run.runtime)}${run.runtime ? ` commit=${run.runtime.commit || 'unknown'} state=${run.runtime.sourceState}` : ''}`);
     const entries = [...run.entries].sort((a, b) => a.ts - b.ts);
     lines.push(entries.map(formatDiagnosticEntry).join('\n') || '(記録はまだありません)', '');
   }
@@ -1470,7 +1477,10 @@ document.getElementById('diagnostics-export-all').addEventListener('click', asyn
   const deletionGeneration = diagnosticDeletionGeneration;
   try {
     const loadedRuns = [];
-    for (const run of runs) loadedRuns.push({ ...run, entries: await loadDiagnosticRun(run.id) });
+    for (const run of runs) {
+      const data = await loadDiagnosticRun(run.id);
+      loadedRuns.push({ ...withLoadedRuntime(run, data), entries: data.entries });
+    }
     // 取得の途中で削除が終わると、取得済みの分に削除した記録が残るため、書き出さない。
     if (deletionGeneration !== diagnosticDeletionGeneration) {
       diagnosticsStatus.textContent = '書き出しの途中で記録を削除したため、書き出しを取りやめました。もう一度「すべての起動を書き出す」を押してください。';
@@ -1543,7 +1553,14 @@ document.getElementById('diagnostics-delete-confirm').addEventListener('click', 
 async function loadDiagnosticRun(run) {
   const response = await fetchUi('/api/diagnostics?run=' + encodeURIComponent(run), { cache: 'no-store' });
   if (!response.ok) throw new Error('Cannot read diagnostics');
-  return (await response.json()).entries;
+  const data = await response.json();
+  if (data.responseRuntime !== undefined) diagnosticResponseRuntime = data.responseRuntime;
+  return data;
+}
+
+// 一覧の取得後にソースの状態が確定することがあるため、起動ごとの取得で版を差し替える。
+function withLoadedRuntime(run, data) {
+  return data.runtime !== undefined ? { ...run, runtime: data.runtime } : run;
 }
 
 function reportWebFailure(url, operation, status) {
@@ -1849,7 +1866,7 @@ function appendModelLine(target, agent, provider = 'claude') {
 function updateTitle(sessions) {
   const judgments = countJudgments(sessions);
   const pendingCount = judgments.permission + judgments.blocking;
-  const appTitle = appVersion ? `Agent Cockpit v${appVersion}` : 'Agent Cockpit';
+  const appTitle = appVersion ? `Agent Cockpit ${appVersion}` : 'Agent Cockpit';
   document.title = pendingCount ? `(${pendingCount}) ${appTitle}` : appTitle;
 }
 
@@ -5118,8 +5135,9 @@ function renderReloadNote(pending) {
   reloadNote.innerHTML = html;
 }
 
-function applyAppVersion(version) {
-  appVersion = typeof version === 'string' ? version : '';
+function applyAppVersion(version, runtime) {
+  if (runtime !== undefined) appVersion = runtime?.version ? formatRuntime(runtime) : '';
+  else appVersion = typeof version === 'string' ? `v${version}` : '';
 }
 
 function applyUpdateState(update) {
@@ -5251,7 +5269,7 @@ async function refresh() {
     const awayBefore = header.dataset.away;
     applyAwayState(state.away);
     applyUpdateState(state.update);
-    applyAppVersion(state.appVersion);
+    applyAppVersion(state.appVersion, state.runtime);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
     const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
     const pullRequestExpiry = pullRequestExpirySignature(state.pullRequests);

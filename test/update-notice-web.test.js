@@ -67,7 +67,7 @@ test('版はウィンドウのタイトルにだけ付け、見出しは名前�
   assert.match(html, /alt="">Agent Cockpit<\/h1>/);
   const context = vm.createContext({ appVersion: '', document: { title: '' },
     countJudgments: () => ({ permission: 1, blocking: 1 }) });
-  vm.runInContext(['applyAppVersion', 'updateTitle'].map(name => functionSource(html, name)).join('\n'), context);
+  vm.runInContext(['formatRuntime', 'applyAppVersion', 'updateTitle'].map(name => functionSource(html, name)).join('\n'), context);
   context.applyAppVersion('1.0.0');
   context.updateTitle([]);
   assert.equal(context.document.title, '(2) Agent Cockpit v1.0.0');

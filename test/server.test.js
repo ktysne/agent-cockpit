@@ -9,11 +9,12 @@ const { productFromCwd } = require('../src/server/identity');
 const { DashboardState } = require('../src/server/state');
 const { readTranscriptInterruption } = require('../src/server/transcript');
 const {
-  startServer,
+  startServer: startRealServer,
   MAX_BODY_BYTES,
   escapeHtmlAttribute,
   hasSessionJsonFiles,
 } = require('../src/server/server');
+const startServer = options => startRealServer({ readSourceCommit: async () => null, readSourceState: () => 'unknown', ...options });
 const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
