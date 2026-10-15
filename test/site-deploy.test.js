@@ -305,6 +305,29 @@ test('同じ大きさでも内容のハッシュが違うファイルだけを�
   assert.deepEqual(server.uploads.map(upload => upload.name), ['license.html.uploading', 'upload-manifest.json.uploading']);
 });
 
+test('送り始める前にサーバーの一覧を消すので、途中で止まった後の配信は全ファイルを送る', async t => {
+  const { directory } = temporaryDirectory(t);
+  const { siteDir, manualDir } = createSite(directory);
+  const items = siteItems(siteDir, manualDir);
+  const server = fakeFtpServer();
+  seedPublishedSite(server, items);
+  const original = fs.readFileSync(path.join(siteDir, 'license.html'));
+  write(siteDir, 'license.html', '<a href="./">Away</a>');
+  server.failures.push(...Array.from({ length: 4 }, () => operation => operation === 'upload'));
+
+  await assert.rejects(uploadSite(items, FTP_CONFIG, server.dependencies), /4 回切れた/);
+  assert.equal(server.remoteFiles.has(path.posix.join(FTP_CONFIG.remoteRoot, 'upload-manifest.json')), false);
+
+  fs.writeFileSync(path.join(siteDir, 'license.html'), original);
+  server.uploads.length = 0;
+  await uploadSite(items, FTP_CONFIG, server.dependencies);
+
+  assert.deepEqual(server.uploads.map(upload => upload.name), [
+    ...items.map(item => path.basename(item.localPath) + '.uploading'),
+    'upload-manifest.json.uploading',
+  ]);
+});
+
 test('一覧が無いと全ファイルを送り、最後に送る一覧が実送信内容のハッシュを持つ', async t => {
   const { directory } = temporaryDirectory(t);
   const { siteDir, manualDir } = createSite(directory);

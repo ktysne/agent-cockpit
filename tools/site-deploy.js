@@ -299,6 +299,14 @@ async function readRemoteUploadManifest(client, rootIndex) {
   return published;
 }
 
+// 送り始める前に一覧を消す。途中で止まった後に古い一覧が残ると、元の内容へ戻したファイルが送り途中の内容のまま一致と判定されるため。
+async function withdrawRemoteUploadManifest(client) {
+  try { await client.remove(UPLOAD_MANIFEST_NAME); } catch {}
+  if ((await listCurrentDirectory(client)).has(UPLOAD_MANIFEST_NAME)) {
+    throw new Error('サーバーの ' + UPLOAD_MANIFEST_NAME + ' を消せないため、送らずに止めます。');
+  }
+}
+
 // 421 は FTP サーバーが制御接続を閉じる前に返す応答で、ソケットの終了より先に届くことがある。
 function isFtpConnectionLost(client, error) {
   return client.closed === true || FTP_CONNECTION_LOST_CODES.has(error?.code) || error?.code === FTP_CLOSING_REPLY_CODE;
@@ -440,8 +448,10 @@ async function uploadSite(items, config, dependencies = {}) {
         + (item.reason ? '  理由: ' + UPLOAD_REASON_LABELS[item.reason] : '  理由: 前回の配信と一致'));
     }
     console.log(describeUploadPlan(uploadItems).join('\n'));
+    if (uploadItems.every(item => item.skipUpload)) return;
+    await withdrawRemoteUploadManifest(client);
     for (const item of uploadItems) if (!item.skipUpload) await sendItem(item);
-    if (uploadItems.some(item => !item.skipUpload)) await sendItem(manifestItem);
+    await sendItem(manifestItem);
   } finally {
     client.close();
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
