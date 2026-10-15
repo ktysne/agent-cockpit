@@ -1068,7 +1068,7 @@ class PullRequestTracker {
 
   refreshAll({ inactiveIntervalMs = INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS, fresh = false } = {}) {
     const repositories = new Map();
-    for (const record of [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]) {
+    for (const record of [...this.state.readOnlyPullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]) {
       const key = repoKey(record.owner, record.repo);
       const previous = repositories.get(key);
       const active = record.state == null || ['open', 'unknown'].includes(record.state);
@@ -1084,7 +1084,7 @@ class PullRequestTracker {
     }
     return Promise.all(refreshes).then((results) => {
       // 取り直しの間に登録されたリポジトリを消さないため、登録は待った後に数え直す。
-      const registeredKeys = new Set([...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
+      const registeredKeys = new Set([...this.state.readOnlyPullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
         .map((record) => repoKey(record.owner, record.repo)));
       let removed = false;
       for (const key of this.repositories.keys()) {
@@ -1138,7 +1138,7 @@ class PullRequestTracker {
       this.crossReviewByRepository.delete(key);
       this.initialFetchCompleted.delete(key);
       this.pruneUnregisteredRepositoryRecords(new Set(
-        [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
+        [...this.state.readOnlyPullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
           .map((record) => repoKey(record.owner, record.repo)),
       ));
       for (const [identity, view] of this.productViews) {
@@ -1311,7 +1311,7 @@ class PullRequestTracker {
     } catch (error) {
       const consecutive = (this.diagnosticFailures.get(key) || 0) + 1;
       this.diagnosticFailures.set(key, consecutive);
-      const registration = repository && this.state.pullRequestRegistrations().find(record =>
+      const registration = repository && this.state.readOnlyPullRequestRegistrations().find(record =>
         repositoryKey(record.owner, record.repo) === repository.toLowerCase() && (!number || record.number === number));
       this.diagnostics?.record('error', 'gh', 'gh.failed', { operation, repository, number,
         session: registration?.session_id.slice(0, 8), consecutive,
@@ -1732,7 +1732,7 @@ class PullRequestTracker {
       };
     });
     const existing = new Set(groups.map((group) => `${group.product.key || `repo:${repoKey(group.owner, group.repo)}`}\0${repoKey(group.owner, group.repo)}`));
-    const registrations = [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()];
+    const registrations = [...this.state.readOnlyPullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()];
     const pendingGroups = new Map();
     for (const registration of registrations) {
       const key = repoKey(registration.owner, registration.repo);

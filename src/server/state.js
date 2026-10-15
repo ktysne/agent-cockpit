@@ -60,6 +60,15 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
+// lastOpen の中の値は保存中の記録と共有しているので、正規化で作り直した階層だけを凍結する。
+function freezeRegistrations(registrations) {
+  for (const record of registrations) {
+    for (const key of ['product', 'lastOpen', 'mergedHead']) if (record[key]) Object.freeze(record[key]);
+    Object.freeze(record);
+  }
+  return Object.freeze(registrations);
+}
+
 function validStoredPlan(plan) {
   return isRecord(plan) && Array.isArray(plan.tasks) && validTimestamp(plan.tasksUpdatedAt, true) &&
     (plan.product === undefined || plan.product === null || validProduct(plan.product)) &&
@@ -1612,7 +1621,7 @@ class DashboardState {
     this.mergedPullRequests = new Map(store.mergedPrs.map((record) => [
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
-    for (const record of [...this.pullRequestRegistrations(), ...this.relatedPullRequestRegistrations()]) {
+    for (const record of [...this.readOnlyPullRequestRegistrations(), ...this.relatedPullRequestRegistrations()]) {
       const mergedAt = Date.parse(record.mergedAt || '');
       if (record.state !== 'merged' || !Number.isFinite(mergedAt) || now - mergedAt < 0 || now - mergedAt >= MERGED_PULL_REQUEST_RETENTION_MS) continue;
       const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
@@ -1687,10 +1696,11 @@ class DashboardState {
         relatedPullRequestsChanged = true;
       }
     }
-    const retainedPullRequestKeys = new Set([
-      ...this.pullRequestRegistrations(),
-      ...this.relatedPullRequestRegistrations(),
-    ].map((record) => relatedPullRequestRecordKey(record.owner, record.repo, record.number)));
+    // 登録の Map のキーは relatedPullRequestRecordKey と同じ規則で作る。マージを記録するたびに呼ぶので、登録一覧を組み立てない。
+    const retainedPullRequestKeys = this.crossReviewSkips.size ? new Set([
+      ...[...this.pullRequests.values()].flatMap((records) => [...records.keys()]),
+      ...this.relatedPullRequests.keys(),
+    ]) : null;
     for (const key of this.crossReviewSkips.keys()) {
       if (retainedPullRequestKeys.has(key)) continue;
       this.crossReviewSkips.delete(key);
@@ -1833,9 +1843,14 @@ class DashboardState {
     return structuredClone(this.pullRequestRegistrationSnapshot().registrations);
   }
 
+  /** 索引と共有する凍結済みの登録一覧を返す。書き換える呼び出し側は pullRequestRegistrations() の複製を使う。 */
+  readOnlyPullRequestRegistrations() {
+    return this.pullRequestRegistrationSnapshot().registrations;
+  }
+
   pullRequestRegistrationSnapshot() {
     if (this.pullRequestRegistrationCache) return this.pullRequestRegistrationCache;
-    const registrations = [...this.pullRequests.values()].flatMap((records) => [...records.values()].map(normalizePullRequestRecord));
+    const registrations = freezeRegistrations([...this.pullRequests.values()].flatMap((records) => [...records.values()].map(normalizePullRequestRecord)));
     const registrationsByRepo = new Map();
     const providersByPullRequest = new Map();
     for (const record of registrations) {
@@ -1920,7 +1935,7 @@ class DashboardState {
     for (const file of this.sessionFiles.values()) {
       if (typeof file.cwd === 'string') cwds.add(file.cwd);
     }
-    for (const record of this.pullRequestRegistrations()) {
+    for (const record of this.readOnlyPullRequestRegistrations()) {
       if (typeof record.cwd === 'string') cwds.add(record.cwd);
     }
     return [...cwds];
@@ -1931,7 +1946,7 @@ class DashboardState {
   }
 
   pullRequestRegistration(number, registrationKey) {
-    const matches = this.pullRequestRegistrations().filter((record) => record.number === number);
+    const matches = this.readOnlyPullRequestRegistrations().filter((record) => record.number === number);
     if (typeof registrationKey === 'string') {
       const record = matches.find((candidate) => pullRequestRegistrationKey(candidate) === registrationKey);
       return record ? normalizePullRequestRecord(record) : null;
@@ -1941,7 +1956,7 @@ class DashboardState {
 
   pullRequestRegistrationByKey(registrationKey) {
     if (!isSha256Digest(registrationKey)) return null;
-    const record = this.pullRequestRegistrations().find((candidate) => pullRequestRegistrationKey(candidate) === registrationKey);
+    const record = this.readOnlyPullRequestRegistrations().find((candidate) => pullRequestRegistrationKey(candidate) === registrationKey);
     return record ? normalizePullRequestRecord(record) : null;
   }
 
@@ -2005,8 +2020,8 @@ class DashboardState {
     if (Object.hasOwn(record, 'mergedHead')) {
       registrationChanges.mergedHead = normalizeMergedPullRequestHead(record.mergedHead);
     }
-    for (const registration of this.pullRequestRegistrationsForRepo(next.owner, next.repo).filter((item) => item.number === next.number)) {
-      this.updatePullRequest(registration.session_id, next.owner, next.repo, next.number, registrationChanges);
+    for (const sessionId of this.pullRequests.keys()) {
+      this.updatePullRequest(sessionId, next.owner, next.repo, next.number, registrationChanges);
     }
     this.updateRelatedPullRequest(next.owner, next.repo, next.number, registrationChanges);
     this.pruneExpiredStoreRecords(now);
@@ -2269,7 +2284,7 @@ class DashboardState {
 
   recordPullRequestCiFailure(owner, repo, number, nextLastOpen, now, displayProducts = []) {
     if (nextLastOpen?.ci !== 'fail') return;
-    const registrations = this.pullRequestRegistrations().filter((record) => (
+    const registrations = this.readOnlyPullRequestRegistrations().filter((record) => (
       record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase() && record.number === number
     ));
     const related = this.relatedPullRequestRegistrations().filter((record) => (
@@ -3592,7 +3607,7 @@ class DashboardState {
 
   // 変化の元になる記録。種類ごとの取り出しと対象のプロダクトの絞り込みが、同じ記録を見る。
   sinceSeenSources(pullRequestGroups) {
-    const registrations = this.pullRequestRegistrations();
+    const registrations = this.readOnlyPullRequestRegistrations();
     const records = [...registrations, ...this.relatedPullRequestRegistrations()];
     const storedMerged = [...this.mergedPullRequests.values()];
     return {
