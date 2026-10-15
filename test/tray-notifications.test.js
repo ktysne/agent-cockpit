@@ -68,3 +68,42 @@ test('離席中や常駐サーバーのエラー通知は通知設定で止め�
   assert.doesNotMatch(away, /notifyPendingCounts/);
   assert.doesNotMatch(startup, /notifyPendingCounts/);
 });
+
+test('再起動前に別フォルダーの常駐サーバーを確認ダイアログより先に知らせる', () => {
+  const restart = section('function Restart-ResidentServer', '\nfunction Open-Dashboard');
+  const precheck = restart.indexOf('Get-ResidentServerFolderFromCommandLine $previousCommandLine');
+  const confirmation = restart.indexOf('[System.Windows.Forms.MessageBox]::Show');
+
+  assert.ok(precheck >= 0);
+  assert.ok(precheck < confirmation);
+  assert.match(restart, /Get-Process -Id \$previousServer\.ProcessId -ErrorAction SilentlyContinue/);
+  assert.match(restart, /Get-CimInstance Win32_Process -Filter "ProcessId=\$\(\$previousServer\.ProcessId\)"/);
+  assert.match(restart, /別のフォルダーの agent-cockpit の常駐サーバーが動いているため、再起動しませんでした/);
+  assert.match(restart, /\$isAgentCockpitServer -and -not \$isResidentServer/);
+  assert.match(restart, /そのフォルダーのタスクトレイから再起動してください。/);
+});
+
+test('トレイの再起動は照合結果に応じた警告を出し、成功扱いにしない', () => {
+  const restart = section('function Restart-ResidentServer', '\nfunction Open-Dashboard');
+
+  assert.match(restart, /ensureScript --verify/);
+  assert.match(restart, /Show-TrayNotice '常駐サーバーを再起動しましたが、更新の途中のファイルで起動した可能性があります。もう一度再起動してください。' \(\[System\.Windows\.Forms\.ToolTipIcon\]::Warning\)/);
+  assert.match(restart, /Show-TrayNotice "別のフォルダーの agent-cockpit の常駐サーバーが起動しました\$folderNotice。フックの登録先がこのフォルダーになっているか確かめてください。"/);
+  assert.match(restart, /Show-TrayNotice "別のフォルダーの agent-cockpit の常駐サーバーが動いているため、再起動しませんでした\$folderNotice。そのフォルダーのタスクトレイから再起動してください。"/);
+  assert.match(restart, /if \(\$isLocalServerCommand\) \{\s*Show-TrayNotice '常駐サーバーを再起動しましたが、更新の途中のファイル/);
+  assert.match(restart, /Show-TrayNotice '常駐サーバーを再起動しましたが、このフォルダーの agent-cockpit で動いているかを確かめられませんでした。もう一度再起動し、続くときはフックの登録先を確かめてください。' \(\[System\.Windows\.Forms\.ToolTipIcon\]::Warning\)/);
+  const otherFolderNotice = restart.indexOf('別のフォルダーの agent-cockpit の常駐サーバーが起動しました');
+  const mismatchBranch = restart.indexOf("if ($server.result -eq 'mismatch')");
+  assert.ok(otherFolderNotice >= 0 && otherFolderNotice < mismatchBranch, '照合が ok でも別フォルダーの起動を成功と通知しない');
+  assert.match(restart, /if \(\$server\.result -ne 'ok'\) \{ throw/);
+  assert.match(restart, /Show-TrayNotice '常駐サーバーを再起動しました'/);
+  assert.match(restart, /常駐サーバーを再起動できませんでした。\{0\}/);
+  assert.match(tray, /if \(\$Folder\.Length -le 90\)/);
+
+  const longFolder = 'x'.repeat(90);
+  const notices = [
+    `別のフォルダーの agent-cockpit の常駐サーバーが動いているため、再起動しませんでした(${longFolder})。そのフォルダーのタスクトレイから再起動してください。`,
+    `別のフォルダーの agent-cockpit の常駐サーバーが起動しました(${longFolder})。フックの登録先がこのフォルダーになっているか確かめてください。`,
+  ];
+  assert.ok(notices.every(notice => notice.length <= 200));
+});

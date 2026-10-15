@@ -4,6 +4,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { temporaryDirectory } = require('./support/temp');
+const { main } = require('../src/tray/ensure-server');
 
 const ensureServerScript = path.join(__dirname, '..', 'src', 'tray', 'ensure-server.js');
 
@@ -73,4 +74,42 @@ test('ensure-server は空きポートでサーバーを起動し、ポートだ
   assert.notEqual(port, 47821);
   assert.equal(result.stdout, `${JSON.stringify({ port })}\n`);
   assert.ok(!result.stdout.includes('secret'));
+});
+
+test('ensure-server --verify は照合結果と版だけを JSON で出力し、mismatch でも起動情報があれば成功する', async () => {
+  for (const [result, running, expectedLine] of [
+    ['mismatch', { version: '1.3.0', commit: 'private', sourceState: 'dirty' },
+      '{"port":47821,"pid":456,"result":"mismatch","expected":{"version":"1.4.0"},"running":{"version":"1.3.0"}}\n'],
+    ['start-failed', null,
+      '{"port":47821,"pid":456,"result":"start-failed","expected":{"version":"1.4.0"},"running":null}\n'],
+  ]) {
+    const lines = [];
+    const code = await main(['--verify'], {
+      homeDir: 'test-home',
+      now: () => 100,
+      ensureServerRunning: async options => {
+        assert.equal(options.homeDir, 'test-home');
+        return { port: 47821, pid: 456 };
+      },
+      verifyServer: async info => {
+        assert.deepEqual(info, { port: 47821, pid: 456 });
+        return { result, expected: { version: '1.4.0', commit: 'private' }, running };
+      },
+      write: line => lines.push(line),
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(lines, [expectedLine]);
+  }
+});
+
+test('ensure-server は --verify が無ければ従来どおりポートだけを出力する', async () => {
+  const lines = [];
+  const code = await main([], {
+    homeDir: 'test-home',
+    ensureServerRunning: async () => ({ port: 47821, pid: 456 }),
+    verifyServer: () => assert.fail('--verify が無いときは照合しない'),
+    write: line => lines.push(line),
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(lines, ['{"port":47821}\n']);
 });
