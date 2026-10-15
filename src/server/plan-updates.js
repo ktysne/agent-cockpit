@@ -104,6 +104,12 @@ function applyDifference(tasks, input) {
   if (changed) task.state = criteria.every(item => item.met) ? 'done' : 'doing';
 }
 
+// 取り込みの印が無い保存済みの一覧は、アプリの各項目を別のタスクとして保存した旧形式でありうる。
+// 完了にすると偽の完了が出るので、題だけの待ち 1 件のほかは捨てる。
+function pendingTitleOnly(tasks) {
+  return tasks.length === 1 && tasks[0].state !== 'done' && !tasks[0].criteria.length ? tasks : [];
+}
+
 function applyItems(tasks, input, sessionTitle) {
   let task = currentTask(tasks);
   if (!(task && !task.criteria.length) && (input.scope === 'new_task' || !task)) {
@@ -159,14 +165,15 @@ class PlanUpdates {
     if (!record) {
       const tasksAt = Date.parse(plan.tasksUpdatedAt);
       record = { hookAt: Number.isFinite(tasksAt) ? tasksAt : -Infinity,
-        tasks: structuredClone(plan.tasks), hasItems: false, seen: new Set(), differences: [] };
+        tasks: structuredClone(plan.tasks), hasItems: false, seen: new Set(), differences: [], legacy: plan.appTasks !== true };
       this.sessions.set(sessionId, record);
     }
     if (toolId && record.seen.has(toolId)) return null;
     if (toolId) record.seen.add(toolId);
     if (input.items) {
       if (record.hasItems && hookAt <= record.hookAt) return null;
-      const before = structuredClone(record.tasks);
+      let before = structuredClone(record.tasks);
+      if (!record.hasItems && record.legacy) before = pendingTitleOnly(before);
       for (const update of record.differences.filter(update => update.hookAt < hookAt)
         .sort((a, b) => a.hookAt - b.hookAt || a.tool_use_id.localeCompare(b.tool_use_id))) {
         applyDifference(before, update.input);
