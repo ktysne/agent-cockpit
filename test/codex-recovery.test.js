@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { runHook } = require('../src/hooks/event');
-const { startServer } = require('../src/server/server');
+const { startServer: startRealServer } = require('../src/server/server');
+const startServer = options => startRealServer({ readSourceCommit: async () => null, readSourceState: () => 'unknown', ...options });
 const { hookHeaders, jsonBody, request } = require('./support/server');
 const { temporaryHome } = require('./support/temp');
 

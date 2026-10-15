@@ -15,6 +15,7 @@ const MAX_DIAGNOSTIC_REPEAT_KEYS = 256;
 const ALLOWED_DATA = Object.freeze({
   ...Object.fromEntries(Object.entries(CLIENT_EVENTS).map(([msg, spec]) => [msg, Object.keys(spec.fields)])),
   'server.start': ['pid', 'port', 'version', 'commit'],
+  'server.source': ['sourceState'],
   'server.stop': ['pid'],
   'update.checked': ['current', 'latest', 'available', 'checkedAt'],
   'update.failed': ['failure'],
@@ -33,7 +34,7 @@ const ALLOWED_DATA = Object.freeze({
   'merge.result': ['repository', 'number', 'result'],
   'session.ended': ['session', 'provider', 'reason'],
   'review.state': ['repository', 'number', 'session', 'file', 'head', 'failure', 'round', 'outcome', 'triageHead'],
-  'diagnostics.rotate': ['segment'],
+  'diagnostics.rotate': ['segment', 'version', 'commit', 'sourceState'],
   'diagnostics.pruned': ['count'],
   'diagnostics.repeated': ['msg', 'count', 'since', 'data'],
 });
@@ -41,6 +42,18 @@ const ALLOWED_DATA = Object.freeze({
 function runStartedAt(run) {
   const stamp = run.split('-')[0];
   return `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(9, 11)}:${stamp.slice(11, 13)}:${stamp.slice(13, 15)}.${stamp.slice(15, -1) || '000'}Z`;
+}
+
+// 起動時の区分は保持上限で消えることがあるため、区分の切り替えの mark も版の出どころにする。
+function runtimeRecords(entries) {
+  const identity = entries.find(entry => ['server.start', 'diagnostics.rotate'].includes(entry.msg)
+    && (entry.data.version || entry.data.commit));
+  const source = entries.find(entry => ['server.source', 'diagnostics.rotate'].includes(entry.msg)
+    && entry.data.sourceState && entry.data.sourceState !== 'pending');
+  return {
+    runtime: identity ? { version: identity.data.version || null, commit: identity.data.commit || null } : null,
+    sourceState: source?.data.sourceState || null,
+  };
 }
 
 /** 起動ごとの診断ログを直列に追記し、読み出しと保持上限と削除を管理する。 */
@@ -67,6 +80,10 @@ class Diagnostics {
       this.enqueue(() => this.flushExpiredRepeats(Date.now())).catch(() => {});
     }, repeatFlushIntervalMs);
     this.repeatTimer.unref();
+  }
+
+  setRuntime({ version, commit, sourceState }) {
+    this.runtime = { version, commit, sourceState };
   }
 
   sanitize(msg, data) {
@@ -196,7 +213,7 @@ class Diagnostics {
       this.lines = 0;
       await fs.appendFile(path.join(this.directory, `${this.run}.${this.segment}.jsonl`), '', { mode: 0o600 });
       const count = await this.prune();
-      if (rotated) await this.write({ ts: entry.ts, level: 'mark', tag: 'server', msg: 'diagnostics.rotate', data: { segment: this.segment } });
+      if (rotated) await this.write({ ts: entry.ts, level: 'mark', tag: 'server', msg: 'diagnostics.rotate', data: { segment: this.segment, ...this.runtime } });
       if (count) await this.write({ ts: entry.ts, level: 'mark', tag: 'server', msg: 'diagnostics.pruned', data: { count } });
     }
     await this.write(entry);
@@ -209,24 +226,39 @@ class Diagnostics {
       for (const name of this.fileSummaries.keys()) {
         if (!currentFiles.has(name)) this.fileSummaries.delete(name);
       }
-      const runs = new Map([[this.run, { id: this.run, startedAt: runStartedAt(this.run), count: 0, sources: new Set(), current: true }]]);
+      const runs = new Map([[this.run, { id: this.run, startedAt: runStartedAt(this.run), count: 0, sources: new Set(), current: true, runtime: null, sourceState: null }]]);
       for (const file of files) {
-        if (!runs.has(file.run)) runs.set(file.run, { id: file.run, startedAt: runStartedAt(file.run), count: 0, sources: new Set(), current: false });
+        if (!runs.has(file.run)) runs.set(file.run, { id: file.run, startedAt: runStartedAt(file.run), count: 0, sources: new Set(), current: false, runtime: null, sourceState: null });
         const stat = await fs.stat(path.join(this.directory, file.name));
         let summary = this.fileSummaries.get(file.name);
         if (!summary || summary.size !== stat.size || summary.mtimeMs !== stat.mtimeMs) {
           const entries = await this.readFile(file.name);
-          summary = { size: stat.size, mtimeMs: stat.mtimeMs, count: entries.length,
+          summary = { ...runtimeRecords(entries), size: stat.size, mtimeMs: stat.mtimeMs, count: entries.length,
             sources: [...new Set(entries.map(entry => entry.tag))] };
           this.fileSummaries.set(file.name, summary);
         }
         const run = runs.get(file.run);
+        run.runtime ||= summary.runtime;
+        run.sourceState ||= summary.sourceState;
         run.count += summary.count;
         for (const source of summary.sources) run.sources.add(source);
       }
-      return [...runs.values()].map(run => ({ ...run, sources: [...run.sources] }))
+      return [...runs.values()].map(({ sourceState, ...run }) => ({ ...run, sources: [...run.sources],
+        runtime: this.runRuntime(run.id, run.runtime, sourceState) }))
         .sort((a, b) => Number(b.current) - Number(a.current) || b.id.localeCompare(a.id));
     });
+  }
+
+  // 過去の起動に現在のサーバーの版を補わない。記録が無ければ null(版不明)とする。
+  runRuntime(run, runtime, sourceState) {
+    if (run === this.run && this.runtime) return { ...this.runtime };
+    return runtime ? { ...runtime, sourceState: sourceState || 'unknown' } : null;
+  }
+
+  /** 起動の記録から、その起動を書いたサーバーの版を求める。 */
+  runtimeOfEntries(run, entries) {
+    const { runtime, sourceState } = runtimeRecords(entries);
+    return this.runRuntime(run, runtime, sourceState);
   }
 
   async readFile(name) {

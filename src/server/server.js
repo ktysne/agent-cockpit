@@ -30,6 +30,7 @@ const { createUiSessionRoutes } = require('./routes/ui-sessions');
 const { createSettingsRoutes } = require('./routes/settings');
 const { Diagnostics } = require('./diagnostics');
 const { UpdateChecker } = require('./update-check');
+const { readSourceCommit, readSourceState } = require('./source-revision');
 const { recordClientEntries, MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYTES } = require('../client/diagnostic-events');
 const { importPendingHooks } = require('../client/hooks-pending');
 const { version } = require('../../package.json');
@@ -184,7 +185,11 @@ function createRequestHandler(options) {
 
   const ctx = {
     updateChecker: options.updateChecker,
+    getRuntime: options.getRuntime,
+    getSourceState: options.getSourceState,
     appVersion: options.appVersion,
+    sourceRoot: options.sourceRoot,
+    uiTemplate: options.uiTemplate,
     diagnostics: options.diagnostics,
     eventCounts: options.eventCounts,
     perf: options.perf,
@@ -234,9 +239,15 @@ function createRequestHandler(options) {
     { method: 'GET', path: '/api/diagnostics', auth: 'none', body: 'none', handler: async ({ response, request }) => {
       const run = new URL(request.url, 'http://localhost').searchParams.get('run');
       try {
-        jsonResponse(response, 200, run === null
-          ? { runs: await options.diagnostics.listRuns(), version }
-          : { entries: await options.diagnostics.readRun(run), version });
+        const { version, commit } = options.getRuntime();
+        const responseRuntime = { version, commit, sourceState: options.getSourceState() };
+        if (run === null) {
+          jsonResponse(response, 200, { runs: await options.diagnostics.listRuns(), version, responseRuntime });
+        } else {
+          const entries = await options.diagnostics.readRun(run);
+          jsonResponse(response, 200, { entries, version,
+            runtime: options.diagnostics.runtimeOfEntries(run, entries), responseRuntime });
+        }
       } catch (error) {
         request.setDiagnosticError?.(error);
         jsonResponse(response, error.statusCode || 500, { error: 'Cannot read diagnostics' });
@@ -412,6 +423,16 @@ async function startServer(options = {}) {
   const port = options.port === undefined ? DEFAULT_PORT : Number(options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('port must be between 0 and 65535');
   const dev = Boolean(options.dev);
+  const appVersion = options.appVersion === undefined ? version : options.appVersion;
+  const sourceRoot = options.sourceRoot || path.join(__dirname, '../..');
+  const commit = await (options.readSourceCommit || readSourceCommit)(sourceRoot);
+  const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
+  let uiTemplate = null;
+  if (!dev) {
+    try { uiTemplate = await fs.readFile(webPath); } catch {}
+  }
+  let runtime = null;
+  let sourceState = 'pending';
   await fs.mkdir(homeDir, { recursive: true });
 
   const storageWriter = new AtomicJsonWriter(homeDir, {
@@ -600,7 +621,9 @@ async function startServer(options = {}) {
   perfSummaryTimer.unref();
   const handler = createRequestHandler({
     updateChecker,
-    appVersion: options.appVersion === undefined ? version : options.appVersion,
+    appVersion,
+    getRuntime: () => runtime,
+    getSourceState: () => sourceState,
     eventCounts,
     perf,
     diagnostics,
@@ -616,7 +639,9 @@ async function startServer(options = {}) {
     codexAgentScriptExists: options.codexAgentScriptExists,
     crossReviewToolExists: options.crossReviewToolExists,
     openExternalUrl: options.openExternalUrl,
-    webPath: options.webPath,
+    webPath,
+    uiTemplate,
+    sourceRoot,
     stateCacheNow: options.stateCacheNow,
     dev,
     scheduleTaskNotifications,
@@ -637,6 +662,8 @@ async function startServer(options = {}) {
       uiSecret: crypto.randomBytes(32).toString('base64url'),
       startedAt: new Date().toISOString(),
     };
+    runtime = Object.freeze({ version: appVersion, commit, pid: info.pid, startedAt: info.startedAt });
+    diagnostics.setRuntime({ ...runtime, sourceState });
     await atomicWriteServerInfo(homeDir, info);
     try {
       const logPath = path.join(homeDir, 'server.log');
@@ -651,7 +678,14 @@ async function startServer(options = {}) {
 
   logLine(homeDir, `started on 127.0.0.1:${info.port}`);
   await diagnostics.record('mark', 'server', 'server.start', {
-    pid: info.pid, port: info.port, version, commit: await readSourceCommit(),
+    pid: info.pid, port: info.port, version: runtime.version, commit: runtime.commit,
+  });
+  const sourceReading = Promise.resolve().then(() => (options.readSourceState || readSourceState)({
+    root: sourceRoot, version: runtime.version, commit: runtime.commit,
+  })).catch(() => 'unknown').then(async result => {
+    sourceState = result;
+    diagnostics.setRuntime({ ...runtime, sourceState });
+    await diagnostics.record('mark', 'server', 'server.source', { sourceState });
   });
   pullRequestTracker.start();
   updateChecker?.start();
@@ -714,6 +748,7 @@ async function startServer(options = {}) {
       pullRequestMergeManager.close?.();
       pullRequestTracker.close();
       await updateChecker?.close();
+      await sourceReading;
       if (server.listening) await new Promise((resolve) => server.close(resolve));
       await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
       await removeServerInfoIfOwned(homeDir, info);
@@ -725,26 +760,6 @@ async function startServer(options = {}) {
   }
 
   return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, updateChecker, diagnostics, info, homeDir, close, refreshSessionFiles };
-}
-
-async function readSourceCommit() {
-  try {
-    const root = path.join(__dirname, '../..');
-    let gitDir = path.join(root, '.git');
-    if ((await fs.stat(gitDir)).isFile()) gitDir = path.resolve(root, (await fs.readFile(gitDir, 'utf8')).trim().replace(/^gitdir: /, ''));
-    const head = (await fs.readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim();
-    if (/^[a-f0-9]{40,64}$/.test(head)) return head;
-    const ref = head.replace(/^ref: /, '');
-    let commonDir = gitDir;
-    try { commonDir = path.resolve(gitDir, (await fs.readFile(path.join(gitDir, 'commondir'), 'utf8')).trim()); } catch {}
-    try {
-      const commit = (await fs.readFile(path.join(commonDir, ref), 'utf8')).trim();
-      if (/^[a-f0-9]{40,64}$/.test(commit)) return commit;
-    } catch {}
-    const packed = await fs.readFile(path.join(commonDir, 'packed-refs'), 'utf8');
-    const commit = packed.split('\n').find(line => line.endsWith(` ${ref}`))?.split(' ')[0];
-    return /^[a-f0-9]{40,64}$/.test(commit) ? commit : undefined;
-  } catch { return undefined; }
 }
 
 function parseArguments(argv) {

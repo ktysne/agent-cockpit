@@ -160,3 +160,23 @@ API 操作は設定取得、比較、head 取得、PR 取得、ブランチ削�
 | レベルを localStorage と URL で指定 | 表示の設定に保存 | 記録するのは常駐サーバーである |
 | 共有(Web Share)、console への同時出力 | 持たない | デスクトップの内部ブラウザと常駐サーバーでは使わない |
 | 文字数の上限やマスクは無い | 受け口で識別子と鍵を選び、文字列を 200 文字で切る | 会話の本文と秘密値を扱うため |
+
+## 起動ごとの版
+
+`GET /api/diagnostics` は `{runs, version, responseRuntime}` を返す。
+run 指定は `{entries, version, runtime, responseRuntime}` を返す。
+version と responseRuntime は応答したサーバーの版で、runtime は記録した起動の `{version, commit, sourceState}` である。
+一覧の各 run にも runtime を付ける。
+
+`server.start` は version と commit を記録する。
+ソースの状態が確定したら `server.source` の mark に sourceState を記録する。
+`diagnostics.rotate` は version、commit、sourceState を引き継ぐ。
+最も古い区分から見て最初の server.start または diagnostics.rotate の version と commit を使い、sourceState は最初の server.source または pending 以外の diagnostics.rotate から求める。
+区分ごとの集計キャッシュにもこの情報を保持する。
+version も commit も無い起動は runtime を null とし、版があって状態の記録だけが無い場合は unknown とする。
+現在の起動は setRuntime の値を優先する。
+
+起動の選択肢には各起動の版を表示する。
+書き出しの共通行は `# viewer=<応答したサーバーの版> level=... run=... exported=...` とする。
+各起動の見出しには、その起動の版、完全な commit、sourceState を付け、記録が無ければ「版不明」とする。
+選択した起動と全起動のどちらの書き出しでも、各起動の版を保つ。

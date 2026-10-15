@@ -958,7 +958,7 @@ test('新しい画面の版は書きかけがあれば知らせ、書きかけ�
   assert.equal(harness.context.checkUiVersion(answerableState()), false);
   assert.equal(harness.reloadCount, 0);
   assert.equal(harness.reloadNote.hidden, false);
-  assert.equal(harness.reloadNote.innerHTML, '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>');
+  assert.equal(harness.reloadNote.innerHTML, '<span>画面が新しくなりました。この画面からは送信できないので、書きかけの回答を控えてから読み込み直してください。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>');
 
   harness.context.answerDrafts.set(DRAFT_KEY, { choice: null, note: '', picks: [] });
   assert.equal(harness.context.checkUiVersion(answerableState()), true);
@@ -3594,6 +3594,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     pullRequestExpirySignature: () => signature,
     renderedPullRequestExpirySignature: 'reservation:visible',
     applyUpdateState() {},
+    renderRestartNote() {},
     applyAppVersion() {},
     updateConnectionNote() {},
     isAwaitingDecision: () => false,
@@ -4340,6 +4341,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       pullRequestExpirySignature: () => '',
       renderedPullRequestExpirySignature: '',
       applyUpdateState() {},
+    renderRestartNote() {},
       applyAppVersion() {},
       updateConnectionNote() {},
       isPendingDecision: () => false,
@@ -5102,4 +5104,57 @@ test('取り込み確認を直接閉じても取り込まない回答を送り�
   await context.answerImportAppTasks(false);
   handler();
   assert.deepEqual(JSON.parse(JSON.stringify(patches)), [{ importAppTasks: false }]);
+});
+
+test('再起動待ちの帯は差のある版とコミットを表示し、解消したら消す', () => {
+  for (const source of [pageHtml, mockHtml]) {
+    const note = { hidden: true, textContent: '' };
+    const context = pageContext(source, { document: { getElementById: () => note } });
+    vm.runInContext(['renderRestartNote', 'formatRuntime'].map(name => functionSource(source, name)).join('\n'), context);
+    context.renderRestartNote({ restartRequired: true,
+      runtime: { version: '1.4.0', commit: 'c933f60' }, installed: { version: '1.5.0', commit: 'a1b2c3d' } });
+    assert.equal(note.hidden, false);
+    assert.match(note.textContent, /実行中 v1.4.0\+c933f60 \/ 配置済み v1.5.0\+a1b2c3d/);
+    context.renderRestartNote({ restartRequired: true, uiVersion: 'old', installed: { uiVersion: 'new' } });
+    assert.match(note.textContent, /画面のファイルが更新されています/);
+    assert.doesNotMatch(note.textContent, /実行中/);
+    context.renderRestartNote({ restartRequired: false });
+    assert.equal(note.hidden, true);
+    assert.equal(note.textContent, '');
+  }
+});
+
+for (const version of ['v1', 'v2', '']) {
+  test(`401 で取り直した画面の版 ${version || '空'} と現在の版を照合して再送を決める`, async () => {
+    const harness = reloadHarness(version === '' ? '' : 'v1', [[DRAFT_KEY, { choice: 'ok', note: '', picks: [] }]]);
+    const secret = { content: 'old-secret' };
+    const unauthorized = { status: 401, ok: false };
+    let sends = 0;
+    Object.assign(harness.context, {
+      lastState: answerableState(),
+      document: { querySelector: () => secret },
+      DOMParser: class { parseFromString() { return { querySelector: selector => ({ content: selector.includes('ui-version') ? version : 'new-secret' }) }; } },
+      fetchUi: async () => ({ ok: true, text: async () => '<html>' }),
+      fetch: async () => { sends += 1; return unauthorized; },
+      reportWebFailure: () => {},
+    });
+    vm.runInContext(['postUiAction', 'refreshUiSecret'].map(name => functionSource(pageHtml, name)).join('\n'), harness.context);
+    assert.equal(await harness.context.postUiAction('/api/away', {}), unauthorized);
+    assert.equal(sends, version === 'v2' ? 1 : 2);
+    assert.equal(secret.content, version === 'v2' ? 'old-secret' : 'new-secret');
+    assert.equal(harness.reloadNote.hidden, version !== 'v2');
+    assert.equal(harness.reloadCount, 0);
+  });
+}
+
+test('401 で画面が変わり下書きが無ければ再送せず読み込み直す', async () => {
+  const harness = reloadHarness('v1');
+  Object.assign(harness.context, {
+    lastState: {},
+    DOMParser: class { parseFromString() { return { querySelector: () => ({ content: 'v2' }) }; } },
+    fetchUi: async () => ({ ok: true, text: async () => '<html>' }),
+  });
+  vm.runInContext(functionSource(pageHtml, 'refreshUiSecret'), harness.context);
+  assert.equal(await harness.context.refreshUiSecret(), false);
+  assert.equal(harness.reloadCount, 1);
 });

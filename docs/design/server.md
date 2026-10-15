@@ -34,7 +34,7 @@
 
 ## 起動と寿命
 
-- フックと MCP サーバーは、`GET /health` の応答が `{app: "agent-cockpit", pid, startedAt}` で `server.json` と一致するとき、常駐サーバーが動いていると判定する。
+- フックと MCP サーバーは、`GET /health` の応答が `{app: "agent-cockpit", pid, startedAt, version, commit, sourceState}` で、app と pid と startedAt が `server.json` の識別情報と一致するとき、常駐サーバーが動いていると判定する。
   `/health` の試行期限は全体の期限の残りか 500ms の短いほうにする。
   `/health` の応答が何も届かないまま期限を過ぎ、`server.json` を読めた場合は、記録されたポート（無ければ既定ポート）へ `127.0.0.1` で TCP 接続する。
   `/health` が応答したのに識別が一致しない場合と、応答が届いた後に本文が期限に間に合わない場合は、別のアプリがその番号を使っているので、TCP 接続の判定をせず、読んだ情報も使わない。秘密値とイベントの本文を別のアプリへ送らないためである。
@@ -77,8 +77,18 @@ git は対話を無効にし、15 秒の期限と 1MB の出力上限を設け�
 確認を有効にしていないサーバー(`updateCheck` を渡していない場合)は `409` と `{"error":"update-check-disabled"}` を返す。
 定期の確認の時機は変えない。
 
-手元の版は `/api/state` の `appVersion` で渡し、画面はウィンドウのタイトルにだけ「Agent Cockpit v1.0.0」の形で出し、見出しは名前だけにする。
-デモの常駐サーバーは `appVersion` を `null` にして版を出さない。マニュアルと紹介ページの画像が、版を上げるたびに変わらないためである。
+起動時の版は `/api/state` の `runtime: {version, commit, sourceState, startedAt}` で渡す。
+互換のため `appVersion` も残す。
+画面のタイトルは `v1.4.0` を基本とし、sourceState が release 以外で commit があれば `v1.4.0+c933f60` の形にする。
+version が無ければ名前だけにする。
+runtime を返さない旧サーバーでは appVersion を使う。
+デモの常駐サーバーは `appVersion` を `null` にし、commit も読まずに版を出さない。マニュアルと紹介ページの画像が、版を上げるたびに変わらないためである。
+
+listen 前には `.git` のファイルから commit だけを読む。
+listen 後に info と同じ pid と startedAt で `{version, commit, pid, startedAt}` を確定し、以後変えない。
+sourceState は別に持ち、listen 後に git のタグ照合と追跡ファイルの状態確認を各 5 秒の期限で並行して開始する。
+判定中は pending、追跡ファイルに変更があれば dirty、注釈タグ `v<version>` の実体コミットが起動時 commit と一致すれば release、不一致なら diverged、タグが無い場合や読み取りの失敗時は unknown とし、一度確定した後は変えない。
+startServer はこの判定を待たずに返し、close は判定と診断記録の完了を待つ。
 
 確認を有効にするのは `startServer` に `updateCheck` を明示して渡した場合だけで、CLI の main が渡す。
 テストとデモと撮影は既定で git を起動しない。
@@ -111,7 +121,10 @@ Windows では `process.kill(pid)` は対象を終了させるため、停止の
 - 開発用の口は `/api/dev/` の下に置き、`--dev` で起動したときだけ有効にする。
 - 書き込みの本文は 64KB を上限とし、超えたら拒否する。
 - フックと MCP サーバーからの書き込みは、`401` か接続の拒否を受けたら `server.json` を読み直して 1 回だけやり直す。秘密値は常駐サーバーの起動ごとに変わるためである。
-- 画面は `uiSecret` を配信時に HTML の meta 属性から受け取る。`401` を受けたら常駐サーバーが再起動して秘密値が変わったとみなし、`GET /` を取り直して新しい値で 1 回だけ送り直す。
+- 画面は `uiSecret` を配信時に HTML の meta 属性から受け取る。`401` を受けたら常駐サーバーが再起動して秘密値が変わったとみなし、`GET /` を取り直し、埋め込まれた画面の版を現在の画面の初期の版と照合する。
+  同じ版なら秘密値を差し替えて 1 回だけ送り直す。
+  違う版なら秘密値を差し替えず、再送もしない。書きかけの回答が無ければ読み込み直し、あれば送信できないことと回答を控えてから読み込み直す案内を表示する。
+  初期の版が空の旧配信では、秘密値を差し替えて 1 回だけ送り直す。
 - 要求の処理は `src/server/server.js` のルート表で決める。行ごとに、メソッド、パス、照合の種別(`hook`、`ui`、`ui-optional-origin`、`none`)、本文を読むか、ID の検査を持つ。
 - 前段は、Host、ルートの決定の後に、秘密値(`401`)、Origin(`403`)、ID の検査、本文の順で行う。照合の種別が決まるのはルートを決めた後なので、照合の前に ID や本文の妥当性を応答して漏らさない。
 - ハンドラーは機能ごとに `src/server/routes/` へ置き、前段を通った要求だけを受ける。ハンドラーは照合を持たず、新しい書き込み口はルート表に行を足して照合の種別を選ぶ。
@@ -254,11 +267,22 @@ PostToolUse の出力全文は送らない。
 - 表示設定 `display.importAppTasks` と `display.importAppTasksAsked` は真偽値で、既定はともに false とする。保存値の互換補正と確認の扱いは「タスクと判断事項」に記す。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 10 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 10 分へ戻し、書き込み時は拒む。
 - 表示設定 `display.awayAnswerWaitMinutes` は離席中の質問への回答を待つ時間で、既定は 3 分、範囲は 1〜30 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 3 分へ戻し、書き込み時は拒む。
-- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, routing, integrations, uiVersion}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`GET /api/tray` はトレイ用に `{permissionKeys, decisionKeys, awayEnabled}` を返し、PR や「前回見てから」の情報を計算しない。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, runtime, routing, integrations, uiVersion, installed, restartRequired}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は配信する HTML テンプレートのバイト列の SHA-256 先頭 16 桁で、秘密値と版の埋め込み前に計算する。
+  本番では起動時に listen の前に HTML を読み、そのテンプレートと版を再起動まで固定する。
+  起動時に読めなかった場合、`GET /` は読み込みに失敗している間 500 を返し、最初の成功時に固定する。
+  `GET /` は固定したテンプレートへ秘密値と版を埋め込み、ディスクを読み直さない。
+  `--dev` では `GET /` のたびに読み直し、版もディスクに追従する。
+  画面はサーバーとの版の違いを検出し、書きかけが無ければ読み込み直す。
+  `installed` は配置済みの `{version, commit, uiVersion}` で、HTML、JSON として読む `package.json`、Git の参照ファイルを同じ確認で観測する。
+  各値は読めなければ `null`、最初の観測前は `installed` 全体を `null` とする。
+  `restartRequired` は実行中と配置済みの両方が `null` でない項目に差があれば `true`、最初の観測前は `false` とする。
+  `--dev` では `uiVersion` を比較しない。
+  再起動待ちの間、画面は配置されたファイルを再起動で反映できることと、差のある項目を通知欄に表示する。
+  状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`GET /api/tray` はトレイ用に `{permissionKeys, decisionKeys, awayEnabled}` を返し、PR や「前回見てから」の情報を計算しない。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
 `POST /api/update/check` は今すぐの版の確認で、「更新の確認」の節に記す。
 - `GET /api/state` は計算済みの JSON 本文を、状態の指紋と有効期限が変わらない間だけ使い回す。
-  指紋は `state.version`、PR の取得中の鍵の署名、整理後の離席状態、経路設定、更新確認の結果、画面の版、連携ツールの検出結果から作る。
-  画面ファイルは 5 秒、連携ツールは 10 秒を確認期限とし、状態の版が変わった場合も確認し直す。
+  指紋は `state.version`、PR の取得中の鍵の署名、整理後の離席状態、経路設定、更新確認の結果、画面の版、配置済みの状態、再起動待ちの判定、連携ツールの検出結果、ソースの状態から作る。
+  配置済みの HTML、パッケージの版、コミットは 5 秒、連携ツールは 10 秒を確認期限とし、状態の版が変わった場合も確認し直す。
   同時に要求が来たときは実行中の外部確認を共有する。確認中に版が変わっても待ち直さず、次の取得で確認し直す。イベントが続く間も応答を止めないためである。
   外部確認と離席期間の整理を済ませてから本文を同期で生成し、初回表示による既読時刻の初期化を含め、生成後の版で指紋を確定する。
 - 本文の有効期限は生成から 30 秒以内とし、予約通知の消失、マージ履歴の保持期限、開いた離席期間へ未来の記録が入る時刻、離席期間の保持期限が先に来れば、その時刻で失効する。
@@ -728,8 +752,8 @@ MCP サーバーは `claude mcp add --scope user` で登録し、スキルは `~
 
 | 経路 | 認証 | 応答または本文 |
 |---|---|---|
-| `GET /api/diagnostics` | なし | `{runs: [{id, startedAt, count, current}], version}`。現在の起動を先頭に返す |
-| `GET /api/diagnostics?run=<起動>` | なし | `{entries, version}`。区分を古い順に連結する |
+| `GET /api/diagnostics` | なし | `{runs: [{id, startedAt, count, current, sources, runtime}], version, responseRuntime}`。現在の起動を先頭に返す |
+| `GET /api/diagnostics?run=<起動>` | なし | `{entries, version, runtime, responseRuntime}`。区分を古い順に連結する |
 | `POST /api/diagnostics` | MCP は secret と Origin 無し、画面は uiSecret と同一 Origin | `{entries: [{msg, data}]}`。本文は 16 KiB、記録は 8 件まで。応答は `202 {accepted: true}` |
 | `POST /api/diagnostics/delete` | uiSecret と同一 Origin | 本文は `{run}` または `{all: true}`。応答は `{ok: true}` |
 

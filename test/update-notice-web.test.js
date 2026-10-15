@@ -67,7 +67,7 @@ test('版はウィンドウのタイトルにだけ付け、見出しは名前�
   assert.match(html, /alt="">Agent Cockpit<\/h1>/);
   const context = vm.createContext({ appVersion: '', document: { title: '' },
     countJudgments: () => ({ permission: 1, blocking: 1 }) });
-  vm.runInContext(['applyAppVersion', 'updateTitle'].map(name => functionSource(html, name)).join('\n'), context);
+  vm.runInContext(['formatRuntime', 'applyAppVersion', 'updateTitle'].map(name => functionSource(html, name)).join('\n'), context);
   context.applyAppVersion('1.0.0');
   context.updateTitle([]);
   assert.equal(context.document.title, '(2) Agent Cockpit v1.0.0');
@@ -82,7 +82,7 @@ test('refresh は後に始めた取得を反映した後に届いた古い応答
   const context = vm.createContext({
     fetchUi: () => new Promise((resolve) => responses.push(resolve)), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
+    applyAwayState() {}, renderRestartNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
     refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 0, lastState: null, lastStateEtag: null, liveStatus: {}, render() {}, countJudgments: () => ({ permission: 0, decisions: 0 }),
@@ -106,7 +106,7 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
   const context = vm.createContext({
     fetchUi: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => state }), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
+    applyAwayState() {}, renderRestartNote() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastStateEtag: 'same', liveStatus: {}, render: () => assert.fail('状態全体は描き直さない'),
   });
@@ -122,7 +122,7 @@ function refreshContext(fetch) {
   const context = vm.createContext({
     fetch, reportWebFailure: (...args) => failures.push(args), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
+    applyAwayState() {}, renderRestartNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
     refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastState: state, lastStateEtag: '"first"', connectionLost: true, lastStateAt: null,
