@@ -3460,14 +3460,11 @@ class DashboardState {
     return candidates;
   }
 
-  pullRequestCreatedCandidates({ registrations, pullRequestTitles }) {
+  pullRequestCreatedCandidates({ registrations, registrationsByPullRequest, pullRequestTitles }) {
     return registrations.map((record) => {
       const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
       const title = pullRequestTitles.get(identity);
-      const providers = orderedProviders(registrations
-        .filter((candidate) => candidate.owner.toLowerCase() === record.owner.toLowerCase() &&
-          candidate.repo.toLowerCase() === record.repo.toLowerCase() && candidate.number === record.number)
-        .map((candidate) => candidate.provider));
+      const providers = orderedProviders(registrationsByPullRequest.get(identity).map((candidate) => candidate.provider));
       return {
         product: cloneProduct(record.product) || repoProduct(record.owner, record.repo),
         type: 'pull-request',
@@ -3539,10 +3536,7 @@ class DashboardState {
     for (const merged of sources.mergedPullRequests.values()) {
       const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
       const title = sources.pullRequestTitles.get(identity);
-      const providers = orderedProviders(sources.registrations.filter((record) => (
-        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() &&
-        record.number === merged.number
-      )).map((record) => record.provider));
+      const providers = orderedProviders((sources.registrationsByPullRequest.get(identity) || []).map((record) => record.provider));
       for (const product of mergedPullRequestProducts(merged, sources)) {
         candidates.push({
           product,
@@ -3587,6 +3581,9 @@ class DashboardState {
     const storedMerged = [...this.mergedPullRequests.values()];
     return {
       registrations,
+      registrationsByPullRequest: groupByPullRequest(registrations, (record) => [record.number]),
+      mergedGroupsByPullRequest: groupByPullRequest(pullRequestGroups.filter((group) => group.owner && group.repo),
+        (group) => new Set((group.merged || []).map((item) => item.number))),
       pullRequestGroups,
       pullRequestTitles: collectPullRequestTitles(records, storedMerged),
       mergedPullRequests: collectMergedPullRequests(records, storedMerged),
@@ -3699,16 +3696,26 @@ function collectMergedPullRequests(records, storedMerged) {
 }
 
 // 関連 PR は登録にプロダクトを持たないので、その PR をマージ済みとして載せている PR 群のプロダクトに出す。
-function mergedPullRequestProducts(merged, { registrations, pullRequestGroups }) {
-  const sameRepo = (owner, repo) => owner?.toLowerCase() === merged.owner.toLowerCase() && repo?.toLowerCase() === merged.repo.toLowerCase();
+function mergedPullRequestProducts(merged, { registrationsByPullRequest, mergedGroupsByPullRequest }) {
+  const key = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
   const found = [
-    ...registrations.filter((record) => sameRepo(record.owner, record.repo) && record.number === merged.number)
-      .map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
-    ...pullRequestGroups.filter((group) => sameRepo(group.owner, group.repo) && group.merged?.some((item) => item.number === merged.number))
-      .map((group) => cloneProduct(group.product)).filter(Boolean),
+    ...(registrationsByPullRequest.get(key) || []).map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
+    ...(mergedGroupsByPullRequest.get(key) || []).map((group) => cloneProduct(group.product)).filter(Boolean),
   ];
   if (!found.length) return [repoProduct(merged.owner, merged.repo)];
   return [...new Map(found.map((product) => [product.key, product])).values()];
+}
+
+function groupByPullRequest(values, numbersOf) {
+  const grouped = new Map();
+  for (const value of values) {
+    for (const number of numbersOf(value)) {
+      const key = relatedPullRequestRecordKey(value.owner, value.repo, number);
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(value);
+    }
+  }
+  return grouped;
 }
 
 function pullRequestLabel(number, title) {
