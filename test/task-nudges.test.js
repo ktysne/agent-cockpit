@@ -24,6 +24,7 @@ function event(sessionId, hookEventName, hookAt, values = {}) {
 
 function makeNudges(options = {}) {
   const state = options.state || new DashboardState();
+  if (!options.state) state.patchDisplayPreferences({ importAppTasks: true });
   let now = START;
   const nudges = new TaskNudges({ state, now: () => now });
   return {
@@ -79,6 +80,7 @@ test('セッションが終わると催促の記録を消す', () => {
 
 test('タスクがある場合はサブエージェント終了から 10 分後に書き直しを促す', () => {
   const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
   state.setTasks('agent-done', [task()], START);
   const { nudges, setNow } = makeNudges({ state });
   nudges.tasksWritten('agent-done', START);
@@ -92,6 +94,7 @@ test('タスクがある場合はサブエージェント終了から 10 分後�
 
 test('サブエージェント終了ごとに 1 回だけ書き直しを促す', () => {
   const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
   state.setTasks('once-per-stop', [task()], START);
   const { nudges, setNow } = makeNudges({ state });
   nudges.tasksWritten('once-per-stop', START);
@@ -109,6 +112,7 @@ test('サブエージェント終了ごとに 1 回だけ書き直しを促す',
 
 test('タスクを書き直すと催促記録を消し、以後の終了時刻を追跡する', () => {
   const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
   const { nudges, setNow } = makeNudges({ state });
   nudges.afterEvent(event('task-write', 'PreToolUse', START, { tool_name: 'Agent' }));
   assert.equal(nudges.reminderFor('task-write'), NO_TASKS_REMINDER);
@@ -124,6 +128,7 @@ test('タスクを書き直すと催促記録を消し、以後の終了時刻�
 
 test('サブエージェント終了より後にタスクを書いたら、その終了を理由に催促しない', () => {
   const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
   state.setTasks('updated-after-agent', [task()], START);
   const { nudges, setNow } = makeNudges({ state });
   nudges.tasksWritten('updated-after-agent', START);
@@ -149,6 +154,7 @@ test('サブエージェントのツール使用は回数に含めない', () =>
 
 test('PostToolBatch は判断事項の回答とタスク催促を同じ additionalContext にまとめる', () => {
   const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
   const delivery = new DecisionAnswerDelivery({ state, away: { snapshot: () => ({ enabled: false }) }, now: () => START });
   const decision = state.addDecision('combined', {
     title: 'どの方式にしますか。', context: '', state: 'provisional', options: [],
@@ -185,6 +191,7 @@ test('取り込み設定がオフの Claude セッションには cockpit_set_ta
 
 test('取り込みオフの Claude セッションに届いた PostToolBatch は cockpit_set_tasks だけの催促を返す', async t => {
   const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
   const { info } = await startTestServer(t, { state });
   const origin = `http://127.0.0.1:${info.port}`;
   const display = await request(info.port, {

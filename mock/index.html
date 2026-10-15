@@ -520,6 +520,14 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   <div class="settings-save-error" id="settings-save-error" role="alert" hidden></div>
   <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="https://ktysne.info/agent-cockpit/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a><button type="button" class="link-btn settings-manual-link" id="update-check">更新を確認</button><span id="update-check-status" role="status" aria-live="polite"></span></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
+<dialog class="settings-dialog" id="import-app-tasks-dialog" aria-labelledby="import-app-tasks-title" aria-describedby="import-app-tasks-description">
+  <h2 id="import-app-tasks-title">デスクトップアプリのタスク一覧を取り込みますか</h2>
+  <p id="import-app-tasks-description">オンにすると、Claude Code デスクトップアプリのタスク一覧を 1 つのタスクの完了条件として取り込み、題はモデルが付けます。Codex のセッションでは取り込みません。<br>オフにすると、従来どおり、モデルが Agent Cockpit に直接登録したタスクを表示します。<br>あとから設定で変えられます。</p>
+  <div class="settings-actions">
+    <button type="button" id="import-app-tasks-no" autofocus>取り込まない</button>
+    <button type="button" id="import-app-tasks-yes">取り込む</button>
+  </div>
+</dialog>
 <dialog class="diagnostics-dialog" id="diagnostics-dialog" aria-labelledby="diagnostics-title">
   <h2 id="diagnostics-title">診断ログ</h2>
   <div class="diagnostics-toolbar">
@@ -858,7 +866,8 @@ const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); 
 // 読み込み直すと消える案内なので、保存する ui には置かない。
 let refreshConfirmPending = false;
 const ui = Object.assign({ mode: 'kind', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 3, idleHideMinutes: 10, hideFinished: true, mergeableCondition: 'cross-review' }, load());
-ui.importAppTasks ??= true;
+ui.importAppTasksAsked = ui.importAppTasksAsked === true;
+ui.importAppTasks = ui.importAppTasksAsked && ui.importAppTasks === true;
 const TRANSIENT_NOTICE_MS = 60_000;
 ui.reservationNotices = ui.reservationNotices && typeof ui.reservationNotices === 'object' && !Array.isArray(ui.reservationNotices) ? ui.reservationNotices : {};
 ui.mergeErrors = ui.mergeErrors && typeof ui.mergeErrors === 'object' && !Array.isArray(ui.mergeErrors) ? ui.mergeErrors : {};
@@ -958,6 +967,7 @@ const mergeableConditionInputs = [...document.querySelectorAll('input[name="merg
 const settingsButton = document.getElementById('settings-button');
 const settingsClose = document.getElementById('settings-close');
 const settingsDialog = document.getElementById('settings-dialog');
+const importAppTasksDialog = document.getElementById('import-app-tasks-dialog');
 const awayToggle = document.getElementById('away-toggle');
 const topBar = document.querySelector('header.top');
 const settingsSaveError = document.getElementById('settings-save-error');
@@ -968,7 +978,7 @@ function captureDisplayPreferences() {
   return {
     mode: ui.mode, order: [...ui.order], pinned: [...ui.pinned], collapsed: [...ui.collapsed], hidden: [...ui.hidden],
     sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
-    importAppTasks: ui.importAppTasks,
+    importAppTasks: ui.importAppTasks, importAppTasksAsked: ui.importAppTasksAsked,
     longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes, idleHideMinutes: ui.idleHideMinutes,
     mergeableCondition: ui.mergeableCondition,
   };
@@ -1010,7 +1020,7 @@ function applySinceSeenMode(mode) {
 function renderDisplaySettings() {
   for (const { key, input } of DISPLAY_MINUTE_SETTINGS) input.value = String(ui[key]);
   hideFinishedInput.checked = ui.hideFinished;
-  importAppTasksInput.checked = ui.importAppTasks !== false;
+  importAppTasksInput.checked = ui.importAppTasks === true;
   for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
 }
 
@@ -1053,9 +1063,31 @@ hideFinishedInput.addEventListener('change', () => {
 importAppTasksInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
   ui.importAppTasks = importAppTasksInput.checked;
+  ui.importAppTasksAsked = true;
   if (!saveDisplayPreferences(previous)) return;
   render();
 });
+let importAppTasksPromptAnswered = false;
+function answerImportAppTasks(value) {
+  if (importAppTasksPromptAnswered) return;
+  importAppTasksPromptAnswered = true;
+  const previous = captureDisplayPreferences();
+  ui.importAppTasks = value;
+  ui.importAppTasksAsked = true;
+  importAppTasksDialog.close();
+  saveDisplayPreferences(previous);
+  renderDisplaySettings();
+  render();
+}
+document.getElementById('import-app-tasks-no').addEventListener('click', () => answerImportAppTasks(false));
+document.getElementById('import-app-tasks-yes').addEventListener('click', () => answerImportAppTasks(true));
+importAppTasksDialog.addEventListener('close', () => { void answerImportAppTasks(false); });
+importAppTasksDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  answerImportAppTasks(false);
+});
+if (!ui.importAppTasksAsked) importAppTasksDialog.showModal();
+
 for (const input of mergeableConditionInputs) input.addEventListener('change', () => {
   if (!['operation', 'ci', 'cross-review'].includes(input.value)) return;
   const previous = captureDisplayPreferences();
@@ -1650,7 +1682,7 @@ function renderSummary() {
   const counts = { ...judgmentCounts, agents, prs };
   // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
   const need = judgmentCounts.permission + judgmentCounts.blocking;
-  const appTitle = `Agent Cockpit ${formatRuntime(DIAGNOSTIC_RUN_SEED[0].runtime)}`;
+  const appTitle = `Agent Cockpit v${DIAGNOSTIC_RUN_SEED[0].runtime.version}`;
   document.title = need ? `(${need}) ${appTitle}` : appTitle;
   // 隠している種類は 0 件でも札を残す。札を押すことが、その種類を個別に表示へ戻す手段であるため。
   document.getElementById('summary').innerHTML = FILTERS.filter(x => counts[x.key] > 0 || !isShown(x.key)).map(x =>

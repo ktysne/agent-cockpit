@@ -3016,7 +3016,10 @@ class DashboardState {
 
   patchDisplayPreferences(changes) {
     const current = normalizeDisplay(this.display || defaultDisplay());
-    const next = normalizeDisplay({ ...current, ...changes });
+    const next = normalizeDisplay({
+      ...current, ...changes,
+      ...(Object.hasOwn(changes, 'importAppTasks') ? { importAppTasksAsked: true } : {}),
+    });
     if (this.display && JSON.stringify(this.display) === JSON.stringify(next)) return cloneDisplay(this.display);
     if (current.importAppTasks !== next.importAppTasks) this.planUpdates.clear();
     this.display = next;

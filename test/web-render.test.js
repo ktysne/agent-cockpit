@@ -1866,12 +1866,12 @@ test('終わったもののチェックは表示設定として保存し、失�
   vm.runInContext(`${settings}\n${functions.join('\n')}\n${saveFunctions.join('\n')}`, context);
 
   assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
-  assert.equal(context.normalizeDisplayPreferences(null).importAppTasks, true);
+  assert.equal(context.normalizeDisplayPreferences(null).importAppTasks, false);
   assert.equal(context.normalizeDisplayPreferences(null).idleHideMinutes, 10);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: true }).hideFinished, true);
   assert.equal(context.normalizeDisplayPreferences({ importAppTasks: false }).importAppTasks, false);
-  assert.equal(context.normalizeDisplayPreferences({ importAppTasks: 'false' }).importAppTasks, true);
+  assert.equal(context.normalizeDisplayPreferences({ importAppTasks: 'false' }).importAppTasks, false);
   assert.equal(context.normalizeDisplayPreferences({}).mergeableCondition, 'cross-review');
   assert.equal(Object.hasOwn(context.normalizeDisplayPreferences({ mergeAfterReviewDefault: true }), 'mergeAfterReviewDefault'), false);
   context.renderDisplaySettings();
@@ -5024,6 +5024,87 @@ test('作業中の完了条件は実画面とモックで doing クラスを付�
   assert.match(markup, /<li class="met">達成済みの条件<\/li>/);
 });
 
+
+test('取り込みの確認は未確認なら一度だけ開き、確認済みなら開かない', () => {
+  for (const asked of [false, true]) {
+    let opened = 0;
+    const context = pageContext(pageHtml, {
+      displayPreferences: { importAppTasksAsked: asked },
+      importAppTasksPromptShown: false,
+      importAppTasksDialog: { showModal() { opened += 1; } },
+    });
+    vm.runInContext(functionSource(pageHtml, 'maybeAskImportAppTasks'), context);
+    context.maybeAskImportAppTasks();
+    context.maybeAskImportAppTasks();
+    assert.equal(opened, asked ? 0 : 1);
+  }
+  const dialog = html => html.match(/<dialog[^>]*id="import-app-tasks-dialog"[\s\S]*?<\/dialog>/)?.[0];
+  assert.equal(dialog(pageHtml), dialog(mockHtml));
+});
+
+test('取り込み確認の回答を保存し、チェックボックスと確認済みの状態を更新する', async () => {
+  for (const value of [false, true]) {
+    let closed = false;
+    let patch;
+    const input = { type: 'checkbox', checked: false };
+    const preferences = { importAppTasks: false, importAppTasksAsked: false };
+    const context = pageContext(pageHtml, {
+      displayPreferences: preferences,
+      importAppTasksPromptAnswered: false,
+      importAppTasksInput: input,
+      importAppTasksDialog: { close() { closed = true; } },
+      saveDisplayPreferences: async (changes, setting) => {
+        patch = changes;
+        Object.assign(preferences, changes);
+        setting.input.checked = changes.importAppTasks;
+        return true;
+      },
+    });
+    vm.runInContext(functionSource(pageHtml, 'answerImportAppTasks'), context);
+    await context.answerImportAppTasks(value);
+    assert.deepEqual(JSON.parse(JSON.stringify(patch)), { importAppTasks: value });
+    assert.equal(closed, true);
+    assert.equal(input.checked, value);
+    assert.equal(preferences.importAppTasksAsked, true);
+  }
+});
+
+test('取り込み確認を Esc で閉じると取り込まない回答を送る', () => {
+  let handler;
+  let answer;
+  let prevented = false;
+  const context = pageContext(pageHtml, {
+    importAppTasksDialog: { addEventListener(type, callback) { assert.equal(type, 'cancel'); handler = callback; } },
+    answerImportAppTasks(value) { answer = value; },
+  });
+  const binding = pageHtml.match(/importAppTasksDialog.addEventListener\('cancel',[\s\S]*?\n\}\);/)[0];
+  vm.runInContext(binding, context);
+  handler({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(answer, false);
+});
+
+
+test('取り込み確認を直接閉じても取り込まない回答を送り、回答後の close では重複保存しない', async () => {
+  let handler;
+  const patches = [];
+  const context = pageContext(pageHtml, {
+    importAppTasksPromptAnswered: false,
+    displayPreferences: { importAppTasksAsked: false },
+    importAppTasksInput: { type: 'checkbox', checked: false },
+    importAppTasksDialog: {
+      addEventListener(type, callback) { handler = callback; },
+      close() {},
+    },
+    saveDisplayPreferences: async (patch) => { patches.push(patch); return true; },
+  });
+  const binding = pageHtml.match(/importAppTasksDialog.addEventListener\('close',[^\n]+/)[0];
+  vm.runInContext(functionSource(pageHtml, 'answerImportAppTasks') + '\n' + binding, context);
+  handler();
+  await context.answerImportAppTasks(false);
+  handler();
+  assert.deepEqual(JSON.parse(JSON.stringify(patches)), [{ importAppTasks: false }]);
+});
 
 test('再起動待ちの帯は差のある版とコミットを表示し、解消したら消す', () => {
   for (const source of [pageHtml, mockHtml]) {

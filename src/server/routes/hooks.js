@@ -7,6 +7,7 @@ const { productFromCwd } = require('../identity');
 const { claudeAgentDefinition, codexAgentDefinition } = require('../session-files');
 const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, repositoryKey, validRepositoryPart } = require('../pull-request-utils');
 const { applyReviewSkip } = require('./review-skip');
+const { keepImportedCriteria } = require('../plan-updates');
 
 function createHookRoutes(ctx) {
   const { state, answerDelivery, claudeHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
@@ -216,7 +217,7 @@ function createHookRoutes(ctx) {
       return;
     }
     if (!rejected && event?.planUpdate && !event.agent_id && event.provider !== 'codex' &&
-      state.getDisplayPreferences().importAppTasks !== false) {
+      state.getDisplayPreferences().importAppTasks === true) {
       const tasks = state.planUpdates.apply(event, state.planFor(event.session_id),
         state.sessionNameFor(event.session_id) || state.sessions.get(event.session_id)?.title);
       if (tasks) {
@@ -272,12 +273,17 @@ function createHookRoutes(ctx) {
     if (body.kind === 'tasks') {
       const incoming = body.tasks.map(task => ({ ...task, criteria: task.criteria || [] }));
       // 取り込みの無い CLI などは一覧全体を書くので置き換える。2 件以上も一覧全体を書く形として扱う。
-      const merging = incoming.length === 1 && state.planFor(sessionId).appTasks === true &&
-        state.getDisplayPreferences().importAppTasks !== false && state.providerForSession(sessionId) !== 'codex';
-      const tasks = merging ? state.planUpdates.merge(sessionId, state.planFor(sessionId), incoming) : incoming;
+      const plan = state.planFor(sessionId);
+      const importing = state.getDisplayPreferences().importAppTasks === true && state.providerForSession(sessionId) !== 'codex';
+      const merging = importing && incoming.length === 1 && plan.appTasks === true;
+      const previousAt = Date.parse(plan.tasksUpdatedAt);
+      const tasks = merging ? state.planUpdates.merge(sessionId, plan, incoming)
+        : importing ? keepImportedCriteria(plan.tasks, incoming) : incoming;
       const saved = state.setTasks(sessionId, tasks);
       // 置き換えより前の基準から組み立て直すと、置き換えた内容が消えるため、基準を置き換えた一覧にする。
-      if (!merging) state.planUpdates.replaced(sessionId, saved.tasks, Date.parse(saved.updatedAt));
+      if (!merging) {
+        state.planUpdates.replaced(sessionId, saved.tasks, Date.parse(saved.updatedAt), Number.isFinite(previousAt) ? previousAt : -Infinity);
+      }
       answerDelivery.afterTasksWrite(sessionId, Date.parse(saved.updatedAt));
       jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt });
       return;
