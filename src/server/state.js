@@ -3298,113 +3298,115 @@ class DashboardState {
   }
 
   buildSnapshot() {
-    const fileOnlySessions = [...this.sessionFiles.values()]
-      .filter((file) => (
-        !this.sessions.has(file.session_id) && !this.endedAt.has(file.session_id) && !this.endedByAbsence.has(file.session_id)
-        && (!this.deletedSessions.has(file.session_id)
-          || Date.parse(file.updatedAt) > Date.parse(this.deletedSessions.get(file.session_id)))
-      ))
-      .map((file) => ({
-        session_id: file.session_id,
-        product: file.product || null,
-        title: file.name,
-        status: '不明',
-        tools: [],
-        agents: [],
-        permissionWaits: [],
-        decisions: [],
-      }));
-    const sessionIds = new Set([
-      ...this.sessions.keys(),
-      ...fileOnlySessions.map((session) => session.session_id),
-    ]);
-    const currentSessions = [...sessionIds].map((sessionId) => {
-      const session = this.sessions.get(sessionId);
-      const file = this.sessionFiles.get(sessionId);
-      const plan = this.plans.get(sessionId);
-      const base = session || {
-        session_id: sessionId,
-        ...(file?.provider === 'codex' ? { provider: 'codex', codex: { ...file.codex } } : {}),
-        product: file?.product || null,
-        title: file?.name || null,
-        status: '不明',
-        tools: [],
-        agents: [],
-        permissionWaits: [],
-        decisions: [],
-      };
-      const { decisionBindings: _decisionBindings, ...visible } = base;
-      const decisions = this.decisionsFor(sessionId);
-      const closedAgents = this.closedAgents.get(sessionId) || new Set();
-      const isClosedByUser = (agent) => closedAgents.has(agent.agent_id) && isClosableAgent(agent);
-      const updateTimestamps = [base.lastActivityAt, plan?.tasksUpdatedAt, ...decisions.map((decision) => decision.updatedAt)]
-        .filter((timestamp) => Number.isFinite(Date.parse(timestamp || '')));
-      const lastUpdatedAt = updateTimestamps.reduce((latest, timestamp) => (
-        !latest || Date.parse(timestamp) > Date.parse(latest) ? timestamp : latest
-      ), null) || base.lastActivityAt || null;
-      const current = {
-        ...visible,
-        provider: base.provider || 'claude',
-        ...(base.provider !== 'codex' && this.claudeSessionModels.has(sessionId)
-          ? { modelName: claudeModelName(this.claudeSessionModels.get(sessionId).model) } : {}),
-        ...(base.codex ? { codex: { ...base.codex, resumes: base.codex.resumes + (session ? this.codexResumesBeforeEnd.get(sessionId) || 0 : 0) } } : {}),
-        title: this.sessionNameFor(sessionId) || base.title,
-        product: base.product ? { ...base.product } : null,
-        sessionFileUpdatedAt: file?.updatedAt || null,
-        lastUpdatedAt,
-        tools: base.tools.map((tool) => ({ ...tool })),
-        agents: base.agents.map((agent) => {
-          const closedByUser = isClosedByUser(agent);
-          const snapshotAgent = closedByUser ? { ...agent, active: false, unconfirmed: false } : agent;
-          return {
-            ...snapshotAgent,
-            ...(isClosableAgent(snapshotAgent) ? { closable: true } : {}),
-            lastTool: agent.lastTool && { ...agent.lastTool },
-          };
-        }),
-        ...(base.status === '待機中(サブエージェント稼働中)'
-          && !base.agents.some((agent) => agent.active && !isClosedByUser(agent))
-          ? { status: '待機中' }
-          : {}),
-        permissionWaits: base.permissionWaits.map((wait) => ({ ...wait })),
-        decisions,
-        tasks: (plan?.tasks || []).map((task) => {
-          const closed = this.closedTasks.get(sessionId)?.get(task.title);
-          const isClosedByUser = closed?.stateAtClose === task.state;
-          return {
-            ...task,
-            ...(isClosedByUser ? { state: 'done', closedByUser: true } : {}),
-            criteria: task.criteria.map((criterion) => ({ ...criterion })),
-          };
-        }),
-        tasksUpdatedAt: plan?.tasksUpdatedAt || null,
-        ...(isNonInteractiveSessionFile(file) ? { nonInteractive: true } : {}),
-      };
-      if (current.status === '不明' && fileStatusDecidesState(file)) {
-        if (file.status === 'busy') {
-          current.status = '作業中';
-        } else {
-          current.status = base.agents.some((agent) => agent.active && !isClosedByUser(agent))
-            ? '待機中(サブエージェント稼働中)'
-            : '待機中';
-        }
-        // 再起動の直後はフックの時刻が無いので、経過時間の基準にファイルの時刻を載せる。
-        current.statusSince = file.statusUpdatedAt || file.updatedAt || null;
-      }
-      const estimate = this.estimates.get(sessionId);
-      if (estimate && current.status === '不明') current.estimate = { ...estimate };
-      if (this.hiddenSessions.has(sessionId)) {
-        current.hidden = true;
-        current.hiddenAt = this.hiddenSessionUpdatedAt.get(sessionId);
-      }
-      return current;
-    });
+    const fileOnlyIds = [...this.sessionFiles.values()]
+      .filter((file) => this.isFileOnlySession(file))
+      .map((file) => file.session_id);
+    const sessionIds = new Set([...this.sessions.keys(), ...fileOnlyIds]);
     return {
       version: this.version,
       generatedAt: this.generatedAt,
       display: cloneDisplay(this.display),
-      sessions: currentSessions,
+      sessions: [...sessionIds].map((sessionId) => this.buildSessionView(sessionId)),
     };
+  }
+
+  // フックのイベントがまだ無く、セッションの一覧にだけあるセッション。
+  isFileOnlySession(file) {
+    return !this.sessions.has(file.session_id) && !this.endedAt.has(file.session_id) && !this.endedByAbsence.has(file.session_id)
+      && (!this.deletedSessions.has(file.session_id)
+        || Date.parse(file.updatedAt) > Date.parse(this.deletedSessions.get(file.session_id)));
+  }
+
+  /**
+   * 1 セッション分の表示用の状態を、全体の snapshot と同じ規則で組み立てる。
+   * 全体の snapshot に含まれないセッションには null を返す。
+   */
+  sessionView(sessionId) {
+    const file = this.sessionFiles.get(sessionId);
+    if (!this.sessions.has(sessionId) && !(file && this.isFileOnlySession(file))) return null;
+    return this.buildSessionView(sessionId);
+  }
+
+  buildSessionView(sessionId) {
+    const session = this.sessions.get(sessionId);
+    const file = this.sessionFiles.get(sessionId);
+    const plan = this.plans.get(sessionId);
+    const base = session || {
+      session_id: sessionId,
+      ...(file?.provider === 'codex' ? { provider: 'codex', codex: { ...file.codex } } : {}),
+      product: file?.product || null,
+      title: file?.name || null,
+      status: '不明',
+      tools: [],
+      agents: [],
+      permissionWaits: [],
+      decisions: [],
+    };
+    const { decisionBindings: _decisionBindings, ...visible } = base;
+    const decisions = this.decisionsFor(sessionId);
+    const closedAgents = this.closedAgents.get(sessionId) || new Set();
+    const isClosedByUser = (agent) => closedAgents.has(agent.agent_id) && isClosableAgent(agent);
+    const updateTimestamps = [base.lastActivityAt, plan?.tasksUpdatedAt, ...decisions.map((decision) => decision.updatedAt)]
+      .filter((timestamp) => Number.isFinite(Date.parse(timestamp || '')));
+    const lastUpdatedAt = updateTimestamps.reduce((latest, timestamp) => (
+      !latest || Date.parse(timestamp) > Date.parse(latest) ? timestamp : latest
+    ), null) || base.lastActivityAt || null;
+    const current = {
+      ...visible,
+      provider: base.provider || 'claude',
+      ...(base.provider !== 'codex' && this.claudeSessionModels.has(sessionId)
+        ? { modelName: claudeModelName(this.claudeSessionModels.get(sessionId).model) } : {}),
+      ...(base.codex ? { codex: { ...base.codex, resumes: base.codex.resumes + (session ? this.codexResumesBeforeEnd.get(sessionId) || 0 : 0) } } : {}),
+      title: this.sessionNameFor(sessionId) || base.title,
+      product: base.product ? { ...base.product } : null,
+      sessionFileUpdatedAt: file?.updatedAt || null,
+      lastUpdatedAt,
+      tools: base.tools.map((tool) => ({ ...tool })),
+      agents: base.agents.map((agent) => {
+        const closedByUser = isClosedByUser(agent);
+        const snapshotAgent = closedByUser ? { ...agent, active: false, unconfirmed: false } : agent;
+        return {
+          ...snapshotAgent,
+          ...(isClosableAgent(snapshotAgent) ? { closable: true } : {}),
+          lastTool: agent.lastTool && { ...agent.lastTool },
+        };
+      }),
+      ...(base.status === '待機中(サブエージェント稼働中)'
+        && !base.agents.some((agent) => agent.active && !isClosedByUser(agent))
+        ? { status: '待機中' }
+        : {}),
+      permissionWaits: base.permissionWaits.map((wait) => ({ ...wait })),
+      decisions,
+      tasks: (plan?.tasks || []).map((task) => {
+        const closed = this.closedTasks.get(sessionId)?.get(task.title);
+        const isClosedByUser = closed?.stateAtClose === task.state;
+        return {
+          ...task,
+          ...(isClosedByUser ? { state: 'done', closedByUser: true } : {}),
+          criteria: task.criteria.map((criterion) => ({ ...criterion })),
+        };
+      }),
+      tasksUpdatedAt: plan?.tasksUpdatedAt || null,
+      ...(isNonInteractiveSessionFile(file) ? { nonInteractive: true } : {}),
+    };
+    if (current.status === '不明' && fileStatusDecidesState(file)) {
+      if (file.status === 'busy') {
+        current.status = '作業中';
+      } else {
+        current.status = base.agents.some((agent) => agent.active && !isClosedByUser(agent))
+          ? '待機中(サブエージェント稼働中)'
+          : '待機中';
+      }
+      // 再起動の直後はフックの時刻が無いので、経過時間の基準にファイルの時刻を載せる。
+      current.statusSince = file.statusUpdatedAt || file.updatedAt || null;
+    }
+    const estimate = this.estimates.get(sessionId);
+    if (estimate && current.status === '不明') current.estimate = { ...estimate };
+    if (this.hiddenSessions.has(sessionId)) {
+      current.hidden = true;
+      current.hiddenAt = this.hiddenSessionUpdatedAt.get(sessionId);
+    }
+    return current;
   }
 
   setProductSeen(productKey, at = Date.now()) {

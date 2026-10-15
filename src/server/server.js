@@ -485,7 +485,7 @@ async function startServer(options = {}) {
     modelTimers.set(sessionId, timer);
   }
   function needsTaskNotifications(sessionId) {
-    const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
+    const session = state.sessionView(sessionId);
     if (!session || session.provider === 'codex') return false;
     return state.backgroundCodexAgents(sessionId).length > 0 ||
       (['待機中(サブエージェント稼働中)', '中断'].includes(session.status) &&
