@@ -6,9 +6,9 @@ const { startServer: startRealServer } = require('../src/server/server');
 const startServer = options => startRealServer({ readSourceCommit: async () => null, readSourceState: () => 'unknown', ...options });
 const { request, jsonBody, startTestServer, uiHeaders } = require('./support/server');
 const { runHook, runHookText } = require('../src/hooks/event');
-const { callTool } = require('../src/mcp/server');
+const { callTool, SERVER_VERSION } = require('../src/mcp/server');
 const { appendPendingHook, MAX_HOOK_PENDING_BYTES } = require('../src/client/hooks-pending');
-const { MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYTES } = require('../src/client/diagnostic-events');
+const { MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYTES, sanitizeClientEntry } = require('../src/client/diagnostic-events');
 const { temporaryHome } = require('./support/temp');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -46,17 +46,28 @@ test('フックが常駐サーバーを起動した場合は起動した段を�
 test('診断の POST は送り手を認証で固定し、未知の識別子と鍵と自由文の値を捨てる', async t => {
   const { runtime, info } = await startTestServer(t);
   const entries = [{ msg: 'mcp.write', tag: 'server', level: 'mark', data: { tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200,
-    secret: info.secret, arguments: 'private', failure: 'private' } }, { msg: 'server.start', data: { pid: 123 } },
+    version: '1.5.0', commit: 'a'.repeat(40), secret: info.secret, arguments: 'private', failure: 'private' } }, { msg: 'server.start', data: { pid: 123 } },
     { msg: 'web.failed', data: { path: '/api/state' } }];
   assert.equal((await uiPost(info, '/api/diagnostics', { entries }, { 'x-cockpit-secret': info.secret })).status, 202);
   const saved = (await read(runtime)).filter(entry => entry.tag === 'mcp');
-  assert.deepEqual(saved.map(entry => entry.data), [{ tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200 }]);
+  assert.deepEqual(saved.map(entry => entry.data), [{ tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200, version: '1.5.0', commit: 'a'.repeat(40) }]);
   assert.equal(saved[0].level, 'info');
   await uiPost(info, '/api/diagnostics', { entries: [{ msg: 'web.failed', data: { operation: 'save', path: '/api/decisions/:id/answer', status: 500, message: 'private' } },
     { msg: 'web.failed', data: { path: '/private/path', status: 'private' } }, entries[0]] });
   assert.deepEqual((await read(runtime)).filter(entry => entry.tag === 'web').map(entry => entry.data),
     [{ operation: 'save', path: '/api/decisions/:id/answer', status: 500 }, {}]);
   assert.doesNotMatch(JSON.stringify(await read(runtime)), /private/);
+});
+
+test('MCP 診断は形式が正しい version と commit を通し、不正な値だけを落とす', () => {
+  const valid = sanitizeClientEntry({ msg: 'mcp.write', data: { tool: 'cockpit_set_tasks', phase: 'result', ok: true,
+    version: '1.5.0', commit: 'a'.repeat(64) } }, 'mcp');
+  assert.deepEqual(valid, { msg: 'mcp.write', data: { tool: 'cockpit_set_tasks', phase: 'result', ok: true,
+    version: '1.5.0', commit: 'a'.repeat(64) } });
+
+  const invalid = sanitizeClientEntry({ msg: 'mcp.write', data: { tool: 'cockpit_set_tasks', phase: 'result', ok: true,
+    version: '1.5', commit: 'g'.repeat(40) } }, 'mcp');
+  assert.deepEqual(invalid, { msg: 'mcp.write', data: { tool: 'cockpit_set_tasks', phase: 'result', ok: true } });
 });
 
 test('診断の POST は秘密値と Origin と上限に違反する記録を採らない', async t => {
@@ -171,31 +182,37 @@ test('記録しない設定とエラーのみの設定では、届かないフ�
 test('MCP の入口は書き込みの試行と HTTP の結果を記録し、引数の本文を含めない', async t => {
   const { runtime, info } = await startTestServer(t);
   const pending = [];
+  const commit = 'c'.repeat(40);
   await callTool('cockpit_set_tasks', { tasks: [{ title: 'private-task', state: 'doing', criteria: [] }] }, {
     homeDir: runtime.homeDir, environment: { CLAUDE_CODE_SESSION_ID: 'mcp-diagnostic' },
     ensureServerRunning: async () => info,
+    sourceCommit: Promise.resolve(commit),
     fetchImpl: (url, init) => { const operation = fetch(url, init); pending.push(operation); return operation; },
   });
   await Promise.all(pending);
   const entries = (await read(runtime)).filter(entry => entry.tag === 'mcp');
-  assert.deepEqual(entries.map(entry => entry.data), [{ tool: 'cockpit_set_tasks', phase: 'attempt' },
-    { tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200 }]);
+  assert.deepEqual(entries.map(entry => entry.data), [{ tool: 'cockpit_set_tasks', phase: 'attempt', version: SERVER_VERSION, commit },
+    { tool: 'cockpit_set_tasks', phase: 'result', ok: true, status: 200, version: SERVER_VERSION, commit }]);
   assert.doesNotMatch(JSON.stringify(entries), /private/);
 });
 
 test('MCP の診断送信が失敗しても書き込みは完了し、診断を再送しない', async t => {
   const { runtime, info } = await startTestServer(t);
   const diagnostics = [];
+  let resolveDiagnosticsSent;
+  const diagnosticsSent = new Promise(resolve => { resolveDiagnosticsSent = resolve; });
   const result = await callTool('cockpit_set_tasks', { tasks: [] }, {
     homeDir: runtime.homeDir, environment: { CLAUDE_CODE_SESSION_ID: 'diagnostic-failure' },
     ensureServerRunning: async () => info,
     fetchImpl: (url, init) => {
       if (!url.endsWith('/api/diagnostics')) return fetch(url, init);
       diagnostics.push(JSON.parse(init.body));
+      if (diagnostics.length === 2) resolveDiagnosticsSent();
       return Promise.reject(new Error('private-message'));
     },
   });
   assert.equal(result.isError, undefined);
+  await diagnosticsSent;
   assert.deepEqual(diagnostics.map(body => body.entries[0].data.phase), ['attempt', 'result']);
   assert.equal((await read(runtime)).filter(entry => entry.tag === 'mcp').length, 0);
 });

@@ -75,8 +75,10 @@ MCP の Origin は既存のフック用の認証と同じく無いことを求�
 | `hook.pid` | `hook` | Codex の PID 照会が `found` / `missing` / `timeout` / `failed` と所要時間。時間切れと失敗は `warn` |
 | `hook.server` | `hook` | フックが常駐サーバーを起動したか。`info` |
 | `hook.delivery` | `hook` | 応答が無い送信の `unreachable` / `timeout` と、発生時刻(`at`、ISO 形式)。取り込みは常駐サーバーの次の起動まで遅れうるため。イベント名(`event`)、常駐サーバーの確認(`ensureMs`)と送信(`postMs`)にかかった時間、フックがイベントを作ってからの時間(`sinceHookMs`)も残し、期限をどこで使ったかを分けられるようにする。`warn` |
-| `mcp.write` | `mcp` | 固定のツール名、試行または結果、成否、HTTP の状態、失敗の `http` / `timeout` / `unreachable`。失敗は `error`、それ以外は `info` |
+| `mcp.write` | `mcp` | 固定のツール名、試行または結果、成否、HTTP の状態、失敗の `http` / `timeout` / `unreachable`、MCP プロセスが起動時に読んだ `version` と `commit`(コミットを読めなければ省く)。失敗は `error`、それ以外は `info` |
 | `web.failed` | `web` | 取得または保存の失敗、ID とクエリーを伏せた既知の経路、HTTP の状態。応答が無いと状態を省く。`warn` |
+
+MCP はセッション中も同じプロセスで動き続け、常駐サーバーの更新後も古いコードが残ることがあるため、起動時に読んだバージョンとコミットを記録する。
 
 フックの退避は 256 KiB を超える追記を行わず、送信が HTTP の応答を受けた場合は作らない。
 追記と取り込みは共通の排他ファイルを使い、取り込み側は rename で分離したファイルを読む。

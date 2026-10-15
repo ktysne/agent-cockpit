@@ -1,14 +1,18 @@
 const readline = require('node:readline');
 const { cockpitHomeFromOptions } = require('../server/identity');
+const { readSourceCommit } = require('../server/source-revision');
 const { postToServer, requestFromServer } = require('../client/server-connection');
 
 function reportMcpWrite(info, options, data) {
   void (async () => {
     if (!info) return;
+    const deadline = Date.now() + 250;
+    const commit = await options.sourceCommit;
+    const diagnosticData = { ...data, version: SERVER_VERSION, ...(commit ? { commit } : {}) };
     await requestFromServer(info, '/api/diagnostics', {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-cockpit-secret': info.secret },
-      body: JSON.stringify({ entries: [{ msg: 'mcp.write', data }] }),
-    }, { fetchImpl: options.fetchImpl || fetch, attemptTimeoutMs: 250, deadline: Date.now() + 250 });
+      body: JSON.stringify({ entries: [{ msg: 'mcp.write', data: diagnosticData }] }),
+    }, { fetchImpl: options.fetchImpl || fetch, attemptTimeoutMs: 250, deadline });
   })().catch(() => {});
 }
 const { COMPLETE_COMMIT_SHA_PATTERN, isCompleteCommitSha, parsePullRequestUrl, validRepositoryPart } = require('../server/pull-request-utils');
@@ -356,6 +360,8 @@ async function handleRequest(request, options = {}) {
 }
 
 function startMcpServer(options = {}) {
+  // 診断に載せるコミットは起動時に読む。最初の書き込みまでに作業ツリーが更新されても、読み込んだコードのコミットを名乗るため。
+  options = { ...options, sourceCommit: Promise.resolve().then(() => (options.readSourceCommit || readSourceCommit)()).catch(() => null) };
   const input = options.input || process.stdin;
   const output = options.output || process.stdout;
   const reader = readline.createInterface({ input });
