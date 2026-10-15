@@ -1100,9 +1100,28 @@ class PullRequestTracker {
           removed = true;
         }
       }
+      this.pruneUnregisteredRepositoryRecords(registeredKeys);
       if (removed) this.state.touch();
       return results;
     });
+  }
+
+  pruneUnregisteredRepositoryRecords(registeredKeys) {
+    for (const diagnosticKey of this.diagnosticFailures.keys()) {
+      const firstSeparator = diagnosticKey.indexOf(':');
+      const lastSeparator = diagnosticKey.lastIndexOf(':');
+      if (firstSeparator < 0 || firstSeparator === lastSeparator) continue;
+      const key = diagnosticKey.slice(firstSeparator + 1, lastSeparator).toLowerCase();
+      if (!key) continue;
+      if (!registeredKeys.has(key)) this.diagnosticFailures.delete(diagnosticKey);
+    }
+    for (const attemptKey of this.mergedHeadBackfillAttempts) {
+      const separator = attemptKey.lastIndexOf('#');
+      if (separator < 0) continue;
+      if (!registeredKeys.has(attemptKey.slice(0, separator).toLowerCase())) {
+        this.mergedHeadBackfillAttempts.delete(attemptKey);
+      }
+    }
   }
 
   async unregisterUnknownRepository(owner, repo) {
@@ -1118,6 +1137,10 @@ class PullRequestTracker {
       this.repositories.delete(key);
       this.crossReviewByRepository.delete(key);
       this.initialFetchCompleted.delete(key);
+      this.pruneUnregisteredRepositoryRecords(new Set(
+        [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
+          .map((record) => repoKey(record.owner, record.repo)),
+      ));
       for (const [identity, view] of this.productViews) {
         if (repoKey(view.owner, view.repo) === key) this.productViews.delete(identity);
       }
