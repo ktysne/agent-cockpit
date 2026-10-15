@@ -5191,16 +5191,73 @@ document.addEventListener('change', (event) => {
   if (lastState) render(lastState);
 });
 
+async function requestServerRestart() {
+  return postUiAction('/api/server/restart', {});
+}
+
 function renderRestartNote(state) {
   const note = document.getElementById('restart-note');
-  note.hidden = !state.restartRequired;
-  if (note.hidden) { note.textContent = ''; return; }
+  const ui = renderRestartNote.ui ||= { phase: 'idle', error: '', timer: null };
+  ui.state = state;
+  if (ui.phase === 'waiting' && state.runtime?.startedAt !== ui.startedAt) {
+    clearTimeout(ui.timer);
+    ui.phase = 'idle';
+    ui.error = '';
+  }
+  note.hidden = !state.restartRequired && ui.phase !== 'waiting';
+  note.textContent = '';
+  if (note.hidden) { ui.phase = 'idle'; ui.error = ''; return; }
+  if (ui.phase === 'waiting') {
+    note.textContent = '常駐サーバーを再起動しています。';
+    return;
+  }
+  const addButton = (text, action) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'link-btn';
+    button.textContent = text;
+    button.disabled = ui.phase === 'sending';
+    button.addEventListener('click', action);
+    note.append(button);
+  };
+  if (ui.phase === 'confirm' || ui.phase === 'sending') {
+    const permissions = (state.sessions || []).reduce((sum, session) => sum + session.permissionWaits.length, 0);
+    note.textContent = '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。'
+      + (permissions ? `許可待ち ${permissions} 件は、再起動後に表示されません。` : '');
+    addButton('再起動する', async () => {
+      if (ui.phase !== 'confirm') return;
+      ui.phase = 'sending';
+      ui.startedAt = ui.state.runtime?.startedAt;
+      renderRestartNote(ui.state);
+      try {
+        const response = await requestServerRestart();
+        if (response.status !== 202) throw new Error('Restart rejected');
+        ui.phase = 'waiting';
+        ui.timer = setTimeout(() => {
+          ui.phase = 'idle';
+          ui.error = '再起動できませんでした。タスクトレイのメニューから再起動してください。';
+          renderRestartNote(ui.state);
+        }, 30_000);
+      } catch {
+        ui.phase = 'idle';
+        ui.error = '再起動を始められませんでした。タスクトレイのメニューから再起動してください。';
+      }
+      renderRestartNote(ui.state);
+    });
+    addButton('やめる', () => { ui.phase = 'idle'; renderRestartNote(ui.state); });
+    return;
+  }
   const running = state.runtime || {};
   const installed = state.installed || {};
   const versionChanged = running.version != null && installed.version != null && running.version !== installed.version;
-  note.textContent = versionChanged
+  note.textContent = ui.error || (versionChanged
     ? `バージョン ${installed.version} のファイルが配置されています。常駐サーバーを再起動すると反映されます。`
-    : '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。';
+    : '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
+  if (state.restartRequired && state.restartAvailable) {
+    addButton('常駐サーバーを再起動する', () => {
+      ui.phase = 'confirm'; ui.error = ''; renderRestartNote(ui.state);
+    });
+  }
 }
 
 function renderReloadNote(pending) {

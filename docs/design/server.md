@@ -100,6 +100,20 @@ startServer はこの判定を待たずに返し、close は判定と診断記�
 確認のテストは git の実行と時計を差し替え、ネットワークを使わずに時機と結果を確かめる。
 
 再起動は外のプロセスで `src/client/restart-server.js` を実行する。
+ダッシュボードの再起動待ちの帯から `POST /api/server/restart` を呼べる。
+本文は JSON オブジェクトを受け付け、`auth: ui` の秘密値と同一 Origin の照合を使う。
+`startServer` の `serverRestart` を明示した場合だけ有効にし、CLI は `{}` を渡す。dev では無効にする。
+無効なら `409 Restart unavailable`、更新が不要なら `409 Restart not required`、開始から 60 秒以内なら `409 Restart in progress` を返す。
+開始時刻は保存の書き出し前に記録し、60 秒で再試行できるようにする。
+起動直前に `state.flushPersistence()`、`away.flushPersistence()`、`routing.flush()` と `diagnostics.flush()` を待つ。
+`process.execPath` で再起動スクリプトに `--json --expect-pid <pid> --expect-started-at <startedAt>` を渡す。
+子は `detached: true`、`windowsHide: true` とし、標準入力を無視し、出力を `server.log` に追記する。
+作業場所は保存先とし、`childEnvironment` で除いた環境に `AGENT_COCKPIT_HOME` と `AGENT_COCKPIT_PORT` を渡す。
+`spawn` を待って `unref` し、`202 {restarting: true}` を返す。失敗は開始時刻を解除して 500 を返す。
+期待の pid または startedAt が `server.json` と違う場合、再起動スクリプトは停止も起動も行わず `stale` を返す。
+画面は帯の中で実行中の行が消えることと許可待ちの件数を確認し、送信後は再起動中と表示する。
+接続失敗でも待機を続け、`runtime.startedAt` が変われば通常の表示に戻す。30 秒で変わらなければ失敗とトレイからの再起動を案内する。再起動のボタンは `restartAvailable` が `true` のときだけ出し、サーバーが受け付けない間は押せないようにする。
+
 既存の接続処理で `server.json` と `/health` の pid と startedAt とアプリ名を照合し、一致するプロセスだけを止め、終了を待ってから既存の起動処理を使う。
 Windows では `process.kill(pid)` は対象を終了させるため、停止のシグナル処理による保存には頼らない。
 照合の前に 1 秒待つ。更新を進める AI がその直前に MCP でタスクを書くことが多く、500ms のまとめ書きが済む前に止めるとその変更を失うためである。
@@ -297,7 +311,7 @@ PostToolUse の出力全文は送らない。
 - 表示設定 `display.importAppTasks` と `display.importAppTasksAsked` は真偽値で、既定はともに false とする。保存値の互換補正と確認の扱いは「タスクと判断事項」に記す。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 10 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 10 分へ戻し、書き込み時は拒む。
 - 表示設定 `display.awayAnswerWaitMinutes` は離席中の質問への回答を待つ時間で、既定は 3 分、範囲は 1〜30 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 3 分へ戻し、書き込み時は拒む。
-- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, runtime, routing, integrations, uiVersion, installed, restartRequired}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は配信する HTML テンプレートのバイト列の SHA-256 先頭 16 桁で、秘密値と版の埋め込み前に計算する。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, runtime, routing, integrations, uiVersion, installed, restartRequired, restartAvailable}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は配信する HTML テンプレートのバイト列の SHA-256 先頭 16 桁で、秘密値と版の埋め込み前に計算する。
   本番では起動時に listen の前に HTML を読み、そのテンプレートと版を再起動まで固定する。
   起動時に読めなかった場合、`GET /` は読み込みに失敗している間 500 を返し、最初の成功時に固定する。
   `GET /` は固定したテンプレートへ秘密値と版を埋め込み、ディスクを読み直さない。
@@ -305,6 +319,7 @@ PostToolUse の出力全文は送らない。
   画面はサーバーとの版の違いを検出し、書きかけが無ければ読み込み直す。
   `installed` は配置済みの `{version, commit, uiVersion}` で、HTML、JSON として読む `package.json`、Git の参照ファイルを同じ確認で観測する。
   各値は読めなければ `null`、最初の観測前は `installed` 全体を `null` とする。
+  `restartAvailable` は再起動が有効で、開始から 60 秒以内でないときに `true` とし、状態の指紋にも含める。
   `restartRequired` は実行中と配置済みの両方が `null` でない項目に差があれば `true`、最初の観測前は `false` とする。
   `--dev` では `uiVersion` を比較しない。
   再起動待ちの間、画面は再起動で更新が反映されることを通知欄に表示する。実行中と配置済みのバージョンが異なる場合は配置済みのバージョンを示し、それ以外の差は更新したファイルが配置されたことを示す。

@@ -23,6 +23,7 @@ const { PullRequestMergeManager } = require('./pull-request-merge');
 const { DEFAULT_PORT, APP_NAME } = require('./server-constants');
 const { SECURITY_HEADERS, jsonResponse, textResponse, escapeHtmlAttribute, logLine } = require('./http-helpers');
 const { validSessionId, validTasks, validDecisionOptions, validPlanInput } = require('./request-validation');
+const { createServerRestart } = require('./routes/server-restart');
 const { createReadRoutes } = require('./routes/read');
 const { createHookRoutes } = require('./routes/hooks');
 const { createPullRequestRoutes } = require('./routes/pull-requests');
@@ -212,7 +213,10 @@ function createRequestHandler(options) {
     scheduleTaskNotifications: (sessionId) => options.scheduleTaskNotifications?.(sessionId),
     scheduleSessionModel: (event) => options.scheduleSessionModel?.(event),
   };
-  const { handleHealth, handleState, handleTrayState, handleContext, handleDevFields, handleIndex } = createReadRoutes(ctx);
+  const serverRestart = createServerRestart(ctx, options.serverRestart);
+  ctx.restartAvailable = serverRestart.restartAvailable;
+  const { handleHealth, handleState, handleTrayState, handleContext, handleDevFields, handleIndex, restartRequired } = createReadRoutes(ctx);
+  ctx.restartRequired = restartRequired;
   const { handleHookAnswers, handleEvents, handlePlan, handleSessionPullRequests } = createHookRoutes(ctx);
   const { handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
   const {
@@ -227,6 +231,7 @@ function createRequestHandler(options) {
   // method と path の両方が一致した最初の行を使う。
   // 本文は body が 'json' の行だけが読む。estimate は本文を使わないので 'none' にする。
   const routes = [
+    { method: 'POST', path: '/api/server/restart', auth: 'ui', body: 'json', handler: serverRestart.handleServerRestart },
     { method: 'POST', path: '/api/diagnostics', auth: 'hook', body: 'json', maxBytes: MAX_DIAGNOSTICS_BODY_BYTES,
       handler: async ({ request, response, body }) => {
         if (!Array.isArray(body?.entries) || body.entries.length > MAX_DIAGNOSTICS_PER_EVENT) {
@@ -620,6 +625,7 @@ async function startServer(options = {}) {
   }, options.perfSummaryIntervalMs ?? PERF_SUMMARY_INTERVAL_MS);
   perfSummaryTimer.unref();
   const handler = createRequestHandler({
+    serverRestart: options.serverRestart,
     updateChecker,
     appVersion,
     getRuntime: () => runtime,
@@ -772,7 +778,7 @@ function parseArguments(argv) {
 }
 
 if (require.main === module) {
-  startServer({ ...parseArguments(process.argv.slice(2)), updateCheck: {} })
+  startServer({ ...parseArguments(process.argv.slice(2)), updateCheck: {}, serverRestart: {} })
     .then((runtime) => {
       console.log(`Agent Cockpit listening at http://127.0.0.1:${runtime.info.port}/`);
       const stop = () => runtime.close().finally(() => { process.exitCode = 0; });
