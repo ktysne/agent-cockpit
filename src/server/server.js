@@ -465,7 +465,10 @@ async function startServer(options = {}) {
     },
     ...(options.answerDeliveryOptions || {}),
   });
-  state.onSessionEndedByAbsence = (sessionId, endedAt) => answerDelivery.sessionEnded?.(sessionId, endedAt);
+  state.onSessionEndedByAbsence = (sessionId, endedAt) => {
+    endSessionRuntimeCaches(sessionId);
+    answerDelivery.sessionEnded?.(sessionId, endedAt);
+  };
   state.onSessionReopened = (sessionId) => answerDelivery.sessionReopened?.(sessionId);
   const pullRequestMergeManager = options.pullRequestMergeManager || new PullRequestMergeManager({
     state,
@@ -479,16 +482,23 @@ async function startServer(options = {}) {
   pullRequestTracker.onRefreshed = (owner, repo) => pullRequestMergeManager.checkReservations?.(owner, repo);
   let info = null;
   let closing = null;
+  let sessionScanPromise = null;
   let lastRequestAt = Date.now();
   const notificationTimers = new Map();
   const notificationReads = new Map();
   const notificationReader = options.readTaskNotifications || readTaskNotifications;
   const modelTimers = new Map();
   const modelReads = new Map();
+  const finalModelReads = new Set();
   const observedModelSessions = new Map();
   const modelReader = options.readSessionModel || readSessionModel;
+  const claudeSessionFileReader = options.readClaudeSessionFiles || listLiveSessionFiles;
   function scheduleSessionModel(event) {
     const sessionId = event.session_id;
+    if (event.hook_event_name === 'SessionEnd') {
+      endSessionRuntimeCaches(sessionId);
+      return;
+    }
     const known = state.sessions.has(sessionId) || Boolean(state.sessionFileFor(sessionId));
     if (closing || !known || state.providerForSession(sessionId) === 'codex' || event.agent_id) return;
     const cwd = state.sessionFileFor(sessionId)?.cwd;
@@ -498,14 +508,27 @@ async function startServer(options = {}) {
     if (modelTimers.has(sessionId)) return;
     const timer = setTimeout(async () => {
       await modelReads.get(sessionId);
+      if (modelTimers.get(sessionId) !== timer) {
+        finalModelReads.delete(timer);
+        return;
+      }
       modelTimers.delete(sessionId);
-      if (closing) return;
-      const reading = (async () => {
+      const finalTimerRead = finalModelReads.delete(timer);
+      if (closing || (!state.sessionView(sessionId) && !finalTimerRead)) return;
+      let reading;
+      reading = (async () => {
         try {
-          const model = await modelReader(claudeHome, state.sessionFileFor(sessionId)?.cwd, sessionId);
-          if (!closing) state.recordSessionModel(sessionId, model);
+          const modelCwd = state.sessionFileFor(sessionId)?.cwd ?? cwd;
+          const model = await modelReader(claudeHome, modelCwd, sessionId);
+          const finalRead = finalModelReads.delete(reading);
+          if (!closing && (state.sessionView(sessionId) || finalTimerRead || finalRead)) {
+            state.recordSessionModel(sessionId, model);
+          }
         } catch {}
-      })().finally(() => modelReads.delete(sessionId));
+      })().finally(() => {
+        finalModelReads.delete(reading);
+        if (modelReads.get(sessionId) === reading) modelReads.delete(sessionId);
+      });
       modelReads.set(sessionId, reading);
       await reading;
     }, options.sessionModelDelayMs ?? 500);
@@ -522,19 +545,57 @@ async function startServer(options = {}) {
   // 読めた出力は task-id ごとに使い回し、読めなかった通知は次の照合で未試行の通知の後に読む。
   // 読み取りの上限を、同じ通知の読み直しで使い切らないため。
   const taskOutputCache = new Map();
+  function endSessionRuntimeCaches(sessionId) {
+    const modelTimer = modelTimers.get(sessionId);
+    const modelRead = modelReads.get(sessionId);
+    if (modelTimer) finalModelReads.add(modelTimer);
+    if (modelRead) finalModelReads.add(modelRead);
+    clearSessionRuntimeCaches(sessionId);
+  }
+  function clearSessionRuntimeCaches(sessionId) {
+    taskOutputCache.delete(sessionId);
+    observedModelSessions.delete(sessionId);
+    const notificationTimer = notificationTimers.get(sessionId);
+    if (notificationTimer) clearTimeout(notificationTimer);
+    notificationTimers.delete(sessionId);
+    const modelTimer = modelTimers.get(sessionId);
+    if (modelTimer && !finalModelReads.has(modelTimer)) {
+      clearTimeout(modelTimer);
+      modelTimers.delete(sessionId);
+    }
+  }
+  function clearEndedSessionRuntimeCaches(sessions) {
+    const liveSessionIds = new Set(sessions.map((session) => session.session_id));
+    const trackedSessionIds = new Set([
+      ...taskOutputCache.keys(), ...observedModelSessions.keys(), ...notificationTimers.keys(), ...modelTimers.keys(),
+    ]);
+    for (const sessionId of trackedSessionIds) {
+      if (!liveSessionIds.has(sessionId)) clearSessionRuntimeCaches(sessionId);
+    }
+  }
   function reconcileTaskNotifications(sessionId) {
-    if (closing || !needsTaskNotifications(sessionId)) return Promise.resolve();
+    if (closing) return Promise.resolve();
+    if (!needsTaskNotifications(sessionId)) {
+      taskOutputCache.delete(sessionId);
+      return Promise.resolve();
+    }
     if (notificationReads.has(sessionId)) return notificationReads.get(sessionId);
+    const cache = taskOutputCache.get(sessionId) || { outputs: new Map(), failed: new Set() };
+    taskOutputCache.set(sessionId, cache);
+    let superseded = false;
+    const wasSuperseded = () => {
+      if (taskOutputCache.get(sessionId) === cache) return false;
+      superseded = true;
+      return true;
+    };
     const reading = (async () => {
       try {
         const notifications = await notificationReader(claudeHome, state.transcriptCwdFor(sessionId), sessionId);
-        if (closing || !needsTaskNotifications(sessionId)) return;
+        if (wasSuperseded() || closing || !needsTaskNotifications(sessionId)) return;
         if (['待機中(サブエージェント稼働中)', '中断'].includes(state.sessions.get(sessionId)?.status)) {
           state.applyTaskNotifications(sessionId, notifications);
         }
         let outputReads = 0;
-        const cache = taskOutputCache.get(sessionId) || { outputs: new Map(), failed: new Set() };
-        taskOutputCache.set(sessionId, cache);
         const ordered = [...notifications].sort(([a], [b]) => cache.failed.has(a) - cache.failed.has(b));
         for (const [taskId, notification] of ordered) {
           if (!['completed', 'failed', 'killed', 'stopped'].includes(notification.status)) continue;
@@ -549,6 +610,7 @@ async function startServer(options = {}) {
               if (outputReads >= 8) continue;
               outputReads += 1;
               const output = await (options.readTaskOutput || readTaskOutputFileAsync)(notification.outputFile);
+              if (wasSuperseded() || closing || !needsTaskNotifications(sessionId)) return;
               if (output === null) {
                 cache.failed.add(taskId);
                 continue;
@@ -560,7 +622,7 @@ async function startServer(options = {}) {
             if (cached === TASK_OUTPUT_MISSING) end.outputMissing = true;
             else end.codexOutput = cached;
           }
-          if (closing) return;
+          if (wasSuperseded() || closing || !needsTaskNotifications(sessionId)) return;
           const runId = parseCodexRunLine(end.codexOutput?.runLine);
           if (candidates().some(agent => agent.backgroundTaskId === taskId || (!agent.backgroundTaskId && runId && agent.runId === runId))) {
             state.recordBackgroundTaskEnd(sessionId, end);
@@ -568,7 +630,11 @@ async function startServer(options = {}) {
         }
         if (!state.backgroundCodexAgents(sessionId).length) taskOutputCache.delete(sessionId);
       } catch {}
-    })().finally(() => notificationReads.delete(sessionId));
+    })().finally(() => {
+      notificationReads.delete(sessionId);
+      if (!needsTaskNotifications(sessionId)) taskOutputCache.delete(sessionId);
+      else if (superseded) scheduleTaskNotifications(sessionId);
+    });
     notificationReads.set(sessionId, reading);
     return reading;
   }
@@ -699,23 +765,39 @@ async function startServer(options = {}) {
   updateChecker?.start();
   pullRequestMergeManager.start?.();
   async function refreshSessionFiles(now = Date.now()) {
-    await importPendingHooks(homeDir, diagnostics).catch(() => {});
-    const files = await listLiveSessionFiles(claudeHome, { isAlive: options.isAlive || processIsAlive });
-    const locks = await listCodexThreadLocks(codexHome);
-    const codexNames = await readCodexSessionNames(codexHome, codexSessionNameCache);
-    const codexFiles = state.liveCodexSessionFiles(options.isAlive || processIsAlive, locks).map((file) => {
-      const name = codexNames?.get(file.session_id);
-      return typeof name === 'string' ? { ...file, name } : file;
-    });
-    state.syncSessionFiles([...(files || []), ...codexFiles]
-      .map((file) => ({ ...file, product: productFromCwd(file.cwd) })), now, { codexOnly: files === null });
-    // Claude の一覧を読めないときは生死を保留し、保存の期限切れの片付けだけを進める。
-    if (!files) state.pruneExpiredStoreRecords(now);
-    for (const session of state.snapshot().sessions) scheduleSessionModel(session);
-    for (const sessionId of interruptChecked.keys()) {
-      if (!state.sessionFileFor(sessionId)) interruptChecked.delete(sessionId);
+    if (closing) return;
+    if (sessionScanPromise) return sessionScanPromise;
+    const scan = (async () => {
+      await importPendingHooks(homeDir, diagnostics).catch(() => {});
+      if (closing) return;
+      const files = await claudeSessionFileReader(claudeHome, { isAlive: options.isAlive || processIsAlive });
+      if (closing) return;
+      const locks = await listCodexThreadLocks(codexHome);
+      if (closing) return;
+      const codexNames = await readCodexSessionNames(codexHome, codexSessionNameCache);
+      if (closing) return;
+      const codexFiles = state.liveCodexSessionFiles(options.isAlive || processIsAlive, locks).map((file) => {
+        const name = codexNames?.get(file.session_id);
+        return typeof name === 'string' ? { ...file, name } : file;
+      });
+      state.syncSessionFiles([...(files || []), ...codexFiles]
+        .map((file) => ({ ...file, product: productFromCwd(file.cwd) })), now, { codexOnly: files === null });
+      // Claude の一覧を読めないときは生死を保留し、保存の期限切れの片付けだけを進める。
+      if (!files) state.pruneExpiredStoreRecords(now);
+      const sessions = state.snapshot().sessions;
+      if (files !== null) clearEndedSessionRuntimeCaches(sessions);
+      for (const session of sessions) scheduleSessionModel(session);
+      for (const sessionId of interruptChecked.keys()) {
+        if (!state.sessionFileFor(sessionId)) interruptChecked.delete(sessionId);
+      }
+      await Promise.all([...state.sessions.keys()].map((sessionId) => reconcileInterruption(sessionId)));
+    })();
+    sessionScanPromise = scan;
+    try {
+      return await scan;
+    } finally {
+      if (sessionScanPromise === scan) sessionScanPromise = null;
     }
-    await Promise.all([...state.sessions.keys()].map((sessionId) => reconcileInterruption(sessionId)));
   }
   await refreshSessionFiles().catch(() => {});
   for (const session of state.snapshot().sessions) scheduleTaskNotifications(session.session_id);
@@ -745,10 +827,12 @@ async function startServer(options = {}) {
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
       clearInterval(notificationTimer);
+      await sessionScanPromise?.catch(() => {});
       for (const timer of notificationTimers.values()) clearTimeout(timer);
       notificationTimers.clear();
       for (const timer of modelTimers.values()) clearTimeout(timer);
       modelTimers.clear();
+      finalModelReads.clear();
       await Promise.all(modelReads.values());
       await Promise.all(notificationReads.values());
       await Promise.all(interruptReads.values());

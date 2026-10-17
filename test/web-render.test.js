@@ -3596,7 +3596,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
   let renders = 0;
   let signature = 'reservation:visible';
   const context = pageContext(pageHtml, {
-    refreshSequence: 0, appliedRefreshSequence: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], pullRequests: [], away: { enabled: false } }) }),
+    refreshSequence: 0, appliedRefreshSequence: 0, pendingStateReads: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], pullRequests: [], away: { enabled: false } }) }),
     checkUiVersion: () => false,
     syncDisplayPreferences: async () => {},
     pullRequestExpirySignature: () => signature,
@@ -3612,6 +3612,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     root: { replaceChildren() {} },
     liveStatus: { textContent: '' },
   });
+  context.AbortSignal = { timeout: () => ({}) };
   vm.runInContext(`${functionSource(pageHtml, 'fetchUi')}\n${functionSource(pageHtml, 'reportWebFailure')}\n${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = 7, lastStateAt = null, connectionLost = false, hasRenderedState = true, refreshConfirmPending = false, sinceSeenMode = 'always';`, context);
 
   await context.refresh();
@@ -4343,7 +4344,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
     let renders = 0;
     let index = 0;
     const context = pageContext(pageHtml, {
-      refreshSequence: 0, appliedRefreshSequence: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
+      refreshSequence: 0, appliedRefreshSequence: 0, pendingStateReads: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
       checkUiVersion: () => false,
       syncDisplayPreferences: async () => {},
       pullRequestExpirySignature: () => '',
@@ -4359,6 +4360,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       root: { replaceChildren() {} },
       liveStatus: { textContent: '' },
     });
+    context.AbortSignal = { timeout: () => ({}) };
     vm.runInContext(`${functionSource(pageHtml, 'fetchUi')}\n${functionSource(pageHtml, 'reportWebFailure')}\n${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, refreshConfirmPending = false, sinceSeenMode = '${mode}';`, context);
     for (let step = 0; step < awaySequence.length; step += 1) await context.refresh();
     return renders;
