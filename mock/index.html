@@ -1879,7 +1879,8 @@ function isFinishedSession(session) {
 }
 
 function agentRow(p, session, agent, withTag, showOriginBands = false) {
-  const permission = session.perms.find(wait => wait.who === agent.type);
+  const permission = session.perms.find(wait => wait.who === agent.type && wait.phase === 'prompted')
+    || session.perms.find(wait => wait.who === agent.type && wait.phase === 'checking');
   const state = isClosedByUser(session, agent) ? ['終了', 'done']
     : permission?.phase === 'checking' ? ['実行許可を確認中', 'busy']
     : permission?.phase === 'prompted' ? ['許可待ち', 'wait']

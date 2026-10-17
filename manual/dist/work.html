@@ -199,7 +199,7 @@
   <ul>
     <li><span class="ui">作業中</span>：セッションがターンの途中です。</li>
     <li><span class="ui">待機中</span>：ターンが終わり、次の入力を待っています。</li>
-    <li><span class="ui">実行許可を確認中</span>：ツールの実行前に許可を確認しています。自動判定やフックの処理中も含むため、利用者の操作が必要とは限りません(<a href="permission.html#permission-checking">実行許可を確認中</a>)。</li>
+    <li><span class="ui">実行許可を確認中</span>：Codex から実行前の許可要求を受けています。Claude Code では <code>PermissionRequest</code> フックを追加登録した場合に出ます。自動判定やフックの処理中も含むため、利用者の操作が必要とは限りません(<a href="permission.html#permission-checking">実行許可を確認中</a>)。</li>
     <li><span class="ui">許可待ち</span>：Claude Code が利用者への許可確認を通知しています。判断が必要なことの欄にカードが出ます(<a href="permission.html">許可待ち</a>)。</li>
     <li><span class="ui">中断</span>：利用者がターンを中断しました。点は輪郭だけの黄色で出ます。セッションは終了しておらず、次の入力を待っています。次にプロンプトを送るか、セッションを開始し直すと消えます。終わったものを隠す設定でも、更新の無いセッションを隠す設定でも、隠れません。</li>
     <li><span class="ui">非対話の実行中</span>：非対話の実行で、ターンの状態が分からない行です。<span class="ui">状態を推定</span> と <span class="ui">一覧から外す</span> は出ず、更新が無くても隠れません。</li>

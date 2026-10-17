@@ -4790,7 +4790,7 @@ test('起点帯の判定は非表示セッション、PR の履歴、新着ま�
   assert.doesNotMatch(markedMockSession, /session-context" data-origin=/);
 });
 
-function renderedKindOriginRows(provider, showOriginBands) {
+function renderedKindOriginRows(provider, showOriginBands, permissionWaits = []) {
   class FakeElement {
     constructor(tagName, className = '', textContent = '') {
       this.tagName = tagName;
@@ -4814,7 +4814,7 @@ function renderedKindOriginRows(provider, showOriginBands) {
     appendUnknownSessionControls() {},
     appendSessionModelLine() {},
     appendModelLine() {},
-    badge: () => element('span'),
+    badge: (text, tone) => element('span', `badge ${tone}`, text),
     displayPreferences: { hideFinished: true },
     isFilterShown: () => true,
     isEndedAgent: () => false,
@@ -4824,7 +4824,7 @@ function renderedKindOriginRows(provider, showOriginBands) {
     .map(name => functionSource(pageHtml, name));
   vm.runInContext(functions.join('\n'), context);
   const session = {
-    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], permissionWaits: [], agents: [{ active: true, agent_type: 'worker' }],
+    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], permissionWaits, agents: [{ agent_id: 'worker', active: true, agent_type: 'worker' }],
   };
   const activity = context.mainRow(session, {}, true, false, showOriginBands);
   const agentBody = element('div');
@@ -4835,7 +4835,7 @@ function renderedKindOriginRows(provider, showOriginBands) {
   return [activity, agent, taskBody.children[0]];
 }
 
-function renderedMockKindOriginRows(provider, showOriginBands) {
+function renderedMockKindOriginRows(provider, showOriginBands, perms = []) {
   const context = pageContext(mockHtml, {
     ui: { estimatedSessions: [], closedAgents: [], expandedKindTodoTasks: false },
     taskState: (_session, task) => task.state,
@@ -4855,13 +4855,27 @@ function renderedMockKindOriginRows(provider, showOriginBands) {
   const functions = ['sessionOrigin', 'mainRow', 'agentRow', 'kindTaskSessionBlock']
     .map(name => functionSource(mockHtml, name));
   vm.runInContext(functions.join('\n'), context);
-  const session = { provider, status: 'wait', tasks: [], perms: [], main: { tool: '—', since: '1 分前' } };
+  const session = { provider, status: 'wait', tasks: [], perms, main: { tool: '—', since: '1 分前' } };
   return [
     context.mainRow({}, session, true, showOriginBands),
     context.agentRow({}, session, { type: 'worker', state: 'busy', since: '1 分前' }, true, showOriginBands),
     context.kindTaskSessionBlock({}, session, false, showOriginBands).html,
   ];
 }
+
+test('並列ツールの確認中に許可画面の通知が届いたサブエージェントは許可待ちを優先する', () => {
+  const waits = [
+    { agent_id: 'worker', phase: 'checking', target_tool_use_id: 'first' },
+    { agent_id: 'worker', phase: 'checking', target_tool_use_id: 'second' },
+    { agent_id: 'worker', phase: 'prompted', target_tool_use_id: null },
+  ];
+  const [, agent] = renderedKindOriginRows('claude', true, waits);
+  const badge = agent.children[0].children.find(node => node.className === 'agent-name').children[0];
+  assert.equal(badge.textContent, '許可待ち');
+  assert.equal(badge.className, 'badge wait');
+  const [, mockAgent] = renderedMockKindOriginRows('claude', true, waits.map(wait => ({ ...wait, who: 'worker' })));
+  assert.match(mockAgent, /class="badge wait">許可待ち<\/span>/);
+});
 
 test('種類別のタスクと作業行はセッションの起点色で帯を表示する', () => {
   for (const [provider, origin] of [['claude', 'claude'], ['codex', 'codex']]) {

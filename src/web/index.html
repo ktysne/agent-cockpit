@@ -3380,7 +3380,8 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     if (origin) row.dataset.origin = origin;
     row.dataset.startedAt = agent.startedAt || '';
     const who = element('div', 'who');
-    const permission = session.permissionWaits.find((wait) => wait.agent_id === agent.agent_id);
+    const permission = session.permissionWaits.find((wait) => wait.agent_id === agent.agent_id && wait.phase === 'prompted')
+      || session.permissionWaits.find((wait) => wait.agent_id === agent.agent_id && wait.phase === 'checking');
     const agentState = permission?.phase === 'checking' ? ['実行許可を確認中', 'busy']
       : permission?.phase === 'prompted' ? ['許可待ち', 'wait']
       : agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];

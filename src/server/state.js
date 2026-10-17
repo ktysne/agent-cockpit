@@ -626,7 +626,7 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>}} SessionDecisions */
 
-/** @typedef {{permissionWaits: PermissionWait[], permissionBoundaryAt: Map<string|null, number>}} SessionPermissions */
+/** @typedef {{permissionWaits: PermissionWait[], permissionBoundaries: Set<string|null>}} SessionPermissions */
 
 /** @typedef {SessionIdentity & SessionTools & SessionAgents & SessionCodex & SessionDecisions & SessionPermissions} DerivedSession */
 
@@ -647,7 +647,7 @@ function newSession(event, askDecisionState = {}) {
     codexLaunchToolIds: new Set(),
     agents: [],
     permissionWaits: [],
-    permissionBoundaryAt: new Map(),
+    permissionBoundaries: new Set(),
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     awayHandledIds: new Set(askDecisionState.awayHandledIds || []),
@@ -1224,7 +1224,7 @@ function applyToolCompletion(session, event) {
       applyCodexResult(session, event);
     }
 
-    session.permissionBoundaryAt.set(agentId, event.hookAt);
+    session.permissionBoundaries.add(agentId);
     session.permissionWaits = session.permissionWaits.filter((wait) => {
       if (!sameAgent(wait.agent_id, agentId)) return true;
       if (wait.target_tool_use_id) return wait.target_tool_use_id !== toolUseId;
@@ -1270,23 +1270,24 @@ function applyPermissionPrompt(session, event) {
 
   // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
   const tools = session.tools.filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent');
+  if (prompted) {
+    session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId)
+      || !wait.target_tool_use_id || tools.some((tool) => tool.tool_use_id === wait.target_tool_use_id));
+  }
   let candidates = requested ? tools.filter((tool) => tool.tool_name === event.tool_name) : tools;
   if (requested && candidates.length > 1) {
     const matchingSummary = candidates.filter((tool) => tool.summary === event.summary);
     if (matchingSummary.length) candidates = matchingSummary;
   }
   const waits = session.permissionWaits.filter((wait) => sameAgent(wait.agent_id, agentId));
-  if (prompted && waits.length === 1) {
+  if (prompted && waits.length === 1 && waits[0].phase === 'checking') {
     waits[0].phase = 'prompted';
     waits[0].notification_type = event.notification_type;
     waits[0].message = event.message || '';
+    waits[0].startedAt = isoTime(event.hookAt);
     return;
   }
-  if (prompted && !waits.length) {
-    const boundaryAt = session.permissionBoundaryAt.get(agentId);
-    candidates = candidates.filter((tool) => boundaryAt === undefined || Date.parse(tool.startedAt) > boundaryAt);
-    if (!candidates.length && boundaryAt !== undefined) return;
-  }
+  if (prompted && !waits.length && !candidates.length && session.permissionBoundaries.has(agentId)) return;
   const target = candidates.length === 1 && (!prompted || waits.length < 2) ? candidates[0] : null;
   const wait = {
     agent_id: agentId,
@@ -1299,9 +1300,9 @@ function applyPermissionPrompt(session, event) {
     phase: requested ? 'checking' : 'prompted',
   };
   session.permissionWaits = session.permissionWaits.filter((item) => !(
-    sameAgent(item.agent_id, agentId) && (target
+    sameAgent(item.agent_id, agentId) && ((prompted && item.phase === 'prompted') || (target
       ? item.target_tool_use_id === target.tool_use_id
-      : !item.target_tool_use_id && item.tool_name === wait.tool_name && item.summary === wait.summary)
+      : !item.target_tool_use_id && item.tool_name === wait.tool_name && item.summary === wait.summary))
   ));
   session.permissionWaits.push(wait);
 }
@@ -1329,7 +1330,7 @@ function applySessionLifecycle(session, event) {
     }
   }
   if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
-    session.permissionBoundaryAt.set(agentId, event.hookAt);
+    session.permissionBoundaries.add(agentId);
     session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
     if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
   }
@@ -1338,7 +1339,7 @@ function applySessionLifecycle(session, event) {
   const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
   if (startsIdle || eventName === 'UserPromptSubmit' || eventName === 'Stop') session.turnKnown = true;
   if (startsIdle) {
-    session.permissionBoundaryAt.set(null, event.hookAt);
+    session.permissionBoundaries.add(null);
     session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
     session.tools = session.tools.filter((tool) => tool.agent_id);
     session.stopped = true;
