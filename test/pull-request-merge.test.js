@@ -919,13 +919,15 @@ test('同じ PR のマージ要求を同時に 2 件実行しない', async (t) 
   const first = fixture.manager.merge(mergeInput());
   while (!release) await new Promise((resolve) => setImmediate(resolve));
 
-  const second = await fixture.manager.merge(mergeInput());
+  const second = fixture.manager.merge(mergeInput());
+  await new Promise(setImmediate);
+  assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge').length, 1);
   release();
-  const firstResult = await first;
+  const [firstResult, secondResult] = await Promise.all([first, second]);
 
   assert.equal(firstResult.ok, true);
-  assert.equal(second.ok, false);
-  assert.equal(second.status, 409);
+  assert.equal(secondResult.ok, false);
+  assert.equal(secondResult.status, 409);
   assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge').length, 1);
 });
 
