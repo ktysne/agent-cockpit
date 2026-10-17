@@ -2,7 +2,7 @@
   "name": "long",
   "target": "article.permission.long-wait",
   "width": 1524,
-  "height": 206,
+  "height": 244,
   "parts": [
     {
       "key": "permission.card",
@@ -10,7 +10,7 @@
         "x": 0,
         "y": 0,
         "width": 1524,
-        "height": 205
+        "height": 243
       },
       "visible": true
     },

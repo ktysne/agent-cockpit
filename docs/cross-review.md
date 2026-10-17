@@ -292,6 +292,12 @@ node tools/cross-review.js subagent      # CLI を起動せずレビュー用プ
 レビューに加えて問題の修正まで依頼します（codex は workspace-write で直接修正、subagent は FIX 指示付きでプロンプト出力。`claude` CLI 経路の自動修正は未対応）。  
 `--instructions <path>` は**レビュアーからの申し送り、重点指摘**をプロンプトに足します（観点 `.cross-review.md` は置き換えず追加。指摘を渡して直させる用途。詳細は前述「レビュアーの指摘を渡して直させる」）。
 
+Claude の単発レビューでは、子プロセスに `AGENT_COCKPIT_NONINTERACTIVE=1` を渡します。
+対応する Agent Cockpit の Stop フックは、到着済みの通知を確認して終了し、対話セッション向けの長時間待機に入りません。
+親プロセスの環境と通常の Claude 設定は変更しません。
+未対応の Agent Cockpit では印が無視され、従来どおり Stop フックで待機します。
+待機を解消するには Cockpit 側も更新してください。
+
 ### 指摘対応
 
 実装側のツールに戻り、指摘（PR コメントか端末出力）を渡して修正し、再コミットします。

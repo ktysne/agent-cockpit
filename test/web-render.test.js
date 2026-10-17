@@ -1140,6 +1140,7 @@ test('作業行は先頭に名前と時刻を置き、詳細と状態不明の�
   const body = new FakeElement('div');
   context.appendAgents(body, {
     ...session,
+    permissionWaits: [],
     agents: [
       { agent_id: 'with-description', agent_type: '実装', active: true, closable: true, description: '依頼の説明', model: 'Sonnet', route: 'Claude', startedAt: '2026-10-05T00:00:00.000Z' },
       { agent_id: 'with-tool', agent_type: '確認', active: true, lastTool: { tool_name: 'Read', summary: 'src/web/index.html' }, startedAt: '2026-10-05T00:00:00.000Z' },
@@ -1194,14 +1195,14 @@ test('モックの作業行も名前と時刻の後に全幅の詳細を並べ�
   assert.ok(!unknownMain.includes('class="since"'));
   assert.ok(unknownMain.indexOf('class="who"') < unknownMain.indexOf('class="session-extra"'));
 
-  const describedAgent = context.agentRow({}, { id: 'session' }, {
+  const describedAgent = context.agentRow({}, { id: 'session', perms: [] }, {
     id: 'agent', type: '実装', text: '依頼の説明', since: '1 分前',
   }, true);
   assert.ok(describedAgent.indexOf('class="who"') < describedAgent.indexOf('class="since"'));
   assert.ok(describedAgent.indexOf('class="since"') < describedAgent.indexOf('class="detail"'));
   assert.ok(describedAgent.indexOf('class="agent-description"') < describedAgent.indexOf('class="models"'));
 
-  const toolOnlyAgent = context.agentRow({}, { id: 'session' }, {
+  const toolOnlyAgent = context.agentRow({}, { id: 'session', perms: [] }, {
     id: 'agent', type: '確認', text: '', tool: 'Read: src/web/index.html', since: '2 分前',
   }, false);
   assert.ok(toolOnlyAgent.indexOf('class="tool-line"') < toolOnlyAgent.indexOf('class="models"'));
@@ -4823,7 +4824,7 @@ function renderedKindOriginRows(provider, showOriginBands) {
     .map(name => functionSource(pageHtml, name));
   vm.runInContext(functions.join('\n'), context);
   const session = {
-    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], agents: [{ active: true, agent_type: 'worker' }],
+    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], permissionWaits: [], agents: [{ active: true, agent_type: 'worker' }],
   };
   const activity = context.mainRow(session, {}, true, false, showOriginBands);
   const agentBody = element('div');
@@ -4854,7 +4855,7 @@ function renderedMockKindOriginRows(provider, showOriginBands) {
   const functions = ['sessionOrigin', 'mainRow', 'agentRow', 'kindTaskSessionBlock']
     .map(name => functionSource(mockHtml, name));
   vm.runInContext(functions.join('\n'), context);
-  const session = { provider, status: 'wait', tasks: [], main: { tool: '—', since: '1 分前' } };
+  const session = { provider, status: 'wait', tasks: [], perms: [], main: { tool: '—', since: '1 分前' } };
   return [
     context.mainRow({}, session, true, showOriginBands),
     context.agentRow({}, session, { type: 'worker', state: 'busy', since: '1 分前' }, true, showOriginBands),
@@ -5151,7 +5152,7 @@ function restartNoteHarness(source, response = async () => ({ status: 202 })) {
   });
   vm.runInContext(functionSource(source, 'renderRestartNote'), context);
   const state = { restartRequired: true, restartAvailable: true, runtime: { startedAt: 'before' },
-    sessions: [{ permissionWaits: [{}, {}] }] };
+    sessions: [{ permissionWaits: [{ phase: 'prompted' }, { phase: 'prompted' }, { phase: 'checking' }] }] };
   const render = () => context.renderRestartNote(state);
   render();
   const click = label => buttons.find(button => button.textContent === label).click();

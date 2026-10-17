@@ -374,7 +374,7 @@ function Get-DashboardState([object]$ServerInfo) {
       $permissionKeys = @()
       foreach ($session in @($state.sessions)) {
         foreach ($wait in @($session.permissionWaits)) {
-          if ($null -ne $wait) { $permissionKeys += '{0}|{1}|{2}' -f $session.session_id, $wait.agent_id, $wait.startedAt }
+          if ($null -ne $wait -and $wait.phase -eq 'prompted') { $permissionKeys += '{0}|{1}|{2}' -f $session.session_id, $wait.agent_id, $wait.startedAt }
         }
       }
       $decisionKeys = @()
