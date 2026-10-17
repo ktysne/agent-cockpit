@@ -898,6 +898,7 @@ const pendingClosedTasks = new Map();
 const pullRequestMergeResults = new Map();
 const pullRequestMergeInFlight = new Set();
 const mockBranchUpdatedBeforeDelete = new Set();
+const mockRetargetFailures = new Map();
 let nextPullRequestMergeResultId = 0;
 function transientNoticeExpired(shownAt, now = Date.now()) {
   const timestamp = typeof shownAt === 'number' ? shownAt : Date.parse(shownAt || '');
@@ -2180,6 +2181,8 @@ function mergeMethodFixed(p, pr) {
 
 function mergeBaseConflictBlocker(p, pr) {
   const e = effective(p, pr);
+  const pendingParent = mockRetargetFailures.get(prKey(p, pr.number));
+  if (pendingParent && !ui.merged[prKey(p, pendingParent)]) return `親 PR #${pendingParent} のマージ確認待ち`;
   const parent = parentPr(p, pr);
   if (parent) return `下の #${parent.number} のマージ待ち`;
   if (!mergeTarget(p, pr)) return `base の ${e.base} はマージ済みの PR の head のため、ダッシュボードではマージしない`;
@@ -2323,6 +2326,7 @@ function finishMockMerge(product, pullRequest, options, automatic = false) {
     (product.repo.autoDeleteBranch === true || options.del);
   const branchDeleted = branchDeletionRequested && !branchUpdateWonRace;
   const children = (branchDeletionRequested ? childPrs(product, pullRequest) : []).map(child => child.number);
+  for (const childNumber of children) mockRetargetFailures.delete(prKey(product, childNumber));
   const warnings = [
     branchUpdateWonRace ? `head が更新されたため、リモートブランチ ${pullRequest.head} を削除しませんでした` : '',
     pullRequest.headMismatch === true ? '予約時と異なる head SHA がマージされました' : '',
@@ -2409,6 +2413,7 @@ function mergeConfirm(p, pr) {
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
     <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging || !o.method ? 'disabled' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
       ${o.del && !pr.isCrossRepository && p.repo.autoDeleteBranch !== true ? `<button type="button" class="link-btn" data-mock-branch-update="${key}" ${merging ? 'disabled' : ''}>モック: 削除前に別の head へ更新</button>` : ''}
+      ${kids.length && branchDeleted ? `<button type="button" class="link-btn" data-mock-retarget-failure="${key}" ${merging ? 'disabled' : ''}>モック: 子 PR の base 変更に失敗</button>` : ''}
       <button type="button" class="link-btn" data-mock-merge-failure="${prKey(p, pr.number)}">モック: 失敗の知らせを表示</button>
       <button type="button" class="ghost" data-merge-cancel ${merging ? 'disabled' : ''}>やめる</button></div>
   </div>`;
@@ -2817,10 +2822,8 @@ function renderRestartNote(state) {
   if (note.hidden) { ui.phase = 'idle'; ui.error = ''; ui.view = ''; note.textContent = ''; return; }
   let text;
   const buttons = [];
-  if (['pending', 'failed'].includes(state.persistence?.status) && ui.phase !== 'waiting') {
-    text = state.persistence.status === 'pending'
-      ? '変更を保存しています。保存が完了してから再起動してください。'
-      : '未保存の変更があるため、再起動できません。保存の警告が消えてから再起動してください。';
+  if (state.persistence?.status === 'failed' && ui.phase !== 'waiting') {
+    text = '未保存の変更があるため、再起動できません。保存の警告が消えてから再起動してください。';
   } else if (ui.phase === 'waiting') {
     text = '常駐サーバーを再起動しています。';
   } else if (ui.phase === 'confirm' || ui.phase === 'sending') {
@@ -2835,7 +2838,11 @@ function renderRestartNote(state) {
       renderRestartNote(ui.state);
       try {
         const response = await requestServerRestart();
-        if (response.status !== 202) throw new Error('Restart rejected');
+        if (response.status !== 202) {
+          const result = await response.json().catch(() => ({}));
+          if (result.persistence) ui.state = { ...ui.state, persistence: result.persistence };
+          throw new Error('Restart rejected');
+        }
         ui.phase = 'waiting';
         ui.timer = setTimeout(() => {
           ui.phase = 'idle';
@@ -2845,7 +2852,9 @@ function renderRestartNote(state) {
         }, 30_000);
       } catch {
         ui.phase = 'idle';
-        ui.error = '再起動を始められませんでした。タスクトレイのメニューから再起動してください。';
+        ui.error = ui.state.persistence?.status === 'pending'
+          ? '保存処理が進行中です。少し待ってから再起動してください。'
+          : '再起動を始められませんでした。タスクトレイのメニューから再起動してください。';
         ui.focus = '常駐サーバーを再起動する';
       }
       renderRestartNote(ui.state);
@@ -3276,6 +3285,11 @@ document.addEventListener('click', e => {
     if (pr) pr.mergeIntent = false;
   } else if (t.dataset.mockMergeFailure) {
     ui.mergeErrors[t.dataset.mockMergeFailure] = { message: 'PR の状態が変わりました。表示を確認してください。', shownAt: Date.now() };
+  } else if (t.dataset.mockRetargetFailure) {
+    const [pid, n] = t.dataset.mockRetargetFailure.split('#');
+    const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
+    for (const child of childPrs(p, pr)) mockRetargetFailures.set(prKey(p, child.number), pr.number);
+    ui.mergeErrors[t.dataset.mockRetargetFailure] = { message: '子 PR の base を付け替えられなかったため、マージを中止しました。', shownAt: Date.now() };
   } else if (t.dataset.mockBranchUpdate) {
     mockBranchUpdatedBeforeDelete.add(t.dataset.mockBranchUpdate);
   } else if (t.dataset.mockConflictFailure) {

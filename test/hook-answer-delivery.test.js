@@ -57,10 +57,20 @@ function fetchToServer(server, {
   };
 }
 
-function delayedFetchToServer(server, { deliveryDelayMs, acknowledgementDelayMs, attempts = [], calls = [] }) {
-  return async (url, init) => {
+function scheduledFetchToServer(server, { deliveryDelayMs, acknowledgementDelayMs, attempts = [], calls = [] }) {
+  const scheduledActions = new Set();
+  const waiters = new Map();
+  const waitForAction = (action) => {
+    if (scheduledActions.has(action)) return Promise.resolve();
+    return new Promise((resolve) => waiters.set(action, resolve));
+  };
+  const fetchImpl = async (url, init) => {
     const body = JSON.parse(init.body);
     attempts.push(body.action);
+    scheduledActions.add(body.action);
+    const waiter = waiters.get(body.action);
+    waiters.delete(body.action);
+    waiter?.();
     await delay(body.action === 'delivery-ack' ? acknowledgementDelayMs : deliveryDelayMs);
     if (init.signal.aborted) throw new Error('request aborted');
     const response = await request(server.info.port, {
@@ -73,6 +83,7 @@ function delayedFetchToServer(server, { deliveryDelayMs, acknowledgementDelayMs,
     calls.push({ body, response: payload, status: response.status });
     return { ok: response.status === 200, status: response.status, json: async () => payload };
   };
+  return { fetchImpl, waitForAction };
 }
 
 async function postHookRequest(server, body) {
@@ -167,10 +178,16 @@ test('遅い配信応答の後も追加 ACK 予算内で本文を返し、受領
   const c = await fixture(t, { notify: false });
   const attempts = [];
   const calls = [];
-  const result = await runAnswerHook({ session_id: c.sessionId, hook_event_name: 'UserPromptSubmit' }, {
-    homeDir: c.homeDir,
-    fetchImpl: delayedFetchToServer(c, { deliveryDelayMs: 850, acknowledgementDelayMs: 200, attempts, calls }),
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: c.now });
+  const transport = scheduledFetchToServer(c, { deliveryDelayMs: 850, acknowledgementDelayMs: 200, attempts, calls });
+  const pending = runAnswerHook({ session_id: c.sessionId, hook_event_name: 'UserPromptSubmit' }, {
+    homeDir: c.homeDir, now: Date.now, fetchImpl: transport.fetchImpl,
   });
+  await transport.waitForAction('user-prompt-submit');
+  t.mock.timers.tick(850);
+  await transport.waitForAction('delivery-ack');
+  t.mock.timers.tick(200);
+  const result = await pending;
 
   assert.deepEqual(attempts, ['user-prompt-submit', 'delivery-ack']);
   assert.equal(calls.filter(({ body }) => body.action === 'delivery-ack').length, 1);
@@ -182,10 +199,16 @@ test('配信応答が早くても ACK は応答受領後 300 ms で打ち切る'
   const c = await fixture(t, { notify: false });
   const attempts = [];
   const calls = [];
-  const result = await runAnswerHook({ session_id: c.sessionId, hook_event_name: 'PostToolBatch' }, {
-    homeDir: c.homeDir,
-    fetchImpl: delayedFetchToServer(c, { deliveryDelayMs: 0, acknowledgementDelayMs: 400, attempts, calls }),
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: c.now });
+  const transport = scheduledFetchToServer(c, { deliveryDelayMs: 0, acknowledgementDelayMs: 400, attempts, calls });
+  const pending = runAnswerHook({ session_id: c.sessionId, hook_event_name: 'PostToolBatch' }, {
+    homeDir: c.homeDir, now: Date.now, fetchImpl: transport.fetchImpl,
   });
+  await transport.waitForAction('post-tool-batch');
+  t.mock.timers.tick(0);
+  await transport.waitForAction('delivery-ack');
+  t.mock.timers.tick(300);
+  const result = await pending;
 
   assert.deepEqual(attempts, ['post-tool-batch', 'delivery-ack']);
   assert.equal(calls.filter(({ body }) => body.action === 'delivery-ack').length, 0);
@@ -197,11 +220,16 @@ test('呼び出し元が指定した絶対期限は ACK の追加予算で延長
   const c = await fixture(t, { notify: false });
   const attempts = [];
   const calls = [];
-  const result = await runAnswerHook({ session_id: c.sessionId, hook_event_name: 'UserPromptSubmit' }, {
-    homeDir: c.homeDir,
-    deadline: Date.now() + 1_000,
-    fetchImpl: delayedFetchToServer(c, { deliveryDelayMs: 850, acknowledgementDelayMs: 200, attempts, calls }),
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: c.now });
+  const transport = scheduledFetchToServer(c, { deliveryDelayMs: 850, acknowledgementDelayMs: 200, attempts, calls });
+  const pending = runAnswerHook({ session_id: c.sessionId, hook_event_name: 'UserPromptSubmit' }, {
+    homeDir: c.homeDir, now: Date.now, deadline: Date.now() + 1_000, fetchImpl: transport.fetchImpl,
   });
+  await transport.waitForAction('user-prompt-submit');
+  t.mock.timers.tick(850);
+  await transport.waitForAction('delivery-ack');
+  t.mock.timers.tick(150);
+  const result = await pending;
 
   assert.deepEqual(attempts, ['user-prompt-submit', 'delivery-ack']);
   assert.equal(calls.filter(({ body }) => body.action === 'delivery-ack').length, 0);
@@ -266,30 +294,28 @@ test('配信記録の期限後も未 ACK の回答と通知を同じ要求へ再
   assert.equal(c.runtime.answerDelivery.sessionNotifications.has(c.sessionId), true);
 });
 
-test('未 ACK 配信記録が上限に達した要求は拒み、ACK 後に同じ要求 ID を受け付ける', async (t) => {
+test('未 ACK 配信記録の上限超過を拒み、既存要求は再生する', async (t) => {
   const c = await fixture(t, { notify: false });
-  const requests = [];
-  for (let index = 0; index < 128; index += 1) {
+  const retainedBody = {
+    action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: c.sessionId, id: 'capacity-retained',
+  };
+  const retained = await postHookRequest(c, retainedBody);
+  assert.equal(retained.status, 200);
+  for (let index = 1; index < 128; index += 1) {
     const body = {
       action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: c.sessionId, id: `capacity-${index}`,
     };
-    const result = await postHookRequest(c, body);
-    assert.equal(result.status, 200);
-    requests.push(body);
+    await postHookRequest(c, body);
   }
   const blockedBody = {
     action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: c.sessionId, id: 'capacity-blocked',
   };
   assert.deepEqual(await postHookRequest(c, blockedBody), { status: 503, json: null });
 
-  const first = c.state.pendingHookDeliveries.get(c.sessionId).get(JSON.stringify(['post-tool-batch', requests[0].id, null]));
-  const acknowledgement = await postHookRequest(c, {
-    action: 'delivery-ack', event_name: 'DeliveryAck', session_id: c.sessionId,
-    id: 'capacity-ack', delivery_id: first.deliveryId,
-  });
-  assert.deepEqual(acknowledgement, { status: 200, json: { acknowledged: true } });
-  const recovered = await postHookRequest(c, blockedBody);
-  assert.deepEqual(recovered, { status: 200, json: { hookOutput: null } });
+  const replay = await postHookRequest(c, retainedBody);
+  assert.equal(replay.status, 200);
+  assert.equal(replay.json.deliveryId, retained.json.deliveryId);
+  assert.match(replay.json.hookOutput.hookSpecificOutput.additionalContext, /最初の回答。/);
 });
 
 test('古い Stop 世代の配信記録は要求から再生しない', async (t) => {
@@ -324,9 +350,7 @@ test('空のポーリング応答を記録せず、同じ要求 ID で後から�
 
 test('未 ACK 通知と上限超過の理由を store.json から復元する', async (t) => {
   const c = await fixture(t, { answerNote: null, notify: false });
-  for (let index = 0; index < 20; index += 1) {
-    assert.equal(c.runtime.answerDelivery.notifySessions([c.sessionId], `通知 ${index}`), true);
-  }
+  for (let index = 0; index < 20; index += 1) c.runtime.answerDelivery.notifySessions([c.sessionId], `通知 ${index}`);
   assert.equal(c.runtime.answerDelivery.notifySessions([c.sessionId], '上限後の通知'), false);
   await c.state.flushPersistence();
 

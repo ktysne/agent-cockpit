@@ -370,11 +370,12 @@ class PullRequestMergeManager {
         base: targetBranch,
         fromNumber: registration.number,
         previousBaseRefName: child.baseRefName,
+        completed: false,
       };
       const recorded = this.state.recordPullRequestRetarget(retarget);
       const alreadyRecorded = this.state.pullRequestRetargetsForRepo(registration.owner, registration.repo)
         .some((item) => item.number === child.number && item.base === targetBranch &&
-          item.fromNumber === registration.number && item.previousBaseRefName === child.baseRefName);
+          item.fromNumber === registration.number && item.previousBaseRefName === child.baseRefName && item.completed === false);
       if (!recorded && !alreadyRecorded) {
         return reject(500, `#${child.number} の base 変更を保存できませんでした。マージはしていません`, 'retarget-save');
       }
@@ -391,6 +392,7 @@ class PullRequestMergeManager {
         const completed = completedRetargetStatus(retargeted);
         return reject(502, `#${child.number} の base を ${targetBranch} に付け替えられませんでした。${completed}。マージはしていません`, 'retarget-failed');
       }
+      this.state.recordPullRequestRetarget({ ...retarget, completed: true });
       retargeted.push(child);
     }
 
@@ -794,8 +796,7 @@ class PullRequestMergeManager {
     } else if (deleteBranch && !headMismatch && validBranchName(pullRequest.headRefName)) {
       try {
         const deletion = await this.deleteRemoteBranch(owner, repo, pullRequest.headRefName, pullRequest.headRefOid);
-        branchDeleted = deletion === 'deleted';
-        if (deletion === 'missing') warning = `PR はマージしましたが、リモートブランチ ${pullRequest.headRefName} は既にありません`;
+        branchDeleted = deletion === 'deleted' || deletion === 'missing';
         if (deletion === 'changed') warning = `PR はマージしましたが、head が更新されたためリモートブランチ ${pullRequest.headRefName} を削除しませんでした`;
       } catch {
         warning = [warning, `PR はマージしましたが、リモートブランチ ${pullRequest.headRefName} を削除できませんでした`].filter(Boolean).join('。');

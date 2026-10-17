@@ -298,7 +298,10 @@ for (const automatic of [false, true]) {
     assert.equal(fixture.github.openPullRequests[0].baseRefName, 'feature/aggregate');
     assert.ok(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'edit' && args.at(-1) === 'feature/aggregate'));
     assert.ok(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'merge' && args.includes('--merge')));
-    assert.equal(fixture.state.pullRequestRetargetsForRepo('example', 'project')[0].base, 'feature/aggregate');
+    assert.deepEqual(fixture.state.pullRequestRetargetsForRepo('example', 'project')[0], {
+      owner: 'example', repo: 'project', number: 2, base: 'feature/aggregate', fromNumber: 1,
+      previousBaseRefName: 'feature/one', completed: true,
+    });
     if (automatic) assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].automaticResult.retargetedBase, 'feature/aggregate');
   });
 
@@ -711,10 +714,10 @@ test('既に無いリモートブランチの削除は成功として扱い警�
   const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
 
   assert.equal(result.ok, true);
-  assert.equal(result.branchDeleted, false);
-  assert.match(result.warning, /既にありません/);
+  assert.equal(result.branchDeleted, true);
+  assert.equal(result.warning, null);
   assert.equal(fixture.calls.some(isBranchDeleteCall), false);
-  assert.match(fixture.notices.at(-1).message, /既にありません/);
+  assert.doesNotMatch(fixture.notices.at(-1).message, /既にありません/);
 });
 
 test('条件付き削除に失敗し ref が変わらなければ警告する', async (t) => {
@@ -806,6 +809,13 @@ test('子 PR の base の付け替えに失敗したらマージせず完了位�
   assert.match(result.error, /#2 の base を main に付け替えられませんでした/);
   assert.match(result.error, /マージはしていません/);
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+  assert.equal(fixture.state.pullRequestRetargetsForRepo('example', 'project')[0].completed, false);
+  await fixture.tracker.refreshRepo('example', 'project');
+  const child = findPullRequestInTrees(fixture.tracker.snapshot()[0].trees, 2);
+  assert.equal(child.effectiveBase, 'feature/one');
+  assert.equal(child.retargetedFrom, null);
+  assert.equal(child.parentNumber, 1);
+  assert.equal(child.blocker, '親 PR #1 のマージ確認待ち');
 });
 
 test('マージキューに入って OPEN のままなら意図を持たず、後のマージは外でのマージとして方式不明で知らせ、ブランチを消さない', async (t) => {

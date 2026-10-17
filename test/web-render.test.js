@@ -5208,7 +5208,7 @@ test('保存失敗の帯は未保存と再試行を示し、復旧後に警告�
   }
 });
 
-test('未保存の変更がある間は画面とモックの再起動操作を出さない', () => {
+test('保存失敗中は再起動操作を出さず、通常の保存待ちでは確認を維持する', () => {
   for (const source of [pageHtml, mockHtml]) {
     const f = restartNoteHarness(source);
     f.state.persistence = { status: 'failed' };
@@ -5217,15 +5217,25 @@ test('未保存の変更がある間は画面とモックの再起動操作を�
     assert.equal(f.buttons.length, 0);
     f.state.persistence = { status: 'pending' };
     f.render();
-    assert.match(f.note.textContent, /保存しています.*完了してから再起動/);
-    assert.equal(f.buttons.length, 0);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+    f.click('常駐サーバーを再起動する');
+    const rebuilt = f.note.rebuilt;
     f.state.persistence = { status: 'saved' };
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+    assert.equal(f.note.rebuilt, rebuilt);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['再起動する', 'やめる']);
   }
 });
 
 for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
+  test(`${label}は再起動時の保存が完了しなければ待ってからの再試行を案内する`, async () => {
+    const f = restartNoteHarness(source, async () => ({ status: 409, json: async () => ({ persistence: { status: 'pending' } }) }));
+    f.click('常駐サーバーを再起動する');
+    await f.click('再起動する');
+    assert.equal(f.note.textContent, '保存処理が進行中です。少し待ってから再起動してください。');
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+  });
+
   test(`${label}の再起動は帯で消える行と許可待ちを確認し、やめると元に戻る`, () => {
     const f = restartNoteHarness(source);
     f.click('常駐サーバーを再起動する');

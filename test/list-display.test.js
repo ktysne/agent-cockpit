@@ -1254,6 +1254,7 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
     pullRequestMergeResults: mockResults, nextPullRequestMergeResultId: 0,
     prKey: () => 'project#41', childPrs: () => [], absoluteTimeLabel: () => 'now',
     mockBranchUpdatedBeforeDelete: new Set(),
+    mockRetargetFailures: new Map(),
     save() {}, render() {},
   });
   const mockSources = [

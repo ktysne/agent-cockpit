@@ -5264,10 +5264,8 @@ function renderRestartNote(state) {
   if (note.hidden) { ui.phase = 'idle'; ui.error = ''; ui.view = ''; note.textContent = ''; return; }
   let text;
   const buttons = [];
-  if (['pending', 'failed'].includes(state.persistence?.status) && ui.phase !== 'waiting') {
-    text = state.persistence.status === 'pending'
-      ? '変更を保存しています。保存が完了してから再起動してください。'
-      : '未保存の変更があるため、再起動できません。保存の警告が消えてから再起動してください。';
+  if (state.persistence?.status === 'failed' && ui.phase !== 'waiting') {
+    text = '未保存の変更があるため、再起動できません。保存の警告が消えてから再起動してください。';
   } else if (ui.phase === 'waiting') {
     text = '常駐サーバーを再起動しています。';
   } else if (ui.phase === 'confirm' || ui.phase === 'sending') {
@@ -5295,7 +5293,9 @@ function renderRestartNote(state) {
         }, 30_000);
       } catch {
         ui.phase = 'idle';
-        ui.error = '再起動を始められませんでした。タスクトレイのメニューから再起動してください。';
+        ui.error = ui.state.persistence?.status === 'pending'
+          ? '保存処理が進行中です。少し待ってから再起動してください。'
+          : '再起動を始められませんでした。タスクトレイのメニューから再起動してください。';
         ui.focus = '常駐サーバーを再起動する';
       }
       renderRestartNote(ui.state);

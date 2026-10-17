@@ -449,10 +449,11 @@ function assemblePullRequestStacks({
 
   function effective(pr) {
     const explicit = retargetedPrs.find((record) => record.number === pr.number);
+    const completedRetarget = explicit?.completed === false ? null : explicit;
     const check = restackResults.get(pr.number) || { checked: false, parent: null };
     const parentNumber = Number.isSafeInteger(explicit?.fromNumber) && explicit.fromNumber > 0
       ? explicit.fromNumber : null;
-    let base = explicit?.base || pr.baseRefName;
+    let base = completedRetarget?.base || pr.baseRefName;
     const seen = new Set([pr.number]);
     while (base) {
       if (base === defaultBranch || liveMergedBranches.has(base)) break;
@@ -465,7 +466,7 @@ function assemblePullRequestStacks({
     }
     return {
       base: base || pr.baseRefName,
-      retargetedFrom: explicit ? { number: explicit.fromNumber || null } : null,
+      retargetedFrom: completedRetarget ? { number: completedRetarget.fromNumber || null } : null,
       parentMergePending: parentNumber && !parentMergeConfirmed(parentNumber) ? parentNumber : null,
       needsRestack: Boolean(check.parent),
       restackCheckUnknown: check.checked !== true,

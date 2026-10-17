@@ -273,7 +273,8 @@ function validPullRequestRetarget(record) {
   return isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
     Number.isSafeInteger(record.number) && record.number > 0 && typeof record.base === 'string' && record.base.length <= 500 &&
     (record.fromNumber === null || record.fromNumber === undefined || (Number.isSafeInteger(record.fromNumber) && record.fromNumber > 0)) &&
-    (record.previousBaseRefName === undefined || validBranchName(record.previousBaseRefName));
+    (record.previousBaseRefName === undefined || validBranchName(record.previousBaseRefName)) &&
+    (record.completed === undefined || typeof record.completed === 'boolean');
 }
 
 function validMergedPullRequest(record) {
@@ -2482,6 +2483,8 @@ class DashboardState {
     const index = this.pullRequestRetargets.findIndex((item) => item.owner === record.owner && item.repo === record.repo && item.number === record.number);
     const next = { owner: record.owner, repo: record.repo, number: record.number, base: record.base, fromNumber: record.fromNumber ?? null };
     if (record.previousBaseRefName) next.previousBaseRefName = record.previousBaseRefName;
+    const completed = record.completed ?? this.pullRequestRetargets[index]?.completed;
+    if (completed !== undefined) next.completed = completed;
     if (index >= 0 && stableStringify(this.pullRequestRetargets[index]) === stableStringify(next)) return false;
     if (index >= 0) this.pullRequestRetargets[index] = next;
     else this.pullRequestRetargets.push(next);
