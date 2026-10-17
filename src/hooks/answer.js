@@ -45,7 +45,7 @@ async function postHookRequest(body, options = {}) {
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const fetchImpl = options.fetchImpl || fetch;
   const now = options.now || Date.now;
-  const deadline = now() + (options.timeoutMs || 1_000);
+  const deadline = options.deadline ?? now() + (options.timeoutMs || 1_000);
   const result = await postToServer('/api/hooks/answers', body, {
     homeDir,
     fetchImpl,
@@ -57,7 +57,31 @@ async function postHookRequest(body, options = {}) {
     ensure: false,
     now,
   });
-  return result.ok ? result.json : null;
+  if (!result.ok) return null;
+  const response = result.json;
+  if (typeof response?.deliveryId === 'string') {
+    try {
+      await postToServer('/api/hooks/answers', {
+        action: 'delivery-ack',
+        event_name: 'DeliveryAck',
+        session_id: body.session_id,
+        id: crypto.randomUUID(),
+        delivery_id: response.deliveryId,
+      }, {
+        homeDir,
+        fetchImpl,
+        cache: 'no-store',
+        deadline,
+        attemptTimeoutMs: options.attemptTimeoutMs,
+        fileSystem: options.fileSystem,
+        readServerInfo: options.readServerInfo,
+        ensure: false,
+        now,
+      });
+    } catch {
+    }
+  }
+  return response;
 }
 
 async function runAskQuestion(input, options = {}) {

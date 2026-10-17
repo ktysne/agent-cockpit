@@ -3603,6 +3603,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     renderedPullRequestExpirySignature: 'reservation:visible',
     applyUpdateState() {},
     renderRestartNote() {},
+    renderPersistenceNote() {},
     applyAppVersion() {},
     updateConnectionNote() {},
     isAwaitingDecision: () => false,
@@ -4350,6 +4351,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       renderedPullRequestExpirySignature: '',
       applyUpdateState() {},
     renderRestartNote() {},
+    renderPersistenceNote() {},
       applyAppVersion() {},
       updateConnectionNote() {},
       isPendingDecision: () => false,
@@ -4516,6 +4518,34 @@ test('モックの非対話の行は稼働中の札で出し、状態推定と�
   const namedNonInteractive = context.mainRow({}, { id: 'named-batch', status: 'unknown', nonInteractive: true,
     modelName: 'Sonnet 5.5', tasks: [], main: {} }, false);
   assert.match(namedNonInteractive, /<span class="model claude">Claude Sonnet 5.5<\/span>/);
+});
+
+test('Codex の状態不明行は履歴推定の非対応を案内し、一覧から外せる', () => {
+  const element = (tagName, className = '', textContent = '') => ({
+    tagName, className, textContent, children: [], dataset: {},
+    append(...nodes) { this.children.push(...nodes); },
+  });
+  const implementation = pageContext(pageHtml, { element });
+  vm.runInContext(functionSource(pageHtml, 'unknownSessionControls'), implementation);
+  const implementationCodex = implementation.unknownSessionControls({
+    session_id: 'codex-session', provider: 'codex', status: '不明',
+  });
+  const flatten = (node) => [node, ...node.children.flatMap(flatten)];
+  const implementationNodes = flatten(implementationCodex);
+  assert.equal(implementationNodes.some((node) => node.dataset.estimateSession), false);
+  assert.equal(implementationNodes.some((node) => node.dataset.hideSession === 'codex-session'), true);
+  assert.ok(implementationNodes.some((node) => node.textContent === 'Codexの履歴からの推定には未対応です'));
+  const legacyImplementation = flatten(implementation.unknownSessionControls({ session_id: 'legacy', status: '不明' }));
+  assert.equal(legacyImplementation.some((node) => node.dataset.estimateSession === 'legacy'), true);
+
+  const mock = pageContext(mockHtml, { ui: { estimatedSessions: [] }, esc: (value) => String(value) });
+  vm.runInContext(functionSource(mockHtml, 'unknownSessionControls'), mock);
+  const mockCodex = mock.unknownSessionControls({ id: 'codex-session', provider: 'codex', status: 'unknown' });
+  assert.doesNotMatch(mockCodex, /data-estimate=/);
+  assert.match(mockCodex, /data-hide-session="codex-session"/);
+  assert.match(mockCodex, /Codexの履歴からの推定には未対応です/);
+  const legacyMock = mock.unknownSessionControls({ id: 'legacy', status: 'unknown' });
+  assert.match(legacyMock, /data-estimate="legacy"/);
 });
 
 test('非対話で状態が不明の行は更新時刻が古くても更新の無い帯へ隠さず、対話の不明な行は従来どおり隠す', () => {
@@ -5155,6 +5185,36 @@ function restartNoteHarness(source, response = async () => ({ status: 202 })) {
   const click = label => buttons.find(button => button.textContent === label).click();
   return { note, buttons, timers, state, render, click, context, focused: () => focused };
 }
+
+test('保存失敗の帯は変更の適用済みと再試行を示し、復旧後に警告を消す', async () => {
+  for (const source of [pageHtml, mockHtml]) {
+    const text = { textContent: '' };
+    const button = {};
+    const note = { hidden: true, querySelector: selector => selector === 'button' ? button : text };
+    const context = pageContext(source, { document: { getElementById: () => note },
+      retryPersistence: async () => ({ persistence: { status: 'saved', files: [] } }) });
+    vm.runInContext(functionSource(source, 'renderPersistenceNote'), context);
+    context.renderPersistenceNote({ persistence: { status: 'failed', files: [
+      { fileName: 'store.json', errorCode: 'ENOSPC', lastFailureAt: '2026-10-18T00:00:00Z' },
+    ] } });
+    assert.equal(note.hidden, false);
+    assert.match(text.textContent, /変更は適用済み.*保存できていません/);
+    assert.match(text.textContent, /store.json: ENOSPC/);
+    await button.onclick();
+    assert.equal(button.disabled, false);
+    assert.equal(note.hidden, true);
+  }
+});
+
+test('未保存の変更がある間は画面とモックの再起動操作を出さない', () => {
+  for (const source of [pageHtml, mockHtml]) {
+    const f = restartNoteHarness(source);
+    f.state.persistence = { status: 'failed' };
+    f.render();
+    assert.match(f.note.textContent, /未保存の変更があるため、再起動できません/);
+    assert.equal(f.buttons.length, 0);
+  }
+});
 
 for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
   test(`${label}の再起動は帯で消える行と許可待ちを確認し、やめると元に戻る`, () => {

@@ -9,7 +9,11 @@ const BRANCH_CACHE_MAX_ENTRIES = 256;
 const branchCache = new Map();
 
 function pathApiFor(value) {
-  return path.win32.isAbsolute(value) ? path.win32 : path.posix;
+  if (/^[A-Za-z]:/.test(value) || value.startsWith('\\') || /^\/\/[^/]+\/[^/]+(?:\/|$)/.test(value)) {
+    return path.win32;
+  }
+  if (path.posix.isAbsolute(value)) return path.posix;
+  return process.platform === 'win32' ? path.win32 : path.posix;
 }
 
 function readSmallFile(filePath, fileSystem) {

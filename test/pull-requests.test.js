@@ -552,6 +552,7 @@ test('merged parent の base をたどり、常駐サーバーの付け替え記
   const withRetarget = assemblePullRequestStacks({
     defaultBranch: 'main', openPullRequests: [child], registrations: [pullRequestRegistration(33), merged],
     retargetedPrs: [{ owner: 'example', repo: 'project', number: 33, base: 'main', fromNumber: 32 }],
+    listAvailable: true, mergedCandidates: [mergedPullRequest(32, 'a'.repeat(40), undefined, 'feat/merged', 'main')],
     restackResults: checkedRestackResults([child]),
   }).trees[0];
   assert.equal(withRetarget.effectiveBase, 'main');
@@ -583,6 +584,8 @@ test('マージできない理由は base、スタック、ドラフト、積み
       pullRequests: [pullRequest(32, 'retarget', 'old-base', { draft: true })],
       number: 32,
       retargetedPrs: [{ owner: 'example', repo: 'project', number: 32, base: 'main', fromNumber: 30 }],
+      listAvailable: true,
+      mergedCandidates: [mergedPullRequest(30, 'a'.repeat(40), undefined, 'feat/parent', 'main')],
       expected: 'base を main に付け替える必要がある',
     },
     { pullRequests: [pullRequest(23, 'draft', 'main', { draft: true, conflict: true })], number: 23, expected: 'ドラフト' },
@@ -604,10 +607,12 @@ test('マージできない理由は base、スタック、ドラフト、積み
     if (item.unknown) restackResults.set(item.number, { checked: false, parent: null });
     const result = assemblePullRequestStacks({
       defaultBranch: 'main',
+      listAvailable: item.listAvailable || false,
       openPullRequests: item.pullRequests,
       registrations: [pullRequestRegistration(item.number), ...(item.number === 22 ? [pullRequestRegistration(21)] : [])],
       relatedPullRequests: item.relatedPullRequests || [],
       retargetedPrs: item.retargetedPrs || [],
+      mergedCandidates: item.mergedCandidates || [],
       restackResults,
     });
     const find = (tree) => tree.number === item.number ? tree : tree.children.map(find).find(Boolean);

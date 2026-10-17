@@ -125,6 +125,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
   const decision = state.addDecision('restored-session', decisionInput('配置を選ぶ'), now);
   const answer = {
     choice: 'pick', note: '案 A で進める', picks: [['案 A']],
+    version: '00000000-0000-4000-8000-000000000001',
     sentAt: new Date(now + 1).toISOString(),
     deliveredAt: new Date(now + 2).toISOString(),
     reflectedAt: new Date(now + 3).toISOString(), promptDeliveries: 1,

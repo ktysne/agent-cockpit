@@ -21,6 +21,7 @@ const MERGED_PULL_REQUEST_LIMIT = 1000;
 const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
+const GITHUB_GIT_CREDENTIAL_HELPER = '!gh auth git-credential';
 const INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 // コマンドの後の取り直しも間引かないと、gh pr のたびに全リポジトリを一斉に取るため、修正前の定期取得と同じ間隔までは間引く。
 const COMMAND_REFRESH_INACTIVE_INTERVAL_MS = 60_000;
@@ -421,9 +422,18 @@ function assemblePullRequestStacks({
   const mergeTargetFor = (base) => base === defaultBranch ? base
     : absenceConfirmed && !knownHeads.has(base) && mergeTargetHeadChecks.get(base) === true ? base : null;
 
+  function parentMergeConfirmed(number) {
+    if (!listAvailable || openByNumber.has(number) || uninspectedNumbers.has(number)) return false;
+    return mergedCandidates.some((candidate) => candidate.number === number &&
+      isCompleteCommitSha(candidate.headRefOid) && validBranchName(candidate.headRefName) &&
+      validBranchName(candidate.baseRefName) && Number.isFinite(Date.parse(candidate.mergedAt || '')));
+  }
+
   function effective(pr) {
     const explicit = retargetedPrs.find((record) => record.number === pr.number);
     const check = restackResults.get(pr.number) || { checked: false, parent: null };
+    const parentNumber = Number.isSafeInteger(explicit?.fromNumber) && explicit.fromNumber > 0
+      ? explicit.fromNumber : null;
     let base = explicit?.base || pr.baseRefName;
     const seen = new Set([pr.number]);
     while (base) {
@@ -438,6 +448,7 @@ function assemblePullRequestStacks({
     return {
       base: base || pr.baseRefName,
       retargetedFrom: explicit ? { number: explicit.fromNumber || null } : null,
+      parentMergePending: parentNumber && !parentMergeConfirmed(parentNumber) ? parentNumber : null,
       needsRestack: Boolean(check.parent),
       restackCheckUnknown: check.checked !== true,
       restackPr: check.parent,
@@ -495,6 +506,7 @@ function assemblePullRequestStacks({
 
   function blockerFor(pr, includeCi = true) {
     const value = effective(pr);
+    if (value.parentMergePending) return `親 PR #${value.parentMergePending} のマージ確認待ち`;
     if (!defaultBranch) return 'リポジトリ設定を取得できません';
     const parent = open.find((candidate) => candidate.number === parentByNumber.get(pr.number));
     if (parent) return `下の #${parent.number} のマージ待ち`;
@@ -589,6 +601,33 @@ function runGh(args, options = {}) {
       windowsHide: true,
       shell: false,
       env: ghEnvironment(options.environment),
+    }, (error, stdout, stderr) => {
+      if (error) {
+        if (stderr && error.stderr == null) error.stderr = stderr;
+        reject(error);
+      } else resolve(stdout);
+    });
+  });
+}
+
+function gitEnvironment(environment = process.env) {
+  return {
+    ...Object.fromEntries(Object.entries(environment).filter(([key]) => !isGithubCredentialEnvironmentVariable(key))),
+    GIT_TERMINAL_PROMPT: '0',
+    GCM_INTERACTIVE: 'never',
+  };
+}
+
+function runGit(args, options = {}) {
+  const execFileImpl = options.execFileImpl || execFile;
+  return new Promise((resolve, reject) => {
+    execFileImpl('git', args, {
+      encoding: 'utf8',
+      timeout: options.timeoutMs || 20_000,
+      maxBuffer: 4 * 1024 * 1024,
+      windowsHide: true,
+      shell: false,
+      env: gitEnvironment(options.environment),
     }, (error, stdout, stderr) => {
       if (error) {
         if (stderr && error.stderr == null) error.stderr = stderr;
@@ -1352,10 +1391,10 @@ class PullRequestTracker {
     };
   }
 
-  async readRemoteBranchHead(repository, branch) {
+  async readRemoteBranchHead(repository, branch, options = {}) {
     const encodedBranch = branch.split('/').map((segment) => encodeURIComponent(segment)).join('/');
     try {
-      const output = await this.execute(['api', `repos/${repository}/git/ref/heads/${encodedBranch}`]);
+      const output = await this.execute(['api', `repos/${repository}/git/ref/heads/${encodedBranch}`], options);
       const headRefOid = JSON.parse(output)?.object?.sha;
       if (!isCompleteCommitSha(headRefOid)) throw new Error('invalid branch ref');
       return headRefOid.toLowerCase();
@@ -1363,6 +1402,21 @@ class PullRequestTracker {
       if (isGitHubNotFoundError(error)) return null;
       throw error;
     }
+  }
+
+  async deleteRemoteBranchIfHeadMatches(owner, repo, branch, expectedHeadRefOid) {
+    if (!validRepositoryPart(owner) || !validRepositoryPart(repo) || !validBranchName(branch) ||
+      !isCompleteCommitSha(expectedHeadRefOid)) throw new Error('invalid branch deletion');
+    const repository = safeRepo(owner, repo);
+    const reference = `refs/heads/${branch}`;
+    return runGit([
+      '-c', 'credential.helper=',
+      '-c', `credential.helper=${GITHUB_GIT_CREDENTIAL_HELPER}`,
+      'push', '--porcelain', '--no-follow-tags', '--no-verify',
+      `--force-with-lease=${reference}:${expectedHeadRefOid.toLowerCase()}`,
+      `https://github.com/${repository}.git`,
+      `:${reference}`,
+    ], { execFileImpl: this.gitExecFileImpl });
   }
 
   async inspectDisappearedPullRequests(owner, repo, repository, {

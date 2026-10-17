@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 
 const RENAME_RETRY_DELAYS_MS = [50, 100, 200];
+const PERSISTENCE_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
 
 async function atomicWriteText(homeDir, fileName, contents, fileSystem = fs, options = {}) {
   const target = path.join(homeDir, fileName);
@@ -66,25 +67,91 @@ class AtomicJsonWriter {
     };
     this.onFailure = options.onFailure || (() => {});
     this.pending = Promise.resolve();
+    this.files = new Map();
+    this.retryDelaysMs = options.persistenceRetryDelaysMs || PERSISTENCE_RETRY_DELAYS_MS;
+    this.closed = false;
   }
 
   write(fileName, value) {
-    const contents = JSON.stringify(value, null, 2);
-    const run = this.pending.then(() => atomicWriteText(
-      this.homeDir,
-      fileName,
-      `${contents}\n`,
-      this.fileSystem,
-      this.writeOptions,
-    ));
-    this.pending = run.catch((error) => {
-      this.onFailure(fileName, error);
+    const contents = `${JSON.stringify(value, null, 2)}\n`;
+    const file = this.files.get(fileName) || {
+      version: 0, savedVersion: 0, failures: 0, errorCode: null, lastFailureAt: null, timer: null,
+    };
+    file.version += 1;
+    file.contents = contents;
+    this.files.set(fileName, file);
+    return this.enqueue(fileName, file.version, contents);
+  }
+
+  enqueue(fileName, version, contents) {
+    const file = this.files.get(fileName);
+    clearTimeout(file.timer);
+    file.timer = null;
+    const run = this.pending.then(async () => {
+      if (version <= file.savedVersion) return;
+      try {
+        await atomicWriteText(this.homeDir, fileName, contents, this.fileSystem, this.writeOptions);
+        file.savedVersion = version;
+        if (file.savedVersion === file.version) {
+          file.failures = 0;
+          file.errorCode = null;
+          file.lastFailureAt = null;
+          file.contents = null;
+          clearTimeout(file.timer);
+          file.timer = null;
+        }
+      } catch (error) {
+        file.failures += 1;
+        file.errorCode = /^[A-Z][A-Z0-9_]{0,31}$/.test(error.code || '') ? error.code : 'WRITE_FAILED';
+        file.lastFailureAt = new Date().toISOString();
+        this.scheduleRetry(fileName);
+        this.onFailure(fileName, error);
+        throw error;
+      }
     });
+    this.pending = run.catch(() => {});
     return run;
   }
 
-  flush() {
+  scheduleRetry(fileName) {
+    const file = this.files.get(fileName);
+    if (this.closed || file.timer) return;
+    const delayMs = this.retryDelaysMs[Math.min(file.failures - 1, this.retryDelaysMs.length - 1)];
+    file.timer = setTimeout(() => {
+      file.timer = null;
+      void this.retry(fileName).catch(() => {});
+    }, delayMs);
+    file.timer.unref?.();
+  }
+
+  async retry(fileName) {
+    await this.pending;
+    const file = this.files.get(fileName);
+    if (file && file.savedVersion < file.version) return this.enqueue(fileName, file.version, file.contents);
+  }
+
+  snapshot() {
+    const files = [...this.files].filter(([, file]) => file.savedVersion < file.version).map(([fileName, file]) => ({
+      fileName, version: file.version, savedVersion: file.savedVersion,
+      errorCode: file.errorCode, lastFailureAt: file.lastFailureAt,
+    }));
+    return { status: files.some(file => file.errorCode) ? 'failed' : files.length ? 'pending' : 'saved', files };
+  }
+
+  async flush() {
+    await this.pending;
+    await Promise.all([...this.files.keys()].map(fileName => this.retry(fileName).catch(() => {})));
+    return this.snapshot();
+  }
+
+  wait() {
     return this.pending;
+  }
+
+  async close() {
+    this.closed = true;
+    for (const file of this.files.values()) clearTimeout(file.timer);
+    return this.flush();
   }
 }
 

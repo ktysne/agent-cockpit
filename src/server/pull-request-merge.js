@@ -52,15 +52,6 @@ function errorText(error) {
   return [error?.message, error?.stderr].filter((value) => typeof value === 'string').join('\n');
 }
 
-function isMissingRemoteBranchError(error) {
-  const text = errorText(error);
-  return /reference does not exist/i.test(text) && /(?:http\s+422|\b422\b)/i.test(text);
-}
-
-function isGitHubNotFoundError(error) {
-  return /(?:http\s+404|\b404\s+not found\b)/i.test(errorText(error));
-}
-
 class PullRequestMergeManager {
   constructor({ state, tracker, answerDelivery, diagnostics, now = Date.now } = {}) {
     this.state = state;
@@ -69,6 +60,9 @@ class PullRequestMergeManager {
     this.answerDelivery = answerDelivery;
     this.now = now;
     this.inFlight = new Map();
+    this.repositoryInFlight = new Set();
+    this.pendingRepositoryReservationChecks = new Map();
+    this.repositoryReservationChecks = new Set();
     this.handledMerges = new Set();
     this.mergeOutcomes = new Map();
     this.diagnosticReservationConditions = new Map();
@@ -84,6 +78,26 @@ class PullRequestMergeManager {
     } finally {
       if (this.inFlight.get(key) === pending) this.inFlight.delete(key);
     }
+  }
+
+  async withRepositoryTryLock(owner, repo, operation) {
+    const key = safeRepo(owner, repo).toLowerCase();
+    if (this.repositoryInFlight.has(key)) return { acquired: false };
+    this.repositoryInFlight.add(key);
+    try {
+      return { acquired: true, result: await operation() };
+    } finally {
+      this.repositoryInFlight.delete(key);
+      const pending = this.pendingRepositoryReservationChecks.get(key);
+      if (pending) {
+        this.pendingRepositoryReservationChecks.delete(key);
+        setImmediate(() => this.checkReservations(pending.owner, pending.repo).catch(() => {}));
+      }
+    }
+  }
+
+  repositoryBusyResult(number) {
+    return actionResult(409, `リポジトリ内の PR #${number} の操作が進行中です`);
   }
 
   registeredPullRequest(number, registrationKey) {
@@ -111,9 +125,12 @@ class PullRequestMergeManager {
     if (!isCompleteCommitSha(input.headRefOid) || !METHODS.has(input.method) || typeof input.deleteBranch !== 'boolean') {
       return Promise.resolve(actionResult(400, 'マージ内容を確認してください'));
     }
-    return this.withPullRequestLock(registration.owner, registration.repo, registration.number, () => (
-      this.performMerge(registration, input)
-    ));
+    return this.withPullRequestLock(registration.owner, registration.repo, registration.number, async () => {
+      const result = await this.withRepositoryTryLock(registration.owner, registration.repo, () => (
+        this.performMerge(registration, input)
+      ));
+      return result.acquired ? result.result : this.repositoryBusyResult(registration.number);
+    });
   }
 
   reserve(input) {
@@ -122,9 +139,12 @@ class PullRequestMergeManager {
     if (!isCompleteCommitSha(input.headRefOid) || !METHODS.has(input.method) || typeof input.deleteBranch !== 'boolean') {
       return Promise.resolve(actionResult(400, 'マージ予約の内容を確認してください'));
     }
-    return this.withPullRequestLock(registration.owner, registration.repo, registration.number, () => (
-      this.performReservation(registration, input)
-    ));
+    return this.withPullRequestLock(registration.owner, registration.repo, registration.number, async () => {
+      const result = await this.withRepositoryTryLock(registration.owner, registration.repo, () => (
+        this.performReservation(registration, input)
+      ));
+      return result.acquired ? result.result : this.repositoryBusyResult(registration.number);
+    });
   }
 
   cancelReservation(input) {
@@ -320,6 +340,26 @@ class PullRequestMergeManager {
       if (!Number.isSafeInteger(child.number) || child.number < 1 || !validBranchName(targetBranch)) {
         return reject(409, `#${child.number} の base を安全に付け替えられません。マージはしていません`, 'retarget-invalid');
       }
+      const retarget = {
+        owner: registration.owner,
+        repo: registration.repo,
+        number: child.number,
+        base: targetBranch,
+        fromNumber: registration.number,
+        previousBaseRefName: child.baseRefName,
+      };
+      const recorded = this.state.recordPullRequestRetarget(retarget);
+      const alreadyRecorded = this.state.pullRequestRetargetsForRepo(registration.owner, registration.repo)
+        .some((item) => item.number === child.number && item.base === targetBranch &&
+          item.fromNumber === registration.number && item.previousBaseRefName === child.baseRefName);
+      if (!recorded && !alreadyRecorded) {
+        return reject(500, `#${child.number} の base 変更を保存できませんでした。マージはしていません`, 'retarget-save');
+      }
+      try {
+        await this.state.flushStoreWrite();
+      } catch {
+        return reject(500, `#${child.number} の base 変更を保存できませんでした。マージはしていません`, 'retarget-persist');
+      }
       try {
         await this.tracker.execute([
           'pr', 'edit', String(child.number), '-R', repository, '--base', targetBranch,
@@ -328,14 +368,6 @@ class PullRequestMergeManager {
         const completed = completedRetargetStatus(retargeted);
         return reject(502, `#${child.number} の base を ${targetBranch} に付け替えられませんでした。${completed}。マージはしていません`, 'retarget-failed');
       }
-      this.state.recordPullRequestRetarget({
-        owner: registration.owner,
-        repo: registration.repo,
-        number: child.number,
-        base: targetBranch,
-        fromNumber: registration.number,
-        previousBaseRefName: child.baseRefName,
-      });
       retargeted.push(child);
     }
 
@@ -550,8 +582,28 @@ class PullRequestMergeManager {
       (!owner || record.owner.toLowerCase() === owner.toLowerCase()) &&
       (!repo || record.repo.toLowerCase() === repo.toLowerCase())
     ));
+    const repositories = new Map();
     for (const reservation of reservations) {
-      await this.withPullRequestLock(reservation.owner, reservation.repo, reservation.number, () => this.checkReservation(reservation));
+      const key = safeRepo(reservation.owner, reservation.repo).toLowerCase();
+      const group = repositories.get(key) || { owner: reservation.owner, repo: reservation.repo, reservations: [] };
+      group.reservations.push(reservation);
+      repositories.set(key, group);
+    }
+    for (const group of repositories.values()) {
+      const key = safeRepo(group.owner, group.repo).toLowerCase();
+      const result = await this.withRepositoryTryLock(group.owner, group.repo, async () => {
+        this.repositoryReservationChecks.add(key);
+        try {
+          for (const reservation of group.reservations) {
+            await this.withPullRequestLock(reservation.owner, reservation.repo, reservation.number, () => this.checkReservation(reservation));
+          }
+        } finally {
+          this.repositoryReservationChecks.delete(key);
+        }
+      });
+      if (!result.acquired && !this.repositoryReservationChecks.has(key)) {
+        this.pendingRepositoryReservationChecks.set(key, { owner: group.owner, repo: group.repo });
+      }
     }
   }
 
@@ -616,18 +668,22 @@ class PullRequestMergeManager {
     return this.cancelSavedReservation(reservation, message);
   }
 
-  async deleteRemoteBranch(owner, repo, branch) {
-    if (!validRepositoryPart(owner) || !validRepositoryPart(repo) || !validBranchName(branch)) throw new Error('invalid branch');
-    const reference = `repos/${owner}/${repo}/git/ref/heads/${branch}`;
+  async deleteRemoteBranch(owner, repo, branch, expectedHeadRefOid) {
+    if (!validRepositoryPart(owner) || !validRepositoryPart(repo) || !validBranchName(branch) ||
+      !isCompleteCommitSha(expectedHeadRefOid)) throw new Error('invalid branch deletion');
+    const repository = safeRepo(owner, repo);
+    const currentHeadRefOid = await this.tracker.readRemoteBranchHead(repository, branch, { priority: true });
+    if (!currentHeadRefOid) return 'missing';
+    if (currentHeadRefOid !== expectedHeadRefOid.toLowerCase()) return 'changed';
     try {
-      await this.tracker.execute(['api', '-X', 'DELETE', `repos/${owner}/${repo}/git/refs/heads/${branch}`], { priority: true });
+      await this.tracker.deleteRemoteBranchIfHeadMatches(owner, repo, branch, expectedHeadRefOid);
+      return 'deleted';
     } catch (error) {
-      if (isMissingRemoteBranchError(error)) return;
       try {
-        await this.tracker.execute(['api', reference], { priority: true });
-      } catch (lookupError) {
-        if (isGitHubNotFoundError(lookupError)) return;
-      }
+        const latestHeadRefOid = await this.tracker.readRemoteBranchHead(repository, branch, { priority: true });
+        if (!latestHeadRefOid) return 'missing';
+        if (latestHeadRefOid !== expectedHeadRefOid.toLowerCase()) return 'changed';
+      } catch {}
       throw error;
     }
   }
@@ -714,8 +770,10 @@ class PullRequestMergeManager {
       warning = [warning, 'fork からの PR の head ブランチは登録先リポジトリから削除しませんでした'].filter(Boolean).join('。');
     } else if (deleteBranch && !headMismatch && validBranchName(pullRequest.headRefName)) {
       try {
-        await this.deleteRemoteBranch(owner, repo, pullRequest.headRefName);
-        branchDeleted = true;
+        const deletion = await this.deleteRemoteBranch(owner, repo, pullRequest.headRefName, pullRequest.headRefOid);
+        branchDeleted = deletion === 'deleted';
+        if (deletion === 'missing') warning = `PR はマージしましたが、リモートブランチ ${pullRequest.headRefName} は既にありません`;
+        if (deletion === 'changed') warning = `PR はマージしましたが、head が更新されたためリモートブランチ ${pullRequest.headRefName} を削除しませんでした`;
       } catch {
         warning = [warning, `PR はマージしましたが、リモートブランチ ${pullRequest.headRefName} を削除できませんでした`].filter(Boolean).join('。');
       }

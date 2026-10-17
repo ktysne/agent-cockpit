@@ -55,7 +55,8 @@ test('両方の Codex 質問ツールは選んだ label と指示を拒否理由
     assert.equal(c.runtime.state.decisionsFor('thread').length, 1);
     assert.equal(c.decision().state, 'resolved');
     assert.deepEqual(c.decision().resolution, { chosen: ['CSV'], note: '理由を記録する' });
-    assert.ok(c.decision().answer.reflectedAt);
+    assert.ok(c.decision().answer.deliveredAt);
+    assert.equal(c.decision().answer.reflectedAt, null);
   }
 });
 

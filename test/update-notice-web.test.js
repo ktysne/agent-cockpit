@@ -86,7 +86,7 @@ test('refresh は後に始めた取得を反映した後に届いた古い応答
   const context = vm.createContext({
     fetchUi: () => new Promise((resolve) => responses.push(resolve)), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, renderRestartNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
+    applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
     refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 0, lastState: null, lastStateEtag: null, liveStatus: {}, render() {}, countJudgments: () => ({ permission: 0, decisions: 0 }),
@@ -110,7 +110,7 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
   const context = vm.createContext({
     fetchUi: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => state }), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, renderRestartNote() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
+    applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastStateEtag: 'same', liveStatus: {}, render: () => assert.fail('状態全体は描き直さない'),
   });
@@ -126,7 +126,7 @@ function refreshContext(fetch) {
   const context = vm.createContext({
     fetch, reportWebFailure: (...args) => failures.push(args), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, renderRestartNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
+    applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
     refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastState: state, lastStateEtag: '"first"', connectionLost: true, lastStateAt: null,
