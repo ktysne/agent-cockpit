@@ -612,10 +612,14 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
   assert.equal(now.body.children.length, 0);
 });
 
-function reloadHarness(initialUiVersion, drafts = []) {
+function reloadHarness(initialUiVersion, drafts = [], { refresh = false, globals = {} } = {}) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'answerValueFor', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks', 'recommendedOptionsForQuestions']
-    .map((name) => functionSource(html, name));
+  const functionNames = [
+    'renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'answerValueFor', 'checkUiVersion', 'reloadNow',
+    'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks', 'recommendedOptionsForQuestions',
+    ...(refresh ? ['fetchUi', 'pollRefresh', 'refresh'] : []),
+  ];
+  const functions = functionNames.map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
   let reloadCount = 0;
@@ -626,13 +630,53 @@ function reloadHarness(initialUiVersion, drafts = []) {
     answerDrafts: new Map(drafts),
     reloadNote,
     location: { reload: () => { reloadCount += 1; } },
+    ...(refresh ? {
+      refreshSequence: 0,
+      appliedRefreshSequence: 0,
+      pendingStateReads: 0,
+      lastStateEtag: null,
+      pullRequestUnconfirmedResults: new Map(),
+    } : {}),
+    ...globals,
   });
-  vm.runInContext(functions.join('\n'), context);
+  if (refresh) context.AbortSignal = { timeout: (milliseconds) => ({ timeoutMs: milliseconds }) };
+  const state = refresh
+    ? "var lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, refreshConfirmPending = false, sinceSeenMode = 'always';\n"
+    : '';
+  vm.runInContext(`${state}${functions.join('\n')}`, context);
   return {
     context,
     reloadNote,
     get reloadCount() { return reloadCount; },
   };
+}
+
+function stateRefreshHarness(fetchImpl, syncDisplayPreferences = async () => {}) {
+  const liveStatus = { textContent: '' };
+  const header = { dataset: { away: 'false' } };
+  const harness = reloadHarness('v1', [], {
+    refresh: true,
+    globals: {
+      fetch: fetchImpl,
+      syncDisplayPreferences,
+      pullRequestExpirySignature: () => '',
+      renderedPullRequestExpirySignature: '',
+      applyUpdateState() {},
+      renderRestartNote() {},
+      applyAppVersion() {},
+      updateConnectionNote() {},
+      countJudgments: () => ({ permission: 0, decisions: 0 }),
+      isIdleHiddenSession: () => false,
+      applyAwayState: (away) => { header.dataset.away = String(away?.enabled === true); },
+      header,
+      awayToggle: { disabled: false, checked: false },
+      render() {},
+      root: { replaceChildren() {} },
+      liveStatus,
+      reportWebFailure() {},
+    },
+  });
+  return Object.assign(harness, { liveStatus });
 }
 
 function renderHarness(initialDraftNote = '保存済みの下書き') {
@@ -997,6 +1041,96 @@ test('今すぐ読み込み直す操作は下書きがあっても再読み込�
   const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'ok', note: '書きかけ', picks: [] }]]);
   harness.context.reloadNow({ target: { closest: (selector) => selector === '[data-reload-now]' } });
   assert.equal(harness.reloadCount, 1);
+});
+
+test('新しい状態を反映した後に届く古い成功と失敗は現在の画面を戻さない', async () => {
+  const requests = [];
+  const fetchImpl = (url, options) => new Promise((resolve, reject) => {
+    requests.push({ url, options, resolve, reject });
+  });
+  const harness = stateRefreshHarness(fetchImpl);
+  const oldSuccess = harness.context.refresh();
+  const oldFailure = harness.context.refresh();
+  const currentRefresh = harness.context.refresh();
+  const currentState = {
+    uiVersion: 'v1', version: 7, display: {}, sessions: [], pullRequests: [], away: { enabled: false },
+  };
+
+  requests[2].resolve({ status: 200, ok: true, headers: { get: () => 'current' }, json: async () => currentState });
+  assert.equal(await currentRefresh, true);
+  requests[0].resolve({ status: 200, ok: true, headers: { get: () => 'old' }, json: async () => ({
+    uiVersion: 'v2', version: 6, display: {}, sessions: [], pullRequests: [], away: { enabled: false },
+  }) });
+  await oldSuccess;
+  requests[1].reject(new Error('network failure'));
+  assert.equal(await oldFailure, true);
+
+  assert.equal(harness.reloadCount, 0);
+  assert.equal(harness.context.lastState, currentState);
+  assert.equal(harness.context.lastStateEtag, 'current');
+  assert.equal(harness.context.connectionLost, false);
+  assert.match(harness.liveStatus.textContent, /^状態を更新しました。/);
+});
+
+test('定期 poll は状態取得中だけ待ち、表示設定の同期中は次の状態を取得する', async () => {
+  const requests = [];
+  const fetchImpl = (url, options) => new Promise((resolve, reject) => {
+    requests.push({ url, options, resolve, reject });
+  });
+  let releaseDisplaySync;
+  let markDisplaySyncStarted;
+  const displaySyncGate = new Promise((resolve) => { releaseDisplaySync = resolve; });
+  const displaySyncStarted = new Promise((resolve) => { markDisplaySyncStarted = resolve; });
+  let displaySyncCount = 0;
+  const syncDisplayPreferences = async () => {
+    displaySyncCount += 1;
+    if (displaySyncCount === 1) {
+      markDisplaySyncStarted();
+      await displaySyncGate;
+    }
+  };
+  const harness = stateRefreshHarness(fetchImpl, syncDisplayPreferences);
+  const firstRefresh = harness.context.refresh();
+
+  harness.context.pollRefresh();
+  assert.equal(requests.length, 1);
+  const currentState = {
+    uiVersion: 'v1', version: 7, display: {}, sessions: [], pullRequests: [], away: { enabled: false },
+  };
+  requests[0].resolve({ status: 200, ok: true, headers: { get: () => 'first' }, json: async () => currentState });
+  await displaySyncStarted;
+
+  const pollRefresh = harness.context.pollRefresh();
+  assert.equal(requests.length, 2);
+  const polledState = { ...currentState, version: 8 };
+  requests[1].resolve({ status: 200, ok: true, headers: { get: () => 'polled' }, json: async () => polledState });
+  assert.equal(await pollRefresh, true);
+  releaseDisplaySync();
+  assert.equal(await firstRefresh, true);
+  assert.equal(harness.context.lastState, polledState);
+  assert.equal(harness.context.lastStateEtag, 'polled');
+  assert.equal(harness.context.connectionLost, false);
+  assert.match(harness.liveStatus.textContent, /^状態を更新しました。/);
+});
+
+test('状態取得はタイムアウト信号を付け、取得中でも明示 refresh を開始する', async () => {
+  const requests = [];
+  const fetchImpl = (url, options) => new Promise((resolve, reject) => {
+    requests.push({ url, options, resolve, reject });
+  });
+  const harness = stateRefreshHarness(fetchImpl);
+  const pollRefresh = harness.context.pollRefresh();
+  const explicitRefresh = harness.context.refresh();
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].options.signal.timeoutMs, 10_000);
+  const state = { uiVersion: 'v1', version: 7, display: {}, sessions: [], pullRequests: [], away: { enabled: false } };
+  requests[1].resolve({ status: 200, ok: true, headers: { get: () => 'explicit' }, json: async () => state });
+  assert.equal(await explicitRefresh, true);
+  requests[0].resolve({ status: 200, ok: true, headers: { get: () => 'poll' }, json: async () => ({ ...state, version: 6 }) });
+  assert.equal(await pollRefresh, true);
+  assert.equal(harness.context.lastState, state);
+  assert.equal(harness.context.lastStateEtag, 'explicit');
 });
 
 test('作業中ツールは表示幅を超えた部分を CSS の省略記号で示す', () => {
@@ -3596,7 +3730,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
   let renders = 0;
   let signature = 'reservation:visible';
   const context = pageContext(pageHtml, {
-    refreshSequence: 0, appliedRefreshSequence: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], pullRequests: [], away: { enabled: false } }) }),
+    refreshSequence: 0, appliedRefreshSequence: 0, pendingStateReads: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], pullRequests: [], away: { enabled: false } }) }),
     checkUiVersion: () => false,
     syncDisplayPreferences: async () => {},
     pullRequestExpirySignature: () => signature,
@@ -3612,6 +3746,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     root: { replaceChildren() {} },
     liveStatus: { textContent: '' },
   });
+  context.AbortSignal = { timeout: () => ({}) };
   vm.runInContext(`${functionSource(pageHtml, 'fetchUi')}\n${functionSource(pageHtml, 'reportWebFailure')}\n${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = 7, lastStateAt = null, connectionLost = false, hasRenderedState = true, refreshConfirmPending = false, sinceSeenMode = 'always';`, context);
 
   await context.refresh();
@@ -4343,7 +4478,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
     let renders = 0;
     let index = 0;
     const context = pageContext(pageHtml, {
-      refreshSequence: 0, appliedRefreshSequence: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
+      refreshSequence: 0, appliedRefreshSequence: 0, pendingStateReads: 0, lastStateEtag: 'same', pullRequestUnconfirmedResults: new Map(), fetch: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
       checkUiVersion: () => false,
       syncDisplayPreferences: async () => {},
       pullRequestExpirySignature: () => '',
@@ -4359,6 +4494,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       root: { replaceChildren() {} },
       liveStatus: { textContent: '' },
     });
+    context.AbortSignal = { timeout: () => ({}) };
     vm.runInContext(`${functionSource(pageHtml, 'fetchUi')}\n${functionSource(pageHtml, 'reportWebFailure')}\n${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, refreshConfirmPending = false, sinceSeenMode = '${mode}';`, context);
     for (let step = 0; step < awaySequence.length; step += 1) await context.refresh();
     return renders;
