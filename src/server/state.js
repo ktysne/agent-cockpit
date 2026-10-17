@@ -2509,10 +2509,11 @@ class DashboardState {
   requestStoreWrite(immediate = false) {
     if (!this.storeWriter) return Promise.resolve();
     this.storeWritePending = true;
-    clearTimeout(this.storeWriteTimer);
     if (!immediate) {
-      this.storeWriteTimer = setTimeout(() => { void this.flushStoreWrite().catch(() => {}); }, STORE_WRITE_DELAY_MS);
-      this.storeWriteTimer.unref?.();
+      if (!this.storeWriteTimer) {
+        this.storeWriteTimer = setTimeout(() => { void this.flushStoreWrite().catch(() => {}); }, STORE_WRITE_DELAY_MS);
+        this.storeWriteTimer.unref?.();
+      }
       return Promise.resolve();
     }
     return this.flushStoreWrite().catch(() => {});

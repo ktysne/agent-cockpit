@@ -82,26 +82,27 @@ test('版はウィンドウのタイトルにだけ付け、見出しは名前�
 });
 
 test('refresh は後に始めた取得を反映した後に届いた古い応答で状態を戻さない', async () => {
-  const responses = [];
-  const context = vm.createContext({
-    fetchUi: () => new Promise((resolve) => responses.push(resolve)), checkUiVersion: () => false,
-    syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
-    refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
-    sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
-    lastVersion: 0, lastState: null, lastStateEtag: null, liveStatus: {}, render() {}, countJudgments: () => ({ permission: 0, decisions: 0 }),
-    isIdleHiddenSession: () => false,
-  });
-  vm.runInContext(functionSource(html, 'refresh'), context);
+  const requests = [];
+  const harness = refreshContext((_url, options) => new Promise((resolve, reject) => {
+    requests.push({ options, resolve, reject });
+  }));
+  const { context } = harness;
   const older = context.refresh();
+  const failed = context.refresh();
   const newer = context.refresh();
-  const newerState = { version: 2, sessions: [], away: {}, update, pullRequests: [] };
-  responses[1]({ ok: true, headers: { get: () => 'newer' }, json: async () => newerState });
+  const newerState = { uiVersion: 'v1', version: 2, sessions: [], away: {}, update, pullRequests: [] };
+  requests[2].resolve({ ok: true, headers: { get: () => 'newer' }, json: async () => newerState });
   await newer;
-  responses[0]({ ok: true, headers: { get: () => 'older' }, json: async () => ({ version: 1, sessions: [], away: {}, update, pullRequests: [] }) });
-  assert.equal(await older, true);
+  requests[0].resolve({ ok: true, headers: { get: () => 'older' }, json: async () => ({
+    uiVersion: 'v2', version: 1, sessions: [], away: {}, update, pullRequests: [],
+  }) });
+  await older;
+  requests[1].reject(new Error('offline'));
+  assert.equal(await failed, true);
   assert.equal(context.lastState, newerState);
-  assert.equal(context.appliedRefreshSequence, 2);
+  assert.equal(context.appliedRefreshSequence, 3);
+  assert.equal(context.connectionLost, false);
+  assert.equal(harness.reloadCount, 0);
 });
 
 test('refresh は状態の version が同じでも新しい通知を描き直す', async () => {
@@ -111,6 +112,7 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
     fetchUi: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => state }), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
     applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
+    pendingStateReads: 0, AbortSignal: { timeout: () => ({}) },
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastStateEtag: 'same', liveStatus: {}, render: () => assert.fail('状態全体は描き直さない'),
   });
@@ -119,21 +121,25 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
   assert.deepEqual(notices, [update]);
 });
 
-function refreshContext(fetch) {
+function refreshContext(fetch, syncDisplayPreferences = async () => {}) {
   const state = { version: 1, sessions: [], away: {}, pullRequests: [] };
   const failures = [];
   const renders = [];
+  let reloadCount = 0;
   const context = vm.createContext({
-    fetch, reportWebFailure: (...args) => failures.push(args), checkUiVersion: () => false,
-    syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
+    fetch, reportWebFailure: (...args) => failures.push(args), initialUiVersion: 'v1', uiUpdatePending: false,
+    hasUnsentAnswerDraft: () => false, location: { reload: () => { reloadCount += 1; } },
+    syncDisplayPreferences, updateConnectionNote() {}, header: { dataset: {} },
     applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
-    refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
+    refreshSequence: 0, appliedRefreshSequence: 0, pendingStateReads: 0, pullRequestUnconfirmedResults: new Map(),
+    AbortSignal: { timeout: (milliseconds) => ({ timeoutMs: milliseconds }) },
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastState: state, lastStateEtag: '"first"', connectionLost: true, lastStateAt: null,
     liveStatus: {}, hasRenderedState: true, render: value => renders.push(value),
+    countJudgments: () => ({ permission: 0, decisions: 0 }), isIdleHiddenSession: () => false,
   });
-  vm.runInContext(['fetchUi', 'refresh'].map(name => functionSource(html, name)).join('\n'), context);
-  return { context, state, failures, renders };
+  vm.runInContext(['fetchUi', 'pollRefresh', 'checkUiVersion', 'refresh'].map(name => functionSource(html, name)).join('\n'), context);
+  return { context, state, failures, renders, get reloadCount() { return reloadCount; } };
 }
 
 test('304 は前回の状態を保ち、切断からの復帰と時刻に応じた表示更新を成功として扱う', async () => {
@@ -145,6 +151,7 @@ test('304 は前回の状態を保ち、切断からの復帰と時刻に応じ�
   context.pullRequestExpirySignature = () => 'expired';
   assert.equal(await context.refresh(), true);
   assert.equal(options.cache, 'no-store');
+  assert.equal(options.signal.timeoutMs, 10_000);
   assert.equal(options.headers['If-None-Match'], '"first"');
   assert.equal(context.lastState, state);
   assert.equal(context.connectionLost, false);
@@ -167,6 +174,60 @@ test('接続に失敗しても ETag を保ち、復帰後の 200 で新しい ET
   assert.equal(context.lastStateEtag, '"next"');
   assert.equal(context.connectionLost, false);
   assert.deepEqual(renders, [next]);
+});
+
+test('定期 poll は状態取得中だけ待ち、表示設定の同期中は次の状態を取得する', async () => {
+  const requests = [];
+  let releaseDisplaySync;
+  let markDisplaySyncStarted;
+  const displaySyncGate = new Promise(resolve => { releaseDisplaySync = resolve; });
+  const displaySyncStarted = new Promise(resolve => { markDisplaySyncStarted = resolve; });
+  let displaySyncCount = 0;
+  const syncDisplayPreferences = async () => {
+    displaySyncCount += 1;
+    if (displaySyncCount === 1) {
+      markDisplaySyncStarted();
+      await displaySyncGate;
+    }
+  };
+  const { context } = refreshContext((_url, options) => new Promise((resolve, reject) => {
+    requests.push({ options, resolve, reject });
+  }), syncDisplayPreferences);
+  const firstRefresh = context.refresh();
+
+  context.pollRefresh();
+  assert.equal(requests.length, 1);
+  const firstState = { uiVersion: 'v1', version: 1, display: {}, sessions: [], away: {}, pullRequests: [] };
+  requests[0].resolve({ ok: true, headers: { get: () => 'first' }, json: async () => firstState });
+  await displaySyncStarted;
+
+  const poll = context.pollRefresh();
+  assert.equal(requests.length, 2);
+  const polledState = { ...firstState };
+  requests[1].resolve({ ok: true, headers: { get: () => 'polled' }, json: async () => polledState });
+  assert.equal(await poll, true);
+  releaseDisplaySync();
+  assert.equal(await firstRefresh, true);
+  assert.equal(context.lastState, polledState);
+  assert.equal(context.lastStateEtag, 'polled');
+});
+
+test('定期 poll の通信中でも明示 refresh は新しい状態を取得する', async () => {
+  const requests = [];
+  const { context } = refreshContext((_url, options) => new Promise((resolve, reject) => {
+    requests.push({ options, resolve, reject });
+  }));
+  const poll = context.pollRefresh();
+  const explicit = context.refresh();
+
+  assert.equal(requests.length, 2);
+  const state = { uiVersion: 'v1', version: 1, display: {}, sessions: [], away: {}, pullRequests: [] };
+  requests[1].resolve({ ok: true, headers: { get: () => 'explicit' }, json: async () => state });
+  assert.equal(await explicit, true);
+  requests[0].resolve({ ok: true, headers: { get: () => 'poll' }, json: async () => ({ ...state }) });
+  assert.equal(await poll, true);
+  assert.equal(context.lastState, state);
+  assert.equal(context.lastStateEtag, 'explicit');
 });
 
 function updateCheckContext(send) {

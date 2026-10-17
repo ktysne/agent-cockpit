@@ -8,6 +8,7 @@ const { makeHookEvent, runHook } = require('../src/hooks/event');
 const { productFromCwd } = require('../src/server/identity');
 const { DashboardState } = require('../src/server/state');
 const { readTranscriptInterruption } = require('../src/server/transcript');
+const { readTaskOutputFileAsync } = require('../src/shared/task-output');
 const {
   startServer: startRealServer,
   MAX_BODY_BYTES,
@@ -42,6 +43,38 @@ test('Claude の SessionStart と Stop の後にモデルを読み、読めな�
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(state.snapshot().sessions[0].modelName, 'Sonnet 5.5');
   assert.deepEqual(reads, Array(3).fill({ cwd: runtime.homeDir, id: 'main-model' }));
+});
+
+test('SessionEnd で予約済みのモデル読取を完了し、同じ ID の再開後に反映する', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const state = new DashboardState();
+  let reads = 0;
+  const readCwds = [];
+  const runtime = await runningServer(t, { state, sessionModelDelayMs: 500, readSessionModel: async (_home, cwd) => {
+    reads += 1;
+    readCwds.push(cwd);
+    if (reads > 1) return null;
+    return { model: 'claude-opus-5-5', at: Date.now() };
+  } });
+  const sessionId = 'ended-model';
+  state.syncSessionFiles([{ session_id: sessionId, cwd: runtime.homeDir }]);
+  const send = event => request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({ session_id: sessionId, ...event }) });
+  await send({ hook_event_name: 'SessionStart', model: 'claude-sonnet-5-5' });
+  await send({ hook_event_name: 'SessionEnd' });
+  await runtime.refreshSessionFiles();
+  assert.equal(reads, 0);
+  t.mock.timers.tick(500);
+  await new Promise(setImmediate);
+  assert.equal(reads, 1);
+  assert.deepEqual(readCwds, [runtime.homeDir]);
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.some(session => session.session_id === sessionId), false);
+  await runtime.refreshSessionFiles();
+  assert.equal(reads, 1);
+  state.syncSessionFiles([{ session_id: sessionId, cwd: runtime.homeDir }]);
+  await send({ hook_event_name: 'SessionStart' });
+  const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.equal(snapshot.sessions.find(session => session.session_id === sessionId).modelName, 'Opus 5.5');
 });
 
 test('サーバー起動時に見える Claude のモデルを読み、Codex は読まない', async (t) => {
@@ -111,6 +144,36 @@ test('待機中の Claude サブエージェントと背景 Codex があるセ�
   await new Promise(resolve => setTimeout(resolve, 80));
   assert.deepEqual(reads, ['waiting-codex', 'waiting-claude'].map(id => ({ cwd: runtime.homeDir, id })));
   assert.equal(state.snapshot().sessions.find(session => session.session_id === 'waiting-claude').status, '待機中');
+});
+
+test('Claude サブエージェントだけが動いている間は空の通知照合を繰り返さない', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const state = new DashboardState();
+  let reads = 0;
+  const runtime = await runningServer(t, { state, taskNotificationDelayMs: 500,
+    readTaskNotifications: async () => { reads += 1; return new Map(); },
+  });
+  const sessionId = 'claude-only-agent';
+  state.syncSessionFiles([{ session_id: sessionId, cwd: runtime.homeDir }]);
+  for (const event of [
+    { hook_event_name: 'SubagentStart', agent_id: 'claude-task' },
+    { hook_event_name: 'Stop' },
+  ]) {
+    const response = await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+      body: JSON.stringify({ session_id: sessionId, ...event }) });
+    assert.equal(response.status, 202);
+  }
+  const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const session = snapshot.sessions.find(row => row.session_id === sessionId);
+  assert.ok(session.agents.some(agent => agent.active && !agent.isCodex));
+  assert.equal(session.agents.some(agent => agent.active && agent.isCodex), false);
+  t.mock.timers.tick(500);
+  await new Promise(setImmediate);
+  t.mock.timers.tick(499);
+  await new Promise(setImmediate);
+  t.mock.timers.tick(1);
+  await new Promise(setImmediate);
+  assert.equal(reads, 1);
 });
 
 test('メインのイベントを受けても、記録の照合の要否を決めるために状態全体を組み立てない', async (t) => {
@@ -2619,6 +2682,18 @@ test('Claude のセッションのフォルダーを読めないときは、セ�
 });
 
 
+async function waitForBackgroundOutputRead(outputRead) {
+  let timeout;
+  try {
+    await Promise.race([outputRead, new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('背景タスクの出力読み取りが完了しませんでした')), 2000);
+    })]);
+  } finally {
+    clearTimeout(timeout);
+  }
+  await new Promise(setImmediate);
+}
+
 async function backgroundNotificationCockpit(t, { byRun = false, output = 'codex-agent: result=ok', sessionFile = true } = {}) {
   const { homeDir, claudeHome } = await temporaryHome(t);
   const state = new DashboardState();
@@ -2641,10 +2716,18 @@ async function backgroundNotificationCockpit(t, { byRun = false, output = 'codex
     content: `<task-notification><task-id>task-a</task-id><output-file>${outputFile}</output-file><status>completed</status></task-notification>`,
   }));
   const before = state.snapshot().sessions[0];
-  const runtime = await startServer({ homeDir, claudeHome, port: 0, state, taskNotificationDelayMs: 1 });
+  let resolveOutputRead;
+  const outputRead = new Promise(resolve => { resolveOutputRead = resolve; });
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, state, taskNotificationDelayMs: 1,
+    readTaskOutput: async file => {
+      const result = await readTaskOutputFileAsync(file);
+      resolveOutputRead();
+      return result;
+    },
+  });
   t.after(() => runtime.close());
-  await new Promise(resolve => setTimeout(resolve, 40));
-  return { state, before, runtime, sessionId, homeDir };
+  if (sessionFile) await waitForBackgroundOutputRead(outputRead);
+  return { state, before, runtime, sessionId, homeDir, outputRead };
 }
 
 test('フックの通知が無くても記録ファイルの task-id で背景 Codex を終了し結果を反映する', async (t) => {
@@ -2669,11 +2752,10 @@ test('PostToolUse が無く背景タスク ID を持たない待ちの行を、�
 });
 
 test('セッションの一覧が読めなくても、フックが送った cwd で記録ファイルを読み背景 Codex を終了する', async (t) => {
-  const { state, runtime, sessionId, homeDir } = await backgroundNotificationCockpit(t, { sessionFile: false });
-  assert.equal(state.snapshot().sessions[0].agents[0].active, true);
+  const { state, runtime, sessionId, homeDir, outputRead } = await backgroundNotificationCockpit(t, { sessionFile: false });
   await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
     body: JSON.stringify({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read', cwd: homeDir }) });
-  await new Promise(resolve => setTimeout(resolve, 40));
+  await waitForBackgroundOutputRead(outputRead);
   const agent = state.snapshot().sessions[0].agents[0];
   assert.equal(agent.active, false);
   assert.equal(agent.resultReceived, true);

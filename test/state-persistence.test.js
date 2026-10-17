@@ -6,6 +6,7 @@ const path = require('node:path');
 const { AwayState, DashboardState, isAwayAt, pullRequestSummaryText } = require('../src/server/state');
 const { AtomicJsonWriter } = require('../src/server/json-storage');
 const { temporaryDirectory } = require('./support/temp');
+const { hookHeaders, request, startTestServer } = require('./support/server');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -90,6 +91,36 @@ function decisionInput(title) {
     context: '背景',
     state: 'waiting',
     options: [{ label: '案 A', description: '説明', recommended: true }],
+  };
+}
+
+async function planUpdatePersistence(t) {
+  const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
+  const { homeDir, info } = await startTestServer(t, { state });
+  const storePath = path.join(homeDir, 'store.json');
+  await fs.writeFile(storePath, JSON.stringify(state.serializeStore()));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let sequence = 0;
+  const hookAt = Date.now();
+  return {
+    state,
+    update: async (content) => {
+      sequence += 1;
+      const response = await request(info.port, {
+        method: 'POST', path: '/api/events', headers: hookHeaders(info.secret),
+        body: JSON.stringify({ session_id: 'debounced', hook_event_name: 'PostToolUse',
+          tool_name: 'mcp__ccd_turn__update_plan', tool_use_id: `plan-${sequence}`, hookAt: hookAt + sequence,
+          planUpdate: { items: [{ content, status: 'in_progress' }] } }),
+      });
+      assert.equal(response.status, 202);
+    },
+    savedCriteria: async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      await state.waitForPersistence();
+      const store = JSON.parse(await fs.readFile(storePath, 'utf8'));
+      return store.plans.debounced?.tasks[0]?.criteria[0]?.text;
+    },
   };
 }
 
@@ -581,36 +612,39 @@ test('実行中の prune でセッション記録を削除すると version を�
   assert.ok(state.version > previousVersion);
 });
 
-test('通常の保存は500msでまとめ、回答記録の変更は待たずに書く', async (t) => {
+test('計画更新が続いても初回から500ms以内に保存し、最後の更新はflushで保存する', async (t) => {
+  const { state, update, savedCriteria } = await planUpdatePersistence(t);
+  await update('継続中1');
+  t.mock.timers.tick(400);
+  await update('継続中2');
+  t.mock.timers.tick(100);
+  assert.equal(await savedCriteria(), '継続中2');
+
+  t.mock.timers.tick(300);
+  await update('継続中3');
+  t.mock.timers.tick(400);
+  await update('継続中4');
+  t.mock.timers.tick(100);
+  assert.equal(await savedCriteria(), '継続中4');
+
+  await update('flushで保存');
+  await state.flushPersistence();
+  assert.equal(await savedCriteria(), 'flushで保存');
+});
+
+test('回答記録は保留中の通常保存より先に書き出す', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const homeDir = await temporaryHome(t);
-  let writes = 0;
-  const fileSystem = {
-    writeFile: fs.writeFile.bind(fs),
-    rm: fs.rm.bind(fs),
-    rename: async (...args) => {
-      writes += 1;
-      return fs.rename(...args);
-    },
-  };
-  const writer = new AtomicJsonWriter(homeDir, { fileSystem });
   const state = new DashboardState();
-  state.attachWriter(writer);
-  state.setTasks('debounced', [task('最初の一覧')]);
-  state.setTasks('debounced', [task('まとめた一覧')]);
-  t.mock.timers.tick(499);
-  assert.equal(writes, 0);
-  t.mock.timers.tick(1);
-  t.mock.timers.reset();
-  await state.waitForPersistence();
-  assert.equal(writes, 1);
-
+  state.attachWriter(new AtomicJsonWriter(homeDir));
+  state.setTasks('debounced', [task('先行変更')]);
   const decision = state.addDecision('debounced', decisionInput('回答を記録する'));
   state.setDecisionLifecycle('debounced', decision.id, {
     answer: { choice: 'ok', note: '続行する', sentAt: new Date().toISOString() },
   });
   await state.waitForPersistence();
-  assert.equal(writes, 2);
+  const store = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.deepEqual(store.decisionLifecycles.debounced[decision.id].answer.choice, 'ok');
 });
 
 test('DashboardState の保存は整形済み JSON と末尾改行を書き出す', async (t) => {

@@ -763,6 +763,7 @@ const pullRequestUnconfirmedResults = new Map();
 const PULL_REQUEST_RESULT_UNCONFIRMED = '操作は完了しましたが、最新の PR の状態を取得できていません。接続が戻るまで操作を止めています。';
 let refreshSequence = 0;
 let appliedRefreshSequence = 0;
+let pendingStateReads = 0;
 
 function pullRequestResultUnconfirmed(key) {
   if (!pullRequestUnconfirmedResults.has(key)) return false;
@@ -5462,18 +5463,31 @@ function reloadNow(event) {
 
 reloadNote.addEventListener('click', reloadNow);
 
+function pollRefresh() {
+  if (pendingStateReads > 0) return;
+  return refresh();
+}
+
 async function refresh() {
   const sequence = ++refreshSequence;
   try {
-    const response = await fetchUi('/api/state', { cache: 'no-store',
-      headers: lastStateEtag ? { 'If-None-Match': lastStateEtag } : {},
-    });
-    const unchanged = response.status === 304;
-    if (!unchanged && !response.ok) throw new Error(`HTTP ${response.status}`);
-    const state = unchanged ? lastState : await response.json();
-    if (checkUiVersion(state)) return;
+    let response;
+    let unchanged;
+    let state;
+    pendingStateReads += 1;
+    try {
+      response = await fetchUi('/api/state', { cache: 'no-store', signal: AbortSignal.timeout(10_000),
+        headers: lastStateEtag ? { 'If-None-Match': lastStateEtag } : {},
+      });
+      unchanged = response.status === 304;
+      if (!unchanged && !response.ok) throw new Error(`HTTP ${response.status}`);
+      state = unchanged ? lastState : await response.json();
+    } finally {
+      pendingStateReads -= 1;
+    }
     // 後に始めた取得の応答を反映済みなら、遅れて届いた古い応答で表示を戻さない。
     if (sequence < appliedRefreshSequence) return true;
+    if (checkUiVersion(state)) return;
     if (!unchanged) await syncDisplayPreferences(state.display);
     if (sequence < appliedRefreshSequence) return true;
     lastStateAt = new Date();
@@ -5511,6 +5525,7 @@ async function refresh() {
     }
     return true;
   } catch {
+    if (sequence < appliedRefreshSequence) return true;
     connectionLost = true;
     updateConnectionNote();
     liveStatus.textContent = '常駐サーバーに接続できません。';
@@ -5520,7 +5535,7 @@ async function refresh() {
 }
 
 refresh();
-setInterval(refresh, POLL_INTERVAL_MS);
+setInterval(pollRefresh, POLL_INTERVAL_MS);
 setInterval(() => { if (lastState) render(lastState); }, WAIT_REFRESH_INTERVAL_MS);
 </script>
 </body>
