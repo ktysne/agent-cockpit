@@ -863,6 +863,7 @@ test('許可待ちは同じ対象ツールの PostToolUse で解消する', asyn
   state.addEvent({ session_id: 'permission', hook_event_name: 'SessionStart', hookAt: 100 });
   state.addEvent({ session_id: 'permission', hook_event_name: 'PreToolUse', hookAt: 200, tool_name: 'Bash', tool_use_id: 'oldest', summary: 'git push' });
   state.addEvent({ session_id: 'permission', hook_event_name: 'PreToolUse', hookAt: 300, tool_name: 'Read', tool_use_id: 'newer', summary: 'README.md' });
+  state.addEvent({ session_id: 'permission', hook_event_name: 'PermissionRequest', hookAt: 350, tool_name: 'Bash', summary: 'git push' });
   state.addEvent({ session_id: 'permission', hook_event_name: 'Notification', hookAt: 400, notification_type: 'permission_prompt', message: '許可を待っています' });
 
   let session = state.snapshot().sessions[0];
@@ -2409,7 +2410,7 @@ test('Interrupt は Stop と同じ後始末をして中断にし、稼働中の�
   add({ hook_event_name: 'SubagentStart', agent_id: 'worker', agent_type: 'impl', hookAt: 1100 });
   add({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'main-tool', summary: 'npm test', hookAt: 1200 });
   add({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', summary: 'npm test', hookAt: 1300 });
-  assert.equal(session().status, '許可待ち');
+  assert.equal(session().status, '許可確認中');
 
   add({ hook_event_name: 'Interrupt', hookAt: 1400 });
   assert.equal(session().status, '中断');

@@ -117,31 +117,38 @@
       <details class="toc mobile-page-toc">
         <summary>このページの内容</summary>
         <ol>        <li><a href="#permission-where">許可はセッションを動かしているアプリで出す</a></li>
+        <li><a href="#permission-checking">実行許可を確認中</a></li>
         <li><a href="#permission-card">許可待ちのカード</a></li>
         <li><a href="#permission-long">長く待たせているとき</a></li>
         <li><a href="#permission-count">許可待ちの数</a></li></ol>
       </details>
 <section class="section">
   <h1>許可待ち</h1>
-  <p class="lead">セッションがツールの実行許可を待っているとき、<span class="ui">あなたの判断が必要なこと</span> の欄に、許可待ちのカードが出ます。
+  <p class="lead">Claude Code が利用者への許可確認を通知したとき、<span class="ui">あなたの判断が必要なこと</span> の欄に、許可待ちのカードが出ます。
   このページでは、カードの見方と、待ち時間の強調を説明します。
   許可を出す操作はダッシュボードにありません。</p>
 
   <h2 id="permission-where">許可はセッションを動かしているアプリで出す</h2>
-  <div class="note">許可は、セッションを動かしている Claude Code、または Codex の CLI・デスクトップの該当するセッションで出します。
+  <div class="note">許可待ちのカードが出たら、そのセッションを開いている Claude Code の画面で許可または拒否を選んでください。
   ダッシュボードから許可を出すことはできません。
   ダッシュボードは、許可待ちが起きていることと、待たせている時間を知らせる表示だけを受け持ちます。</div>
   <p>どのセッションを開けばよいかは、カードの最下段に書いてあります。
   プロダクトの名前と、セッションの名前が出ます。
-  名前が取れない Codex のセッションは <span class="ui">Codex のセッション</span> と出ます。</p>
+  カードにも、操作するアプリの案内が出ます。</p>
+
+  <h2 id="permission-checking">実行許可を確認中</h2>
+  <p>Codex からツールの実行前の許可要求を受けたときは、<span class="ui">今やっていること</span> に <span class="ui">実行許可を確認中</span> と出ます。
+  自動判定やフックの処理中もあるため、この表示だけでは利用者の操作が必要とは限りません。
+  判断欄や許可待ちの件数には含めず、待ち時間が長くなっても判断待ちへ切り替えません。</p>
+  <p>Codex は、利用者が操作できる許可画面が出たことを Agent Cockpit から確認できないため、許可要求をこの状態で表示します。
+  Codex 自体に許可画面が出た場合は、Codex の元の画面で操作してください。</p>
+  <p>Claude Code の標準設定では、利用者への許可確認の通知を受けて <span class="ui">許可待ち</span> を表示します。
+  実行前の許可要求を送る <code>PermissionRequest</code> フックを追加登録した環境では、Claude Code にも <span class="ui">実行許可を確認中</span> が出ます。</p>
 
   <h2 id="permission-card">許可待ちのカード</h2>
   <p>許可待ちのカードは、セッションが許可を求める通知を出した時点で現れます。
   許可を求めているのがメインセッションか、サブエージェントかは、見出しで分かります。</p>
-  <figure class="guide-map" id="permission-card-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/208"><div class="gm-clip"><img src="img/permission-card/waiting.png" width="788" height="104" alt="許可待ちのカード。見出しに、メインがツールの実行許可を待っているとあり、許可待ちの札と待ち時間が続く。その下にツールの名前とコマンド、最下段にプロダクト名とセッション名がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#permission-card-map-1" style="left:15.355%;top:12.981%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#permission-card-map-2" style="left:33.312%;top:13.942%" aria-label="2. 許可待ち の札">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#permission-card-map-3" style="left:41.688%;top:14.904%" aria-label="3. 待ち時間">3</a><a class="gm-badge gm-place-right" data-gm="4" href="#permission-card-map-4" style="left:98.35%;top:49.76%" aria-label="4. ツール">4</a><a class="gm-badge gm-place-right" data-gm="5" href="#permission-card-map-5" style="left:98.35%;top:77.404%" aria-label="5. プロダクトとセッション">5</a></div></div></div><ol class="gm-list"><li id="permission-card-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：許可を待っている作業者の名前に、<span class="ui">がツールの実行許可を待っている</span> が続きます。メインセッションのときは、名前が「メイン」になります。</div></li><li id="permission-card-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">許可待ち</span> の札</b>：許可待ちのカードであることを示します。</div></li><li id="permission-card-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>待ち時間</b>：許可を求める通知が出てからの時間です。「3 分待機中」の形で出ます。時刻が分からないときは <span class="ui">時刻不明</span> と出ます。</div></li><li id="permission-card-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>ツール</b>：許可を待っているツールの名前と、コマンドです。ファイルを扱うツールでは、ファイルのパスが出ます。</div></li><li id="permission-card-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>プロダクトとセッション</b>：Claude Code または Codex で開くセッションを示します。</div></li></ol></figure>
-  <p>Codex では、実行許可を求めた時点でカードが出て、求めているツールの名前も表示します。
-  同じツールの実行が終わるか、ターンの終了・中断、新しい入力で消えます。
-  別のツールが終わっても消えません。</p>
+  <figure class="guide-map" id="permission-card-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/246"><div class="gm-clip"><img src="img/permission-card/waiting.png" width="788" height="123" alt="許可待ちのカード。見出しに、メインがツールの実行許可を待っているとあり、許可待ちの札と待ち時間が続く。その下にツールの名前とコマンド、最下段にプロダクト名とセッション名がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#permission-card-map-1" style="left:15.355%;top:11.382%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#permission-card-map-2" style="left:33.312%;top:11.789%" aria-label="2. 許可待ち の札">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#permission-card-map-3" style="left:41.688%;top:13.008%" aria-label="3. 待ち時間">3</a><a class="gm-badge gm-place-right" data-gm="4" href="#permission-card-map-4" style="left:98.35%;top:42.073%" aria-label="4. ツール">4</a><a class="gm-badge gm-place-right" data-gm="5" href="#permission-card-map-5" style="left:98.35%;top:65.447%" aria-label="5. プロダクトとセッション">5</a></div></div></div><ol class="gm-list"><li id="permission-card-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：許可を待っている作業者の名前に、<span class="ui">がツールの実行許可を待っている</span> が続きます。メインセッションのときは、名前が「メイン」になります。</div></li><li id="permission-card-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">許可待ち</span> の札</b>：許可待ちのカードであることを示します。</div></li><li id="permission-card-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>待ち時間</b>：許可を求める通知が出てからの時間です。「3 分待機中」の形で出ます。時刻が分からないときは <span class="ui">時刻不明</span> と出ます。</div></li><li id="permission-card-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>ツール</b>：許可を待っているツールの名前と、コマンドです。ファイルを扱うツールでは、ファイルのパスが出ます。</div></li><li id="permission-card-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>プロダクトとセッション</b>：Claude Code で開くセッションを示します。</div></li></ol></figure>
   <p>Claude Code のカードは、許可を待っていたツールが終わると消えます。
   成功しても、失敗しても同じです。
   メインセッションの許可待ちは、ターンが終わったときと、新しいプロンプトを送ったときにも消えます。</p>
@@ -149,10 +156,10 @@
   メインと、各サブエージェントは、別々に 1 件ずつ数えます。</p>
   <details class="more">
     <summary>許可を待っているツールの表示の詳細</summary>
-    <p>Claude Code の許可を求める通知には、ツールの名前が含まれません。
-    そこで、同じ作業者のなかで、実行が始まっていて終わっていないツールのうち、いちばん古いものを表示します。
+    <p>実行前の許可要求が記録されていれば、そのツールを表示します。
+    Claude Code の通知だけを受けた場合は、同じ作業者の未完了ツールが一つだけなら、そのツールを表示します。
     Agent ツールは、サブエージェントが終わるまで続くので、候補にしません。
-    該当するツールが見つからないときは、ツールの行を出しません。</p>
+    該当するツールが見つからないときや複数あるときは、対象を断定せずツールの行を出しません。</p>
     <p>セッションが開始、再開、クリアされたときは、メインの許可待ちを消します。</p>
   </details>
 
@@ -160,7 +167,7 @@
   <p>待ち時間が設定の時間を超えると、カードの背景が赤みを帯び、待ち時間が太い赤の文字になります。
   時間は、設定の <span class="ui">長く待たせているとみなす時間 (1〜120 分)</span> で決めます(<a href="settings.html#settings-long-wait">長く待たせているとみなす時間</a>)。
   既定は 15 分で、ちょうどその時間に達しただけでは強調しません。</p>
-  <figure class="guide-map" id="permission-long-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/206"><div class="gm-clip"><img src="img/permission-card/long.png" width="762" height="103" alt="長く待たせている許可待ちのカード。背景が赤みを帯び、待ち時間が太い赤の文字になっている" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#permission-long-map-1" style="left:43.537%;top:14.563%" aria-label="1. 待ち時間">1</a><span class="gm-frame" data-gm="2" aria-hidden="true" style="left:0%;top:0%;width:100%;height:99.515%"></span><a class="gm-badge gm-place-left" data-gm="2" href="#permission-long-map-2" style="left:0%;top:49.757%" aria-label="2. カードの背景">2</a></div></div></div><ol class="gm-list"><li id="permission-long-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>待ち時間</b>：設定の時間を超えると、太い赤の文字になります。</div></li><li id="permission-long-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>カードの背景</b>：赤みを帯びた背景は、長く待たせていることを示します。</div></li></ol></figure>
+  <figure class="guide-map" id="permission-long-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/244"><div class="gm-clip"><img src="img/permission-card/long.png" width="762" height="122" alt="長く待たせている許可待ちのカード。背景が赤みを帯び、待ち時間が太い赤の文字になっている" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#permission-long-map-1" style="left:43.537%;top:12.295%" aria-label="1. 待ち時間">1</a><span class="gm-frame" data-gm="2" aria-hidden="true" style="left:0%;top:0%;width:100%;height:99.59%"></span><a class="gm-badge gm-place-left" data-gm="2" href="#permission-long-map-2" style="left:0%;top:49.795%" aria-label="2. カードの背景">2</a></div></div></div><ol class="gm-list"><li id="permission-long-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>待ち時間</b>：設定の時間を超えると、太い赤の文字になります。</div></li><li id="permission-long-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>カードの背景</b>：赤みを帯びた背景は、長く待たせていることを示します。</div></li></ol></figure>
   <p>待ち時間は 1 分ごとに更新します。
   同じ強調は、止めて待っている判断事項にも付きます(<a href="decisions.html#decisions-time">経過時間と強調</a>)。</p>
 
@@ -180,6 +187,7 @@
     <nav class="toc page-toc" aria-label="このページの内容">
       <h2>このページの内容</h2>
       <ol>        <li><a href="#permission-where">許可はセッションを動かしているアプリで出す</a></li>
+        <li><a href="#permission-checking">実行許可を確認中</a></li>
         <li><a href="#permission-card">許可待ちのカード</a></li>
         <li><a href="#permission-long">長く待たせているとき</a></li>
         <li><a href="#permission-count">許可待ちの数</a></li></ol>

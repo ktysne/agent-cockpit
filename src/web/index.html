@@ -1967,7 +1967,7 @@ function isAwaitingDecision(decision) {
 function countJudgments(sessions) {
   const counts = { permission: 0, blocking: 0, provisional: 0 };
   for (const session of sessions) {
-    counts.permission += session.permissionWaits.length;
+    counts.permission += session.permissionWaits.filter((wait) => wait.phase === 'prompted').length;
     for (const decision of session.decisions) {
       if (!isAwaitingDecision(decision)) continue;
       counts[isPendingDecision(decision) ? 'blocking' : 'provisional'] += 1;
@@ -2322,7 +2322,7 @@ function isLongWait(ageMs) {
 }
 
 function shownPermissions(session) {
-  return isFilterShown('permission') ? session.permissionWaits : [];
+  return isFilterShown('permission') ? session.permissionWaits.filter((wait) => wait.phase === 'prompted') : [];
 }
 
 function shownActiveDecisions(session) {
@@ -2334,7 +2334,7 @@ function shownActiveDecisions(session) {
 }
 
 function hasHiddenJudgmentItems(session) {
-  return (!isFilterShown('permission') && session.permissionWaits.length > 0)
+  return (!isFilterShown('permission') && session.permissionWaits.some((wait) => wait.phase === 'prompted'))
     || session.decisions.some((decision) => (
       isActiveDecision(decision) && !shownActiveDecisions(session).includes(decision)
     ));
@@ -3305,6 +3305,12 @@ function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
 }
 
 function activityStatus(session) {
+  if (session.status === '許可確認中' || session.status === '許可待ち') {
+    const phase = session.status === '許可確認中' ? 'checking' : 'prompted';
+    const mainIsWaiting = session.permissionWaits.some((wait) => !wait.agent_id && wait.phase === phase);
+    const label = phase === 'checking' ? '実行許可を確認中' : '許可待ち';
+    return { label: `${mainIsWaiting ? '' : 'サブエージェントが'}${label}`, tone: phase === 'checking' ? 'busy' : 'wait' };
+  }
   if (session.status === '作業中') return { label: '作業中', tone: 'busy' };
   if (session.status === '中断') return { label: '中断', tone: 'interrupted' };
   if (session.status === '不明' && session.nonInteractive) return { label: '非対話の実行中', tone: 'busy' };
@@ -3374,7 +3380,11 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     if (origin) row.dataset.origin = origin;
     row.dataset.startedAt = agent.startedAt || '';
     const who = element('div', 'who');
-    const agentState = agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+    const permission = session.permissionWaits.find((wait) => wait.agent_id === agent.agent_id && wait.phase === 'prompted')
+      || session.permissionWaits.find((wait) => wait.agent_id === agent.agent_id && wait.phase === 'checking');
+    const agentState = permission?.phase === 'checking' ? ['実行許可を確認中', 'busy']
+      : permission?.phase === 'prompted' ? ['許可待ち', 'wait']
+      : agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
     who.append(element('span', `dot ${agent.unconfirmed ? 'wait' : agentState[1]}`));
     appendContextTags(who, product, session, withTags, multipleSessions);
     const name = element('span', 'agent-name');
@@ -3449,6 +3459,7 @@ function appendPermissionWaits(body, session, product, withTags = false, multipl
       card.append(context);
     }
     card.append(element('div', 'meta', `${product.name} 「${sessionDisplayName(session)}」`));
+    card.append(element('div', 'meta', 'このセッションを開いている Claude Code の画面で許可または拒否を選んでください。'));
     list.append(card);
   }
   body.append(list);
@@ -5222,7 +5233,7 @@ function renderRestartNote(state) {
   if (ui.phase === 'waiting') {
     text = '常駐サーバーを再起動しています。';
   } else if (ui.phase === 'confirm' || ui.phase === 'sending') {
-    const permissions = (state.sessions || []).reduce((sum, session) => sum + session.permissionWaits.length, 0);
+    const permissions = (state.sessions || []).reduce((sum, session) => sum + session.permissionWaits.filter((wait) => wait.phase === 'prompted').length, 0);
     text = '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。'
       + (permissions ? `許可待ち ${permissions} 件は、再起動後に表示されません。` : '');
     buttons.push(['再起動する', async () => {

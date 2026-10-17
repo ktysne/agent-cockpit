@@ -796,7 +796,7 @@ test('許可待ちと判断事項のフィルターは非表示の行を検出�
   vm.runInContext(`${helpers.join('\n')}\nthis.hasHidden = hasHiddenJudgmentItems;`, context);
 
   const categories = [
-    ['permission', { permissionWaits: [{}], decisions: [] }],
+    ['permission', { permissionWaits: [{ phase: 'prompted' }], decisions: [] }],
     ['blocking', { permissionWaits: [], decisions: [{ state: 'waiting', answer: null }] }],
     ['provisional', { permissionWaits: [], decisions: [{ state: 'provisional', answer: null }] }],
   ];

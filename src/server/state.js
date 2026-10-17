@@ -610,7 +610,7 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{tool_use_id: string, tool_name: string, summary: string, description: string, agent_id: string|null, startedAt: string}} SessionTool */
 
-/** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string}} PermissionWait */
+/** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string, phase: 'checking'|'prompted'}} PermissionWait */
 
 /** @typedef {ReturnType<typeof agentModelFromDefinition> & {
  * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
@@ -626,7 +626,7 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>}} SessionDecisions */
 
-/** @typedef {{permissionWaits: PermissionWait[]}} SessionPermissions */
+/** @typedef {{permissionWaits: PermissionWait[], permissionBoundaries: Set<string|null>}} SessionPermissions */
 
 /** @typedef {SessionIdentity & SessionTools & SessionAgents & SessionCodex & SessionDecisions & SessionPermissions} DerivedSession */
 
@@ -647,6 +647,7 @@ function newSession(event, askDecisionState = {}) {
     codexLaunchToolIds: new Set(),
     agents: [],
     permissionWaits: [],
+    permissionBoundaries: new Set(),
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     awayHandledIds: new Set(askDecisionState.awayHandledIds || []),
@@ -831,17 +832,19 @@ function sessionSnapshot(session) {
       };
     });
   const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
-  const status = permissionWaits.length
+  const status = permissionWaits.some((wait) => wait.phase === 'prompted')
     ? '許可待ち'
-    : !session.turnKnown
-      ? '不明'
-      : session.interrupted
-        ? '中断'
-        : session.stopped && session.agents.some((agent) => agent.active)
-          ? '待機中(サブエージェント稼働中)'
-          : session.stopped
-            ? '待機中'
-            : '作業中';
+    : permissionWaits.length
+      ? '許可確認中'
+      : !session.turnKnown
+        ? '不明'
+        : session.interrupted
+          ? '中断'
+          : session.stopped && session.agents.some((agent) => agent.active)
+            ? '待機中(サブエージェント稼働中)'
+            : session.stopped
+              ? '待機中'
+              : '作業中';
 
   const snapshot = {
     session_id: session.session_id,
@@ -1221,12 +1224,14 @@ function applyToolCompletion(session, event) {
       applyCodexResult(session, event);
     }
 
-    session.permissionWaits = session.permissionWaits.filter((wait) => !(
-      sameAgent(wait.agent_id, agentId) && (
-        (wait.target_tool_use_id === toolUseId && toolUseId) ||
-        (session.provider === 'codex' && eventName === 'PostToolUse' && !wait.target_tool_use_id && wait.tool_name === event.tool_name)
-      )
-    ));
+    session.permissionBoundaries.add(agentId);
+    session.permissionWaits = session.permissionWaits.filter((wait) => {
+      if (!sameAgent(wait.agent_id, agentId)) return true;
+      if (wait.target_tool_use_id) return wait.target_tool_use_id !== toolUseId;
+      if (wait.tool_name && wait.tool_name !== event.tool_name) return true;
+      return session.tools.some((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent'
+        && (!wait.tool_name || tool.tool_name === wait.tool_name));
+    });
     // Codex の request_user_input_async はすぐ戻るので結果では閉じず、次の入力で閉じる。待つ形の request_user_input は Claude と同じく結果で閉じる。
     if (session.provider !== 'codex' || event.tool_name === 'request_user_input') applyAskQuestionCompletion(session, event);
 
@@ -1254,34 +1259,52 @@ function applyToolBatch(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'tools'> & SessionPermissions} session
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions & Pick<SessionIdentity, 'provider'>} session
  */
 function applyPermissionPrompt(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
-  if (eventName === 'PermissionRequest' || (eventName === 'Notification' && event.notification_type === 'permission_prompt')) {
-    // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
-    const oldestTool = session.tools
-      .filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent')
-      .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0];
-    // PermissionRequest には tool_use_id が無いので、同じ名前で実行中のツールが 1 つに決まるときだけ対象にする。
-    const requestedTools = eventName === 'PermissionRequest'
-      ? session.tools.filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name === event.tool_name)
-      : [];
-    const wait = {
-      agent_id: agentId,
-      target_tool_use_id: eventName === 'PermissionRequest'
-        ? (requestedTools.length === 1 ? requestedTools[0].tool_use_id : null)
-        : oldestTool?.tool_use_id || null,
-      tool_name: eventName === 'PermissionRequest' ? event.tool_name : oldestTool?.tool_name || '',
-      summary: eventName === 'PermissionRequest' ? event.summary : oldestTool?.summary || '',
-      notification_type: event.notification_type || 'permission_prompt',
-      message: event.message || '',
-      startedAt: isoTime(event.hookAt),
-    };
-    session.permissionWaits = session.permissionWaits.filter((item) => !sameAgent(item.agent_id, agentId));
-    session.permissionWaits.push(wait);
+  const requested = eventName === 'PermissionRequest';
+  const prompted = session.provider === 'claude' && eventName === 'Notification' && event.notification_type === 'permission_prompt';
+  if (!requested && !prompted) return;
+
+  // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
+  const tools = session.tools.filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent');
+  if (prompted) {
+    session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId)
+      || !wait.target_tool_use_id || tools.some((tool) => tool.tool_use_id === wait.target_tool_use_id));
   }
+  let candidates = requested ? tools.filter((tool) => tool.tool_name === event.tool_name) : tools;
+  if (requested && candidates.length > 1) {
+    const matchingSummary = candidates.filter((tool) => tool.summary === event.summary);
+    if (matchingSummary.length) candidates = matchingSummary;
+  }
+  const waits = session.permissionWaits.filter((wait) => sameAgent(wait.agent_id, agentId));
+  if (prompted && waits.length === 1 && waits[0].phase === 'checking') {
+    waits[0].phase = 'prompted';
+    waits[0].notification_type = event.notification_type;
+    waits[0].message = event.message || '';
+    waits[0].startedAt = isoTime(event.hookAt);
+    return;
+  }
+  if (prompted && !waits.length && !candidates.length && session.permissionBoundaries.has(agentId)) return;
+  const target = candidates.length === 1 && (!prompted || waits.length < 2) ? candidates[0] : null;
+  const wait = {
+    agent_id: agentId,
+    target_tool_use_id: target?.tool_use_id || null,
+    tool_name: requested ? event.tool_name : target?.tool_name || '',
+    summary: requested ? event.summary : target?.summary || '',
+    notification_type: event.notification_type || '',
+    message: event.message || '',
+    startedAt: isoTime(event.hookAt),
+    phase: requested ? 'checking' : 'prompted',
+  };
+  session.permissionWaits = session.permissionWaits.filter((item) => !(
+    sameAgent(item.agent_id, agentId) && ((prompted && item.phase === 'prompted') || (target
+      ? item.target_tool_use_id === target.tool_use_id
+      : !item.target_tool_use_id && item.tool_name === wait.tool_name && item.summary === wait.summary))
+  ));
+  session.permissionWaits.push(wait);
 }
 
 /**
@@ -1307,6 +1330,7 @@ function applySessionLifecycle(session, event) {
     }
   }
   if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
+    session.permissionBoundaries.add(agentId);
     session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
     if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
   }
@@ -1315,6 +1339,7 @@ function applySessionLifecycle(session, event) {
   const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
   if (startsIdle || eventName === 'UserPromptSubmit' || eventName === 'Stop') session.turnKnown = true;
   if (startsIdle) {
+    session.permissionBoundaries.add(null);
     session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
     session.tools = session.tools.filter((tool) => tool.agent_id);
     session.stopped = true;
@@ -2921,9 +2946,9 @@ class DashboardState {
     }
     else this.sessions.delete(event.session_id);
     // 推定はターンが不明な間の補助なので、状態が確定したら消す。不明のままのイベントでは残す。
-    // 許可待ちはターンの確定を待たずに優先して出るので、許可待ちでも残す。
+    // 許可確認はターンの確定を待たずに優先して出るので、確認中と許可待ちでも残す。
     const derivedStatus = nextSessions[0]?.status;
-    const hadEstimate = derivedStatus !== '不明' && derivedStatus !== '許可待ち' && this.estimates.delete(event.session_id);
+    const hadEstimate = !['不明', '許可確認中', '許可待ち'].includes(derivedStatus) && this.estimates.delete(event.session_id);
     const reclassifiedDelegatedThread = event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition
       ? this.reclassifyDelegatedThreads(event.session_id, event.hookAt) : false;
 
@@ -2958,12 +2983,12 @@ class DashboardState {
   }
 
   // Claude はターンの中断で Stop を送らないので、ファイルが idle なのにメインの最後の区切りより新しく、
-  // フックの状態が作業中か許可待ちのままのセッションだけを、transcript で中断を確かめる候補にする。
+  // フックの状態が作業中か許可確認の途中のセッションだけを、transcript で中断を確かめる候補にする。
   interruptCandidate(sessionId) {
     const session = this.sessions.get(sessionId);
     const file = this.sessionFiles.get(sessionId);
     if (!session || session.provider !== 'claude' || file?.status !== 'idle') return null;
-    if (session.status !== '作業中' && session.status !== '許可待ち') return null;
+    if (!['作業中', '許可確認中', '許可待ち'].includes(session.status)) return null;
     const statusAt = Date.parse(file.statusUpdatedAt || '');
     if (!Number.isFinite(statusAt)) return null;
     const { lastLifecycleAt, lastPromptAt } = this.entries.lifecycle(sessionId);

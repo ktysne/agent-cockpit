@@ -17,6 +17,10 @@
   },
   "steps": [
     {
+      "do": "click",
+      "selector": "#import-app-tasks-no"
+    },
+    {
       "do": "screenshot",
       "name": "waiting",
       "target": "article.permission:not(.long-wait)",

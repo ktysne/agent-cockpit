@@ -122,7 +122,7 @@ function createHookRoutes(ctx) {
       },
     },
     {
-      matches: (body) => body.action === 'stop-check' && body.event_name === 'Stop' && body.provider === 'codex',
+      matches: (body) => body.action === 'stop-check' && body.event_name === 'Stop' && ['claude', 'codex'].includes(body.provider),
       run: (body) => answerDelivery.checkStop(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined),
     },
     {

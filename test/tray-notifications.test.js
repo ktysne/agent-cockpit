@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const tray = fs.readFileSync(path.join(__dirname, '../src/tray/tray.ps1'), 'utf8').replace(/\r\n/g, '\n');
@@ -13,6 +14,29 @@ function section(startMarker, endMarker) {
   assert.notEqual(end, -1, `終了位置が見つからない: ${endMarker}`);
   return tray.slice(start, end);
 }
+
+test('古いトレイAPIへのフォールバックでも確認済みの許可待ちだけを通知対象にする', { skip: process.platform !== 'win32' }, () => {
+  const state = { sessions: [{ session_id: 'session', decisions: [], permissionWaits: [
+    { phase: 'checking', startedAt: 'checking' }, { startedAt: 'old' }, { phase: 'prompted', startedAt: 'prompted' },
+  ] }] };
+  const script = `${section('function Get-DashboardState', '\nfunction Find-DashboardWindow')}
+function Invoke-RestMethod {
+  param($Uri)
+  if ($Uri.EndsWith('/api/tray')) {
+    $failure = New-Object System.Exception
+    $failure | Add-Member -NotePropertyName Response -NotePropertyValue ([pscustomobject]@{ StatusCode = 404 })
+    throw $failure
+  }
+  return '${JSON.stringify(state)}' | ConvertFrom-Json
+}
+Get-DashboardState ([pscustomobject]@{ Port = 1 }) | ConvertTo-Json -Compress`;
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  const actual = JSON.parse(result.stdout);
+  assert.equal(actual.Connected, true);
+  assert.equal(actual.PermissionCount, 1);
+  assert.deepEqual(actual.PermissionKeys, ['session||prompted']);
+});
 
 test('通知設定が無いときは初回に既定オフで確認し、壊れた設定も未設定として扱う', () => {
   const getter = section('function Get-TrayNotificationSetting', '\nfunction Save-TrayNotificationSetting');

@@ -41,14 +41,14 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
   assert.match(functionSource(mock, 'renderProductMode'), /title="\$\{esc\(decisionCountTitle\(pend\)\)\}"/);
 });
 
-test('許可待ちと質問はセッションを示し、操作の説明文を出さない', () => {
+test('許可待ちは元のClaude画面で操作する案内を出し、質問にはセッションを示す', () => {
   for (const [source, permissionFunction, questionFunction] of [
     [web, 'appendPermissionWaits', 'appendDecisionAnswer'],
     [mock, 'permCard', 'decisionCard'],
   ]) {
     assert.match(functionSource(source, permissionFunction), /sessionDisplayName\(session\)/);
     assert.match(functionSource(source, questionFunction), /sessionDisplayName\(session\)/);
-    assert.doesNotMatch(functionSource(source, permissionFunction), /デスクトップアプリの/);
+    assert.match(functionSource(source, permissionFunction), /このセッションを開いている Claude Code の画面で許可または拒否を選んでください。/);
     assert.doesNotMatch(functionSource(source, questionFunction), /デスクトップアプリの/);
     assert.match(functionSource(source, 'sessionBlock'), /session-context[\s\S]*sessionDisplayName\(session\)/);
   }

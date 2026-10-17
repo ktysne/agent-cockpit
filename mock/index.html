@@ -703,9 +703,9 @@ const DATA = {
       ],
       extraSessions: [
         {
-          id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'busy', modelName: 'Opus 5.5', branch: 'feat/tempo-map-test',
+          id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'checking', modelName: 'Opus 5.5', branch: 'feat/tempo-map-test',
           main: { tool: 'Bash: npm test -- tempo-map', since: '1 分前' },
-          perms: [{ id: 'rs-p1', who: 'メイン', tool: 'Bash', detail: 'npm test -- tempo-map', waitMin: 1 }],
+          perms: [{ id: 'rs-p1', phase: 'checking', who: 'メイン', tool: 'Bash', detail: 'npm test -- tempo-map', waitMin: 1 }],
           subagents: [{ type: 'test-writer', text: 'テンポ変換の境界値を確認', since: '2 分前', state: 'busy', sinceMin: 2,
             model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' }, route: 'default',
             gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex-subagent' } }],
@@ -757,9 +757,9 @@ const DATA = {
       ],
     },
     {
-      id: 'agent-cockpit', name: 'agent-cockpit', branch: 'plan/pr-stack-view', sessionTitle: 'PR スタック表示', status: 'wait',
+      id: 'agent-cockpit', name: 'agent-cockpit', branch: 'plan/pr-stack-view', sessionTitle: 'PR スタック表示', status: 'prompted',
       main: { tool: 'Bash: git push -u origin plan/pr-stack-view', since: '6 分前' },
-      perms: [{ id: 'ac-p1', who: 'メイン', tool: 'Bash', detail: 'git push -u origin plan/pr-stack-view', waitMin: 6 }],
+      perms: [{ id: 'ac-p1', phase: 'prompted', who: 'メイン', tool: 'Bash', detail: 'git push -u origin plan/pr-stack-view', waitMin: 6 }],
       news: [{ t: 'Codex が「Codex の状態表示」を完了した', provider: 'codex' }],
       subagents: [
         { type: 'Explore', text: 'フックの入力項目を調査', since: '完了', state: 'done',
@@ -1547,7 +1547,7 @@ const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filte
 function countJudgments(sessions) {
   const counts = { permission: 0, blocking: 0, provisional: 0 };
   for (const session of sessions) {
-    counts.permission += session.perms.length;
+    counts.permission += session.perms.filter(wait => wait.phase === 'prompted').length;
     for (const decision of session.decisions) {
       if (!isAwaitingDecision(decision)) continue;
       counts[effectiveDecisionState(decision) === 'waiting' ? 'blocking' : 'provisional'] += 1;
@@ -1586,15 +1586,15 @@ function decisionCategory(d) {
 const isShown = key => !ui.hidden.includes(key);
 const visibleDecisions = s => s.decisions.filter(d => isActiveDecision(d) && isShown(decisionCategory(d)));
 const visibleSubagents = s => s.subagents.filter(agent => !isBusyAgent(s, agent) || isShown('agents'));
-const visiblePermissions = s => isShown('permission') ? s.perms : [];
-const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.length > 0)
+const visiblePermissions = s => isShown('permission') ? s.perms.filter(wait => wait.phase === 'prompted') : [];
+const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.some(wait => wait.phase === 'prompted'))
   || s.decisions.some(d => isActiveDecision(d) && !isShown(decisionCategory(d)));
 
 function countHidden() {
   const hiddenRows = allSessions().filter(s => (!ui.hiddenSessions.includes(s.id) || isIdleHiddenSession(s))).reduce((n, s) => n
     + s.decisions.filter(d => isActiveDecision(d) && !isShown(decisionCategory(d))).length
     + s.subagents.filter(agent => isBusyAgent(s, agent) && !isShown('agents')).length
-    + (isShown('permission') ? 0 : s.perms.length), 0);
+    + (isShown('permission') ? 0 : s.perms.filter(wait => wait.phase === 'prompted').length), 0);
   return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + openPrs(p).length, 0));
 }
 
@@ -1835,10 +1835,12 @@ function mainRow(p, session, withTag, showOriginBands = false) {
   const unknown = session.status === 'unknown' && !nonInteractiveUnknown;
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
+  const permissionLabel = session.status === 'checking' ? '実行許可を確認中' : session.status === 'prompted' ? '許可待ち' : '';
+  const mainIsWaiting = permissionLabel && session.perms.some(wait => wait.who === 'メイン' && wait.phase === session.status);
   // 状態不明の行の main.since は、ターンを確定しないイベントが最後に届いた時刻。無いときは時刻不明にする。
-  const status = nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
+  const status = permissionLabel ? `${mainIsWaiting ? '' : 'サブエージェントが'}${permissionLabel}` : nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
   const statusTitle = session.status === 'interrupted' ? ' title="利用者が中断した。セッションは生きていて、次の入力を待っている"' : '';
-  const stateClass = nonInteractiveUnknown ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
+  const stateClass = nonInteractiveUnknown || session.status === 'checking' ? 'busy' : session.status === 'prompted' ? 'wait' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
   const resumes = session.codex?.resumes ? `<span class="route-tag" title="同じ会話を再開しても 1 行にまとめて表示する">再開 ${session.codex.resumes} 回</span>` : '';
   const model = session.codex ? `<div class="models"><span class="model gpt">Codex ${esc(session.codex.model)}</span>${resumes}</div>`
@@ -1877,7 +1879,12 @@ function isFinishedSession(session) {
 }
 
 function agentRow(p, session, agent, withTag, showOriginBands = false) {
-  const state = isClosedByUser(session, agent) ? ['終了', 'done'] : isBusyAgent(session, agent) ? ['稼働中', 'busy'] : isUnconfirmed(session, agent) ? ['終了未確認', 'wait'] : ['終了', 'done'];
+  const permission = session.perms.find(wait => wait.who === agent.type && wait.phase === 'prompted')
+    || session.perms.find(wait => wait.who === agent.type && wait.phase === 'checking');
+  const state = isClosedByUser(session, agent) ? ['終了', 'done']
+    : permission?.phase === 'checking' ? ['実行許可を確認中', 'busy']
+    : permission?.phase === 'prompted' ? ['許可待ち', 'wait']
+    : isBusyAgent(session, agent) ? ['稼働中', 'busy'] : isUnconfirmed(session, agent) ? ['終了未確認', 'wait'] : ['終了', 'done'];
   const close = isClosable(session, agent) ? `<button type="button" class="link-btn close-agent" data-close-agent="${esc(closedAgentKey(session, agent))}">終了にする</button>` : '';
   const description = agent.text ? `<div class="agent-description">${esc(agent.text)}</div>` : agent.tool ? renderToolLine(agent.tool) : '';
   const detail = description + modelLine(agent, routeTag(agent));
@@ -1960,7 +1967,6 @@ const waitLabel = m => {
 };
 const isNew = (p, item) => !!item.isNew && !ui.seen.includes(p.id);
 
-// 許可待ち: Notification フックで受ける。許可そのものはデスクトップアプリで出す
 function permCard(p, session, x, withTag) {
   const long = isLongWait(x.waitMin);
   return `<article class="decision blocking perm ${long ? 'long-wait' : ''}">
@@ -1968,6 +1974,7 @@ function permCard(p, session, x, withTag) {
       <span class="chip danger">許可待ち</span>${waitLabel(x.waitMin)}</div>
     <div class="ctx">${esc(x.tool)}: <code>${esc(x.detail)}</code></div>
     <div class="meta">${esc(p.name)} 「${esc(sessionDisplayName(session))}」</div>
+    <div class="meta">このセッションを開いている Claude Code の画面で許可または拒否を選んでください。</div>
   </article>`;
 }
 const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => ageMinutes(a) - ageMinutes(b));
@@ -2767,7 +2774,7 @@ function renderRestartNote(state) {
     text = '常駐サーバーを再起動しています。';
   } else if (ui.phase === 'confirm' || ui.phase === 'sending') {
     const sessions = state.sessions || (state.products || []).flatMap(product => product.sessions);
-    const permissions = sessions.reduce((sum, session) => sum + (session.permissionWaits || session.perms || []).length, 0);
+    const permissions = sessions.reduce((sum, session) => sum + (session.permissionWaits || session.perms || []).filter(wait => wait.phase === 'prompted').length, 0);
     text = '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。'
       + (permissions ? `許可待ち ${permissions} 件は、再起動後に表示されません。` : '');
     buttons.push(['再起動する', async () => {
