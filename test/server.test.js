@@ -8,6 +8,7 @@ const { makeHookEvent, runHook } = require('../src/hooks/event');
 const { productFromCwd } = require('../src/server/identity');
 const { DashboardState } = require('../src/server/state');
 const { readTranscriptInterruption } = require('../src/server/transcript');
+const { readTaskOutputFileAsync } = require('../src/shared/task-output');
 const {
   startServer: startRealServer,
   MAX_BODY_BYTES,
@@ -2640,9 +2641,27 @@ async function backgroundNotificationCockpit(t, { byRun = false, output = 'codex
     content: `<task-notification><task-id>task-a</task-id><output-file>${outputFile}</output-file><status>completed</status></task-notification>`,
   }));
   const before = state.snapshot().sessions[0];
-  const runtime = await startServer({ homeDir, claudeHome, port: 0, state, taskNotificationDelayMs: 1 });
+  let resolveOutputRead;
+  const outputRead = new Promise(resolve => { resolveOutputRead = resolve; });
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, state, taskNotificationDelayMs: 1,
+    readTaskOutput: async file => {
+      const result = await readTaskOutputFileAsync(file);
+      resolveOutputRead();
+      return result;
+    },
+  });
   t.after(() => runtime.close());
-  await new Promise(resolve => setTimeout(resolve, 40));
+  if (sessionFile) {
+    let timeout;
+    try {
+      await Promise.race([outputRead, new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('背景タスクの出力読み取りが完了しませんでした')), 2000);
+      })]);
+    } finally {
+      clearTimeout(timeout);
+    }
+    await new Promise(setImmediate);
+  }
   return { state, before, runtime, sessionId, homeDir };
 }
 

@@ -23,6 +23,12 @@ function waitForAbort(_url, { signal }) {
   });
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 test('/health が 120ms より遅く 500ms 以内に返れば健全と判定する', async () => {
   const info = serverInfo(41001, 'secret');
   const healthy = await serverIsHealthy(info, {
@@ -38,14 +44,20 @@ test('/health が 120ms より遅く 500ms 以内に返れば健全と判定す�
 
 test('/health が期限内に返らず番号へ接続できるときは起動せず server.json の情報を返す', async (t) => {
   const temporary = temporaryDirectory(t, 'agent-cockpit-connection-test-');
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const info = serverInfo(41001, 'secret');
+  const healthRequests = [deferred(), deferred()];
+  let healthRequestCount = 0;
   let starts = 0;
   let portChecks = 0;
-  const result = await ensureServerRunning({
+  const resultPromise = ensureServerRunning({
     homeDir: temporary.directory,
     deadline: Date.now() + 1400,
     readInfo: async () => info,
-    fetchImpl: waitForAbort,
+    fetchImpl: (url, options) => {
+      healthRequests[healthRequestCount++]?.resolve();
+      return waitForAbort(url, options);
+    },
     canConnectToPort: async (port) => {
       assert.equal(port, info.port);
       portChecks += 1;
@@ -53,6 +65,11 @@ test('/health が期限内に返らず番号へ接続できるときは起動せ
     },
     startServer: async () => { starts += 1; },
   });
+  await healthRequests[0].promise;
+  t.mock.timers.tick(500);
+  await healthRequests[1].promise;
+  t.mock.timers.tick(500);
+  const result = await resultPromise;
 
   assert.equal(result, info);
   assert.equal(portChecks, 2);
@@ -95,16 +112,20 @@ test('/health が応答した後に本文を返し切らない相手には、番
 
 test('/health が期限内に返らず番号へ接続できないときはサーバーを起動する', async (t) => {
   const temporary = temporaryDirectory(t, 'agent-cockpit-connection-test-');
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const info = serverInfo(41001, 'secret');
+  const healthRequests = [deferred(), deferred()];
+  let healthRequestCount = 0;
   let starts = 0;
   let portChecks = 0;
   let started = false;
-  const result = await ensureServerRunning({
+  const resultPromise = ensureServerRunning({
     homeDir: temporary.directory,
     deadline: Date.now() + 1400,
     readInfo: async () => info,
     fetchImpl: async (url, options) => {
       if (started) return healthResponse(info);
+      healthRequests[healthRequestCount++]?.resolve();
       return waitForAbort(url, options);
     },
     canConnectToPort: async (port) => {
@@ -114,6 +135,11 @@ test('/health が期限内に返らず番号へ接続できないときはサー
     },
     startServer: async () => { starts += 1; started = true; },
   });
+  await healthRequests[0].promise;
+  t.mock.timers.tick(500);
+  await healthRequests[1].promise;
+  t.mock.timers.tick(500);
+  const result = await resultPromise;
 
   assert.equal(result, info);
   assert.equal(portChecks, 2);
