@@ -5188,7 +5188,7 @@ function restartNoteHarness(source, response = async () => ({ status: 202 })) {
   return { note, buttons, timers, state, render, click, context, focused: () => focused };
 }
 
-test('保存失敗の帯は変更の適用済みと再試行を示し、復旧後に警告を消す', async () => {
+test('保存失敗の帯は未保存と再試行を示し、復旧後に警告を消す', async () => {
   for (const source of [pageHtml, mockHtml]) {
     const text = { textContent: '' };
     const button = {};
@@ -5200,7 +5200,7 @@ test('保存失敗の帯は変更の適用済みと再試行を示し、復旧�
       { fileName: 'store.json', errorCode: 'ENOSPC', lastFailureAt: '2026-10-18T00:00:00Z' },
     ] } });
     assert.equal(note.hidden, false);
-    assert.match(text.textContent, /変更は適用済み.*保存できていません/);
+    assert.match(text.textContent, /現在の状態を保存できていません/);
     assert.match(text.textContent, /store.json: ENOSPC/);
     await button.onclick();
     assert.equal(button.disabled, false);
@@ -5215,6 +5215,13 @@ test('未保存の変更がある間は画面とモックの再起動操作を�
     f.render();
     assert.match(f.note.textContent, /未保存の変更があるため、再起動できません/);
     assert.equal(f.buttons.length, 0);
+    f.state.persistence = { status: 'pending' };
+    f.render();
+    assert.match(f.note.textContent, /保存しています.*完了してから再起動/);
+    assert.equal(f.buttons.length, 0);
+    f.state.persistence = { status: 'saved' };
+    f.render();
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
   }
 });
 

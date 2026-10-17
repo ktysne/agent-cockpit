@@ -53,8 +53,8 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     failEditNumber: null,
     failMerge: false,
     deleteStderr: '',
-    failGitDelete: false,
-    beforeGitDelete: null,
+    failGraphqlDelete: false,
+    beforeGraphqlDelete: null,
     autoDeleteBranch: false,
     failOpenList: false,
     blockAfterEdit: false,
@@ -91,6 +91,31 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
       }
       finish(null, JSON.stringify(args[stateIndex + 1] === 'open' ? github.openPullRequests : github.mergedPullRequests));
       return;
+    }
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      const query = graphqlVariable(args, 'query') || '';
+      if (query.includes('repository(owner: $owner')) {
+        finish(null, JSON.stringify({ data: { repository: { id: 'R_kgDOExample' } } }));
+        return;
+      }
+      if (query.includes('updateRefs(input:')) {
+        const refName = graphqlVariable(args, 'refName');
+        const branch = refName?.startsWith('refs/heads/') ? refName.slice('refs/heads/'.length) : null;
+        const beforeOid = graphqlVariable(args, 'beforeOid');
+        const afterOid = graphqlVariable(args, 'afterOid');
+        control.beforeGraphqlDelete?.(branch, beforeOid);
+        if (control.failGraphqlDelete) {
+          finish(Object.assign(new Error('ref update failed'), { code: 'EIO' }), '', control.deleteStderr || 'GraphQL ref update failed');
+          return;
+        }
+        if (!branch || afterOid !== '0'.repeat(40) || control.remoteBranchHeads.get(branch) !== beforeOid) {
+          finish(Object.assign(new Error('conditional ref update rejected'), { code: 'EIO' }), '', 'GraphQL updateRefs rejected ref change');
+          return;
+        }
+        control.remoteBranchHeads.delete(branch);
+        finish(null, JSON.stringify({ data: { updateRefs: { clientMutationId: null } } }));
+        return;
+      }
     }
     if (args[0] === 'api' && args[1] === 'repos/example/project') {
       finish(null, JSON.stringify({
@@ -166,21 +191,6 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
   };
   const gitExecFileImpl = (_file, args, _options, callback) => {
     gitCalls.push([...args]);
-    operations.push({ tool: 'git', args: [...args] });
-    const lease = args.find((argument) => argument.startsWith('--force-with-lease='));
-    const expectedHeadRefOid = lease?.slice(lease.lastIndexOf(':') + 1);
-    const refspec = args.at(-1);
-    const branch = refspec?.startsWith(':refs/heads/') ? refspec.slice(':refs/heads/'.length) : null;
-    control.beforeGitDelete?.(branch, expectedHeadRefOid);
-    if (control.failGitDelete) {
-      callback(Object.assign(new Error('push failed'), { code: 1, stderr: control.deleteStderr || 'remote: Service Unavailable' }), '', control.deleteStderr || 'remote: Service Unavailable');
-      return;
-    }
-    if (!branch || control.remoteBranchHeads.get(branch) !== expectedHeadRefOid) {
-      callback(Object.assign(new Error('stale info'), { code: 1, stderr: '! [rejected] (stale info)' }), '', '! [rejected] (stale info)');
-      return;
-    }
-    control.remoteBranchHeads.delete(branch);
     callback(null, '', '');
   };
 
@@ -211,6 +221,19 @@ function mergeInput(number = 1, changes = {}) {
   };
 }
 
+function graphqlVariable(args, name) {
+  return args.find((argument) => argument.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+
+function usesRawGraphqlVariable(args, name) {
+  const index = args.findIndex((argument) => argument.startsWith(`${name}=`));
+  return index > 0 && args[index - 1] === '-f';
+}
+
+function isBranchDeleteCall(args) {
+  return args[0] === 'api' && args[1] === 'graphql' && args.some((argument) => argument.startsWith('refName=refs/heads/'));
+}
+
 test('確定操作のブランチ削除は待機中の定期取得より先にghを起動する', async (t) => {
   const { state, tracker, manager } = await mergeFixture(t);
   state.getDisplayPreferences = () => ({ ghConcurrencyLimit: 4 });
@@ -237,13 +260,30 @@ test('確定操作のブランチ削除は待機中の定期取得より先にgh
   assert.deepEqual(started[4], ['api', 'repos/example/project/git/ref/heads/feature/one']);
   completeNext((args) => args[1] === started[4][1], null, JSON.stringify({ object: { sha: sha(1) } }));
   await new Promise(setImmediate);
+  assert.deepEqual(started[5], ['api', 'repos/example/project/4']);
+  completeNext((args) => args[1] === 'repos/example/project/1');
+  await new Promise(setImmediate);
+  assert.equal(started[6][1], 'graphql');
+  assert.ok(started[6].some((argument) => argument.includes('repository(owner: $owner')));
+  completeNext((args) => args[1] === 'graphql' && args.some((argument) => argument.includes('repository(owner: $owner')),
+    null, JSON.stringify({ data: { repository: { id: 'R_kgDOExample' } } }));
+  await new Promise(setImmediate);
+  assert.deepEqual(started[7], ['api', 'repos/example/project/5']);
+  completeNext((args) => args[1] === 'repos/example/project/2');
+  await new Promise(setImmediate);
+  assert.equal(started[8][1], 'graphql');
+  assert.ok(started[8].some((argument) => argument.includes('updateRefs(input:')));
+  completeNext(isBranchDeleteCall, null, JSON.stringify({ data: { updateRefs: { clientMutationId: null } } }));
+  await new Promise(setImmediate);
   while (running.length) {
     const pending = running.shift();
     pending.callback(null, '{}');
     await new Promise(setImmediate);
   }
   await Promise.all([...background, deletion]);
-  assert.deepEqual(started.slice(5).map(args => args[1]), ['repos/example/project/4', 'repos/example/project/5']);
+  assert.deepEqual(started.slice(5).map(args => args[1]), [
+    'repos/example/project/4', 'graphql', 'repos/example/project/5', 'graphql',
+  ]);
 });
 
 for (const automatic of [false, true]) {
@@ -639,11 +679,12 @@ test('子 PR の base を付け替え、head SHA を照合してマージし、�
     ['pr', 'edit', '2', '-R', 'example/project', '--base', 'main'],
     ['pr', 'merge', '1', '-R', 'example/project', '--squash', '--match-head-commit', sha(1)],
   ]);
-  assert.deepEqual(fixture.gitCalls[0].slice(-3), [
-    `--force-with-lease=refs/heads/feature/one:${sha(1)}`,
-    'https://github.com/example/project.git',
-    ':refs/heads/feature/one',
-  ]);
+  const deleteCall = fixture.calls.find(isBranchDeleteCall);
+  assert.equal(graphqlVariable(deleteCall, 'refName'), 'refs/heads/feature/one');
+  assert.equal(graphqlVariable(deleteCall, 'beforeOid'), sha(1));
+  assert.equal(graphqlVariable(deleteCall, 'afterOid'), '0'.repeat(40));
+  assert.equal(['repositoryId', 'refName', 'beforeOid', 'afterOid'].every((name) => usesRawGraphqlVariable(deleteCall, name)), true);
+  assert.equal(fixture.gitCalls.some((args) => args.includes('push')), false);
   assert.equal(fixture.control.remoteBranchHeads.has('feature/one'), false);
   assert.equal(operations.flat().includes('--delete-branch'), false);
   assert.equal(fixture.state.pullRequestRetargetsForRepo('example', 'project')[0].base, 'main');
@@ -660,7 +701,7 @@ test('マージ後に別のコミットへ進んだリモートブランチを�
   assert.equal(result.branchDeleted, false);
   assert.match(result.warning, /head が更新されたため.*削除しませんでした/);
   assert.equal(fixture.control.remoteBranchHeads.get('feature/one'), sha(2));
-  assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
+  assert.equal(fixture.calls.some(isBranchDeleteCall), false);
 });
 
 test('既に無いリモートブランチの削除は成功として扱い警告を出さない', async (t) => {
@@ -672,13 +713,13 @@ test('既に無いリモートブランチの削除は成功として扱い警�
   assert.equal(result.ok, true);
   assert.equal(result.branchDeleted, false);
   assert.match(result.warning, /既にありません/);
-  assert.equal(fixture.gitCalls.length, 0);
+  assert.equal(fixture.calls.some(isBranchDeleteCall), false);
   assert.match(fixture.notices.at(-1).message, /既にありません/);
 });
 
 test('条件付き削除に失敗し ref が変わらなければ警告する', async (t) => {
   const fixture = await mergeFixture(t);
-  fixture.control.failGitDelete = true;
+  fixture.control.failGraphqlDelete = true;
   fixture.control.deleteStderr = 'remote: Service Unavailable';
 
   const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
@@ -692,7 +733,7 @@ test('条件付き削除に失敗し ref が変わらなければ警告する', 
 
 test('削除との競合で ref が進んだ場合は新しい head を残して理由を記録する', async (t) => {
   const fixture = await mergeFixture(t);
-  fixture.control.beforeGitDelete = () => fixture.control.remoteBranchHeads.set('feature/one', sha(2));
+  fixture.control.beforeGraphqlDelete = () => fixture.control.remoteBranchHeads.set('feature/one', sha(2));
 
   const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
 
@@ -700,11 +741,11 @@ test('削除との競合で ref が進んだ場合は新しい head を残して
   assert.equal(result.branchDeleted, false);
   assert.match(result.warning, /head が更新されたため.*削除しませんでした/);
   assert.equal(fixture.control.remoteBranchHeads.get('feature/one'), sha(2));
-  assert.deepEqual(fixture.gitCalls[0].slice(-3), [
-    `--force-with-lease=refs/heads/feature/one:${sha(1)}`,
-    'https://github.com/example/project.git',
-    ':refs/heads/feature/one',
-  ]);
+  const deleteCall = fixture.calls.find(isBranchDeleteCall);
+  assert.equal(graphqlVariable(deleteCall, 'refName'), 'refs/heads/feature/one');
+  assert.equal(graphqlVariable(deleteCall, 'beforeOid'), sha(1));
+  assert.equal(graphqlVariable(deleteCall, 'afterOid'), '0'.repeat(40));
+  assert.equal(fixture.gitCalls.some((args) => args.includes('push')), false);
   assert.match(fixture.notices.at(-1).message, /head が更新されたため.*削除しませんでした/);
 });
 
@@ -994,14 +1035,12 @@ test('予約による自動マージは子 PR を付け替え、選択した hea
   assert.equal(reserved.ok, true);
   assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].automatic, true);
   const editIndex = fixture.operations.findIndex((operation) => operation.tool === 'gh' && operation.args[0] === 'pr' && operation.args[1] === 'edit');
-  const deleteIndex = fixture.operations.findIndex((operation) => operation.tool === 'git');
+  const deleteIndex = fixture.operations.findIndex((operation) => isBranchDeleteCall(operation.args));
   assert.ok(editIndex >= 0 && deleteIndex > editIndex);
   assert.deepEqual(fixture.operations[editIndex].args, ['pr', 'edit', '2', '-R', 'example/project', '--base', 'main']);
-  assert.deepEqual(fixture.operations[deleteIndex].args.slice(-3), [
-    `--force-with-lease=refs/heads/feature/one:${sha(1)}`,
-    'https://github.com/example/project.git',
-    ':refs/heads/feature/one',
-  ]);
+  assert.equal(graphqlVariable(fixture.operations[deleteIndex].args, 'refName'), 'refs/heads/feature/one');
+  assert.equal(graphqlVariable(fixture.operations[deleteIndex].args, 'beforeOid'), sha(1));
+  assert.equal(graphqlVariable(fixture.operations[deleteIndex].args, 'afterOid'), '0'.repeat(40));
   assert.deepEqual(fixture.calls.find((args) => args[0] === 'pr' && args[1] === 'merge'), [
     'pr', 'merge', '1', '-R', 'example/project', '--squash', '--match-head-commit', sha(1),
   ]);
@@ -1120,6 +1159,56 @@ test('同じ PR の予約チェックが重なってもマージを一度だけ�
 
   assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge').length, 1);
   assert.equal(fixture.state.pullRequestMergeReservation('example', 'project', 1), null);
+});
+
+test('予約確認中の手動 merge と reserve は同じ順序の repo lock で完了する', async (t) => {
+  const fixture = await mergeFixture(t, [
+    ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' }),
+    ghPullRequest(2, 'feature/two', 'main'),
+    ghPullRequest(3, 'feature/three', 'main'),
+  ]);
+  await fixture.manager.reserve(mergeInput(1, { deleteBranch: false }));
+  fixture.control.crossReviews.set(1, convergedReview(1));
+  fixture.github.openPullRequests[0] = ghPullRequest(1, 'feature/one', 'main', { reviewDecision: 'APPROVED' });
+
+  let startMerge;
+  const mergeStarted = new Promise((resolve) => { startMerge = resolve; });
+  let releaseMerge;
+  const mergeGate = new Promise((resolve) => { releaseMerge = resolve; });
+  const mergeNumbers = [];
+  fixture.control.beforeMerge = (number) => {
+    mergeNumbers.push(number);
+    if (number === 1) startMerge();
+  };
+  fixture.control.waitForMerge = () => mergeNumbers.at(-1) === 1 ? mergeGate : Promise.resolve();
+
+  const reservationCheck = fixture.tracker.refreshRepo('example', 'project');
+  await mergeStarted;
+
+  let manualMergeFinished = false;
+  let manualReserveFinished = false;
+  const manualMerge = fixture.manager.merge(mergeInput(2, { deleteBranch: false }))
+    .then((result) => { manualMergeFinished = true; return result; });
+  const manualReserve = fixture.manager.reserve(mergeInput(3, { deleteBranch: false }))
+    .then((result) => { manualReserveFinished = true; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(manualMergeFinished, false);
+  assert.equal(manualReserveFinished, false);
+  assert.deepEqual(mergeNumbers, [1]);
+
+  releaseMerge();
+  const [_, mergeResult, reserveResult] = await Promise.all([reservationCheck, manualMerge, manualReserve]);
+  assert.equal(mergeResult.ok, true);
+  assert.equal(mergeResult.merged, true);
+  assert.equal(reserveResult.ok, true);
+  assert.equal(reserveResult.reserved, true);
+  assert.deepEqual(mergeNumbers, [1, 2]);
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fixture.manager.repositoryInFlight.size, 0);
+  assert.equal(fixture.manager.repositoryLockWaiters.size, 0);
+  assert.equal(fixture.manager.pendingRepositoryReservationChecks.size, 0);
+  assert.equal(fixture.manager.inFlight.size, 0);
 });
 
 test('ダッシュボード外でマージされた PR は方式なしで履歴へ記録し、作成元セッションへ知らせる', async (t) => {
@@ -1636,6 +1725,8 @@ test('同じリポジトリの別 PR は進行中のマージと並行して開�
     ghPullRequest(1, 'feature/one', 'main'),
     ghPullRequest(2, 'feature/two', 'main'),
   ]);
+  const mergeNumbers = [];
+  fixture.control.beforeMerge = (number) => mergeNumbers.push(number);
   let finishMerge;
   fixture.control.waitForMerge = () => new Promise((resolve) => { finishMerge = resolve; });
   const firstMerge = fixture.manager.merge(mergeInput(1, { method: 'merge' }));
@@ -1644,14 +1735,20 @@ test('同じリポジトリの別 PR は進行中のマージと並行して開�
   }
   assert.ok(finishMerge);
 
-  const secondResult = await fixture.manager.merge(mergeInput(2, { method: 'merge' }));
-  assert.equal(secondResult.status, 409);
-  assert.match(secondResult.error, /リポジトリ内の PR #2 の操作が進行中/);
+  let secondFinished = false;
+  const secondMerge = fixture.manager.merge(mergeInput(2, { method: 'merge' }))
+    .then((result) => { secondFinished = true; return result; });
+  await new Promise(setImmediate);
+  assert.equal(secondFinished, false);
+  assert.deepEqual(mergeNumbers, [1]);
   assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge').length, 1);
 
   fixture.control.waitForMerge = null;
   finishMerge();
-  assert.equal((await firstMerge).merged, true);
+  const [firstResult, secondResult] = await Promise.all([firstMerge, secondMerge]);
+  assert.equal(firstResult.merged, true);
+  assert.equal(secondResult.merged, true);
+  assert.deepEqual(mergeNumbers, [1, 2]);
 });
 
 test('予約の状態取得が失敗しても即時再試行ループを作らない', async (t) => {

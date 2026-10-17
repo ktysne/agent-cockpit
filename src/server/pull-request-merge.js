@@ -61,6 +61,7 @@ class PullRequestMergeManager {
     this.now = now;
     this.inFlight = new Map();
     this.repositoryInFlight = new Set();
+    this.repositoryLockWaiters = new Map();
     this.pendingRepositoryReservationChecks = new Map();
     this.repositoryReservationChecks = new Set();
     this.handledMerges = new Set();
@@ -87,17 +88,41 @@ class PullRequestMergeManager {
     try {
       return { acquired: true, result: await operation() };
     } finally {
-      this.repositoryInFlight.delete(key);
-      const pending = this.pendingRepositoryReservationChecks.get(key);
-      if (pending) {
-        this.pendingRepositoryReservationChecks.delete(key);
-        setImmediate(() => this.checkReservations(pending.owner, pending.repo).catch(() => {}));
-      }
+      this.releaseRepositoryLock(key);
     }
   }
 
-  repositoryBusyResult(number) {
-    return actionResult(409, `リポジトリ内の PR #${number} の操作が進行中です`);
+  async withRepositoryLock(owner, repo, operation) {
+    const key = safeRepo(owner, repo).toLowerCase();
+    if (this.repositoryInFlight.has(key)) {
+      const waiters = this.repositoryLockWaiters.get(key) || [];
+      this.repositoryLockWaiters.set(key, waiters);
+      await new Promise((resolve) => waiters.push(resolve));
+    } else {
+      this.repositoryInFlight.add(key);
+    }
+    try {
+      return await operation();
+    } finally {
+      this.releaseRepositoryLock(key);
+    }
+  }
+
+  releaseRepositoryLock(key) {
+    const waiters = this.repositoryLockWaiters.get(key);
+    const next = waiters?.shift();
+    if (next) {
+      if (!waiters.length) this.repositoryLockWaiters.delete(key);
+      next();
+      return;
+    }
+    this.repositoryLockWaiters.delete(key);
+    this.repositoryInFlight.delete(key);
+    const pending = this.pendingRepositoryReservationChecks.get(key);
+    if (pending) {
+      this.pendingRepositoryReservationChecks.delete(key);
+      setImmediate(() => this.checkReservations(pending.owner, pending.repo).catch(() => {}));
+    }
   }
 
   registeredPullRequest(number, registrationKey) {
@@ -125,12 +150,11 @@ class PullRequestMergeManager {
     if (!isCompleteCommitSha(input.headRefOid) || !METHODS.has(input.method) || typeof input.deleteBranch !== 'boolean') {
       return Promise.resolve(actionResult(400, 'マージ内容を確認してください'));
     }
-    return this.withPullRequestLock(registration.owner, registration.repo, registration.number, async () => {
-      const result = await this.withRepositoryTryLock(registration.owner, registration.repo, () => (
+    return this.withRepositoryLock(registration.owner, registration.repo, () => (
+      this.withPullRequestLock(registration.owner, registration.repo, registration.number, () => (
         this.performMerge(registration, input)
-      ));
-      return result.acquired ? result.result : this.repositoryBusyResult(registration.number);
-    });
+      ))
+    ));
   }
 
   reserve(input) {
@@ -139,12 +163,11 @@ class PullRequestMergeManager {
     if (!isCompleteCommitSha(input.headRefOid) || !METHODS.has(input.method) || typeof input.deleteBranch !== 'boolean') {
       return Promise.resolve(actionResult(400, 'マージ予約の内容を確認してください'));
     }
-    return this.withPullRequestLock(registration.owner, registration.repo, registration.number, async () => {
-      const result = await this.withRepositoryTryLock(registration.owner, registration.repo, () => (
+    return this.withRepositoryLock(registration.owner, registration.repo, () => (
+      this.withPullRequestLock(registration.owner, registration.repo, registration.number, () => (
         this.performReservation(registration, input)
-      ));
-      return result.acquired ? result.result : this.repositoryBusyResult(registration.number);
-    });
+      ))
+    ));
   }
 
   cancelReservation(input) {

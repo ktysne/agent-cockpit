@@ -68,6 +68,7 @@ function normalizeRepository(name, definition) {
     autoDeleteBranch: definition.autoDeleteBranch === true,
     mergeMethods: definition.mergeMethods || ['merge', 'squash', 'rebase'],
     branchDeleteFailures: new Set(definition.branchDeleteFailures || []),
+    branchHeads: new Map(pullRequests.map((pr) => [pr.head, pr.headRefOid])),
     pullRequests,
     deletedBranches: [],
   };
@@ -76,6 +77,10 @@ function normalizeRepository(name, definition) {
 function flagValue(args, flag) {
   const index = args.indexOf(flag);
   return index >= 0 ? args[index + 1] : undefined;
+}
+
+function fieldValue(args, name) {
+  return args.find((argument) => argument.startsWith(`${name}=`))?.slice(name.length + 1);
 }
 
 // PullRequestTracker と PullRequestMergeManager が呼ぶ gh の部分だけを、シナリオの PR の定義から返す。
@@ -149,21 +154,36 @@ function createFakeGh(definition, { now = () => Date.now(), onUnexpected = () =>
   }
 
   function handleApi(args) {
-    const deleteMatch = args.length === 4 && args[1] === '-X' && args[2] === 'DELETE'
-      && args[3].match(/^repos\/([^/]+\/[^/]+)\/git\/refs\/heads\/(.+)$/);
-    if (deleteMatch) {
-      const repo = repositoryFor(args, deleteMatch[1]);
-      if (repo.branchDeleteFailures.has(deleteMatch[2])) {
-        throw Object.assign(new Error('branch deletion failed'), { code: 'DEMO_BRANCH_DELETE_FAILED', stderr: 'branch deletion failed' });
+    if (args[1] === 'graphql') {
+      const query = fieldValue(args, 'query') || '';
+      if (query.includes('repository(owner: $owner')) {
+        const repo = repositoryFor(args, `${fieldValue(args, 'owner')}/${fieldValue(args, 'repository')}`);
+        return JSON.stringify({ data: { repository: { id: `R_${repo.name.replace('/', '_')}` } } });
       }
-      repo.deletedBranches.push(deleteMatch[2]);
-      return '';
+      if (query.includes('updateRefs(input:')) {
+        const repo = [...repositories.values()].find((item) => `R_${item.name.replace('/', '_')}` === fieldValue(args, 'repositoryId'))
+          || fail(args, 'GraphQL repository ID が定義に無い');
+        const refName = fieldValue(args, 'refName');
+        const branch = refName?.startsWith('refs/heads/') ? refName.slice('refs/heads/'.length) : null;
+        const beforeOid = fieldValue(args, 'beforeOid');
+        if (!branch || fieldValue(args, 'afterOid') !== '0'.repeat(40) || repo.branchHeads.get(branch) !== beforeOid) {
+          throw Object.assign(new Error('conditional ref update rejected'), { code: 'DEMO_BRANCH_DELETE_CONFLICT', stderr: 'branch ref changed' });
+        }
+        if (repo.branchDeleteFailures.has(branch)) {
+          throw Object.assign(new Error('branch deletion failed'), { code: 'DEMO_BRANCH_DELETE_FAILED', stderr: 'branch deletion failed' });
+        }
+        repo.branchHeads.delete(branch);
+        repo.deletedBranches.push(branch);
+        return JSON.stringify({ data: { updateRefs: { clientMutationId: null } } });
+      }
+      return fail(args, '扱えない GraphQL query');
     }
     if (args.length !== 2) return fail(args);
     const reference = args[1].match(/^repos\/([^/]+\/[^/]+)\/git\/ref\/heads\/(.+)$/);
     if (reference) {
       const repo = repositoryFor(args, reference[1]);
-      if (repo.branchDeleteFailures.has(reference[2])) return JSON.stringify({ ref: `refs/heads/${reference[2]}` });
+      const headRefOid = repo.branchHeads.get(decodeURIComponent(reference[2]));
+      if (headRefOid) return JSON.stringify({ ref: `refs/heads/${reference[2]}`, object: { sha: headRefOid } });
       return fail(args, 'branch が見つからない');
     }
     const compare = args[1].match(/^repos\/([^/]+\/[^/]+)\/compare\/([^/]+)\.\.\.([a-f0-9]+)$/i);

@@ -21,7 +21,25 @@ const MERGED_PULL_REQUEST_LIMIT = 1000;
 const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
-const GITHUB_GIT_CREDENTIAL_HELPER = '!gh auth git-credential';
+const EMPTY_GIT_OBJECT_ID = '0000000000000000000000000000000000000000';
+const REPOSITORY_NODE_ID_QUERY = `query($owner: String!, $repository: String!) {
+  repository(owner: $owner, name: $repository) {
+    id
+  }
+}`;
+const DELETE_BRANCH_REF_MUTATION = `mutation($repositoryId: ID!, $refName: GitRefname!, $beforeOid: GitObjectID!, $afterOid: GitObjectID!) {
+  updateRefs(input: {
+    repositoryId: $repositoryId,
+    refUpdates: [{
+      name: $refName,
+      beforeOid: $beforeOid,
+      afterOid: $afterOid,
+      force: false
+    }]
+  }) {
+    clientMutationId
+  }
+}`;
 const INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 // コマンドの後の取り直しも間引かないと、gh pr のたびに全リポジトリを一斉に取るため、修正前の定期取得と同じ間隔までは間引く。
 const COMMAND_REFRESH_INACTIVE_INTERVAL_MS = 60_000;
@@ -601,33 +619,6 @@ function runGh(args, options = {}) {
       windowsHide: true,
       shell: false,
       env: ghEnvironment(options.environment),
-    }, (error, stdout, stderr) => {
-      if (error) {
-        if (stderr && error.stderr == null) error.stderr = stderr;
-        reject(error);
-      } else resolve(stdout);
-    });
-  });
-}
-
-function gitEnvironment(environment = process.env) {
-  return {
-    ...Object.fromEntries(Object.entries(environment).filter(([key]) => !isGithubCredentialEnvironmentVariable(key))),
-    GIT_TERMINAL_PROMPT: '0',
-    GCM_INTERACTIVE: 'never',
-  };
-}
-
-function runGit(args, options = {}) {
-  const execFileImpl = options.execFileImpl || execFile;
-  return new Promise((resolve, reject) => {
-    execFileImpl('git', args, {
-      encoding: 'utf8',
-      timeout: options.timeoutMs || 20_000,
-      maxBuffer: 4 * 1024 * 1024,
-      windowsHide: true,
-      shell: false,
-      env: gitEnvironment(options.environment),
     }, (error, stdout, stderr) => {
       if (error) {
         if (stderr && error.stderr == null) error.stderr = stderr;
@@ -1341,14 +1332,15 @@ class PullRequestTracker {
     this.dispatchQueuedGh();
   }
 
-  async execute(args, { priority = false } = {}) {
+  async execute(args, { priority = false, repositoryHint = null } = {}) {
     const apiPath = args.find(arg => arg.startsWith('repos/'));
     const operation = args[0] === 'pr' ? `pr.${args[1]}`
       : apiPath?.includes('/compare/') ? 'api.compare'
-      : args.includes('DELETE') ? 'api.delete-branch'
+      : (args.includes('DELETE') || args.some((arg) => arg.includes('updateRefs(input:'))) ? 'api.delete-branch'
       : apiPath?.includes('/git/ref/') ? 'api.branch-head'
       : apiPath?.includes('/pulls') ? 'api.pull-requests' : 'api.repository';
-    const repository = args.includes('-R') ? args[args.indexOf('-R') + 1] : args.find(arg => /^repos\/[^/]+\/[^/]+/.test(arg))?.split('/').slice(1, 3).join('/');
+    const repository = repositoryHint || (args.includes('-R') ? args[args.indexOf('-R') + 1]
+      : args.find(arg => /^repos\/[^/]+\/[^/]+/.test(arg))?.split('/').slice(1, 3).join('/'));
     const number = args[0] === 'pr' && /^\d+$/.test(args[2]) ? Number(args[2]) : undefined;
     const key = `${operation}:${repository || ''}:${number || ''}`;
     const queueRepositoryKey = repository ? repository.toLowerCase() : null;
@@ -1408,15 +1400,28 @@ class PullRequestTracker {
     if (!validRepositoryPart(owner) || !validRepositoryPart(repo) || !validBranchName(branch) ||
       !isCompleteCommitSha(expectedHeadRefOid)) throw new Error('invalid branch deletion');
     const repository = safeRepo(owner, repo);
-    const reference = `refs/heads/${branch}`;
-    return runGit([
-      '-c', 'credential.helper=',
-      '-c', `credential.helper=${GITHUB_GIT_CREDENTIAL_HELPER}`,
-      'push', '--porcelain', '--no-follow-tags', '--no-verify',
-      `--force-with-lease=${reference}:${expectedHeadRefOid.toLowerCase()}`,
-      `https://github.com/${repository}.git`,
-      `:${reference}`,
-    ], { execFileImpl: this.gitExecFileImpl });
+    const repositoryOutput = await this.execute([
+      'api', 'graphql',
+      '-f', `owner=${owner}`,
+      '-f', `repository=${repo}`,
+      '-f', `query=${REPOSITORY_NODE_ID_QUERY}`,
+    ], { priority: true, repositoryHint: repository });
+    const repositoryId = JSON.parse(repositoryOutput)?.data?.repository?.id;
+    if (typeof repositoryId !== 'string' || !repositoryId) throw new Error('repository ID lookup failed');
+
+    const mutationOutput = await this.execute([
+      'api', 'graphql',
+      '-f', `repositoryId=${repositoryId}`,
+      '-f', `refName=refs/heads/${branch}`,
+      '-f', `beforeOid=${expectedHeadRefOid.toLowerCase()}`,
+      '-f', `afterOid=${EMPTY_GIT_OBJECT_ID}`,
+      '-f', `query=${DELETE_BRANCH_REF_MUTATION}`,
+    ], { priority: true, repositoryHint: repository });
+    const mutationResult = JSON.parse(mutationOutput);
+    if (mutationResult.errors?.length || !mutationResult.data?.updateRefs) {
+      throw new Error('branch reference deletion failed');
+    }
+    return mutationOutput;
   }
 
   async inspectDisappearedPullRequests(owner, repo, repository, {

@@ -5,6 +5,8 @@ const { DecisionAnswerDelivery } = require('../src/server/decision-answers');
 const { runAnswerHook } = require('../src/hooks/answer');
 const { request, startTestServer, uiHeaders } = require('./support/server');
 
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 async function fixture(t, { sessionId = 'hook-delivery', provider = 'claude', answerNote = '最初の回答。', notify = true } = {}) {
   const now = Date.now();
   const state = new DashboardState();
@@ -51,6 +53,24 @@ function fetchToServer(server, {
       lostAcknowledgement = true;
       return { ok: response.status === 200, status: response.status, json: async () => { throw new Error('injected ACK JSON loss'); } };
     }
+    return { ok: response.status === 200, status: response.status, json: async () => payload };
+  };
+}
+
+function delayedFetchToServer(server, { deliveryDelayMs, acknowledgementDelayMs, attempts = [], calls = [] }) {
+  return async (url, init) => {
+    const body = JSON.parse(init.body);
+    attempts.push(body.action);
+    await delay(body.action === 'delivery-ack' ? acknowledgementDelayMs : deliveryDelayMs);
+    if (init.signal.aborted) throw new Error('request aborted');
+    const response = await request(server.info.port, {
+      method: init.method,
+      path: new URL(url).pathname,
+      headers: init.headers,
+      body: init.body,
+    });
+    const payload = response.status === 200 ? JSON.parse(response.body) : null;
+    calls.push({ body, response: payload, status: response.status });
     return { ok: response.status === 200, status: response.status, json: async () => payload };
   };
 }
@@ -140,6 +160,52 @@ test('ACK に失敗しても本文を取得済みのフック出力を返す', a
 
   assert.match(result.output.hookSpecificOutput.additionalContext, /最初の回答。/);
   assert.equal(calls.filter(({ body }) => body.action === 'delivery-ack').length, 1);
+  assert.equal(c.state.decisionFor(c.sessionId, c.decision.id).answer.deliveredAt, null);
+});
+
+test('遅い配信応答の後も追加 ACK 予算内で本文を返し、受領を記録する', async (t) => {
+  const c = await fixture(t, { notify: false });
+  const attempts = [];
+  const calls = [];
+  const result = await runAnswerHook({ session_id: c.sessionId, hook_event_name: 'UserPromptSubmit' }, {
+    homeDir: c.homeDir,
+    fetchImpl: delayedFetchToServer(c, { deliveryDelayMs: 850, acknowledgementDelayMs: 200, attempts, calls }),
+  });
+
+  assert.deepEqual(attempts, ['user-prompt-submit', 'delivery-ack']);
+  assert.equal(calls.filter(({ body }) => body.action === 'delivery-ack').length, 1);
+  assert.match(result.output.hookSpecificOutput.additionalContext, /最初の回答。/);
+  assert.ok(c.state.decisionFor(c.sessionId, c.decision.id).answer.deliveredAt);
+});
+
+test('配信応答が早くても ACK は応答受領後 300 ms で打ち切る', async (t) => {
+  const c = await fixture(t, { notify: false });
+  const attempts = [];
+  const calls = [];
+  const result = await runAnswerHook({ session_id: c.sessionId, hook_event_name: 'PostToolBatch' }, {
+    homeDir: c.homeDir,
+    fetchImpl: delayedFetchToServer(c, { deliveryDelayMs: 0, acknowledgementDelayMs: 400, attempts, calls }),
+  });
+
+  assert.deepEqual(attempts, ['post-tool-batch', 'delivery-ack']);
+  assert.equal(calls.filter(({ body }) => body.action === 'delivery-ack').length, 0);
+  assert.match(result.output.hookSpecificOutput.additionalContext, /最初の回答。/);
+  assert.equal(c.state.decisionFor(c.sessionId, c.decision.id).answer.deliveredAt, null);
+});
+
+test('呼び出し元が指定した絶対期限は ACK の追加予算で延長しない', async (t) => {
+  const c = await fixture(t, { notify: false });
+  const attempts = [];
+  const calls = [];
+  const result = await runAnswerHook({ session_id: c.sessionId, hook_event_name: 'UserPromptSubmit' }, {
+    homeDir: c.homeDir,
+    deadline: Date.now() + 1_000,
+    fetchImpl: delayedFetchToServer(c, { deliveryDelayMs: 850, acknowledgementDelayMs: 200, attempts, calls }),
+  });
+
+  assert.deepEqual(attempts, ['user-prompt-submit', 'delivery-ack']);
+  assert.equal(calls.filter(({ body }) => body.action === 'delivery-ack').length, 0);
+  assert.match(result.output.hookSpecificOutput.additionalContext, /最初の回答。/);
   assert.equal(c.state.decisionFor(c.sessionId, c.decision.id).answer.deliveredAt, null);
 });
 

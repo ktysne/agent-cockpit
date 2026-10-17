@@ -2786,7 +2786,7 @@ function renderPersistenceNote(state) {
   button.textContent = ui.busy ? '再保存中…' : '保存を再試行';
   const files = (state.persistence?.files || []).filter(file => file.errorCode);
   const details = files.map(file => `${file.fileName}: ${file.errorCode} (${new Date(file.lastFailureAt).toLocaleString('ja-JP')})`).join('、');
-  note.querySelector('span').textContent = ui.error || `変更は適用済みですが、保存できていません。自動で再試行します。終了や再起動をすると未保存の変更を失います。${details}`;
+  note.querySelector('span').textContent = ui.error || `現在の状態を保存できていません。自動で再試行します。終了や再起動をすると、未保存の状態を失うおそれがあります。${details}`;
   button.onclick = async () => {
     if (ui.busy) return;
     ui.busy = true;
@@ -2817,8 +2817,10 @@ function renderRestartNote(state) {
   if (note.hidden) { ui.phase = 'idle'; ui.error = ''; ui.view = ''; note.textContent = ''; return; }
   let text;
   const buttons = [];
-  if (state.persistence?.status === 'failed' && ui.phase !== 'waiting') {
-    text = '未保存の変更があるため、再起動できません。保存の警告が消えてから再起動してください。';
+  if (['pending', 'failed'].includes(state.persistence?.status) && ui.phase !== 'waiting') {
+    text = state.persistence.status === 'pending'
+      ? '変更を保存しています。保存が完了してから再起動してください。'
+      : '未保存の変更があるため、再起動できません。保存の警告が消えてから再起動してください。';
   } else if (ui.phase === 'waiting') {
     text = '常駐サーバーを再起動しています。';
   } else if (ui.phase === 'confirm' || ui.phase === 'sending') {
