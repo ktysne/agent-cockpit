@@ -74,7 +74,8 @@ test('close は走査完了を待ち、完了後の走査を開始しない', as
     beforeClose = state.snapshot();
     let closeFinished = false;
     closing = server.runtime.close().then(() => { closeFinished = true; });
-    await new Promise(resolve => setTimeout(resolve, 30));
+    await new Promise(setImmediate);
+    assert.equal(server.runtime.server.listening, true);
     assert.equal(closeFinished, false);
   } finally {
     release.resolve();

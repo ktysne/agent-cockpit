@@ -466,7 +466,7 @@ async function startServer(options = {}) {
     ...(options.answerDeliveryOptions || {}),
   });
   state.onSessionEndedByAbsence = (sessionId, endedAt) => {
-    clearSessionRuntimeCaches(sessionId);
+    endSessionRuntimeCaches(sessionId);
     answerDelivery.sessionEnded?.(sessionId, endedAt);
   };
   state.onSessionReopened = (sessionId) => answerDelivery.sessionReopened?.(sessionId);
@@ -489,13 +489,14 @@ async function startServer(options = {}) {
   const notificationReader = options.readTaskNotifications || readTaskNotifications;
   const modelTimers = new Map();
   const modelReads = new Map();
+  const finalModelReads = new Set();
   const observedModelSessions = new Map();
   const modelReader = options.readSessionModel || readSessionModel;
   const claudeSessionFileReader = options.readClaudeSessionFiles || listLiveSessionFiles;
   function scheduleSessionModel(event) {
     const sessionId = event.session_id;
     if (event.hook_event_name === 'SessionEnd') {
-      clearSessionRuntimeCaches(sessionId);
+      endSessionRuntimeCaches(sessionId);
       return;
     }
     const known = state.sessions.has(sessionId) || Boolean(state.sessionFileFor(sessionId));
@@ -507,15 +508,27 @@ async function startServer(options = {}) {
     if (modelTimers.has(sessionId)) return;
     const timer = setTimeout(async () => {
       await modelReads.get(sessionId);
-      if (modelTimers.get(sessionId) !== timer) return;
+      if (modelTimers.get(sessionId) !== timer) {
+        finalModelReads.delete(timer);
+        return;
+      }
       modelTimers.delete(sessionId);
-      if (closing || !state.sessionView(sessionId)) return;
-      const reading = (async () => {
+      const finalTimerRead = finalModelReads.delete(timer);
+      if (closing || (!state.sessionView(sessionId) && !finalTimerRead)) return;
+      let reading;
+      reading = (async () => {
         try {
-          const model = await modelReader(claudeHome, state.sessionFileFor(sessionId)?.cwd, sessionId);
-          if (!closing && state.sessionView(sessionId)) state.recordSessionModel(sessionId, model);
+          const modelCwd = state.sessionFileFor(sessionId)?.cwd ?? cwd;
+          const model = await modelReader(claudeHome, modelCwd, sessionId);
+          const finalRead = finalModelReads.delete(reading);
+          if (!closing && (state.sessionView(sessionId) || finalTimerRead || finalRead)) {
+            state.recordSessionModel(sessionId, model);
+          }
         } catch {}
-      })().finally(() => modelReads.delete(sessionId));
+      })().finally(() => {
+        finalModelReads.delete(reading);
+        if (modelReads.get(sessionId) === reading) modelReads.delete(sessionId);
+      });
       modelReads.set(sessionId, reading);
       await reading;
     }, options.sessionModelDelayMs ?? 500);
@@ -532,6 +545,13 @@ async function startServer(options = {}) {
   // 読めた出力は task-id ごとに使い回し、読めなかった通知は次の照合で未試行の通知の後に読む。
   // 読み取りの上限を、同じ通知の読み直しで使い切らないため。
   const taskOutputCache = new Map();
+  function endSessionRuntimeCaches(sessionId) {
+    const modelTimer = modelTimers.get(sessionId);
+    const modelRead = modelReads.get(sessionId);
+    if (modelTimer) finalModelReads.add(modelTimer);
+    if (modelRead) finalModelReads.add(modelRead);
+    clearSessionRuntimeCaches(sessionId);
+  }
   function clearSessionRuntimeCaches(sessionId) {
     taskOutputCache.delete(sessionId);
     observedModelSessions.delete(sessionId);
@@ -539,8 +559,10 @@ async function startServer(options = {}) {
     if (notificationTimer) clearTimeout(notificationTimer);
     notificationTimers.delete(sessionId);
     const modelTimer = modelTimers.get(sessionId);
-    if (modelTimer) clearTimeout(modelTimer);
-    modelTimers.delete(sessionId);
+    if (modelTimer && !finalModelReads.has(modelTimer)) {
+      clearTimeout(modelTimer);
+      modelTimers.delete(sessionId);
+    }
   }
   function clearEndedSessionRuntimeCaches(sessions) {
     const liveSessionIds = new Set(sessions.map((session) => session.session_id));
@@ -560,10 +582,16 @@ async function startServer(options = {}) {
     if (notificationReads.has(sessionId)) return notificationReads.get(sessionId);
     const cache = taskOutputCache.get(sessionId) || { outputs: new Map(), failed: new Set() };
     taskOutputCache.set(sessionId, cache);
+    let superseded = false;
+    const wasSuperseded = () => {
+      if (taskOutputCache.get(sessionId) === cache) return false;
+      superseded = true;
+      return true;
+    };
     const reading = (async () => {
       try {
         const notifications = await notificationReader(claudeHome, state.transcriptCwdFor(sessionId), sessionId);
-        if (closing || !needsTaskNotifications(sessionId) || taskOutputCache.get(sessionId) !== cache) return;
+        if (wasSuperseded() || closing || !needsTaskNotifications(sessionId)) return;
         if (['待機中(サブエージェント稼働中)', '中断'].includes(state.sessions.get(sessionId)?.status)) {
           state.applyTaskNotifications(sessionId, notifications);
         }
@@ -582,7 +610,7 @@ async function startServer(options = {}) {
               if (outputReads >= 8) continue;
               outputReads += 1;
               const output = await (options.readTaskOutput || readTaskOutputFileAsync)(notification.outputFile);
-              if (closing || !needsTaskNotifications(sessionId) || taskOutputCache.get(sessionId) !== cache) return;
+              if (wasSuperseded() || closing || !needsTaskNotifications(sessionId)) return;
               if (output === null) {
                 cache.failed.add(taskId);
                 continue;
@@ -594,7 +622,7 @@ async function startServer(options = {}) {
             if (cached === TASK_OUTPUT_MISSING) end.outputMissing = true;
             else end.codexOutput = cached;
           }
-          if (closing || !needsTaskNotifications(sessionId) || taskOutputCache.get(sessionId) !== cache) return;
+          if (wasSuperseded() || closing || !needsTaskNotifications(sessionId)) return;
           const runId = parseCodexRunLine(end.codexOutput?.runLine);
           if (candidates().some(agent => agent.backgroundTaskId === taskId || (!agent.backgroundTaskId && runId && agent.runId === runId))) {
             state.recordBackgroundTaskEnd(sessionId, end);
@@ -605,7 +633,7 @@ async function startServer(options = {}) {
     })().finally(() => {
       notificationReads.delete(sessionId);
       if (!needsTaskNotifications(sessionId)) taskOutputCache.delete(sessionId);
-      else if (taskOutputCache.get(sessionId) !== cache) scheduleTaskNotifications(sessionId);
+      else if (superseded) scheduleTaskNotifications(sessionId);
     });
     notificationReads.set(sessionId, reading);
     return reading;
@@ -804,6 +832,7 @@ async function startServer(options = {}) {
       notificationTimers.clear();
       for (const timer of modelTimers.values()) clearTimeout(timer);
       modelTimers.clear();
+      finalModelReads.clear();
       await Promise.all(modelReads.values());
       await Promise.all(notificationReads.values());
       await Promise.all(interruptReads.values());
