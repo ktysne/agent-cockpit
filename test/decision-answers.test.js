@@ -538,7 +538,7 @@ test('回答を受け取った質問は PostToolUse 後に解決済みになる'
   assert.equal(answered.state.decisionFor(answered.sessionId, answeredId).state, 'resolved');
 });
 
-test('PostToolBatch は回答文を追加コンテキストで一度だけ渡す', () => {
+test('PostToolBatch は受領 ACK まで回答を未配信として保つ', () => {
   const state = new DashboardState();
   const away = { snapshot: () => ({ enabled: true }) };
   const delivery = new DecisionAnswerDelivery({ state, away, now: () => NOW });
@@ -553,11 +553,11 @@ test('PostToolBatch は回答文を追加コンテキストで一度だけ渡す
   assert.match(context, new RegExp(`判断事項 ${decision.id}`));
   assert.match(context, /指示のみ/);
   assert.match(context, /期限付きで進める。/);
-  assert.ok(updated.answer.deliveredAt);
-  assert.equal(delivery.deliverPending('session-batch'), null);
+  assert.equal(updated.answer.deliveredAt, null);
+  assert.equal(delivery.deliverPending('session-batch'), context);
 });
 
-test('UserPromptSubmit は未反映の回答を最大 3 回差し込み、反映後は止める', () => {
+test('UserPromptSubmit は受領 ACK を最大 3 回記録し、反映後は止める', () => {
   const state = new DashboardState();
   const away = { snapshot: () => ({ enabled: false }) };
   const delivery = new DecisionAnswerDelivery({ state, away, now: () => NOW });
@@ -566,9 +566,15 @@ test('UserPromptSubmit は未反映の回答を最大 3 回差し込み、反映
   }, NOW);
   delivery.submitAnswer('session-prompt', decision.id, null, 'ログを残す。');
 
-  assert.match(delivery.deliverPrompt('session-prompt', 'prompt-1', NOW + 1), /ログを残す。/);
-  assert.match(delivery.deliverPrompt('session-prompt', 'prompt-2', NOW + 2), /ログを残す。/);
-  assert.match(delivery.deliverPrompt('session-prompt', 'prompt-3', NOW + 3), /ログを残す。/);
+  for (let index = 1; index <= 3; index += 1) {
+    const requestId = `prompt-${index}`;
+    assert.match(delivery.deliverPrompt('session-prompt', requestId, NOW + index), /ログを残す。/);
+    const record = delivery.recordHookDelivery({
+      sessionId: 'session-prompt', action: 'user-prompt-submit', requestId,
+      response: { hookOutput: { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'ログを残す。' } } },
+    });
+    assert.equal(delivery.acknowledgeHookDelivery('session-prompt', record.deliveryId), true);
+  }
   assert.equal(delivery.state.decisionFor('session-prompt', decision.id).answer.promptDeliveries, 3);
   assert.equal(delivery.deliverPrompt('session-prompt', 'prompt-4', NOW + 4), null);
 
@@ -595,7 +601,7 @@ test('後続の Stop、UserPromptSubmit、SessionEnd、親の終了で Stop の�
   assert.deepEqual(await delivery.waitForStopAnswer('session-parent', 0, false), { stderrText: null, done: true });
 });
 
-test('セッションファイル不在で終了すると質問待ち、通知、催促の記録を片付ける', async () => {
+test('セッションファイル不在で終了しても未受領通知を保持する', async () => {
   const clock = new FakeClock();
   let delivery;
   const state = new DashboardState({
@@ -627,7 +633,7 @@ test('セッションファイル不在で終了すると質問待ち、通知�
 
   assert.deepEqual(await waiting, { outcome: 'released' });
   assert.equal(delivery.askWaits.has(`${sessionId}\0${toolUseId}`), false);
-  assert.equal(delivery.sessionNotifications.has(sessionId), false);
+  assert.equal(delivery.sessionNotifications.has(sessionId), true);
   assert.equal(delivery.taskNudges.sessions.has(sessionId), false);
 });
 
@@ -1253,7 +1259,8 @@ test('PostToolBatch、Stop asyncRewake、MCP 更新が配信と反映の印を�
     title: '状態を決める。', context: '', state: 'provisional', options: [],
   }, NOW);
   runtime.answerDelivery.submitAnswer('session-update', updateDecision.id, null, '状態を固定する。');
-  assert.match(runtime.answerDelivery.deliverPending('session-update'), /状態を固定する。/);
+  const updateHook = await runAnswerHook({ hook_event_name: 'PostToolBatch', session_id: 'session-update' }, { homeDir });
+  assert.match(updateHook.output.hookSpecificOutput.additionalContext, /状態を固定する。/);
   const update = await request(runtime.info.port, {
     method: 'POST', path: '/api/sessions/session-update/plan',
     body: JSON.stringify({ kind: 'update_decision', id: updateDecision.id, state: 'resolved', chosen: [], note: '' }),

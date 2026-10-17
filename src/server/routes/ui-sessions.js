@@ -20,6 +20,10 @@ function createUiSessionRoutes(ctx) {
       jsonResponse(response, 409, { error: 'Session state is known' });
       return;
     }
+    if (state.providerForSession(sessionId) !== 'claude') {
+      jsonResponse(response, 422, { error: 'State estimation is not supported for this provider' });
+      return;
+    }
     const file = state.sessionFileFor(sessionId);
     const estimate = await estimateTranscript(claudeHome, file?.cwd, sessionId);
     const saved = state.saveEstimate(sessionId, estimate);
@@ -212,7 +216,7 @@ function createUiSessionRoutes(ctx) {
       return;
     }
     await state.waitForPersistence();
-    jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer } });
+    jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer }, persistence: state.persistenceStatus?.() });
   }
 
   return { handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks, handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer };

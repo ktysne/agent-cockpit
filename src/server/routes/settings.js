@@ -39,6 +39,11 @@ function createSettingsRoutes(ctx) {
     }
   }
 
+  async function handlePersistenceRetry({ response }) {
+    await Promise.all([state.flushPersistence(), away.flushPersistence(), routing.flush()]);
+    jsonResponse(response, 200, { persistence: state.persistenceStatus() });
+  }
+
   async function handleOpenUrl({ request, response, info, body }) {
     const externalUrl = body && typeof body === 'object' && !Array.isArray(body)
       ? normalizeExternalUrl(body.url)
@@ -75,7 +80,7 @@ function createSettingsRoutes(ctx) {
     }
   }
 
-  return { handleAwayState, handleAway, handleRouting, handleOpenUrl, handleUpdateCheck };
+  return { handleAwayState, handleAway, handleRouting, handleOpenUrl, handleUpdateCheck, handlePersistenceRetry };
 }
 
 module.exports = { createSettingsRoutes };
