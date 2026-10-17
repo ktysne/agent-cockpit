@@ -96,6 +96,8 @@ git show HEAD:<パス> | diff --strip-trailing-cr - <写し>
 | bridge | `.claude/gpt-agents/*.md` | `~/.claude/gpt-agents/` の同名のファイル |
 | ai-cross-review | `.claude/skills/cross-review/SKILL.md` | Claude のホーム、`~/.codex`、`~/.codex-subagent` の `skills/cross-review/SKILL.md` |
 
+ai-cross-review のグローバル SKILL は、checkout のルートで `node tools/cross-review.sync-all.js --global-skill --check` を実行しても確かめられる。
+
 checkout を更新する予定のツールは、更新先の内容で差分の見込みを示し、更新後に比べ直す(手順 5)。
 
 ai-cross-review は、レビューを回すリポジトリごとに `tools/cross-review.sync.json` で GitHub から直接取り込む形でも入っている。
