@@ -76,7 +76,7 @@ test('待つ質問ツールは Claude と同じく完了で回答内容不明と
   assert.deepEqual(decisions(state)[0].resolution, { chosen: [], note: '元の画面で回答済み(内容は不明)' });
 });
 
-test('同じ thread の質問より後の入力は、すぐ戻る質問を回答内容不明で閉じ、待つ質問を取り下げる', () => {
+test('同じ thread の質問より後の入力は、すぐ戻る質問を回答未確認で閉じ、待つ質問を取り下げる', () => {
   const state = new DashboardState();
   state.addEvent(event('PreToolUse'));
   state.addEvent(event('PreToolUse', { tool_use_id: 'question-2', tool_name: 'request_user_input',
@@ -88,7 +88,7 @@ test('同じ thread の質問より後の入力は、すぐ戻る質問を回答
   state.addEvent(event('UserPromptSubmit', {}, 300));
   const [asyncDecision, planDecision] = decisions(state);
   assert.equal(asyncDecision.state, 'resolved');
-  assert.deepEqual(asyncDecision.resolution, { chosen: [], note: '元の画面で回答済み(内容は不明)' });
+  assert.deepEqual(asyncDecision.resolution, { chosen: [], note: '次の入力を検出(回答は未確認)' });
   assert.equal(planDecision.state, 'withdrawn');
   assert.equal(planDecision.resolution, null);
   state.addEvent(event('Stop', {}, 400));
@@ -125,10 +125,10 @@ test('HTTP で受けた質問カードは在席中に回答できず、次の入
   assert.equal(jsonBody(answer).error, 'Decision cannot be answered now');
   await postEvent(event('UserPromptSubmit', {}, 200));
   assert.deepEqual((await snapshot()).sessions[0].decisions[0].resolution,
-    { chosen: [], note: '元の画面で回答済み(内容は不明)' });
+    { chosen: [], note: '次の入力を検出(回答は未確認)' });
 });
 
-test('常駐サーバーの再起動の前に出た質問も次の入力で回答内容不明として閉じる', async (t) => {
+test('常駐サーバーの再起動の前に出た質問も次の入力で回答未確認として閉じる', async (t) => {
   const homeDir = temporaryDirectory(t, 'agent-cockpit-codex-question-').directory;
   const now = Date.now();
   const state = await DashboardState.load(homeDir, { now });
@@ -139,5 +139,5 @@ test('常駐サーバーの再起動の前に出た質問も次の入力で回�
   restored.addEvent(event('UserPromptSubmit', {}, now + 20));
   const decision = restored.decisionFor('thread', 'question-1');
   assert.equal(decision.state, 'resolved');
-  assert.deepEqual(decision.resolution, { chosen: [], note: '元の画面で回答済み(内容は不明)' });
+  assert.deepEqual(decision.resolution, { chosen: [], note: '次の入力を検出(回答は未確認)' });
 });

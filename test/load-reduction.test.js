@@ -41,14 +41,21 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
   assert.match(functionSource(mock, 'renderProductMode'), /title="\$\{esc\(decisionCountTitle\(pend\)\)\}"/);
 });
 
-test('許可待ちは元のClaude画面で操作する案内を出し、質問にはセッションを示す', () => {
+test('元の画面で操作する許可待ちと質問は、操作先のアプリとセッションを 1 行で示す', () => {
   for (const [source, permissionFunction, questionFunction] of [
     [web, 'appendPermissionWaits', 'appendDecisionAnswer'],
     [mock, 'permCard', 'decisionCard'],
   ]) {
-    assert.match(functionSource(source, permissionFunction), /sessionDisplayName\(session\)/);
-    assert.match(functionSource(source, questionFunction), /sessionDisplayName\(session\)/);
-    assert.match(functionSource(source, permissionFunction), /このセッションを開いている Claude Code の画面で許可または拒否を選んでください。/);
+    assert.match(functionSource(source, permissionFunction), /originalScreenAction\([^)]*'許可または拒否を選んでください。'\)/);
+    assert.match(functionSource(source, questionFunction), /originalScreenAction\([^)]*'回答してください。'\)/);
+    assert.doesNotMatch(functionSource(source, permissionFunction), /このセッションを開いている/);
+    const context = vm.createContext({ sessionDisplayName: (session) => session.title });
+    vm.runInContext(`${functionSource(source, 'originalScreenAction')}\nthis.originalScreenAction = originalScreenAction;`, context);
+    const product = { name: 'shift-planner' };
+    assert.equal(context.originalScreenAction(product, { provider: 'claude', title: '週切り替え' }, '回答してください。'),
+      'Claude Code の shift-planner 「週切り替え」で回答してください。');
+    assert.equal(context.originalScreenAction(product, { provider: 'codex', title: '週切り替え' }, '回答してください。'),
+      'Codex の shift-planner 「週切り替え」で回答してください。');
     assert.doesNotMatch(functionSource(source, questionFunction), /デスクトップアプリの/);
     assert.match(functionSource(source, 'sessionBlock'), /session-context[\s\S]*sessionDisplayName\(session\)/);
   }

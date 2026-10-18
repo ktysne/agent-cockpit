@@ -2007,14 +2007,18 @@ const waitLabel = m => {
 };
 const isNew = (p, item) => !!item.isNew && !ui.seen.includes(p.id);
 
+function originalScreenAction(p, session, action) {
+  const app = session.provider === 'codex' ? 'Codex' : 'Claude Code';
+  return `${app} の ${p.name} 「${sessionDisplayName(session)}」で${action}`;
+}
+
 function permCard(p, session, x, withTag) {
   const long = isLongWait(x.waitMin);
   return `<article class="decision blocking perm ${long ? 'long-wait' : ''}">
     <div class="dhead">${sessionTag(p, session, withTag)}<span class="dtitle">${esc(x.who)}がツールの実行許可を待っている</span>
       <span class="chip danger">許可待ち</span>${waitLabel(x.waitMin)}</div>
     <div class="ctx">${esc(x.tool)}: <code>${esc(x.detail)}</code></div>
-    <div class="meta">${esc(p.name)} 「${esc(sessionDisplayName(session))}」</div>
-    <div class="meta">このセッションを開いている Claude Code の画面で許可または拒否を選んでください。</div>
+    <div class="meta">${esc(originalScreenAction(p, session, '許可または拒否を選んでください。'))}</div>
   </article>`;
 }
 const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => ageMinutes(a) - ageMinutes(b));
@@ -2101,7 +2105,7 @@ function decisionCard(p, session, d, withTag) {
         ${statusLine}
       </div>
       ${answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
-    </div>` : viaDialog ? `<div class="meta">${esc(p.name)} 「${esc(sessionDisplayName(session))}」</div>` : ''}
+    </div>` : viaDialog ? `<div class="meta">${esc(originalScreenAction(p, session, '回答してください。'))}</div>` : ''}
     ${!active && answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
     ${summary ? `<div class="decision-summary">${summary}</div>` : ''}</article>`;
 }
