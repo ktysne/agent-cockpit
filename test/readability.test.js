@@ -161,7 +161,7 @@ test('待ち時間と許可待ちは期間表示の形式を使う', () => {
     appendContextTags() {},
     sessionDisplayName: (session) => session.title || session.session_id,
   });
-  vm.runInContext(`${element}\n${badge}\n${durationLabel}\n${appendPermissionWaits}\nthis.appendPermissionWaits = appendPermissionWaits;`, context);
+  vm.runInContext(`${element}\n${badge}\n${durationLabel}\n${functionSource(web, 'originalScreenAction')}\n${appendPermissionWaits}\nthis.appendPermissionWaits = appendPermissionWaits;`, context);
 
   const startedAt = new Date(Date.now() - (14 * 60 + 3) * 60_000 - 1_000).toISOString();
   const body = new FakeElement('div');
@@ -187,7 +187,7 @@ test('許可確認中は作業状態だけに表示し、確認済みの待ち�
     isFilterShown: () => true, newestFirst: (items) => items, isLongWait: () => true,
     appendContextTags() {}, sessionDisplayName: () => '音源の編集',
   });
-  const helpers = ['element', 'badge', 'durationLabel', 'shownPermissions', 'appendPermissionWaits', 'countJudgments', 'activityStatus'];
+  const helpers = ['element', 'badge', 'durationLabel', 'shownPermissions', 'originalScreenAction', 'appendPermissionWaits', 'countJudgments', 'activityStatus'];
   vm.runInContext(helpers.map((name) => functionSource(web, name)).join('\n'), context);
   for (const [phase, count, agent_id] of [['checking', 0], ['checking', 0, 'worker'], [undefined, 0], ['prompted', 1]]) {
     const session = { status: phase === 'prompted' ? '許可待ち' : '許可確認中', decisions: [], agents: [],
@@ -196,7 +196,7 @@ test('許可確認中は作業状態だけに表示し、確認済みの待ち�
     context.appendPermissionWaits(body, session, { name: 'rec-studio' });
     assert.equal(context.countJudgments([session]).permission, count);
     assert.equal(body.children.length, count);
-    if (count) assert.match(textOf(body), /Claude Code の画面で許可または拒否/);
+    if (count) assert.match(textOf(body), /Claude Code の rec-studio 「音源の編集」で許可または拒否を選んでください。/);
     else if (phase === 'checking') assert.equal(context.activityStatus(session).label, `${agent_id ? 'サブエージェントが' : ''}実行許可を確認中`);
   }
 });

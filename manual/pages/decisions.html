@@ -13,7 +13,7 @@
   </ul>
 
   <h2 id="decisions-card">判断事項のカード</h2>
-  <figure class="guide-map" id="decisions-card-map" data-shot="decisions-card/dialog" data-alt="止めて待っている判断事項のカード。見出しに、新着の印、題、止めて待っているの札、待ち時間がある。その下に背景の説明と、推奨の札が付いた選択肢を含む 2 つの選択肢が並び、最下段にプロダクト名とセッション名がある">
+  <figure class="guide-map" id="decisions-card-map" data-shot="decisions-card/dialog" data-alt="止めて待っている判断事項のカード。見出しに、新着の印、題、止めて待っているの札、待ち時間がある。その下に背景の説明と、推奨の札が付いた選択肢を含む 2 つの選択肢が並び、最下段に、回答するアプリ、プロダクト名、セッション名を示す案内がある">
     <ol class="guide-list">
       <li data-part="card.new"><b><span class="ui">新着</span> の印</b>：そのプロダクトを最後に既読にした時刻より後に作られた判断事項に付きます。既読にすると外れます(<a href="away.html#away-since-seen">前回見てから</a>)。</li>
       <li data-part="card.title"><b>題</b>：質問の文、または記録した判断の題です。</li>
@@ -22,7 +22,7 @@
       <li data-part="card.context"><b>背景</b>：セッションが書いた、判断が必要になった状況の説明です。質問のツールから作った判断事項には、背景がありません。</li>
       <li data-part="card.options"><b>選択肢</b>：選択肢の名前と説明です。複数の質問を持つ判断事項では、質問ごとに並びます。複数選択の質問には、<span class="ui">複数選択できます。</span> と出ます。</li>
       <li data-part="card.recommended" data-place="left"><b><span class="ui">推奨</span> の札</b>：推奨と判定した選択肢に付きます(<a href="#decisions-recommended">推奨の判定</a>)。</li>
-      <li data-part="card.meta" data-place="right"><b>プロダクトとセッション</b>：どのセッションの判断事項かを示します。</li>
+      <li data-part="card.meta" data-place="right"><b>回答する場所</b>：回答するアプリと、プロダクトとセッションを示します。</li>
     </ol>
   </figure>
   <p>カードの左端の色は、状態を示します。
@@ -93,7 +93,7 @@
   セッションが記録した判断は、セッションが解決済みに更新したときに <span class="ui">解決済み</span> になります。</p>
 
   <p>Codex の在席中の質問は、Codex の元の画面で答えます。
-  すぐ戻る質問は、その会話への次の入力で <span class="ui">解決済み</span> になり、「元の画面で回答済み(内容は不明)」と出ます。
+  すぐ戻る質問は、その会話への次の入力で <span class="ui">解決済み</span> になり、「次の入力を検出(回答は未確認)」と出ます。
   質問と無関係な入力でも閉じます。
   待つ質問は結果が届いたときに解決済みになり、結果が届かないまま次の入力があると <span class="ui">取り下げ</span> になります。</p>
 
