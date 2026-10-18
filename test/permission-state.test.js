@@ -71,11 +71,15 @@ test('別のツールが完了しても実行中ツールの承認通知を表�
 });
 
 test('次の承認通知に一意の対象があれば拒否済みまたは対象不明の待ちを置き換える', async (t) => {
-  for (const withPreviousTool of [true, false]) {
+  for (const previousTools of [0, 1, 2]) {
     const c = await permissionServer(t);
-    if (withPreviousTool) await c.event('PreToolUse', { tool_name: 'Bash', tool_use_id: 'rejected' });
+    for (let i = 0; i < previousTools; i++) await c.event('PreToolUse', { tool_name: 'Bash', tool_use_id: `rejected-${i}` });
     await c.event('Notification', { notification_type: 'permission_prompt' });
     await c.event('PostToolBatch');
+    if (previousTools > 1) {
+      assert.deepEqual((await c.session()).permissionWaits, []);
+      assert.deepEqual((await c.tray()).permissionKeys, []);
+    }
     await c.event('PreToolUse', { tool_name: 'Bash', tool_use_id: 'next', summary: 'npm test' });
     await c.event('Notification', { notification_type: 'permission_prompt' });
 
@@ -88,6 +92,47 @@ test('次の承認通知に一意の対象があれば拒否済みまたは対�
     assert.deepEqual((await c.session()).permissionWaits, []);
     assert.deepEqual((await c.tray()).permissionKeys, []);
   }
+});
+
+test('対象不明の承認通知は候補の一部が完了すると到着順によらず確認中へ戻す', async (t) => {
+  for (const [completion, delayed] of [['PostToolUse', false], ['PostToolUseFailure', true]]) {
+    const c = await permissionServer(t);
+    await c.event('PreToolUse', { hookAt: 100, tool_name: 'Bash', tool_use_id: 'first' });
+    await c.event('PreToolUse', { hookAt: 200, tool_name: 'Bash', tool_use_id: 'second' });
+    const notify = () => c.event('Notification', { hookAt: 250, notification_type: 'permission_prompt' });
+    if (!delayed) await notify();
+    await c.event(completion, { hookAt: 300, tool_name: 'Bash', tool_use_id: 'first' });
+    if (delayed) await notify();
+
+    const session = await c.session();
+    assert.equal(session.status, '許可確認中');
+    assert.equal(session.permissionWaits.length, 1);
+    assert.equal(session.permissionWaits[0].phase, 'checking');
+    assert.equal(session.permissionWaits[0].target_tool_use_id, null);
+    assert.equal(session.permissionWaits[0].candidate_tool_use_ids, undefined);
+    assert.deepEqual((await c.tray()).permissionKeys, []);
+    await c.event('PreToolUse', { hookAt: 400, tool_name: 'Bash', tool_use_id: 'later' });
+    await c.event('PostToolUse', { hookAt: 500, tool_name: 'Bash', tool_use_id: 'second' });
+    assert.deepEqual((await c.session()).permissionWaits, []);
+  }
+});
+
+test('確認中へ戻した通知は新しい承認通知で現在の候補へ置き換える', async (t) => {
+  const c = await permissionServer(t);
+  await c.event('PreToolUse', { tool_name: 'Bash', tool_use_id: 'first' });
+  await c.event('PreToolUse', { tool_name: 'Bash', tool_use_id: 'second' });
+  await c.event('Notification', { notification_type: 'permission_prompt' });
+  await c.event('PostToolUse', { tool_name: 'Bash', tool_use_id: 'first' });
+  await c.event('Notification', { notification_type: 'permission_prompt', message: '実行を許可してください' });
+
+  const session = await c.session();
+  assert.equal(session.permissionWaits.length, 1);
+  assert.equal(session.permissionWaits[0].phase, 'prompted');
+  assert.equal(session.permissionWaits[0].target_tool_use_id, 'second');
+  assert.equal(session.permissionWaits[0].startedAt, session.lastActivityAt);
+  assert.equal((await c.tray()).permissionKeys.length, 1);
+  await c.event('PostToolUse', { tool_name: 'Bash', tool_use_id: 'second' });
+  assert.deepEqual((await c.session()).permissionWaits, []);
 });
 
 test('並列の承認通知は対象を断定せず、同名の別ツールと別エージェントの確認を維持する', async (t) => {
@@ -104,8 +149,14 @@ test('並列の承認通知は対象を断定せず、同名の別ツールと�
   assert.equal(prompted.tool_name, '');
   assert.equal((await c.tray()).permissionKeys.length, 1);
 
+  await c.event('PreToolUse', { tool_name: 'Bash', tool_use_id: 'later' });
+  await c.event('PostToolUse', { tool_name: 'Bash', tool_use_id: 'later' });
+  assert.equal((await c.tray()).permissionKeys.length, 1);
   await c.event('PostToolUse', { tool_name: 'Bash', tool_use_id: 'second' });
-  assert.deepEqual((await c.session()).permissionWaits.filter(wait => wait.phase === 'checking').map(wait => wait.target_tool_use_id), ['first', 'child']);
+  assert.deepEqual((await c.session()).permissionWaits.map(wait => [wait.target_tool_use_id, wait.phase]), [
+    ['first', 'checking'], ['child', 'checking'], [null, 'checking'],
+  ]);
+  assert.deepEqual((await c.tray()).permissionKeys, []);
   await c.event('PostToolUseFailure', { tool_name: 'Bash', tool_use_id: 'first' });
   assert.deepEqual((await c.session()).permissionWaits.map(wait => wait.agent_id), ['worker']);
   assert.deepEqual((await c.tray()).permissionKeys, []);

@@ -610,7 +610,7 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{tool_use_id: string, tool_name: string, summary: string, description: string, agent_id: string|null, startedAt: string}} SessionTool */
 
-/** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string, phase: 'checking'|'prompted'}} PermissionWait */
+/** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string, phase: 'checking'|'prompted', candidate_tool_use_ids?: string[]}} PermissionWait */
 
 /** @typedef {ReturnType<typeof agentModelFromDefinition> & {
  * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
@@ -805,7 +805,7 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
  * @param {DerivedSession} session
  */
 function sessionSnapshot(session) {
-  const permissionWaits = session.permissionWaits.map(({ agent_id, ...wait }) => ({ agent_id, ...wait }));
+  const permissionWaits = session.permissionWaits.map(({ candidate_tool_use_ids, ...wait }) => wait);
   const agents = session.agents
     .filter((agent) => !(
       agent.isCodex && agent.parent_agent_id && session.agents.some((parent) => parent.agent_id === agent.parent_agent_id)
@@ -1205,6 +1205,17 @@ function applySubagentStop(session, event) {
   }
 }
 
+function retainPermissionCandidates(wait, tools) {
+  const remaining = wait.candidate_tool_use_ids.filter((id) => tools.some((tool) => tool.tool_use_id === id));
+  if (remaining.length !== wait.candidate_tool_use_ids.length) {
+    wait.candidate_tool_use_ids = remaining;
+    wait.phase = 'checking';
+    wait.notification_type = '';
+    wait.message = '';
+  }
+  return remaining.length > 0;
+}
+
 /**
  * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & SessionPermissions & Pick<SessionIdentity, 'stopped'|'turnKnown'>} session
  */
@@ -1228,6 +1239,7 @@ function applyToolCompletion(session, event) {
     session.permissionWaits = session.permissionWaits.filter((wait) => {
       if (!sameAgent(wait.agent_id, agentId)) return true;
       if (wait.target_tool_use_id) return wait.target_tool_use_id !== toolUseId;
+      if (wait.candidate_tool_use_ids) return retainPermissionCandidates(wait, session.tools);
       if (wait.tool_name && wait.tool_name !== event.tool_name) return true;
       return session.tools.some((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent'
         && (!wait.tool_name || tool.tool_name === wait.tool_name));
@@ -1253,8 +1265,12 @@ function applyToolBatch(session, event) {
   if (eventName === 'PostToolBatch') {
     const startedBeforeBatch = (item) => sameAgent(item.agent_id, agentId) && Date.parse(item.startedAt) < event.hookAt;
     session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
-    // メインの許可待ちは Stop と UserPromptSubmit で消す。並行する背景のサブエージェントの許可待ちを巻き込まないため。
-    if (agentId) session.permissionWaits = session.permissionWaits.filter((wait) => !startedBeforeBatch(wait));
+    // メインの待ちの一括解除は、背景ツールの区切りで並列の待ちを巻き込むため避ける。
+    session.permissionWaits = session.permissionWaits.filter((wait) => {
+      if (!sameAgent(wait.agent_id, agentId)) return true;
+      if (agentId && startedBeforeBatch(wait)) return false;
+      return !wait.candidate_tool_use_ids || retainPermissionCandidates(wait, session.tools);
+    });
   }
 }
 
@@ -1272,7 +1288,8 @@ function applyPermissionPrompt(session, event) {
   const tools = session.tools.filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent');
   if (prompted) {
     session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId)
-      || !wait.target_tool_use_id || tools.some((tool) => tool.tool_use_id === wait.target_tool_use_id));
+      || (!wait.candidate_tool_use_ids
+        && (!wait.target_tool_use_id || tools.some((tool) => tool.tool_use_id === wait.target_tool_use_id))));
   }
   let candidates = requested ? tools.filter((tool) => tool.tool_name === event.tool_name) : tools;
   if (requested && candidates.length > 1) {
@@ -1285,6 +1302,9 @@ function applyPermissionPrompt(session, event) {
     waits[0].notification_type = event.notification_type;
     waits[0].message = event.message || '';
     waits[0].startedAt = isoTime(event.hookAt);
+    if (!waits[0].target_tool_use_id && candidates.length) {
+      waits[0].candidate_tool_use_ids = candidates.map((tool) => tool.tool_use_id);
+    }
     return;
   }
   if (prompted && !waits.length && !candidates.length && session.permissionBoundaries.has(agentId)) return;
@@ -1298,6 +1318,7 @@ function applyPermissionPrompt(session, event) {
     message: event.message || '',
     startedAt: isoTime(event.hookAt),
     phase: requested ? 'checking' : 'prompted',
+    ...(prompted && !target && candidates.length ? { candidate_tool_use_ids: candidates.map((tool) => tool.tool_use_id) } : {}),
   };
   session.permissionWaits = session.permissionWaits.filter((item) => !(
     sameAgent(item.agent_id, agentId) && ((prompted && item.phase === 'prompted') || (target

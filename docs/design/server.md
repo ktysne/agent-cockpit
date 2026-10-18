@@ -499,11 +499,12 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 ## 許可待ち
 
 - `PermissionRequest` は実行前の許可確認を示し、人間が操作できる画面の表示は保証しない。`permissionWaits` に `phase: checking` として保持し、セッションの作業状態に「実行許可を確認中」と表示する。
-- Codex の標準登録は `PermissionRequest` を送る。Claude Code の標準登録にはこのフックがないため、`Notification` から許可待ちを表示する。Claude Code で「実行許可を確認中」が出るのは、`PermissionRequest` を追加登録した環境である。
+- Codex の標準登録は `PermissionRequest` を送る。Claude Code の標準登録にはこのフックがないため、`Notification` から許可待ちを表示する。Claude Code では、`PermissionRequest` を追加登録した場合と、通知後に許可待ちの継続を確認できなくなった場合に「実行許可を確認中」を表示する。
 - Claude Code の `Notification` のうち `permission_prompt` を受けたとき、対応する有効な待ちを `phase: prompted` とする。候補のツールが一意なら対象へ結び付け、複数なら対象を断定せず確認済み通知を表示する。時間の経過だけでは `prompted` にしない。
+- 候補が複数ある通知は、通知時点の候補集合を内部に保持する。その一部が完了または失敗したら、許可待ちが続くと断定できないため `checking` に戻す。判断欄と通知からは外し、作業状態の表示を保つ。候補が一つに減っても自動では対象を確定せず、新たな `permission_prompt` を受けたときだけ `prompted` に戻す。
 - `prompted` だけを判断欄、許可待ちの件数、タブの件数、トレイの通知に含める。カードには対象のセッションと、Claude Code の画面で許可または拒否を選ぶ案内を表示する。ダッシュボードに承認操作は設けない。
 - Codex は利用者が操作する許可画面の表示を観測する経路がないため、許可要求を `checking` のまま扱う。保存済みの状態に `phase` がない場合も、人間の判断待ちには含めない。
-- 解消するのは、同じ対象の PostToolUse、PostToolUseFailure、UserPromptSubmit、Stop を受けたときである。
+- 対象を特定した許可待ちは、同じ対象の PostToolUse、PostToolUseFailure、UserPromptSubmit、Stop を受けたときに解消する。
 - 完了、停止、新しい入力の後に届いた通知は、既存の要求も実行中のツールの候補もなければ待ちを再生成しない。
 
 ## タスクと判断事項
