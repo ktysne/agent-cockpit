@@ -20,6 +20,7 @@ function element(tagName, className = '', text = '') {
 function context(overrides = {}) {
   const result = pageContext(web, {
     element, worktreeActionStatus: new Map(), worktreeActionInFlight: new Set(),
+    TERMINAL_LABELS: { auto: '自動', 'windows-terminal': 'Windows Terminal', pwsh: 'PowerShell 7', powershell: 'Windows PowerShell', cmd: 'コマンドプロンプト' },
     absoluteTimeLabel: () => '12:00', shownActiveDecisions: session => session.decisions || [],
     ...overrides,
   });
@@ -125,7 +126,7 @@ test('画面は起動依頼と端末には ID だけを送り、コピーはブ�
   const requests = [];
   const copied = [];
   const live = context({ lastState: null, refresh: async () => {}, navigator: { clipboard: { writeText: async text => copied.push(text) } },
-    postUiAction: async (url, body) => { requests.push({ url, body }); return { ok: true }; } });
+    postUiAction: async (url, body) => { requests.push({ url, body }); return { ok: true, json: async () => ({ terminal: 'powershell' }) }; } });
   await live.runWorktreeAction('launch', session, decision);
   await live.runWorktreeAction('terminal', session, decision);
   await live.runWorktreeAction('terminal', session, null);
@@ -137,4 +138,11 @@ test('画面は起動依頼と端末には ID だけを送り、コピーはブ�
     { url: '/api/worktree/terminal', body: { session_id: session.session_id } },
   ]);
   assert.deepEqual(copied, [session.worktree.path, 'npm start']);
+});
+
+test('ターミナルを開いた成功表示に応答の端末名を使う', async () => {
+  const { session, decision } = fixture();
+  const live = context({ lastState: null, postUiAction: async () => ({ ok: true, json: async () => ({ terminal: 'windows-terminal' }) }) });
+  await live.runWorktreeAction('terminal', session, decision);
+  assert.equal(live.worktreeActionStatus.get(decision.id), 'Windows Terminal で開きました');
 });

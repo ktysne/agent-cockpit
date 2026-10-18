@@ -499,6 +499,17 @@ h3.sub .count { font-weight: normal; }
     </div>
     <p class="meta" id="settings-gh-concurrency-limit-note">プルリクエストの取得に使う gh を同時に動かす数。大きいほど一覧の更新が速く、PC と GitHub API への負荷が増える。変えた値は次に起動する gh から効く。</p>
     <div class="settings-theme-row">
+      <label for="settings-terminal-select">「ターミナルで開く」で使う端末</label>
+      <select id="settings-terminal-select" name="terminal" aria-describedby="settings-terminal-note">
+        <option value="auto">自動</option>
+        <option value="windows-terminal">Windows Terminal</option>
+        <option value="pwsh">PowerShell 7</option>
+        <option value="powershell">Windows PowerShell</option>
+        <option value="cmd">コマンドプロンプト</option>
+      </select>
+    </div>
+    <p class="meta" id="settings-terminal-note">自動では、Windows Terminal、PowerShell 7、Windows PowerShell の順に、見つかったものを使う。選んだ端末が見つからないときは開かずに知らせる。</p>
+    <div class="settings-theme-row">
       <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
       <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
     </div>
@@ -570,6 +581,8 @@ const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer
 const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
 const ghConcurrencyLimitInput = document.getElementById('settings-gh-concurrency-limit');
 const ghConcurrencyLimitError = document.getElementById('settings-gh-concurrency-limit-error');
+const terminalSelect = document.getElementById('settings-terminal-select');
+const TERMINAL_LABELS = Object.freeze({ auto: '自動', 'windows-terminal': 'Windows Terminal', pwsh: 'PowerShell 7', powershell: 'Windows PowerShell', cmd: 'コマンドプロンプト' });
 const DISPLAY_INTEGER_SETTINGS = [
   { key: 'longWaitMinutes', input: longWaitMinutesInput, error: longWaitMinutesError, min: 1, max: 120, unit: '分', default: DEFAULT_LONG_WAIT_MINUTES },
   { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: awayAnswerWaitMinutesError, min: 1, max: 30, unit: '分', default: DEFAULT_AWAY_ANSWER_WAIT_MINUTES },
@@ -784,6 +797,7 @@ function normalizeDisplayPreferences(value) {
     importAppTasksAsked: value?.importAppTasksAsked === true,
     diagnosticsLevel: ['silent', 'error', 'warn', 'info', 'debug'].includes(value?.diagnosticsLevel) ? value.diagnosticsLevel : 'info',
     mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value?.mergeableCondition) ? value.mergeableCondition : 'cross-review',
+    terminal: Object.hasOwn(TERMINAL_LABELS, value?.terminal) ? value.terminal : 'auto',
   };
 }
 
@@ -816,6 +830,7 @@ function renderDisplaySettings() {
     // 初回の描画は診断ログの部品の宣言より前に走るので、ダイアログは要素から辿る。
     if (diagnosticsLevelSelect.closest('dialog').open) renderDiagnosticEntries();
   }
+  if (document.activeElement !== terminalSelect) terminalSelect.value = displayPreferences.terminal;
 }
 
 function setDisplaySettingInput(input, value) {
@@ -1089,6 +1104,12 @@ for (const input of mergeableConditionInputs) {
     if (lastState) render(lastState);
   });
 }
+function changeTerminalPreference() {
+  if (!Object.hasOwn(TERMINAL_LABELS, terminalSelect.value)) return;
+  void saveDisplayPreferences({ terminal: terminalSelect.value }, { key: 'terminal', input: terminalSelect });
+  if (lastState) render(lastState);
+}
+terminalSelect.addEventListener('change', changeTerminalPreference);
 
 // 表示に残った古い要素や一時的な状態を確実に捨てるため、差分の描き直しではなくページごと読み込み直す。
 // 下書きはメモリーにしか無いので、書きかけがあるときは案内の操作で消してよいかを確かめる。
@@ -3287,6 +3308,7 @@ async function runWorktreeAction(action, session, decision, text) {
   worktreeActionStatus.delete(key);
   if (lastState) render(lastState);
   try {
+    let terminalLabel;
     if (action === 'copy' || action === 'step') await navigator.clipboard.writeText(text);
     else {
       const response = await postUiAction(action === 'launch' ? '/api/verify/launch' : '/api/worktree/terminal',
@@ -3296,9 +3318,13 @@ async function runWorktreeAction(action, session, decision, text) {
         const result = await response.json();
         throw new Error(result.error || '操作できませんでした');
       }
+      if (action === 'terminal') {
+        const result = await response.json();
+        terminalLabel = TERMINAL_LABELS[result.terminal] || TERMINAL_LABELS.auto;
+      }
       if (action === 'launch') await refresh();
     }
-    const messages = { terminal: 'ターミナルを開きました', copy: 'パスをコピーしました', step: 'コマンドをコピーしました' };
+    const messages = { terminal: `${terminalLabel} で開きました`, copy: 'パスをコピーしました', step: 'コマンドをコピーしました' };
     worktreeActionStatus.set(key, messages[action] || '');
   } catch (error) {
     worktreeActionStatus.set(key, action === 'copy' || action === 'step' ? 'コピーできませんでした。文字列を選択してコピーしてください' : error.message);

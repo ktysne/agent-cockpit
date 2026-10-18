@@ -208,7 +208,9 @@ test('ターミナルは絶対パスの wt.exe に root だけを渡し、連打
       queueMicrotask(() => child.emit('spawn'));
       return child;
     } });
-  assert.equal((await s.post('/api/worktree/terminal', { session_id: 'linked-session' })).status, 200);
+  const opened = await s.post('/api/worktree/terminal', { session_id: 'linked-session' });
+  assert.equal(opened.status, 200);
+  assert.equal(jsonBody(opened).terminal, 'windows-terminal');
   assert.deepEqual(calls, [{ file: executable, args: ['-w', 'new', '-d', root], options: { detached: true, windowsHide: true, shell: false, stdio: 'ignore' } }]);
   assert.equal((await s.post('/api/worktree/terminal', { session_id: 'linked-session' })).status, 429);
 });
@@ -239,7 +241,7 @@ test('wt.exe が無ければ絶対パスの cmd と PowerShell で worktree を�
     options: { detached: true, windowsHide: true, shell: false, stdio: 'ignore', cwd: root, windowsVerbatimArguments: true } }]);
 });
 
-test('ターミナルが使えない OS と wt.exe のない環境は理由付きの 4xx を返す', async t => {
+test('Windows 以外と自動候補が無い環境は理由付きの 4xx を返す', async t => {
   const s = await setup(t);
   await linkedWorktree(s);
   const tracker = s.runtime.state.worktreeInfo;
@@ -248,10 +250,150 @@ test('ターミナルが使えない OS と wt.exe のない環境は理由付�
   assert.equal(response.status, 400);
   assert.match(jsonBody(response).error, /Windows/);
   tracker.platform = 'win32';
-  tracker.environment = { LOCALAPPDATA: path.join(s.homeDir, 'no-terminal') };
+  const systemRoot = path.join(s.homeDir, 'cmd-only-windows');
+  const cmd = path.join(systemRoot, 'System32', 'cmd.exe');
+  await fs.mkdir(path.dirname(cmd), { recursive: true });
+  await fs.writeFile(cmd, '');
+  tracker.environment = { LOCALAPPDATA: path.join(s.homeDir, 'no-terminal'), SystemRoot: systemRoot };
   response = await s.post('/api/worktree/terminal', { session_id: 'linked-session' });
   assert.equal(response.status, 404);
   assert.match(jsonBody(response).error, /wt.exe/);
+});
+
+test('各端末設定は選んだ絶対パスを使い、worktree の作業ディレクトリで開く', async t => {
+  const calls = [];
+  const s = await setup(t);
+  const root = await linkedWorktree(s);
+  const tracker = s.runtime.state.worktreeInfo;
+  const localAppData = path.join(s.homeDir, 'terminal-local');
+  const programFiles = path.join(s.homeDir, 'terminal-program-files');
+  const systemRoot = path.join(s.homeDir, 'terminal-windows');
+  const wt = path.join(localAppData, 'Microsoft', 'WindowsApps', 'wt.exe');
+  const pwsh = path.join(programFiles, 'PowerShell', '7', 'pwsh.exe');
+  const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const cmd = path.join(systemRoot, 'System32', 'cmd.exe');
+  for (const file of [wt, pwsh, powershell, cmd]) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '');
+  }
+  Object.assign(tracker, { platform: 'win32', spawn(file, args, options) {
+    calls.push({ file, args, options });
+    const child = new EventEmitter();
+    child.unref = () => {};
+    queueMicrotask(() => child.emit('spawn'));
+    return child;
+  } });
+  const shellOptions = { detached: true, windowsHide: true, shell: false, stdio: 'ignore', cwd: root, windowsVerbatimArguments: true };
+  const cases = [
+    { preference: 'auto', terminal: 'windows-terminal', environment: { LOCALAPPDATA: localAppData, ProgramFiles: programFiles, SystemRoot: systemRoot },
+      expected: { file: wt, args: ['-w', 'new', '-d', root], options: { detached: true, windowsHide: true, shell: false, stdio: 'ignore' } } },
+    { preference: 'windows-terminal', terminal: 'windows-terminal', environment: { LOCALAPPDATA: localAppData },
+      expected: { file: wt, args: ['-w', 'new', '-d', root], options: { detached: true, windowsHide: true, shell: false, stdio: 'ignore' } } },
+    { preference: 'pwsh', terminal: 'pwsh', environment: { ProgramFiles: programFiles, SystemRoot: systemRoot },
+      expected: { file: cmd, args: [`/d /c start "worktree" "${pwsh}" -NoExit`], options: shellOptions } },
+    { preference: 'powershell', terminal: 'powershell', environment: { SystemRoot: systemRoot },
+      expected: { file: cmd, args: [`/d /c start "worktree" "${powershell}" -NoExit`], options: shellOptions } },
+    { preference: 'cmd', terminal: 'cmd', environment: { SystemRoot: systemRoot },
+      expected: { file: cmd, args: [`/d /c start "worktree" "${cmd}"`], options: shellOptions } },
+  ];
+
+  for (const { preference, terminal, environment, expected } of cases) {
+    tracker.environment = environment;
+    tracker.terminalRequests.clear();
+    assert.equal((await s.post('/api/display', { terminal: preference })).status, 200);
+    const response = await s.post('/api/worktree/terminal', { session_id: 'linked-session' });
+    assert.equal(response.status, 200, preference);
+    assert.equal(jsonBody(response).terminal, terminal, preference);
+    assert.deepEqual(calls.at(-1), expected, preference);
+  }
+});
+
+test('PowerShell 7 は PATH の絶対パスから見つける', async t => {
+  const calls = [];
+  const s = await setup(t);
+  const root = await linkedWorktree(s);
+  const systemRoot = path.join(s.homeDir, 'path-windows');
+  const pathDirectory = path.join(s.homeDir, 'path-powershell');
+  const executable = path.join(pathDirectory, 'pwsh.exe');
+  const cmd = path.join(systemRoot, 'System32', 'cmd.exe');
+  for (const file of [executable, cmd]) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '');
+  }
+  const tracker = s.runtime.state.worktreeInfo;
+  Object.assign(tracker, { platform: 'win32', environment: { ProgramFiles: path.join(s.homeDir, 'missing'), SystemRoot: systemRoot,
+    PATH: pathDirectory }, spawn(file, args, options) {
+    calls.push({ file, args, options });
+    const child = new EventEmitter();
+    child.unref = () => {};
+    queueMicrotask(() => child.emit('spawn'));
+    return child;
+  } });
+  await s.post('/api/display', { terminal: 'pwsh' });
+  const response = await s.post('/api/worktree/terminal', { session_id: 'linked-session' });
+  assert.equal(response.status, 200);
+  assert.equal(jsonBody(response).terminal, 'pwsh');
+  assert.deepEqual(calls[0], { file: cmd, args: [`/d /c start "worktree" "${executable}" -NoExit`],
+    options: { detached: true, windowsHide: true, shell: false, stdio: 'ignore', cwd: root, windowsVerbatimArguments: true } });
+});
+
+test('自動設定は PowerShell 7 を Windows PowerShell より先に選び、次に Windows PowerShell へ進む', async t => {
+  const calls = [];
+  const s = await setup(t);
+  await linkedWorktree(s);
+  const programFiles = path.join(s.homeDir, 'auto-program-files');
+  const systemRoot = path.join(s.homeDir, 'auto-windows');
+  const pwsh = path.join(programFiles, 'PowerShell', '7', 'pwsh.exe');
+  const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const cmd = path.join(systemRoot, 'System32', 'cmd.exe');
+  for (const file of [pwsh, powershell, cmd]) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '');
+  }
+  const tracker = s.runtime.state.worktreeInfo;
+  Object.assign(tracker, { platform: 'win32', environment: { ProgramFiles: programFiles, SystemRoot: systemRoot }, spawn(file, args) {
+    calls.push({ file, args });
+    const child = new EventEmitter();
+    child.unref = () => {};
+    queueMicrotask(() => child.emit('spawn'));
+    return child;
+  } });
+  let response = await s.post('/api/worktree/terminal', { session_id: 'linked-session' });
+  assert.equal(response.status, 200);
+  assert.equal(jsonBody(response).terminal, 'pwsh');
+  tracker.environment = { ProgramFiles: path.join(s.homeDir, 'no-auto-pwsh'), SystemRoot: systemRoot };
+  tracker.terminalRequests.clear();
+  response = await s.post('/api/worktree/terminal', { session_id: 'linked-session' });
+  assert.equal(response.status, 200);
+  assert.equal(jsonBody(response).terminal, 'powershell');
+  assert.deepEqual(calls.map(({ args }) => args[0]), [
+    `/d /c start "worktree" "${pwsh}" -NoExit`,
+    `/d /c start "worktree" "${powershell}" -NoExit`,
+  ]);
+});
+
+test('選んだ端末が無いときは自動候補へ落ちず、設定を案内する', async t => {
+  const calls = [];
+  const s = await setup(t);
+  await linkedWorktree(s);
+  const localAppData = path.join(s.homeDir, 'missing-terminal-local');
+  const programFiles = path.join(s.homeDir, 'missing-terminal-program-files');
+  const systemRoot = path.join(s.homeDir, 'missing-terminal-windows');
+  const wt = path.join(localAppData, 'Microsoft', 'WindowsApps', 'wt.exe');
+  const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const cmd = path.join(systemRoot, 'System32', 'cmd.exe');
+  for (const file of [wt, powershell, cmd]) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '');
+  }
+  const tracker = s.runtime.state.worktreeInfo;
+  Object.assign(tracker, { platform: 'win32', environment: { LOCALAPPDATA: localAppData, ProgramFiles: programFiles, SystemRoot: systemRoot },
+    spawn() { calls.push(true); } });
+  await s.post('/api/display', { terminal: 'pwsh' });
+  const response = await s.post('/api/worktree/terminal', { session_id: 'linked-session' });
+  assert.equal(response.status, 404);
+  assert.equal(jsonBody(response).error, 'PowerShell 7 が見つかりません。設定で別の端末を選んでください');
+  assert.deepEqual(calls, []);
 });
 
 test('base は origin HEAD が無いと main に戻し、main も無いと先行数を出さない', async t => {

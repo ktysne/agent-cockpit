@@ -564,10 +564,15 @@ ask 由来の質問と離席時の扱いは変えない。
 
 `POST /api/worktree/terminal` は判断事項かセッションの ID だけを受け、サーバーが cwd から root を引く。
 両方の画面の口で起動ごとの UI 秘密値と Origin を照合し、パスやコマンドは受けない。
-Windows では LOCALAPPDATA 配下の絶対パスの wt.exe に `-w new -d <root>` を shell なしで渡し、短時間の同じ root の起動を間引く。
-wt.exe が無ければ、SystemRoot 配下の cmd.exe の `start` で PowerShell 7(無ければ Windows PowerShell)の新しいコンソールを開き、root は作業ディレクトリとしてだけ渡す。
-常駐サーバーから PowerShell を直接起動すると標準入力が空ですぐ終わるため、start を挟む。
-端末が無い場合、worktree 削除済みの場合、Windows 以外の場合は理由付きの 4xx を返す。
+表示設定 `display.terminal` は `auto`、`windows-terminal`、`pwsh`、`powershell`、`cmd` から選び、既定は `auto` とする。
+`auto` は Windows Terminal、PowerShell 7、Windows PowerShell の順に候補を探し、コマンドプロンプトは自動選択しない。
+Windows Terminal は LOCALAPPDATA 配下の絶対パスの `wt.exe` に `-w new -d <root>` を shell なしで渡す。
+PowerShell とコマンドプロンプトは絶対パスの `cmd.exe` から `start` で起動し、root は作業ディレクトリとしてだけ渡す。
+PowerShell は `-NoExit` を付け、コマンドプロンプトには付けない。
+PowerShell 7 は ProgramFiles 配下を先に探し、次に PATH の絶対パスのディレクトリを探す。
+どの端末も名前だけで起動せず、worktree のパスをコマンド行に入れない。
+短時間の同じ root の起動は間引く。
+選んだ端末が無い場合は自動選択へ落とさず、worktree 削除済みの場合や Windows 以外の場合と同様に理由付きの 4xx を返す。
 パスと確認手順のコピーはブラウザーだけで行う。
 
 判断事項は次の形で保持する。

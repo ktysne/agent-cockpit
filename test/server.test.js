@@ -2221,6 +2221,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(mode).display.ghConcurrencyLimit, 8);
   assert.equal(jsonBody(mode).display.hideFinished, true);
   assert.equal(jsonBody(mode).display.importAppTasks, false);
+  assert.equal(jsonBody(mode).display.terminal, 'auto');
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display.importAppTasks, false);
   assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
   assert.equal(Object.hasOwn(jsonBody(mode).display, 'mergeAfterReviewDefault'), false);
@@ -2250,6 +2251,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
     ['importAppTasks', 1], ['importAppTasks', 'false'], ['importAppTasks', null],
     ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
+    ['terminal', 'unknown'], ['terminal', null],
     ['mergeAfterReviewDefault', true],
   ]) {
     const invalidMinutes = await request(runtime.info.port, {
@@ -2303,6 +2305,13 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(importOn.status, 200);
   assert.equal(jsonBody(importOn).display.importAppTasks, true);
   assert.equal(jsonBody(importOn).display.importAppTasksAsked, true);
+  for (const terminal of ['auto', 'windows-terminal', 'pwsh', 'powershell', 'cmd']) {
+    const selected = await request(runtime.info.port, {
+      method: 'POST', path: endpoint, body: JSON.stringify({ terminal }), headers: validHeaders,
+    });
+    assert.equal(selected.status, 200);
+    assert.equal(jsonBody(selected).display.terminal, terminal);
+  }
   for (const mergeableCondition of ['operation', 'ci', 'cross-review']) {
     const selected = await request(runtime.info.port, {
       method: 'POST', path: endpoint, body: JSON.stringify({ mergeableCondition }), headers: validHeaders,
@@ -2317,7 +2326,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'sinceSeen', 'judgment', 'prs', 'now'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, ghConcurrencyLimit: 12, hideFinished: true, importAppTasks: true, importAppTasksAsked: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info',
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, ghConcurrencyLimit: 12, hideFinished: true, importAppTasks: true, importAppTasksAsked: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info', terminal: 'cmd',
   });
 });
 

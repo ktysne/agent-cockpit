@@ -24,6 +24,7 @@ const DISPLAY_SCHEMA = Object.freeze({
   importAppTasks: Object.freeze({ type: 'boolean', default: false }),
   importAppTasksAsked: Object.freeze({ type: 'boolean', default: false }),
   mergeableCondition: Object.freeze({ type: 'enum', default: 'cross-review', values: Object.freeze(['operation', 'ci', 'cross-review']) }),
+  terminal: Object.freeze({ type: 'enum', default: 'auto', values: Object.freeze(['auto', 'windows-terminal', 'pwsh', 'powershell', 'cmd']) }),
 });
 
 const DISPLAY_KEYS = new Set(Object.keys(DISPLAY_SCHEMA));
@@ -86,7 +87,7 @@ function normalizeDisplay(value) {
       result[key] = hidden;
     } else if (key === 'sectionOrder') {
       result[key] = normalizeSectionOrder(field);
-    } else if (key === 'mergeableCondition' || key === 'diagnosticsLevel') {
+    } else if (definition.type === 'enum') {
       result[key] = definition.values.includes(field) ? field : definition.default;
     } else if (Array.isArray(definition.default)) {
       result[key] = [...field];

@@ -196,7 +196,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
     mode: 'kind', order: ['C:\\project'], pinned: ['C:\\project'],
     collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
     sectionOrder: ['now', 'judgment', 'tasks', 'prs', 'sinceSeen'],
-    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, ghConcurrencyLimit: 12, hideFinished: true, importAppTasks: true, mergeableCondition: 'ci',
+    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, ghConcurrencyLimit: 12, hideFinished: true, importAppTasks: true, mergeableCondition: 'ci', terminal: 'pwsh',
   };
   state.patchDisplayPreferences(display);
   state.registerPullRequest('restored-session', { url: 'https://github.com/example/project/pull/47' }, {
@@ -250,6 +250,7 @@ test('古い表示設定は既定順を補い、保存済みの不明な種類�
     const restored = await DashboardState.load(homeDir, { now: Date.parse('2026-10-03T00:00:00.000Z') });
     assert.deepEqual(restored.display.sectionOrder, expected, name);
     assert.equal(restored.getDisplayPreferences().mergeableCondition, 'cross-review', name);
+    assert.equal(restored.getDisplayPreferences().terminal, 'auto', name);
     assert.equal(Object.hasOwn(restored.getDisplayPreferences(), 'mergeAfterReviewDefault'), false, name);
     assert.equal(Object.hasOwn(restored.getDisplayPreferences(), 'staleOption'), false, name);
     assert.deepEqual(restored.crossReviewSkips.size, 0, name);
@@ -258,6 +259,7 @@ test('古い表示設定は既定順を補い、保存済みの不明な種類�
     const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
     assert.deepEqual(saved.display.sectionOrder, expected, name);
     assert.equal(saved.display.mergeableCondition, 'cross-review', name);
+    assert.equal(saved.display.terminal, 'auto', name);
     assert.equal(Object.hasOwn(saved.display, 'mergeAfterReviewDefault'), false, name);
     assert.equal(Object.hasOwn(saved.display, 'staleOption'), false, name);
     assert.deepEqual(saved.crossReviewSkips, [], name);

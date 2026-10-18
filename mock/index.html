@@ -520,6 +520,17 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
     </div>
     <p class="meta" id="settings-gh-concurrency-limit-note">プルリクエストの取得に使う gh を同時に動かす数。大きいほど一覧の更新が速く、PC と GitHub API への負荷が増える。変えた値は次に起動する gh から効く。</p>
     <div class="settings-theme-row">
+      <label for="settings-terminal-select">「ターミナルで開く」で使う端末</label>
+      <select id="settings-terminal-select" name="terminal" aria-describedby="settings-terminal-note">
+        <option value="auto">自動</option>
+        <option value="windows-terminal">Windows Terminal</option>
+        <option value="pwsh">PowerShell 7</option>
+        <option value="powershell">Windows PowerShell</option>
+        <option value="cmd">コマンドプロンプト</option>
+      </select>
+    </div>
+    <p class="meta" id="settings-terminal-note">自動では、Windows Terminal、PowerShell 7、Windows PowerShell の順に、見つかったものを使う。選んだ端末が見つからないときは開かずに知らせる。</p>
+    <div class="settings-theme-row">
       <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
       <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
     </div>
@@ -1026,6 +1037,7 @@ function captureDisplayPreferences() {
     longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes, idleHideMinutes: ui.idleHideMinutes,
     ghConcurrencyLimit: ui.ghConcurrencyLimit,
     mergeableCondition: ui.mergeableCondition,
+    terminal: ui.terminal,
   };
 }
 
@@ -1057,6 +1069,9 @@ function applyAway(away) {
 }
 
 const sinceSeenSelect = document.getElementById('settings-since-seen-select');
+const terminalSelect = document.getElementById('settings-terminal-select');
+const TERMINAL_LABELS = { auto: '自動', 'windows-terminal': 'Windows Terminal', pwsh: 'PowerShell 7', powershell: 'Windows PowerShell', cmd: 'コマンドプロンプト' };
+ui.terminal = Object.hasOwn(TERMINAL_LABELS, ui.terminal) ? ui.terminal : 'auto';
 function applySinceSeenMode(mode) {
   ui.sinceSeenMode = ['show', 'always', 'away'].includes(mode) ? 'show'
     : ['hide', 'never'].includes(mode) ? 'hide' : 'show';
@@ -1068,6 +1083,7 @@ function renderDisplaySettings() {
   hideFinishedInput.checked = ui.hideFinished;
   importAppTasksInput.checked = ui.importAppTasks === true;
   for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
+  terminalSelect.value = ui.terminal;
 }
 
 function displaySettingError(key) {
@@ -1103,6 +1119,12 @@ for (const { key, input } of DISPLAY_INTEGER_SETTINGS) {
 hideFinishedInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
   ui.hideFinished = hideFinishedInput.checked;
+  if (!saveDisplayPreferences(previous)) return;
+  render();
+});
+terminalSelect.addEventListener('change', () => {
+  const previous = captureDisplayPreferences();
+  ui.terminal = terminalSelect.value;
   if (!saveDisplayPreferences(previous)) return;
   render();
 });
@@ -3278,8 +3300,11 @@ document.addEventListener('click', e => {
       }, 3000);
       return;
     }
+    // 自動のときに見つかった端末は、例として Windows PowerShell にする。
+    const opened = ui.terminal === 'auto' ? 'Windows PowerShell' : TERMINAL_LABELS[ui.terminal];
+    const done = action === 'terminal' ? `${opened} で開きました` : WORKTREE_ACTION_DONE[action];
     const finish = ok => {
-      worktreeActionStatus.set(key, ok ? `${WORKTREE_ACTION_DONE[action]} (${absoluteTimeLabel(new Date().toISOString())})` : 'コピーできませんでした');
+      worktreeActionStatus.set(key, ok ? `${done} (${absoluteTimeLabel(new Date().toISOString())})` : 'コピーできませんでした');
       render();
     };
     if (action === 'copy' || action === 'step') copyDiagnosticText(action === 'copy' ? t.dataset.wtPath : t.dataset.wtText).then(finish);
