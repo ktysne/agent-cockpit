@@ -1916,6 +1916,53 @@ test('隠した種類をすべて表示した後は元の配列へ戻せ、札�
   assert.doesNotMatch(note.textContent, /元に戻す/);
 });
 
+test('種類の全表示の保存に失敗したら取り消しの案内を消し、取り消しの保存に失敗したら案内を戻す', async () => {
+  const note = fakeElement('div');
+  const context = pageContext(web, {
+    displayPreferences: { hidden: ['prs'] }, FILTERS: [{ key: 'prs', label: 'PR', color: '' }],
+    summary: fakeElement('div'), element: fakeElement, lastState: {},
+    document: { getElementById: () => note, createTextNode: text => fakeElement('text', '', text) },
+    countJudgments: () => ({}), pullRequestMergeableCount: () => 0, pullRequestOpenCount: () => 0,
+    saveDisplayPreferences(patch) {
+      const previous = context.displayPreferences.hidden;
+      Object.assign(context.displayPreferences, patch);
+      return Promise.resolve().then(() => { context.displayPreferences.hidden = previous; return false; });
+    },
+    render() { context.renderSummary([]); },
+  });
+  vm.runInContext(functionSource(web, 'renderSummary'), context);
+  context.renderSummary([]);
+  note.children[1].listeners.get('click')();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.hiddenKindsUndo, null);
+  assert.match(note.textContent, /非表示: PR/);
+
+  context.displayPreferences.hidden = [];
+  context.hiddenKindsUndo = ['prs'];
+  context.renderSummary([]);
+  note.children[1].listeners.get('click')();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(context.hiddenKindsUndo), ['prs']);
+  assert.match(note.textContent, /隠した種類をすべて表示しました。元に戻す/);
+});
+
+test('一時表示中は隠す対象が 0 件になっても下端に「隠す」を残す', () => {
+  const note = { hidden: true, children: [], replaceChildren(...children) { this.children = children; } };
+  const context = pageContext(web, {
+    displayPreferences: { hideFinished: true }, showFinishedTemporarily: true, element: fakeElement,
+    document: { getElementById: () => note }, recordDeletionConfirmations: new Map(), appendRecordDeletion() {},
+    lastState: {}, render() {},
+  });
+  vm.runInContext(`${functionSource(web, 'hidesFinished')}\n${functionSource(web, 'finishedToggle')}\n${functionSource(web, 'renderFinishedNote')}`, context);
+  context.renderFinishedNote({ sessions: 0, pullRequests: 0 });
+  assert.equal(note.hidden, false);
+  assert.equal(note.children[0].textContent, '終わったものを表示しています');
+  assert.equal(note.children[1].textContent, '隠す');
+  context.showFinishedTemporarily = false;
+  context.renderFinishedNote({ sessions: 0, pullRequests: 0 });
+  assert.equal(note.hidden, true);
+});
+
 
 function visibilityFocusHarness(active, replacements, empty = false) {
   let focused;

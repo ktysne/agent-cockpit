@@ -1571,7 +1571,11 @@ function renderSummary(sessions, pullRequestGroups = []) {
     undo.addEventListener('click', () => {
       const hidden = hiddenKindsUndo;
       hiddenKindsUndo = null;
-      saveDisplayPreferences({ hidden });
+      void Promise.resolve(saveDisplayPreferences({ hidden })).then((saved) => {
+        if (saved !== false || hiddenKindsUndo || displayPreferences.hidden.length) return;
+        hiddenKindsUndo = hidden;
+        if (lastState) render(lastState);
+      });
       render(lastState);
     });
     note.replaceChildren(element('span', '', '隠した種類をすべて表示しました。'), undo);
@@ -1580,8 +1584,14 @@ function renderSummary(sessions, pullRequestGroups = []) {
     showAll.type = 'button';
     showAll.dataset.showAll = 'true';
     showAll.addEventListener('click', () => {
-      hiddenKindsUndo = [...displayPreferences.hidden];
-      saveDisplayPreferences({ hidden: [] });
+      const previous = [...displayPreferences.hidden];
+      hiddenKindsUndo = previous;
+      // 保存に失敗すると絞り込みが元に戻るので、取り消しの案内も消す。
+      void Promise.resolve(saveDisplayPreferences({ hidden: [] })).then((saved) => {
+        if (saved !== false || hiddenKindsUndo !== previous) return;
+        hiddenKindsUndo = null;
+        if (lastState) render(lastState);
+      });
       render(lastState);
     });
     note.replaceChildren(
@@ -1597,6 +1607,11 @@ function renderExcludedNote(sessions) {
   const note = document.getElementById('excluded-note');
   const hiddenSessions = sessions.filter((session) => session.hidden === true && !isIdleHiddenSession(session));
   const hiddenCount = hiddenSessions.length;
+  if (restoredHiddenSessionsUndo) {
+    const known = new Set(sessions.map((session) => session.session_id));
+    restoredHiddenSessionsUndo = restoredHiddenSessionsUndo.filter((id) => known.has(id));
+    if (!restoredHiddenSessionsUndo.length) restoredHiddenSessionsUndo = null;
+  }
   note.hidden = hiddenCount === 0 && !hiddenSessionsUndo && !restoredHiddenSessionsUndo && !recordDeletionConfirmations.has('excluded');
   if (note.hidden) {
     note.replaceChildren();
@@ -1819,14 +1834,16 @@ function renderFinishedNote(counts, targets) {
     counts.sessions ? `セッション ${counts.sessions} 件` : '',
     counts.pullRequests ? `PR ${counts.pullRequests} 件` : '',
   ].filter(Boolean);
-  note.hidden = parts.length === 0 && !recordDeletionConfirmations.has('finished');
+  // 一時表示中は件数が 0 になっても、終了したサブエージェントなどが見えたままなので「隠す」を残す。
+  const showingTemporarily = displayPreferences.hideFinished && showFinishedTemporarily;
+  note.hidden = parts.length === 0 && !showingTemporarily && !recordDeletionConfirmations.has('finished');
   if (note.hidden) {
     note.replaceChildren();
     return;
   }
   const show = finishedToggle('note', hidesFinished() ? '表示する' : '隠す');
   const message = hidesFinished() ? '終わったものを隠しています' : '終わったものを表示しています';
-  note.replaceChildren(element('span', '', `${message} (${parts.join('、')})`), show);
+  note.replaceChildren(element('span', '', parts.length ? `${message} (${parts.join('、')})` : message), show);
   appendRecordDeletion(note, 'finished', targets, counts.sessions + counts.pullRequests);
 }
 

@@ -5535,6 +5535,16 @@ test('隠し直す途中の404と409を無視して残るセッションを処�
   assert.equal(harness.context.restoredHiddenSessionsUndo, null);
 });
 
+test('全件復元の取り消し対象が別の画面で消えていたら、取り消しの案内を消す', async () => {
+  const sessions = [{ session_id: 'gone', hidden: true }];
+  const harness = hiddenSessionRestoreHarness(sessions, [200, 404]);
+  await harness.click('clearHiddenSessions');
+  sessions.splice(0);
+  await harness.click('undoRestoredSessions');
+  assert.equal(harness.context.restoredHiddenSessionsUndo, null);
+  assert.equal(harness.note.hidden, true);
+});
+
 test('全件を戻した後にセッションやプロダクトを外すと新しい操作だけを取り消せる', async () => {
   for (const undoInfo of [null, { productName: '作業', sessionIds: ['hidden'] }]) {
     const harness = hiddenSessionRestoreHarness([{ session_id: 'hidden', hidden: true }]);
@@ -5547,7 +5557,7 @@ test('全件を戻した後にセッションやプロダクトを外すと新�
 });
 
 test('記録削除で全件復元の取り消し対象から削除済み ID を除き、空なら案内を消す', async () => {
-  const harness = recordDeletionHarness([{ session_id: 'deleted', hidden: true }], async () => ({ ok: true, json: async () => ({ deleted: { sessions: 1, pullRequests: 0 } }) }));
+  const harness = recordDeletionHarness([{ session_id: 'deleted', hidden: true }, { session_id: 'retained', hidden: false }], async () => ({ ok: true, json: async () => ({ deleted: { sessions: 1, pullRequests: 0 } }) }));
   harness.context.restoredHiddenSessionsUndo = ['deleted', 'retained'];
   harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
   await harness.context.deleteNoteRecords('excluded');

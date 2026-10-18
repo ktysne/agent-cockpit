@@ -1804,11 +1804,13 @@ function renderSummary() {
     hiddenFinished.pullRequests ? `PR ${hiddenFinished.pullRequests} 件` : '',
   ].filter(Boolean);
   const finished = document.getElementById('finished-note');
-  finished.innerHTML = finishedParts.length
-    ? `<span>${hidesFinished() ? '終わったものを隠しています' : '終わったものを表示しています'} (${finishedParts.join('、')})</span><button type="button" class="link-btn" data-show-finished="note">${hidesFinished() ? '表示する' : '隠す'}</button>`
+  const showingFinishedTemporarily = ui.hideFinished && ui.showFinishedTemporarily;
+  const finishedMessage = hidesFinished() ? '終わったものを隠しています' : '終わったものを表示しています';
+  finished.innerHTML = finishedParts.length || showingFinishedTemporarily
+    ? `<span>${finishedParts.length ? `${finishedMessage} (${finishedParts.join('、')})` : finishedMessage}</span><button type="button" class="link-btn" data-show-finished="note">${hidesFinished() ? '表示する' : '隠す'}</button>`
     : '';
   finished.innerHTML += recordDeletionControls('finished', finishedDeletionTargets(), hiddenFinished.sessions + hiddenFinished.pullRequests);
-  finished.hidden = finishedParts.length === 0 && !recordDeletionConfirmations.has('finished');
+  finished.hidden = finishedParts.length === 0 && !showingFinishedTemporarily && !recordDeletionConfirmations.has('finished');
   const idleHiddenCount = idleHiddenSessions().length;
   const idle = document.getElementById('idle-note');
   idle.innerHTML = idleHiddenCount
