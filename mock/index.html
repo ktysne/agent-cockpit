@@ -730,9 +730,11 @@ const DATA = {
             verify: {
               path: 'D:/Develop/rec-studio/.claude/worktrees/tempo-map-test-3f9a1c', branch: 'feat/tempo-map-test', base: 'main', ahead: 2, uncommitted: 3,
               steps: [
-                { cmd: 'npm run dev', note: 'http://127.0.0.1:5173 の「テンポ」タブで 120.5 を入力し、小節線がずれないかを見る' },
-                { cmd: 'npm test -- tempo-map', note: '境界値のテストが通ることを確かめる' },
+                { cmd: 'build-debug.bat', note: 'Debug ビルドを作る' },
+                { cmd: '"build\\src\\app\\RecStudio_artefacts\\Debug\\Rec Studio.exe"', note: 'テンポ欄に 120.5 を入力し、小節線がずれないかを見る' },
               ],
+              // 起動を頼んだあとにセッションが返す起動先。Web アプリなら url、ネイティブアプリなら process を返す。
+              launched: { process: 'Rec Studio.exe (Debug)' },
             },
             options: [
               { t: '確認した。コミットして PR を作る', why: 'クロスレビューを経て、マージは PR の欄で確かめてから行う', rec: true,
@@ -2109,9 +2111,12 @@ function launchButton(d) {
 
 function launchRow(d) {
   const launch = verifyLaunches.get(d.id);
-  if (launch?.state === 'requested') return '<div class="verify-row"><span class="verify-label">アプリ</span><span class="meta">起動を待っています。セッションが起動すると、ここに URL が出ます</span></div>';
+  if (launch?.state === 'requested') return '<div class="verify-row"><span class="verify-label">アプリ</span><span class="meta">起動を待っています。セッションが起動すると、ここに起動先が出ます</span></div>';
   if (launch?.state !== 'running') return '';
-  return `<div class="verify-row"><span class="verify-label">アプリ</span><span class="chip ok">起動中</span><a href="${esc(launch.url)}" target="_blank" rel="noopener"><code>${esc(launch.url)}</code></a><span class="meta">${esc(absoluteTimeLabel(launch.at))} にセッションが起動した</span></div>`;
+  const target = launch.url
+    ? `<a href="${esc(launch.url)}" target="_blank" rel="noopener"><code>${esc(launch.url)}</code></a>`
+    : `<code>${esc(launch.process)}</code><span class="meta">のウィンドウを開いた</span>`;
+  return `<div class="verify-row"><span class="verify-label">アプリ</span><span class="chip ok">起動中</span>${target}<span class="meta">${esc(absoluteTimeLabel(launch.at))} にセッションが起動した</span></div>`;
 }
 
 function worktreeStatus(key) {
@@ -3261,7 +3266,8 @@ document.addEventListener('click', e => {
       render();
       // モックでは、セッションが起動して確認依頼を更新するまでを数秒で再現する。
       setTimeout(() => {
-        verifyLaunches.set(key, { state: 'running', url: 'http://127.0.0.1:5173', at: new Date().toISOString() });
+        const decision = allSessions().flatMap(session => session.decisions).find(d => d.id === key);
+        verifyLaunches.set(key, { state: 'running', ...decision?.verify?.launched, at: new Date().toISOString() });
         render();
       }, 3000);
       return;
