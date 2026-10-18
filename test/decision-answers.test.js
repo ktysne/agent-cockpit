@@ -1,6 +1,5 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -19,7 +18,7 @@ const { ANSWER_HOOK_TIMEOUT_MS, runAnswerHook, runAskQuestion, runStop } = requi
 const { makeHookEvent } = require('../src/hooks/event');
 const { request, startTestServer } = require('./support/server');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
-const { functionSource } = require('./support/page-context');
+const { readWebPage, functionSource } = require('./support/page-context');
 
 const NOW = Date.UTC(2026, 9, 2, 1, 2, 3);
 const QUESTIONS = [{
@@ -130,7 +129,7 @@ test('推奨は label の括弧付き指定か MCP の明示指定だけを単�
 });
 
 test('タイトル、外したセッション、読み上げは回答前の waiting だけを数える', () => {
-  const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const helper = functionSource(html, 'isPendingDecision');
   assert.ok(helper);
   const isPendingDecision = vm.runInNewContext(`(${helper})`, {
@@ -143,7 +142,7 @@ test('タイトル、外したセッション、読み上げは回答前の wait
 });
 
 test('プロダクト別の並び替えと除外を表示する', () => {
-  const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const productSection = functionSource(html, 'productSection');
   assert.ok(productSection);
   assert.match(productSection, /productControls\(product, index, products\.length, pinnedCount, heading\.id\)/);

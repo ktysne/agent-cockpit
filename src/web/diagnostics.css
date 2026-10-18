@@ -1,0 +1,41 @@
+.diagnostics-dialog, .diagnostics-policy-dialog { width: min(900px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: min(88dvh, 900px); overflow-y: auto; overscroll-behavior: contain; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+.diagnostics-dialog::backdrop, .diagnostics-policy-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.diagnostics-policy-dialog { width: min(720px, calc(100vw - 32px)); }
+.diagnostics-dialog h2, .diagnostics-policy-dialog h2 { margin: 0; font-size: 18px; }
+.diagnostics-toolbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 10px; margin-top: 16px; }
+.diagnostics-toolbar label { display: grid; gap: 5px; min-width: 0; color: var(--text-2); font-size: 12px; }
+.diagnostics-toolbar select, .diagnostics-toolbar button, .diagnostics-dialog button, .diagnostics-policy-dialog button { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.diagnostics-toolbar select { width: 100%; min-width: 0; padding: 4px 8px; }
+.diagnostics-toolbar button, .diagnostics-dialog button, .diagnostics-policy-dialog button { padding: 4px 12px; cursor: pointer; }
+.diagnostics-list { min-height: 150px; max-height: min(42dvh, 460px); overflow: auto; margin: 12px 0 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.diagnostics-actions .diagnostics-danger-button { border-color: var(--danger); color: var(--danger); }
+.diagnostics-policy-link { margin-top: 14px; padding: 0 !important; border: 0 !important; color: var(--accent-text) !important; text-decoration: underline; text-underline-offset: 3px; }
+.diagnostics-delete-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--danger); border-radius: var(--radius); background: var(--danger-soft); }
+.diagnostics-delete-confirm[hidden] { display: none; }
+.diagnostics-delete-confirm span { flex: 1 1 100%; }
+.diagnostics-delete-confirm #diagnostics-delete-confirm { border-color: var(--danger); color: var(--danger); }
+.diagnostics-status { min-height: 1.5em; margin: 8px 0 0; color: var(--text-2); font-size: 12px; }
+.diagnostics-policy-dialog section { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.diagnostics-policy-dialog h3 { margin: 0 0 8px; font-size: 14px; }
+.diagnostics-policy-dialog p { margin: 8px 0 0; }
+.diagnostics-policy-dialog ul { margin: 8px 0 0; padding-left: 20px; }
+.diagnostics-policy-callout { padding: 12px; border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-soft); color: var(--warn-text); }
+.diagnostics-policy-table-wrap { overflow-x: auto; }
+.diagnostics-policy-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.diagnostics-policy-table th, .diagnostics-policy-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.diagnostics-policy-table th { white-space: nowrap; }
+.diagnostics-policy-close { display: flex; justify-content: flex-end; margin-top: 16px; }
+@media (max-width: 640px) {
+  .diagnostics-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .diagnostics-toolbar button { min-height: 40px; }
+  .diagnostics-list { max-height: 38dvh; }
+  .diagnostics-actions button { flex: 1 1 210px; }
+}
+@media (max-width: 480px) {
+  .diagnostics-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .diagnostics-dialog, .diagnostics-policy-dialog { width: calc(100vw - 20px); max-width: calc(100vw - 20px); max-height: 92dvh; padding: 14px; }
+  .diagnostics-list { min-height: 120px; max-height: 34dvh; }
+  .diagnostics-policy-table { min-width: 560px; }
+}
+.diagnostics-dialog :focus-visible, .diagnostics-policy-dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

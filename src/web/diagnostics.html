@@ -1,0 +1,73 @@
+<dialog class="diagnostics-dialog" id="diagnostics-dialog" aria-labelledby="diagnostics-title">
+  <h2 id="diagnostics-title">診断ログ</h2>
+  <div class="diagnostics-toolbar">
+    <label for="diagnostics-level">レベル
+      <select id="diagnostics-level">
+        <option value="silent">記録しない</option>
+        <option value="error">エラーのみ</option>
+        <option value="warn">警告まで</option>
+        <option value="info">情報まで(既定)</option>
+        <option value="debug">詳細</option>
+      </select>
+    </label>
+    <label for="diagnostics-run">起動
+      <select id="diagnostics-run"><option value="current">現在の起動</option></select>
+    </label>
+    <label for="diagnostics-source">出どころ
+      <select id="diagnostics-source"><option value="">すべて</option></select>
+    </label>
+    <button id="diagnostics-refresh" type="button">更新</button>
+  </div>
+  <pre class="diagnostics-list" id="diagnostics-list" role="log" aria-live="polite" aria-label="診断ログの一覧">(記録はまだありません)</pre>
+  <div class="diagnostics-actions">
+    <button id="diagnostics-copy" type="button">コピー</button>
+    <button id="diagnostics-export-run" type="button">選んだ起動を書き出す</button>
+    <button id="diagnostics-export-all" type="button">すべての起動を書き出す</button>
+  </div>
+  <div class="diagnostics-actions" id="diagnostics-delete-actions">
+    <button class="diagnostics-danger-button" id="diagnostics-delete-run" type="button">選んだ起動を削除</button>
+    <button class="diagnostics-danger-button" id="diagnostics-delete-all" type="button">すべて削除</button>
+  </div>
+  <div class="diagnostics-delete-confirm" id="diagnostics-delete-confirmation" role="group" aria-live="polite" hidden>
+    <span id="diagnostics-delete-message"></span>
+    <button id="diagnostics-delete-confirm" type="button">削除する</button>
+    <button id="diagnostics-delete-cancel" type="button">やめる</button>
+  </div>
+  <p class="diagnostics-status" id="diagnostics-status" role="status" aria-live="polite"></p>
+  <button class="diagnostics-policy-link" id="diagnostics-policy-open" type="button">ポリシーを確認</button>
+  <div class="settings-actions"><span></span><button id="diagnostics-close" type="button" autofocus>閉じる</button></div>
+</dialog>
+<dialog class="diagnostics-policy-dialog" id="diagnostics-policy-dialog" aria-labelledby="diagnostics-policy-title">
+  <h2 id="diagnostics-policy-title">診断ログのポリシー</h2>
+  <p class="diagnostics-policy-callout"><strong>あなたの操作なしに記録が外に出ることはありません。外に出るのは「コピー」か「書き出す」を押したときだけです。</strong></p>
+  <section aria-labelledby="diagnostics-policy-storage-title">
+    <h3 id="diagnostics-policy-storage-title">保存先と保持期間</h3>
+    <p>記録はこの端末の <code>~/.agent-cockpit/diagnostics/</code> に保存します。直近 10 回の起動を残し、区分ファイルは全体で 30 件まで、1 区分は 2000 行までです。上限を超えたときは古い記録から削除します。同じ記録が 10 分以内に続いたときは、最初の 1 件と繰り返した件数だけを残します。サーバーに届かなかったフックの記録は、一時的に <code>hooks-pending.jsonl</code> に 256 KiB まで保存し、サーバーが取り込んだ後に削除します。</p>
+  </section>
+  <section aria-labelledby="diagnostics-policy-level-title">
+    <h3 id="diagnostics-policy-level-title">レベルごとに残る記録</h3>
+    <div class="diagnostics-policy-table-wrap"><table class="diagnostics-policy-table"><thead><tr><th scope="col">レベル</th><th scope="col">記録する内容</th><th scope="col">例</th></tr></thead><tbody>
+      <tr><th scope="row">記録しない</th><td>記録を残しません。</td><td>なし</td></tr>
+      <tr><th scope="row">エラーのみ</th><td>処理に失敗した記録。</td><td><code>request.failed</code>、<code>gh.failed</code></td></tr>
+      <tr><th scope="row">警告まで</th><td>失敗に加え、問題があっても処理を続けた記録。</td><td><code>hook.delivery</code>、<code>web.failed</code></td></tr>
+      <tr><th scope="row">情報まで(既定)</th><td>起動や終了、採らなかったイベント、件数のまとめ。</td><td><code>server.start</code>、<code>mcp.write</code></td></tr>
+      <tr><th scope="row">詳細</th><td>受け付けたイベントを 1 件ずつ記録。</td><td>イベントの受付結果</td></tr>
+    </tbody></table></div>
+    <p>起動や停止などの節目は、記録する設定ならどのレベルでも残します。</p>
+  </section>
+  <section aria-labelledby="diagnostics-policy-excluded-title">
+    <h3 id="diagnostics-policy-excluded-title">記録しない情報</h3>
+    <ul>
+      <li>会話、プロンプト、計画、質問と回答、ツールの入力と出力</li>
+      <li>認証に使う値や要求のヘッダー</li>
+      <li><code>gh</code> やプロセス照会のエラー文、標準エラー</li>
+      <li>セッション記録ファイルの中身</li>
+      <li>作業場所のパスと、ホームディレクトリに含まれるユーザー名</li>
+    </ul>
+  </section>
+  <section aria-labelledby="diagnostics-policy-included-title">
+    <h3 id="diagnostics-policy-included-title">記録する情報</h3>
+    <p>記録の種類と時刻、出どころ、フックのイベント名、provider、ツール名、セッション ID の先頭 8 文字、プロダクト名、PR 番号、件数、長さ、所要時間、成否、失敗の分類、HTTP の状態、照合結果を残します。常駐サーバーの pid、ポート、バージョン、ソースの commit も記録します。文字列は 200 文字までです。</p>
+  </section>
+  <div class="diagnostics-policy-close"><button id="diagnostics-policy-close" type="button" autofocus>閉じる</button></div>
+</dialog>

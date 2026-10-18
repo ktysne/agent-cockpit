@@ -29,6 +29,7 @@ const { createHookRoutes } = require('./routes/hooks');
 const { createPullRequestRoutes } = require('./routes/pull-requests');
 const { createUiSessionRoutes } = require('./routes/ui-sessions');
 const { createSettingsRoutes } = require('./routes/settings');
+const { composeUiTemplate } = require('./ui-template');
 const { Diagnostics } = require('./diagnostics');
 const { UpdateChecker } = require('./update-check');
 const { readSourceCommit, readSourceState } = require('./source-revision');
@@ -434,8 +435,12 @@ async function startServer(options = {}) {
   const commit = await (options.readSourceCommit || readSourceCommit)(sourceRoot);
   const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
   let uiTemplate = null;
-  if (!dev) {
-    try { uiTemplate = await fs.readFile(webPath); } catch {}
+  try {
+    const template = await composeUiTemplate(webPath);
+    if (!dev) uiTemplate = template;
+  } catch (error) {
+    // 骨格が読めなければ配信時に再試行し、部品の欠落では起動を止める。
+    if (error.path !== webPath) throw error;
   }
   let runtime = null;
   let sourceState = 'pending';

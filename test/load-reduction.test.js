@@ -3,9 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { functionSource } = require('./support/page-context');
+const { readWebPage, functionSource } = require('./support/page-context');
 
-const web = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+const web = readWebPage();
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 
 test('仮進行中の状態名と判断待ちの内訳を上部札とそろえる', () => {

@@ -2,8 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const { functionSource } = require('./support/page-context');
-const web = fs.readFileSync('src/web/index.html', 'utf8');
+const { readWebPage, functionSource } = require('./support/page-context');
+const web = readWebPage();
 const mock = fs.readFileSync('mock/index.html', 'utf8');
 
 test('画面の取得と保存の失敗は ID とクエリーとエラー文を伏せ、診断失敗を再送しない', async () => {

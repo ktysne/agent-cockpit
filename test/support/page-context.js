@@ -1,4 +1,10 @@
+const path = require('node:path');
 const vm = require('node:vm');
+const { composeUiTemplateSync } = require('../../src/server/ui-template');
+
+function readWebPage() {
+  return composeUiTemplateSync(path.join(__dirname, '../../src/web/index.html')).toString('utf8');
+}
 
 function functionSource(source, name) {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -112,4 +118,4 @@ function pageContext(html, sandbox = {}) {
   return vm.createContext(sandbox);
 }
 
-module.exports = { cssDeclarations, functionSource, pageContext, sourceBetween };
+module.exports = { readWebPage, cssDeclarations, functionSource, pageContext, sourceBetween };
