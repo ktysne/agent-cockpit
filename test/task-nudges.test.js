@@ -8,6 +8,8 @@ const {
   SUBAGENT_REMINDER,
   SET_TASKS_NO_TASKS_REMINDER,
   SET_TASKS_SUBAGENT_REMINDER,
+  STALE_TASKS_REMINDER,
+  SET_TASKS_STALE_TASKS_REMINDER,
   TaskNudges,
 } = require('../src/server/task-nudges');
 const { startTestServer, request, hookHeaders, uiHeaders, jsonBody } = require('./support/server');
@@ -16,6 +18,10 @@ const START = Date.UTC(2026, 9, 2, 1, 2, 3);
 
 function task(title = '実装する') {
   return { title, state: 'doing', criteria: [] };
+}
+
+function completedTask(title = '前の依頼を完了する') {
+  return { title, state: 'done', criteria: [] };
 }
 
 function event(sessionId, hookEventName, hookAt, values = {}) {
@@ -52,6 +58,132 @@ test('メインのツールを 5 回使うとタスク登録を促し、同じ�
 
   nudges.afterEvent(event('tools', 'UserPromptSubmit', START + TASK_REMINDER_INTERVAL_MS + 1));
   assert.equal(nudges.reminderFor('tools'), null);
+});
+
+test('全件完了の一覧を新しい入力の後に書かず、メインのツールを 5 回使うと一覧の更新を促す', () => {
+  const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
+  state.setTasks('stale-tasks', [completedTask()], START - 1);
+  const { nudges } = makeNudges({ state });
+  nudges.tasksWritten('stale-tasks', START - 1);
+  nudges.afterEvent(event('stale-tasks', 'UserPromptSubmit', START));
+  for (let index = 1; index <= 5; index += 1) {
+    nudges.afterEvent(event('stale-tasks', 'PreToolUse', START + index, { tool_name: 'Read' }));
+  }
+
+  assert.equal(nudges.reminderFor('stale-tasks'), STALE_TASKS_REMINDER);
+});
+
+test('全件完了の一覧があっても新しい入力の後にメインのツールを 4 回使っただけでは一覧の更新を促さない', () => {
+  const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
+  state.setTasks('stale-tools-under-limit', [completedTask()], START - 1);
+  const { nudges } = makeNudges({ state });
+  nudges.tasksWritten('stale-tools-under-limit', START - 1);
+  nudges.afterEvent(event('stale-tools-under-limit', 'UserPromptSubmit', START));
+  for (let index = 1; index <= 4; index += 1) {
+    nudges.afterEvent(event('stale-tools-under-limit', 'PreToolUse', START + index, { tool_name: 'Read' }));
+  }
+
+  assert.equal(nudges.reminderFor('stale-tools-under-limit'), null);
+});
+
+test('新しい入力の後に全件完了の一覧を書き直すと一覧の更新を促さない', () => {
+  const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
+  state.setTasks('rewritten-done-tasks', [completedTask()], START - 1);
+  const { nudges } = makeNudges({ state });
+  nudges.tasksWritten('rewritten-done-tasks', START - 1);
+  nudges.afterEvent(event('rewritten-done-tasks', 'UserPromptSubmit', START));
+  state.setTasks('rewritten-done-tasks', [completedTask()], START + 1);
+  nudges.tasksWritten('rewritten-done-tasks', START + 1);
+  for (let index = 1; index <= 5; index += 1) {
+    nudges.afterEvent(event('rewritten-done-tasks', 'PreToolUse', START + index + 1, { tool_name: 'Read' }));
+  }
+
+  assert.equal(nudges.reminderFor('rewritten-done-tasks'), null);
+});
+
+test('未完了のタスクが 1 件でもあれば全件完了の一覧向けの案内を出さない', () => {
+  for (const stateValue of ['todo', 'doing']) {
+    const sessionId = `unfinished-${stateValue}`;
+    const state = new DashboardState();
+    state.patchDisplayPreferences({ importAppTasks: true });
+    state.setTasks(sessionId, [completedTask(), { ...task(), state: stateValue }], START - 1);
+    const { nudges } = makeNudges({ state });
+    nudges.tasksWritten(sessionId, START - 1);
+    nudges.afterEvent(event(sessionId, 'UserPromptSubmit', START));
+    for (let index = 1; index <= 5; index += 1) {
+      nudges.afterEvent(event(sessionId, 'PreToolUse', START + index, { tool_name: 'Read' }));
+    }
+
+    assert.equal(nudges.reminderFor(sessionId), null);
+  }
+});
+
+test('全件完了の一覧があるターンで Agent を起動すると一覧の更新をすぐ促す', () => {
+  const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
+  state.setTasks('stale-agent', [completedTask()], START - 1);
+  const { nudges } = makeNudges({ state });
+  nudges.tasksWritten('stale-agent', START - 1);
+  nudges.afterEvent(event('stale-agent', 'UserPromptSubmit', START));
+  nudges.afterEvent(event('stale-agent', 'PreToolUse', START + 1, { tool_name: 'Agent' }));
+
+  assert.equal(nudges.reminderFor('stale-agent'), STALE_TASKS_REMINDER);
+});
+
+test('全件完了の一覧への案内も同じセッションでは 10 分空ける', () => {
+  const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
+  state.setTasks('stale-interval', [completedTask()], START - 1);
+  const { nudges, setNow } = makeNudges({ state });
+  nudges.tasksWritten('stale-interval', START - 1);
+  nudges.afterEvent(event('stale-interval', 'UserPromptSubmit', START));
+  for (let index = 1; index <= 5; index += 1) {
+    nudges.afterEvent(event('stale-interval', 'PreToolUse', START + index, { tool_name: 'Read' }));
+  }
+  assert.equal(nudges.reminderFor('stale-interval'), STALE_TASKS_REMINDER);
+  setNow(START + TASK_REMINDER_INTERVAL_MS - 1);
+  assert.equal(nudges.reminderFor('stale-interval'), null);
+  setNow(START + TASK_REMINDER_INTERVAL_MS);
+  assert.equal(nudges.reminderFor('stale-interval'), STALE_TASKS_REMINDER);
+});
+
+test('遅れて届いた古い入力イベントで全件完了の一覧への催促カウントを巻き戻さない', () => {
+  const state = new DashboardState();
+  state.patchDisplayPreferences({ importAppTasks: true });
+  state.setTasks('stale-late-prompt', [completedTask()], START - 1);
+  const { nudges } = makeNudges({ state });
+  nudges.tasksWritten('stale-late-prompt', START - 1);
+  nudges.afterEvent(event('stale-late-prompt', 'UserPromptSubmit', START));
+  for (let index = 1; index <= 2; index += 1) {
+    nudges.afterEvent(event('stale-late-prompt', 'PreToolUse', START + index, { tool_name: 'Read' }));
+  }
+  nudges.afterEvent(event('stale-late-prompt', 'UserPromptSubmit', START + 1));
+  for (let index = 3; index <= 5; index += 1) {
+    nudges.afterEvent(event('stale-late-prompt', 'PreToolUse', START + index, { tool_name: 'Read' }));
+  }
+
+  assert.equal(nudges.reminderFor('stale-late-prompt'), STALE_TASKS_REMINDER);
+});
+
+test('Codex とアプリタスク取り込みオフでは全件完了の一覧への案内に cockpit_set_tasks と完了条件を含める', () => {
+  for (const [sessionId, provider, importAppTasks] of [
+    ['stale-codex', 'codex', true],
+    ['stale-import-off', 'claude', false],
+  ]) {
+    const state = new DashboardState();
+    state.patchDisplayPreferences({ importAppTasks });
+    state.setTasks(sessionId, [completedTask()], START - 1);
+    state.providerForSession = () => provider;
+    const { nudges } = makeNudges({ state });
+    nudges.tasksWritten(sessionId, START - 1);
+    nudges.afterEvent(event(sessionId, 'UserPromptSubmit', START));
+    nudges.afterEvent(event(sessionId, 'PreToolUse', START + 1, { tool_name: 'Agent' }));
+
+    assert.equal(nudges.reminderFor(sessionId), SET_TASKS_STALE_TASKS_REMINDER);
+  }
 });
 
 test('タスクが無い状態で Agent ツールを起動すると登録を促す', () => {
