@@ -2103,10 +2103,10 @@ function worktreeButtons(key, path, compact = false, missing = false) {
 
 function launchButton(d) {
   const launch = verifyLaunches.get(d.id);
-  if (launch?.state === 'running') return '';
-  return launch?.state === 'requested'
-    ? '<button type="button" class="ghost" disabled>起動を頼みました</button>'
-    : `<button type="button" class="ghost" data-wt-action="launch" data-wt-key="${esc(d.id)}">起動を頼む</button>`;
+  if (launch?.state === 'requested') return '<button type="button" class="ghost" disabled>起動を頼みました</button>';
+  // 起動中も、落ちたときや直したあとに起動し直せるように残す。
+  const label = launch?.state === 'running' ? 'もう一度起動を頼む' : '起動を頼む';
+  return `<button type="button" class="ghost" data-wt-action="launch" data-wt-key="${esc(d.id)}">${label}</button>`;
 }
 
 function launchRow(d) {
