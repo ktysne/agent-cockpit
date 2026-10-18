@@ -764,7 +764,7 @@ class PullRequestMergeManager {
       ...(confirmedIntent?.stackedPullRequests || []),
     ].map((item) => [item.number, item]));
     const retargeted = this.state.pullRequestRetargetsForRepo(owner, repo)
-      .filter((record) => record.fromNumber === pullRequest.number);
+      .filter((record) => record.fromNumber === pullRequest.number && record.completed !== false);
     const stackedByNumber = new Map();
     const selectedStackedPullRequests = synchronization ? [] : [...savedStackedByNumber.values(), ...(event.stackedPullRequests || [])];
     for (const stacked of selectedStackedPullRequests) {

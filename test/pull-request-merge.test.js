@@ -795,7 +795,7 @@ test('自動削除設定があるリポジトリでは古い画面からの予�
   assert.doesNotMatch(fixture.notices.at(-1).message, /削除できませんでした/);
 });
 
-test('子 PR の base の付け替えに失敗したらマージせず完了位置を返す', async (t) => {
+test('付け替え失敗後にブランチを残してマージすると子の base を保持したことを知らせる', async (t) => {
   const fixture = await mergeFixture(t, [
     ghPullRequest(1, 'feature/one', 'main'),
     ghPullRequest(2, 'feature/two', 'feature/one'),
@@ -816,6 +816,11 @@ test('子 PR の base の付け替えに失敗したらマージせず完了位�
   assert.equal(child.retargetedFrom, null);
   assert.equal(child.parentNumber, 1);
   assert.equal(child.blocker, '親 PR #1 のマージ確認待ち');
+  const retried = await fixture.manager.merge(mergeInput(1, { deleteBranch: false }));
+  assert.equal(retried.ok, true);
+  assert.equal(fixture.github.openPullRequests.find(item => item.number === 2).baseRefName, 'feature/one');
+  assert.match(fixture.notices.at(-1).message, /base は feature\/one のままです/);
+  assert.doesNotMatch(fixture.notices.at(-1).message, /git rebase --onto/);
 });
 
 test('マージキューに入って OPEN のままなら意図を持たず、後のマージは外でのマージとして方式不明で知らせ、ブランチを消さない', async (t) => {
