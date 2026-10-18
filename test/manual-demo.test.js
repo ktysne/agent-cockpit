@@ -100,8 +100,18 @@ test('偽の gh はマージ、base の付け替え、ブランチの削除を�
   assert.equal((await run(gh, ['pr', 'merge', '1', '-R', 'example-team/app', '--squash', '--match-head-commit', head])).error, null);
   assert.equal(repository.pullRequests[0].state, 'MERGED');
   assert.equal(repository.pullRequests[0].mergedAt, '2026-10-06T05:30:00.000Z');
-  assert.equal((await run(gh, ['api', '-X', 'DELETE', 'repos/example-team/app/git/refs/heads/feature/a'])).error, null);
+  const repositoryId = JSON.parse((await run(gh, [
+    'api', 'graphql', '-f', 'owner=example-team', '-f', 'repository=app',
+    '-f', 'query=query($owner: String!, $repository: String!) { repository(owner: $owner, name: $repository) { id } }',
+  ])).stdout).data.repository.id;
+  const deletion = await run(gh, [
+    'api', 'graphql', '-f', `repositoryId=${repositoryId}`, '-f', 'refName=refs/heads/feature/a',
+    '-f', `beforeOid=${head}`, '-f', `afterOid=${'0'.repeat(40)}`,
+    '-f', 'query=mutation($repositoryId: ID!, $refName: GitRefname!, $beforeOid: GitObjectID!, $afterOid: GitObjectID!) { updateRefs(input: { repositoryId: $repositoryId, refUpdates: [{ name: $refName, beforeOid: $beforeOid, afterOid: $afterOid, force: false }] }) { clientMutationId } }',
+  ]);
+  assert.equal(deletion.error, null);
   assert.deepEqual(repository.deletedBranches, ['feature/a']);
+  assert.equal(repository.branchHeads.has('feature/a'), false);
 });
 
 test('偽の gh は定義に無い呼び出しをエラーにして記録する', async () => {

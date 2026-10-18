@@ -90,16 +90,20 @@ Claude Code を使っていない環境では、Claude Code のスキルは飛�
 PowerShell:
 
 ```powershell
-$skillDirectory = Join-Path $env:USERPROFILE '.claude\skills\agent-cockpit'
-New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
-Copy-Item .\skills\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
+foreach ($name in 'agent-cockpit', 'update-tools') {
+  $skillDirectory = Join-Path $env:USERPROFILE ".claude\skills\$name"
+  New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
+  Copy-Item ".\skills\$name\SKILL.md" (Join-Path $skillDirectory 'SKILL.md') -Force
+}
 ```
 
 bash:
 
 ```bash
-mkdir -p ~/.claude/skills/agent-cockpit
-cp skills/agent-cockpit/SKILL.md ~/.claude/skills/agent-cockpit/SKILL.md
+for name in agent-cockpit update-tools; do
+  mkdir -p ~/.claude/skills/$name
+  cp skills/$name/SKILL.md ~/.claude/skills/$name/SKILL.md
+done
 ```
 
 Codex を使っているときは、[導入手順](setup.md#3-スキルを置く)と同じコマンドで、Codex のスキルもコピーし直します。
@@ -111,13 +115,17 @@ $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USER
 $skillDirectory = Join-Path $codexHome 'skills\agent-cockpit'
 New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
 Copy-Item .\skills\codex\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
+$updateSkillDirectory = Join-Path $codexHome 'skills\update-tools'
+New-Item -ItemType Directory -Path $updateSkillDirectory -Force | Out-Null
+Copy-Item .\skills\update-tools\SKILL.md (Join-Path $updateSkillDirectory 'SKILL.md') -Force
 ```
 
 bash:
 
 ```bash
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit"
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit" "${CODEX_HOME:-$HOME/.codex}/skills/update-tools"
 cp skills/codex/agent-cockpit/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit/SKILL.md"
+cp skills/update-tools/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/update-tools/SKILL.md"
 ```
 
 ## 常駐サーバーの再起動と確認

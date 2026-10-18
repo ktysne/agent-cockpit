@@ -102,7 +102,7 @@ function createReadRoutes(ctx) {
 
   function fingerprint() {
     return JSON.stringify([state.version, pullRequestTracker?.inFlightSignature?.() || '',
-      away.snapshot(), routing.snapshot(), ctx.updateChecker?.snapshot() || null, uiVersion, installed, restartRequired(), ctx.restartAvailable(), integrations, ctx.getSourceState()]);
+      away.snapshot(), routing.snapshot(), state.persistenceStatus?.(), ctx.updateChecker?.snapshot() || null, uiVersion, installed, restartRequired(), ctx.restartAvailable(), integrations, ctx.getSourceState()]);
   }
 
   function generateState(now) {
@@ -128,7 +128,7 @@ function createReadRoutes(ctx) {
     return { body: JSON.stringify({ ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen,
       runtime: { version: ctx.getRuntime().version, commit: ctx.getRuntime().commit,
         sourceState: ctx.getSourceState(), startedAt: ctx.getRuntime().startedAt },
-      away: awayState, update: ctx.updateChecker?.snapshot() || null, appVersion: ctx.appVersion,
+      away: awayState, persistence: state.persistenceStatus?.(), update: ctx.updateChecker?.snapshot() || null, appVersion: ctx.appVersion,
       routing: routing.snapshot(), integrations, uiVersion, installed, restartRequired: restartRequired(), restartAvailable: ctx.restartAvailable() }), fingerprint: fingerprint(),
       expiresAt: Math.min(deadline.at, now + STATE_CACHE_MAX_AGE_MS) };
   }

@@ -8,6 +8,7 @@ const ANSWER_HOOK_TIMEOUT_MS = 30 * 60_000 + 30_000;
 const ANSWER_HOOK_DEADLINE_GRACE_MS = 30_000;
 const CODEX_STOP_WAIT_MS = 59 * 60_000;
 const POST_TOOL_BATCH_TIMEOUT_MS = 1_000;
+const DELIVERY_ACK_TIMEOUT_MS = 300;
 // stop-check はレビュー記録の催促の判定を待ってから応答するため。
 const STOP_CHECK_TIMEOUT_MS = REVIEW_REMINDER_WAIT_MS + 2_000;
 // 最初の stop-poll は催促の判定を待ってから long-poll に入る。先に打ち切ると、その後の回答が届かないまま配信済みになる。
@@ -45,7 +46,8 @@ async function postHookRequest(body, options = {}) {
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const fetchImpl = options.fetchImpl || fetch;
   const now = options.now || Date.now;
-  const deadline = now() + (options.timeoutMs || 1_000);
+  const hasExternalDeadline = Number.isFinite(options.deadline);
+  const deadline = hasExternalDeadline ? options.deadline : now() + (options.timeoutMs || 1_000);
   const result = await postToServer('/api/hooks/answers', body, {
     homeDir,
     fetchImpl,
@@ -57,7 +59,34 @@ async function postHookRequest(body, options = {}) {
     ensure: false,
     now,
   });
-  return result.ok ? result.json : null;
+  if (!result.ok) return null;
+  const response = result.json;
+  if (typeof response?.deliveryId === 'string') {
+    try {
+      const acknowledgementDeadline = hasExternalDeadline
+        ? deadline
+        : Math.min(deadline + DELIVERY_ACK_TIMEOUT_MS, now() + DELIVERY_ACK_TIMEOUT_MS);
+      await postToServer('/api/hooks/answers', {
+        action: 'delivery-ack',
+        event_name: 'DeliveryAck',
+        session_id: body.session_id,
+        id: crypto.randomUUID(),
+        delivery_id: response.deliveryId,
+      }, {
+        homeDir,
+        fetchImpl,
+        cache: 'no-store',
+        deadline: acknowledgementDeadline,
+        attemptTimeoutMs: options.attemptTimeoutMs,
+        fileSystem: options.fileSystem,
+        readServerInfo: options.readServerInfo,
+        ensure: false,
+        now,
+      });
+    } catch {
+    }
+  }
+  return response;
 }
 
 async function runAskQuestion(input, options = {}) {

@@ -198,20 +198,25 @@ claude mcp add --scope user agent-cockpit -- "$(command -v node)" "$(pwd)/src/mc
 ### 4. スキルを置く
 
 メインセッションが MCP ツールの使い方を読むスキルを、`~/.claude/skills/agent-cockpit/` にコピーします。
+あわせて、agent-cockpit、ai-cross-review、claude-codex-bridge の checkout と写しを GitHub の最新と見比べて更新するスキルを、`~/.claude/skills/update-tools/` にコピーします。
 
 PowerShell:
 
 ```powershell
-$skillDirectory = Join-Path $env:USERPROFILE '.claude\skills\agent-cockpit'
-New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
-Copy-Item .\skills\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
+foreach ($name in 'agent-cockpit', 'update-tools') {
+  $skillDirectory = Join-Path $env:USERPROFILE ".claude\skills\$name"
+  New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
+  Copy-Item ".\skills\$name\SKILL.md" (Join-Path $skillDirectory 'SKILL.md') -Force
+}
 ```
 
 bash:
 
 ```bash
-mkdir -p ~/.claude/skills/agent-cockpit
-cp skills/agent-cockpit/SKILL.md ~/.claude/skills/agent-cockpit/SKILL.md
+for name in agent-cockpit update-tools; do
+  mkdir -p ~/.claude/skills/$name
+  cp skills/$name/SKILL.md ~/.claude/skills/$name/SKILL.md
+done
 ```
 
 リポジトリを更新してスキルが変わったときは、コピーし直します。
@@ -255,7 +260,7 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Startup
 3. ブラウザーで `http://127.0.0.1:47821/` を開き、1 で開いたセッションが表示されることを確かめます。
 4. `claude mcp list` を実行し、`agent-cockpit` がつながっている(`Connected`)ことを確かめます。
 5. 1 のセッションで「`cockpit_set_tasks` で確認用のタスクを 1 件登録して」と依頼します。そのセッションの欄にタスクが出れば、MCP サーバーとフックが同じセッションを指していることも確かめられます。別のセッションの欄に出たり、どこにも出なかったりするときは、MCP サーバーの登録を確かめます。
-6. `~/.claude/skills/agent-cockpit/SKILL.md` があることを確かめます。
+6. `~/.claude/skills/agent-cockpit/SKILL.md` と `~/.claude/skills/update-tools/SKILL.md` があることを確かめます。
 7. 回答の経路を確かめるときは、画面上部の「離席中」をオンにしてから、セッションに「確認のために `AskUserQuestion` で質問して」と依頼します。ダッシュボードに判断待ちとして出て、画面から回答するとセッションがその回答で進めば成功です。確かめ終わったら「離席中」をオフに戻します。離席中でないときは、質問はデスクトップアプリのダイアログに出ます。
 
 導入できたら、画面の使い方を利用者向けマニュアル(https://ktysne.info/agent-cockpit/manual/)で確かめます。ダッシュボードの設定画面の「マニュアル」からも開けます。
@@ -455,7 +460,8 @@ approval_mode = "approve"
 ### 3. スキルを置く
 
 Codex のメインセッションが MCP ツールの使い方を読むスキルを、`~/.codex/skills/agent-cockpit/` にコピーします。
-Claude 向けの `skills/agent-cockpit/` ではなく、質問ツールの扱いを Codex に合わせた `skills/codex/agent-cockpit/` を使います。リポジトリのルートで実行します。
+Claude 向けの `skills/agent-cockpit/` ではなく、質問ツールの扱いを Codex に合わせた `skills/codex/agent-cockpit/` を使います。
+更新のスキル(`skills/update-tools/`)は Claude と共通なので、同じものを `~/.codex/skills/update-tools/` にコピーします。リポジトリのルートで実行します。
 
 PowerShell:
 
@@ -464,13 +470,17 @@ $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USER
 $skillDirectory = Join-Path $codexHome 'skills\agent-cockpit'
 New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
 Copy-Item .\skills\codex\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
+$updateSkillDirectory = Join-Path $codexHome 'skills\update-tools'
+New-Item -ItemType Directory -Path $updateSkillDirectory -Force | Out-Null
+Copy-Item .\skills\update-tools\SKILL.md (Join-Path $updateSkillDirectory 'SKILL.md') -Force
 ```
 
 bash:
 
 ```bash
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit"
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit" "${CODEX_HOME:-$HOME/.codex}/skills/update-tools"
 cp skills/codex/agent-cockpit/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit/SKILL.md"
+cp skills/update-tools/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/update-tools/SKILL.md"
 ```
 
 リポジトリを更新してスキルが変わったときは、コピーし直します。

@@ -4,11 +4,31 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { branchFromCwd } = require('../src/server/identity');
+const { branchFromCwd, productFromCwd } = require('../src/server/identity');
 const { temporaryDirectory: createTemporaryDirectory } = require('./support/temp');
 
 async function temporaryDirectory(testContext) {
   return createTemporaryDirectory(testContext, 'agent-cockpit-identity-').directory;
+}
+
+function posixFileSystem(files, directories) {
+  const fileEntries = new Map(Object.entries(files));
+  const directoryEntries = new Set(directories);
+  return {
+    statSync(filePath) {
+      if (directoryEntries.has(filePath)) return { isDirectory: () => true, isFile: () => false, size: 0 };
+      if (fileEntries.has(filePath)) {
+        return { isDirectory: () => false, isFile: () => true, size: Buffer.byteLength(fileEntries.get(filePath)) };
+      }
+      const error = new Error('not found');
+      error.code = 'ENOENT';
+      throw error;
+    },
+    readFileSync(filePath) {
+      if (!fileEntries.has(filePath)) throw new Error('unexpected file read');
+      return fileEntries.get(filePath);
+    },
+  };
 }
 
 test('通常のリポジトリからブランチ名を取得する', async (t) => {
@@ -19,6 +39,52 @@ test('通常のリポジトリからブランチ名を取得する', async (t) =
   await fsp.writeFile(path.join(directory, '.git', 'HEAD'), 'ref: refs/heads/feature/session-view\n');
 
   assert.equal(branchFromCwd(cwd), 'feature/session-view');
+});
+
+test('POSIX の絶対パスから通常リポジトリ、worktree、detached HEAD のブランチを取得する', () => {
+  const sha = '0123456789abcdef0123456789abcdef01234567';
+  const worktreeRoot = '/tmp/repository/.claude/worktrees/feature-x';
+  const cases = [
+    {
+      cwd: '/tmp/project/src',
+      fileSystem: posixFileSystem({ '/tmp/project/.git/HEAD': 'ref: refs/heads/feature/posix\n' }, ['/tmp/project/.git']),
+      expected: 'feature/posix',
+    },
+    {
+      cwd: `${worktreeRoot}/src`,
+      fileSystem: posixFileSystem({
+        [`${worktreeRoot}/.git`]: `gitdir: ${path.posix.relative(worktreeRoot, '/tmp/repository/.git/worktrees/feature-x')}\n`,
+        '/tmp/repository/.git/worktrees/feature-x/HEAD': 'ref: refs/heads/fix/posix-worktree\n',
+      }, ['/tmp/repository/.git/worktrees/feature-x']),
+      expected: 'fix/posix-worktree',
+    },
+    {
+      cwd: '/tmp/detached',
+      fileSystem: posixFileSystem({ '/tmp/detached/.git/HEAD': `${sha}\n` }, ['/tmp/detached/.git']),
+      expected: sha.slice(0, 7),
+    },
+  ];
+
+  for (const { cwd, fileSystem, expected } of cases) {
+    assert.equal(branchFromCwd(cwd, { fileSystem }), expected, cwd);
+  }
+});
+
+test('POSIX のプロダクトキーは大文字小文字を区別する', () => {
+  const fileSystem = posixFileSystem({}, []);
+  const upper = productFromCwd('/tmp/Project', { fileSystem });
+  const lower = productFromCwd('/tmp/project', { fileSystem });
+
+  assert.equal(upper.key, '/tmp/Project');
+  assert.equal(lower.key, '/tmp/project');
+  assert.notEqual(upper.key, lower.key);
+});
+
+test('Windows のドライブ、ルート相対、UNC パスは Windows 規則で解決する', () => {
+  assert.equal(productFromCwd('C:\\Repo').key, productFromCwd('c:/repo').key);
+  assert.equal(productFromCwd('\\Repo').key, path.win32.resolve('\\Repo').toLowerCase());
+  assert.equal(productFromCwd('\\\\server\\share\\Repo').key, path.win32.resolve('\\\\server\\share\\Repo').toLowerCase());
+  assert.equal(productFromCwd('//server/share/Repo').key, productFromCwd('\\\\server\\share\\Repo').key);
 });
 
 test('worktree の .git ファイルが指す gitdir からブランチ名を取得する', async (t) => {
