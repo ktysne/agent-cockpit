@@ -3605,7 +3605,10 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   const questions = decision.questions || [];
   const { active, viaDialog } = decisionAnswerAvailability(decision);
   if (viaDialog) {
-    card.append(element('div', 'meta', originalScreenAction(product, session, '回答してください。')));
+    const ended = decision.state === 'resolved' || decision.state === 'withdrawn';
+    card.append(element('div', 'meta', ended
+      ? `${product.name} 「${sessionDisplayName(session)}」`
+      : originalScreenAction(product, session, '回答してください。')));
     if (savedError) {
       const error = element('div', 'answer-error', savedError);
       error.setAttribute('role', 'alert');

@@ -536,6 +536,34 @@ test('種類別の空欄は本文と枠を省き、件数付きの見出し一�
   assert.doesNotMatch(mockKind, /class="empty">ありません/);
 });
 
+test('元の画面で答える判断事項は、終わるまでだけ回答を求める案内を出す', () => {
+  const webFunctions = ['answerDraftKey', 'answerDraftChanged', 'originalScreenAction', 'appendDecisionCard', 'appendDecisionAnswer']
+    .map((name) => functionSource(web, name));
+  assert.ok(webFunctions.every(Boolean));
+  const context = pageContext(web, {
+    answerErrors: new Map(),
+    element: fakeElement,
+    decisionElapsedLabel: () => null,
+    decisionAnswerAvailability: () => ({ active: false, viaDialog: true }),
+    answerDraftFor: () => ({}),
+    appendContextTags() {},
+    badge: (_label, tone = '') => fakeElement('span', tone),
+    decisionStateLabel: (state) => state,
+    answerStatusText: () => '',
+    absoluteTimeLabel: () => '12:00',
+    sessionDisplayName: () => '週切り替え',
+  });
+  vm.runInContext(`${webFunctions.join('\n')}\nthis.renderDecision = appendDecisionCard;`, context);
+  const metaFor = (state) => {
+    const list = fakeElement('div');
+    context.renderDecision(list, { id: `decision-${state}`, state, title: '重複した質問', questions: [] },
+      { name: 'shift-planner' }, { session_id: 'session-1', provider: 'claude' });
+    return descendants(list).filter((node) => node.className === 'meta').map((node) => node.textContent);
+  };
+  assert.deepEqual(metaFor('waiting'), ['Claude Code の shift-planner 「週切り替え」で回答してください。']);
+  for (const state of ['resolved', 'withdrawn']) assert.deepEqual(metaFor(state), ['shift-planner 「週切り替え」']);
+});
+
 test('判断事項の解決内容と回答状態は余白のある一行にまとまる', () => {
   const webFunctions = ['answerDraftKey', 'answerDraftChanged', 'appendDecisionCard', 'appendDecisionAnswer'].map((name) => functionSource(web, name));
   assert.ok(webFunctions.every(Boolean));
