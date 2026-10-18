@@ -1176,7 +1176,7 @@ test('起動時に読めない画面は最初の成功した配信で固定す�
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).uiVersion, firstVersion);
 });
 
-test('/api/tray は許可待ち、未回答の判断待ち、離席状態だけを返す', async (t) => {
+test('/api/tray は確認済みの許可待ち、未回答の判断待ち、離席状態だけを返す', async (t) => {
   const state = new DashboardState();
   const sessionId = 'tray-session';
   state.addEvent({
@@ -1186,6 +1186,7 @@ test('/api/tray は許可待ち、未回答の判断待ち、離席状態だけ�
     hookAt: 1_000,
     agent_id: 'agent-1',
   });
+  state.addEvent({ session_id: sessionId, hook_event_name: 'PermissionRequest', tool_name: 'Bash', hookAt: 1_100 });
   const addWaitingDecision = (title) => state.addDecision(sessionId, {
     title, context: '', state: 'waiting', options: [{ label: '案 A', description: '' }],
   });

@@ -167,6 +167,7 @@ function createReadRoutes(ctx) {
     const decisionKeys = [];
     for (const session of snapshot.sessions) {
       for (const wait of session.permissionWaits) {
+        if (wait.phase !== 'prompted') continue;
         permissionKeys.push(`${session.session_id}|${wait.agent_id}|${wait.startedAt}`);
       }
       for (const decision of session.decisions) {

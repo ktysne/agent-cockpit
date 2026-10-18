@@ -74,13 +74,14 @@ test('未知の provider を持つフックは Claude のセッションとし�
   assert.equal((await c.snapshot()).sessions[0].provider, 'claude');
 });
 
-test('Codex の許可待ちはツール完了またはターンの区切りで解消する', async (t) => {
+test('Codex の許可確認中はツール完了またはターンの区切りで解消する', async (t) => {
   const c = await cockpit(t);
-  for (const name of ['PostToolUse', 'Stop', 'Interrupt', 'UserPromptSubmit']) {
+  for (const name of ['PostToolUse', 'PostToolUseFailure', 'Stop', 'Interrupt', 'UserPromptSubmit']) {
     await c.event(name, 'PreToolUse', { tool_name: 'exec_command', tool_use_id: 'tool' });
     await c.event(name, 'PermissionRequest', { tool_name: 'exec_command', summary: 'npm test' });
     const waiting = (await c.snapshot()).sessions.find(s => s.session_id === name);
-    assert.equal(waiting.status, '許可待ち');
+    assert.equal(waiting.status, '許可確認中');
+    assert.equal(waiting.permissionWaits[0].phase, 'checking');
     assert.equal(waiting.permissionWaits[0].summary, 'npm test');
     await c.event(name, name, { tool_name: 'exec_command', tool_use_id: 'tool' });
     const done = (await c.snapshot()).sessions.find(s => s.session_id === name);
@@ -89,18 +90,18 @@ test('Codex の許可待ちはツール完了またはターンの区切りで�
   }
 });
 
-test('Codex の許可待ちは別のツールの完了では解消しない', async (t) => {
+test('Codex の許可確認中は別のツールの完了では解消しない', async (t) => {
   const c = await cockpit(t);
   await c.event('parallel', 'PreToolUse', { tool_name: 'exec_command', tool_use_id: 'shell' });
   await c.event('parallel', 'PreToolUse', { tool_name: 'mcp__cockpit__probe', tool_use_id: 'probe' });
   await c.event('parallel', 'PermissionRequest', { tool_name: 'exec_command' });
   await c.event('parallel', 'PostToolUse', { tool_name: 'mcp__cockpit__probe', tool_use_id: 'probe' });
-  assert.equal((await c.snapshot()).sessions[0].status, '許可待ち');
+  assert.equal((await c.snapshot()).sessions[0].status, '許可確認中');
   await c.event('parallel', 'PostToolUse', { tool_name: 'exec_command', tool_use_id: 'shell' });
   assert.deepEqual((await c.snapshot()).sessions[0].permissionWaits, []);
 });
 
-test('Codex の子の許可待ちはその子のツール完了で解消する', async (t) => {
+test('Codex の子の許可確認中はその子のツール完了で解消する', async (t) => {
   const c = await cockpit(t);
   await c.event('parent', 'PermissionRequest', { agent_id: 'child', tool_name: 'exec_command' });
   await c.event('parent', 'PostToolUse', { agent_id: 'child', tool_name: 'exec_command', tool_use_id: 'tool' });
@@ -269,6 +270,7 @@ test('Codex の runHook は PermissionRequest にツール名と入力の要約�
   const wait = (await c.snapshot()).sessions[0].permissionWaits[0];
   assert.equal(wait.tool_name, 'Bash');
   assert.equal(wait.summary, 'npm test');
+  assert.equal(wait.phase, 'checking');
 });
 
 test('Codex の子が稼働中でも Claude のエージェント定義とタスク通知を読まない', async (t) => {

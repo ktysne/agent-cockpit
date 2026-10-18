@@ -10,7 +10,7 @@ const CODEX_STOP_WAIT_MS = 59 * 60_000;
 const POST_TOOL_BATCH_TIMEOUT_MS = 1_000;
 const DELIVERY_ACK_TIMEOUT_MS = 300;
 // stop-check はレビュー記録の催促の判定を待ってから応答するため。
-const CODEX_STOP_CHECK_TIMEOUT_MS = REVIEW_REMINDER_WAIT_MS + 2_000;
+const STOP_CHECK_TIMEOUT_MS = REVIEW_REMINDER_WAIT_MS + 2_000;
 // 最初の stop-poll は催促の判定を待ってから long-poll に入る。先に打ち切ると、その後の回答が届かないまま配信済みになる。
 const CLAUDE_STOP_POLL_TIMEOUT_MS = REVIEW_REMINDER_WAIT_MS + MAX_LONG_POLL_MS + 1_500;
 const ASK_OUTCOMES = new Set(['answered', 'timeout', 'released', 'server-lost']);
@@ -194,7 +194,7 @@ async function runCodexStopCheck(input, options) {
     id: crypto.randomUUID(),
     hook_at: now(),
     provider: 'codex',
-  }, { ...options, timeoutMs: CODEX_STOP_CHECK_TIMEOUT_MS });
+  }, { ...options, timeoutMs: STOP_CHECK_TIMEOUT_MS });
   if (result?.hookOutput) return { exitCode: 0, output: result.hookOutput, stderrText: null };
   if (result?.wait !== true || !Number.isInteger(result.generation)) {
     return { exitCode: 0, output: null, stderrText: null };
@@ -231,6 +231,14 @@ async function runStop(input, options) {
   const sessionId = input.session_id;
   const eventId = crypto.randomUUID();
   const hookAt = (options.now || Date.now)();
+  if (options.noninteractive) {
+    const result = await postHookRequest({
+      action: 'stop-check', event_name: 'Stop', session_id: sessionId, id: eventId, hook_at: hookAt,
+      provider: 'claude',
+    }, { ...options, timeoutMs: STOP_CHECK_TIMEOUT_MS });
+    const stderrText = result?.hookOutput?.reason || null;
+    return { exitCode: stderrText ? 2 : 0, stderrText };
+  }
   const started = await postHookRequest({
     action: 'stop-start', event_name: 'Stop', session_id: sessionId, id: eventId, hook_at: hookAt,
   }, { ...options, timeoutMs: 1_000 });
@@ -281,7 +289,10 @@ async function readStdin(stream = process.stdin) {
 async function main() {
   try {
     const input = JSON.parse(await readStdin());
-    const result = await runAnswerHook(input, { provider: process.argv[2] === 'codex' ? 'codex' : 'claude' });
+    const result = await runAnswerHook(input, {
+      provider: process.argv[2] === 'codex' ? 'codex' : 'claude',
+      noninteractive: process.env.AGENT_COCKPIT_NONINTERACTIVE === '1',
+    });
     if (result.output) process.stdout.write(`${JSON.stringify(result.output)}\n`);
     if (result.stderrText) process.stderr.write(result.stderrText);
     process.exitCode = result.exitCode;

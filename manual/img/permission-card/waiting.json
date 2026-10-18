@@ -2,15 +2,15 @@
   "name": "waiting",
   "target": "article.permission:not(.long-wait)",
   "width": 1576,
-  "height": 208,
+  "height": 246,
   "parts": [
     {
       "key": "permission.card",
       "bounds": {
         "x": 0,
-        "y": 1,
+        "y": 2,
         "width": 1576,
-        "height": 205
+        "height": 243
       },
       "visible": true
     },
@@ -18,7 +18,7 @@
       "key": "permission.who",
       "bounds": {
         "x": 32,
-        "y": 27,
+        "y": 28,
         "width": 420,
         "height": 45
       },
@@ -38,7 +38,7 @@
       "key": "permission.time",
       "bounds": {
         "x": 599,
-        "y": 31,
+        "y": 32,
         "width": 116,
         "height": 38
       },

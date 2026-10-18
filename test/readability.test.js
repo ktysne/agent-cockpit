@@ -181,6 +181,26 @@ test('待ち時間と許可待ちは期間表示の形式を使う', () => {
   assert.equal(mockContext.durationLabel(mockStartedAt), '14 時間 3 分');
 });
 
+test('許可確認中は作業状態だけに表示し、確認済みの待ちだけ判断欄と件数に出す', () => {
+  const context = vm.createContext({ Date,
+    document: { createElement: (tag) => new FakeElement(tag), createTextNode: (text) => ({ textContent: text }) },
+    isFilterShown: () => true, newestFirst: (items) => items, isLongWait: () => true,
+    appendContextTags() {}, sessionDisplayName: () => '音源の編集',
+  });
+  const helpers = ['element', 'badge', 'durationLabel', 'shownPermissions', 'appendPermissionWaits', 'countJudgments', 'activityStatus'];
+  vm.runInContext(helpers.map((name) => functionSource(web, name)).join('\n'), context);
+  for (const [phase, count, agent_id] of [['checking', 0], ['checking', 0, 'worker'], [undefined, 0], ['prompted', 1]]) {
+    const session = { status: phase === 'prompted' ? '許可待ち' : '許可確認中', decisions: [], agents: [],
+      permissionWaits: [{ phase, agent_id, startedAt: '2020-01-01T00:00:00Z', tool_name: 'Bash', summary: 'npm test' }] };
+    const body = new FakeElement('div');
+    context.appendPermissionWaits(body, session, { name: 'rec-studio' });
+    assert.equal(context.countJudgments([session]).permission, count);
+    assert.equal(body.children.length, count);
+    if (count) assert.match(textOf(body), /Claude Code の画面で許可または拒否/);
+    else if (phase === 'checking') assert.equal(context.activityStatus(session).label, `${agent_id ? 'サブエージェントが' : ''}実行許可を確認中`);
+  }
+});
+
 test('SHAは確認欄とマージ警告で7桁を表示し、完全な値をtitleに残す', () => {
   const element = functionSource(web, 'element');
   const shortShaElement = functionSource(web, 'shortShaElement');

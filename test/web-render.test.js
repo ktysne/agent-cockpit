@@ -1140,6 +1140,7 @@ test('作業行は先頭に名前と時刻を置き、詳細と状態不明の�
   const body = new FakeElement('div');
   context.appendAgents(body, {
     ...session,
+    permissionWaits: [],
     agents: [
       { agent_id: 'with-description', agent_type: '実装', active: true, closable: true, description: '依頼の説明', model: 'Sonnet', route: 'Claude', startedAt: '2026-10-05T00:00:00.000Z' },
       { agent_id: 'with-tool', agent_type: '確認', active: true, lastTool: { tool_name: 'Read', summary: 'src/web/index.html' }, startedAt: '2026-10-05T00:00:00.000Z' },
@@ -1194,14 +1195,14 @@ test('モックの作業行も名前と時刻の後に全幅の詳細を並べ�
   assert.ok(!unknownMain.includes('class="since"'));
   assert.ok(unknownMain.indexOf('class="who"') < unknownMain.indexOf('class="session-extra"'));
 
-  const describedAgent = context.agentRow({}, { id: 'session' }, {
+  const describedAgent = context.agentRow({}, { id: 'session', perms: [] }, {
     id: 'agent', type: '実装', text: '依頼の説明', since: '1 分前',
   }, true);
   assert.ok(describedAgent.indexOf('class="who"') < describedAgent.indexOf('class="since"'));
   assert.ok(describedAgent.indexOf('class="since"') < describedAgent.indexOf('class="detail"'));
   assert.ok(describedAgent.indexOf('class="agent-description"') < describedAgent.indexOf('class="models"'));
 
-  const toolOnlyAgent = context.agentRow({}, { id: 'session' }, {
+  const toolOnlyAgent = context.agentRow({}, { id: 'session', perms: [] }, {
     id: 'agent', type: '確認', text: '', tool: 'Read: src/web/index.html', since: '2 分前',
   }, false);
   assert.ok(toolOnlyAgent.indexOf('class="tool-line"') < toolOnlyAgent.indexOf('class="models"'));
@@ -4819,7 +4820,7 @@ test('起点帯の判定は非表示セッション、PR の履歴、新着ま�
   assert.doesNotMatch(markedMockSession, /session-context" data-origin=/);
 });
 
-function renderedKindOriginRows(provider, showOriginBands) {
+function renderedKindOriginRows(provider, showOriginBands, permissionWaits = [], ended = false) {
   class FakeElement {
     constructor(tagName, className = '', textContent = '') {
       this.tagName = tagName;
@@ -4843,28 +4844,27 @@ function renderedKindOriginRows(provider, showOriginBands) {
     appendUnknownSessionControls() {},
     appendSessionModelLine() {},
     appendModelLine() {},
-    badge: () => element('span'),
-    displayPreferences: { hideFinished: true },
+    badge: (text, tone) => element('span', `badge ${tone}`, text),
+    displayPreferences: { hideFinished: !ended },
     isFilterShown: () => true,
-    isEndedAgent: () => false,
     taskVisibility: () => ({ visible: [], todoCount: 0, doneCount: 0 }),
   });
-  const functions = ['sessionOrigin', 'mainRow', 'appendAgents', 'appendKindTaskSession']
+  const functions = ['sessionOrigin', 'mainRow', 'isEndedAgent', 'appendAgents', 'appendKindTaskSession']
     .map(name => functionSource(pageHtml, name));
   vm.runInContext(functions.join('\n'), context);
   const session = {
-    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], agents: [{ active: true, agent_type: 'worker' }],
+    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], permissionWaits, agents: [{ agent_id: 'worker', active: !ended, agent_type: 'worker' }],
   };
   const activity = context.mainRow(session, {}, true, false, showOriginBands);
   const agentBody = element('div');
-  context.appendAgents(agentBody, session, {}, false, false, false, false, showOriginBands);
+  context.appendAgents(agentBody, session, {}, false, false, ended, false, showOriginBands);
   const agent = agentBody.children.find(node => node.className === 'agent-list').children[0];
   const taskBody = element('div');
   context.appendKindTaskSession(taskBody, { product: {}, session, multipleSessions: false }, false, false, showOriginBands);
   return [activity, agent, taskBody.children[0]];
 }
 
-function renderedMockKindOriginRows(provider, showOriginBands) {
+function renderedMockKindOriginRows(provider, showOriginBands, perms = [], ended = false) {
   const context = pageContext(mockHtml, {
     ui: { estimatedSessions: [], closedAgents: [], expandedKindTodoTasks: false },
     taskState: (_session, task) => task.state,
@@ -4876,7 +4876,7 @@ function renderedMockKindOriginRows(provider, showOriginBands) {
     modelLine: () => '',
     routeTag: () => '',
     unknownSessionControls: () => '',
-    isClosedByUser: () => false,
+    isClosedByUser: () => ended,
     isBusyAgent: () => true,
     isUnconfirmed: () => false,
     isClosable: () => false,
@@ -4884,13 +4884,29 @@ function renderedMockKindOriginRows(provider, showOriginBands) {
   const functions = ['sessionOrigin', 'mainRow', 'agentRow', 'kindTaskSessionBlock']
     .map(name => functionSource(mockHtml, name));
   vm.runInContext(functions.join('\n'), context);
-  const session = { provider, status: 'wait', tasks: [], main: { tool: '—', since: '1 分前' } };
+  const session = { provider, status: 'wait', tasks: [], perms, main: { tool: '—', since: '1 分前' } };
   return [
     context.mainRow({}, session, true, showOriginBands),
     context.agentRow({}, session, { type: 'worker', state: 'busy', since: '1 分前' }, true, showOriginBands),
     context.kindTaskSessionBlock({}, session, false, showOriginBands).html,
   ];
 }
+
+test('サブエージェントの札は終了状態を優先し、稼働中は確認中より許可待ちを優先する', () => {
+  const waits = [
+    { agent_id: 'worker', phase: 'checking', target_tool_use_id: 'first' },
+    { agent_id: 'worker', phase: 'checking', target_tool_use_id: 'second' },
+    { agent_id: 'worker', phase: 'prompted', target_tool_use_id: null },
+  ];
+  for (const [ended, label, tone] of [[false, '許可待ち', 'wait'], [true, '終了', 'done']]) {
+    const [, agent] = renderedKindOriginRows('claude', true, waits, ended);
+    const badge = agent.children[0].children.find(node => node.className === 'agent-name').children[0];
+    assert.equal(badge.textContent, label);
+    assert.equal(badge.className, `badge ${tone}`);
+    const [, mockAgent] = renderedMockKindOriginRows('claude', true, waits.map(wait => ({ ...wait, who: 'worker' })), ended);
+    assert.match(mockAgent, new RegExp(`class="badge ${tone}">${label}</span>`));
+  }
+});
 
 test('種類別のタスクと作業行はセッションの起点色で帯を表示する', () => {
   for (const [provider, origin] of [['claude', 'claude'], ['codex', 'codex']]) {
@@ -5181,7 +5197,7 @@ function restartNoteHarness(source, response = async () => ({ status: 202 })) {
   });
   vm.runInContext(functionSource(source, 'renderRestartNote'), context);
   const state = { restartRequired: true, restartAvailable: true, runtime: { startedAt: 'before' },
-    sessions: [{ permissionWaits: [{}, {}] }] };
+    sessions: [{ permissionWaits: [{ phase: 'prompted' }, { phase: 'prompted' }, { phase: 'checking' }] }] };
   const render = () => context.renderRestartNote(state);
   render();
   const click = label => buttons.find(button => button.textContent === label).click();
