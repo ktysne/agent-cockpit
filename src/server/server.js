@@ -223,7 +223,7 @@ function createRequestHandler(options) {
     handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks,
     handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
   } = createUiSessionRoutes(ctx);
-  const { handleAwayState, handleAway, handleRouting, handleOpenUrl, handleUpdateCheck } = createSettingsRoutes(ctx);
+  const { handleAwayState, handleAway, handleRouting, handleOpenUrl, handleUpdateCheck, handlePersistenceRetry } = createSettingsRoutes(ctx);
 
   const invalidSessionId = { valid: (params) => validSessionId(params[1]), status: 400, error: 'Invalid session id' };
   const unknownSessionId = { valid: (params) => isShortSessionId(params[1]), status: 404, error: 'Session not found' };
@@ -231,6 +231,7 @@ function createRequestHandler(options) {
   // method と path の両方が一致した最初の行を使う。
   // 本文は body が 'json' の行だけが読む。estimate は本文を使わないので 'none' にする。
   const routes = [
+    { method: 'POST', path: '/api/persistence/retry', auth: 'ui', body: 'json', handler: handlePersistenceRetry },
     { method: 'POST', path: '/api/server/restart', auth: 'ui', body: 'json', handler: serverRestart.handleServerRestart },
     { method: 'POST', path: '/api/diagnostics', auth: 'hook', body: 'json', maxBytes: MAX_DIAGNOSTICS_BODY_BYTES,
       handler: async ({ request, response, body }) => {
@@ -441,6 +442,7 @@ async function startServer(options = {}) {
   await fs.mkdir(homeDir, { recursive: true });
 
   const storageWriter = new AtomicJsonWriter(homeDir, {
+    ...options.storageOptions,
     onFailure: (fileName) => logLine(homeDir, `${fileName} write failed`),
   });
   const perf = new PerfMetrics();
@@ -843,6 +845,7 @@ async function startServer(options = {}) {
       await sourceReading;
       if (server.listening) await new Promise((resolve) => server.close(resolve));
       await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
+      await storageWriter.close();
       await removeServerInfoIfOwned(homeDir, info);
       logLine(homeDir, 'stopped');
       await diagnostics.record('mark', 'server', 'server.stop', { pid: info.pid });

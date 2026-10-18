@@ -564,6 +564,7 @@ h3.sub .count { font-weight: normal; }
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="restart-note" role="status" aria-live="polite" hidden></div>
+  <div class="filter-note" id="persistence-note" role="status" aria-live="polite" hidden><span></span> <button type="button" class="link-btn">保存を再試行</button></div>
   <div class="filter-note" id="update-note" role="status" aria-live="polite" hidden>
     <span id="update-message"></span>
     <button type="button" class="link-btn" id="update-copy">更新の依頼文をコピー</button>
@@ -3879,17 +3880,26 @@ function appendKindTaskSession(body, reference, showTodo, showDone, showOriginBa
 function unknownSessionControls(session) {
   // 非対話の実行はプロセスが終われば行ごと消えるので、推定と一覧からの除外は出さない。
   if (session.status !== '不明' || session.nonInteractive) return null;
+  const supportsEstimate = session.provider == null || session.provider === 'claude';
   const extra = element('div', 'session-extra');
   const actions = element('div', 'session-actions');
-  const estimateButton = element('button', 'ended-toggle', '状態を推定');
-  estimateButton.type = 'button';
-  estimateButton.dataset.estimateSession = session.session_id;
+  if (supportsEstimate) {
+    const estimateButton = element('button', 'ended-toggle', '状態を推定');
+    estimateButton.type = 'button';
+    estimateButton.dataset.estimateSession = session.session_id;
+    actions.append(estimateButton);
+  }
   const hideButton = element('button', 'ended-toggle', '一覧から外す');
   hideButton.type = 'button';
   hideButton.dataset.hideSession = session.session_id;
-  actions.append(estimateButton, hideButton);
+  actions.append(hideButton);
   extra.append(actions);
 
+  if (!supportsEstimate) {
+    const providerName = session.provider === 'codex' ? 'Codex' : 'このプロバイダー';
+    extra.append(element('div', 'estimate', `${providerName}の履歴からの推定には未対応です`));
+    return extra;
+  }
   if (!session.estimate) return extra;
   const panel = element('div', 'estimate');
   if (!session.estimate.canEstimate) {
@@ -5206,6 +5216,41 @@ async function requestServerRestart() {
   return postUiAction('/api/server/restart', {});
 }
 
+async function retryPersistence() {
+  const response = await postUiAction('/api/persistence/retry', {});
+  if (!response.ok) throw new Error('Persistence retry failed');
+  return response.json();
+}
+
+function renderPersistenceNote(state) {
+  const note = document.getElementById('persistence-note');
+  const ui = renderPersistenceNote.ui ||= { busy: false, error: '' };
+  if (state.persistence?.status === 'saved') ui.error = '';
+  ui.state = state;
+  note.hidden = state.persistence?.status !== 'failed' && !ui.busy && !ui.error;
+  const button = note.querySelector('button');
+  button.disabled = ui.busy;
+  button.textContent = ui.busy ? '再保存中…' : '保存を再試行';
+  const files = (state.persistence?.files || []).filter(file => file.errorCode);
+  const details = files.map(file => `${file.fileName}: ${file.errorCode} (${new Date(file.lastFailureAt).toLocaleString('ja-JP')})`).join('、');
+  note.querySelector('span').textContent = ui.error || `現在の状態を保存できていません。自動で再試行します。終了や再起動をすると、未保存の状態を失うおそれがあります。${details}`;
+  button.onclick = async () => {
+    if (ui.busy) return;
+    ui.busy = true;
+    ui.error = '';
+    renderPersistenceNote(ui.state);
+    try {
+      const result = await retryPersistence();
+      ui.state = { ...ui.state, persistence: result.persistence };
+    } catch {
+      ui.error = '保存状態を確認できませんでした。接続を確かめて、保存を再試行してください。';
+    } finally {
+      ui.busy = false;
+      renderPersistenceNote(ui.state);
+    }
+  };
+}
+
 function renderRestartNote(state) {
   const note = document.getElementById('restart-note');
   const ui = renderRestartNote.ui ||= { phase: 'idle', error: '', timer: null, view: '', focus: '' };
@@ -5219,7 +5264,9 @@ function renderRestartNote(state) {
   if (note.hidden) { ui.phase = 'idle'; ui.error = ''; ui.view = ''; note.textContent = ''; return; }
   let text;
   const buttons = [];
-  if (ui.phase === 'waiting') {
+  if (state.persistence?.status === 'failed' && ui.phase !== 'waiting') {
+    text = '未保存の変更があるため、再起動できません。保存の警告が消えてから再起動してください。';
+  } else if (ui.phase === 'waiting') {
     text = '常駐サーバーを再起動しています。';
   } else if (ui.phase === 'confirm' || ui.phase === 'sending') {
     const permissions = (state.sessions || []).reduce((sum, session) => sum + session.permissionWaits.length, 0);
@@ -5232,7 +5279,11 @@ function renderRestartNote(state) {
       renderRestartNote(ui.state);
       try {
         const response = await requestServerRestart();
-        if (response.status !== 202) throw new Error('Restart rejected');
+        if (response.status !== 202) {
+          const result = await response.json().catch(() => ({}));
+          if (result.persistence) ui.state = { ...ui.state, persistence: result.persistence };
+          throw new Error('Restart rejected');
+        }
         ui.phase = 'waiting';
         ui.timer = setTimeout(() => {
           ui.phase = 'idle';
@@ -5242,7 +5293,9 @@ function renderRestartNote(state) {
         }, 30_000);
       } catch {
         ui.phase = 'idle';
-        ui.error = '再起動を始められませんでした。タスクトレイのメニューから再起動してください。';
+        ui.error = ui.state.persistence?.status === 'pending'
+          ? '保存処理が進行中です。少し待ってから再起動してください。'
+          : '再起動を始められませんでした。タスクトレイのメニューから再起動してください。';
         ui.focus = '常駐サーバーを再起動する';
       }
       renderRestartNote(ui.state);
@@ -5453,6 +5506,7 @@ async function refresh() {
     applyAwayState(state.away);
     applyUpdateState(state.update);
     renderRestartNote(state);
+    renderPersistenceNote(state);
     applyAppVersion(state.appVersion, state.runtime);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
     const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;

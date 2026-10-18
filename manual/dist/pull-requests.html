@@ -266,7 +266,7 @@
   <figure class="guide-map" id="pr-variants-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/1013"><div class="gm-clip"><img src="img/pull-requests-badges/group.png" width="788" height="756" alt="3 つの PR の行と、マージ済みの一覧。1 つ目は積み直しが必要の札とマージできない理由が出ている。2 つ目はコンフリクトの札とコンフリクト解決のボタンがあり、クロスレビューがレビュー未実施になっている。3 つ目はドラフトの札があり、マージできない理由がドラフトになっている。最下段にマージ済みの一覧がある" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-30.901%"></div><a class="gm-badge gm-place-right" data-gm="1" href="#pr-variants-map-1" style="left:29.124%;top:12.537%" aria-label="1. 積み直しが必要">1</a><a class="gm-badge gm-place-left" data-gm="2" href="#pr-variants-map-2" style="left:1.65%;top:22.507%" aria-label="2. マージできない理由">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#pr-variants-map-3" style="left:39.181%;top:15.499%" aria-label="3. クロスレビューの状態">3</a><a class="gm-badge gm-place-right" data-gm="4" href="#pr-variants-map-4" style="left:26.142%;top:44.324%" aria-label="4. コンフリクト">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-variants-map-5" style="left:82.614%;top:45.212%" aria-label="5. コンフリクト解決">5</a><span class="gm-frame" data-gm="6" aria-hidden="true" style="left:1.65%;top:47.285%;width:78.046%;height:6.318%"></span><a class="gm-badge gm-place-left" data-gm="6" href="#pr-variants-map-6" style="left:1.65%;top:50.444%" aria-label="6. クロスレビューの行">6</a><a class="gm-badge gm-place-left" data-gm="7" href="#pr-variants-map-7" style="left:1.65%;top:78.085%" aria-label="7. ドラフト">7</a><a class="gm-badge gm-place-left" data-gm="8" href="#pr-variants-map-8" style="left:1.65%;top:90.03%" aria-label="8. マージできない理由">8</a><a class="gm-badge gm-place-left" data-gm="9" href="#pr-variants-map-9" style="left:1.65%;top:96.693%" aria-label="9. マージ済みの一覧">9</a></div></div></div><ol class="gm-list"><li id="pr-variants-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">積み直しが必要</span></b>：下の PR をスカッシュかリベースでマージした後も、そのコミットが、この PR の差分に残っています(<a href="#pr-restack">積み直し</a>)。</div></li><li id="pr-variants-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>マージできない理由</b>：積み直しが済むまで、マージできません。</div></li><li id="pr-variants-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>クロスレビューの状態</b>：<span class="ui">レビュー済み</span> は、この head のクロスレビューが収束した PR です。</div></li><li id="pr-variants-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">コンフリクト</span></b>：base と衝突しています。</div></li><li id="pr-variants-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b><span class="ui">コンフリクト解決</span></b>：衝突の解消を、PR を登録したセッションに依頼します(<a href="#pr-conflict">衝突の解消の依頼</a>)。</div></li><li id="pr-variants-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b>クロスレビューの行</b>：<span class="ui">レビュー未実施</span> は、この PR のブランチに、クロスレビューの記録が無い PR です。</div></li><li id="pr-variants-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b><span class="ui">ドラフト</span></b>：ドラフトの PR です。</div></li><li id="pr-variants-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b>マージできない理由</b>：ドラフトを解除するまで、マージできません。</div></li><li id="pr-variants-map-9" data-gm="9"><span class="gm-num" aria-hidden="true">9</span><div class="gm-body"><b>マージ済みの一覧</b>：<span class="ui">マージ済み (24 時間)</span> に、直近にマージした PR が出ます(<a href="#pr-merged-list">マージ済みの一覧</a>)。</div></li></ol></figure>
   <p>図に無い札もあります。
   <span class="ui">マージ処理中 (未マージ)</span> は、マージ処理を行っていて、まだマージを確認していない PR に出ます。
-  <span class="ui">base を</span> で始まる札は、ダッシュボードが、下の PR をマージするときに base をマージ先へ付け替えた PR に付きます(<a href="#pr-result">マージの結果</a>)。</p>
+  <span class="ui">base を</span> で始まる札は、ダッシュボードが、下の PR をマージするときに base の付け替えに成功した PR に付きます(<a href="#pr-result">マージの結果</a>)。</p>
 
   <h3 id="pr-restack">積み直し</h3>
   <p>スカッシュかリベースでマージすると、下の PR の元のコミットが、既定ブランチに別のコミットとして入ります。
@@ -298,6 +298,7 @@
   予約していない、マージ操作ができない PR には、<span class="ui">マージできない理由</span> の行が出ます。
   理由は、次の順に調べ、最初に当たった 1 つを出します。</p>
   <ul>
+    <li>「親 PR #&lt;番号&gt; のマージ確認待ち」：子 PR の base 変更に先立って記録した親 PR が、GitHub からマージ済みと確認できていません。親 PR が未マージで閉じている場合は、再オープンして先にマージしてください</li>
     <li>「リポジトリ設定を取得できません」：既定ブランチを取得できていません</li>
     <li>「base の &lt;ブランチ名&gt; がどの PR の head でもないことを確認できない」：一覧や候補の検索を取得できない、または確認の上限を超えています</li>
     <li>「base の &lt;ブランチ名&gt; はマージ済みの PR の head のため、ダッシュボードではマージしない」：マージ済みの PR の head に向けています</li>
@@ -421,15 +422,16 @@
     <p>実行を押すと、常駐サーバーは次の順に進めます。</p>
     <ol>
       <li>GitHub から PR の状態を取り直し、上の条件を確かめます</li>
-      <li>ブランチを削除する場合だけ、直上の PR の base をマージ先に付け替えます。リポジトリの自動削除も含み、1 件でも付け替えに失敗したらマージしません。fork の PR は付け替えません</li>
+      <li>ブランチを削除する場合だけ、直上の PR の base をマージ先に付け替えます。親子の依存を先に保存し、GitHub の base 変更が成功した場合だけ付け替え済みとして表示します。リポジトリの自動削除も含み、1 件でも付け替えに失敗したらマージしません。fork の PR は付け替えません</li>
       <li>もう一度取り直して、条件を確かめます</li>
       <li><code>gh pr merge</code> を実行します</li>
       <li>PR の状態を読み、マージ済みであることを確かめます</li>
-      <li>ブランチの削除を選んだときは、ブランチを削除します</li>
+      <li>ブランチの削除を選んだときは、マージした head SHA と一致するリモートブランチだけを削除します。ref が既に無い場合は削除済みとして扱い、head SHA が変わっていた場合は削除を見送って警告します</li>
       <li>PR を登録したセッションに、結果を知らせます(<a href="#pr-result">マージの結果</a>)</li>
     </ol>
-    <p>同じ PR の操作が進行中のときは、後から押した操作を断り、「操作が進行中です」と出します。</p>
+    <p>同じリポジトリの手動マージと予約は到着順に待ち、一件ずつ実行します。先行操作が終わってから GitHub の状態を取り直します。</p>
     <p>失敗したときは、PR の行の下に理由が出ます。
+    GitHub への付け替えが失敗した場合は、表示する base を変えず、親 PR のマージが確認されるまで子 PR のマージを止めます。
     付け替えが済んだ後に失敗したときは、付け替えが済んでいることも書きます。
     失敗の知らせは 1 分で消えます。
     確認欄は残るので、状態を確認してから <span class="ui">マージを実行</span> をもう一度押せます。</p>

@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const { sanitizeQuestions, sanitizeCodexQuestions } = require('./events');
 const { isStoredSessionId } = require('./session-ids');
 const { TaskNudges } = require('./task-nudges');
@@ -6,6 +7,9 @@ const ANSWER_WAIT_MS = 5 * 60_000;
 const MAX_LONG_POLL_MS = 25_000;
 const REVIEW_REMINDER_WAIT_MS = 3_000;
 const MAX_ASK_POLL_GAP_MS = 30_000;
+const HOOK_DELIVERY_TTL_MS = 10 * 60_000;
+const MAX_HOOK_DELIVERY_RECORDS_PER_SESSION = 128;
+const MAX_SESSION_NOTIFICATIONS = 20;
 const ANSWER_HOOK_DENY_REASON = '開発者は離席中です。AskUserQuestion で尋ねずに、推奨の選択肢を適用して作業を続けてください。判断事項の id は「{id}」です。推奨で進めたら cockpit_update_decision でこの id を provisional にし、選んだ選択肢を書いてください。判断が必要だった事項と仮に適用した推奨は、最後の報告の「あなたの判断が必要なこと」に一覧で書いてください。破壊的な操作は行わず、判断待ちとして残してください。';
 // 知らせはフックの英語の定型文に包まれて届き、返答が英語に引きずられやすいため、毎回添える。
 const SESSION_NOTIFICATION_REPLY_LANGUAGE = 'この知らせへの返答と、続けて開発者に見せる文は日本語で書く。';
@@ -159,12 +163,15 @@ class DecisionAnswerDelivery {
     this.answerWaitMs = answerWaitMs;
     this.maxAskPollGapMs = maxAskPollGapMs;
     this.taskNudges = new TaskNudges({ state, now });
+    this.pendingHookDeliveries = state.pendingHookDeliveries;
+    this.pendingSessionNotifications = state.pendingSessionNotifications;
+    this.pendingSessionNotificationOverflow = state.pendingSessionNotificationOverflow;
     this.askWaits = new Map();
     this.stopGenerations = new Map();
     this.lastLifecycleAt = new Map();
     this.endedSessions = new Set();
     this.waiters = new Map();
-    this.sessionNotifications = new Map();
+    this.sessionNotifications = this.pendingSessionNotifications;
     this.closed = false;
   }
 
@@ -280,7 +287,7 @@ class DecisionAnswerDelivery {
     }
 
     if (currentOutcome === 'answered') {
-      const answer = { ...decision.answer, deliveredAt: decision.answer.deliveredAt || at };
+      const answer = { ...decision.answer };
       this.state.setDecisionLifecycle(sessionId, record.decisionId, {
         answer,
         awaitingAnswerUntil: null,
@@ -318,6 +325,7 @@ class DecisionAnswerDelivery {
       note,
       ...(choice === 'pick' ? { picks: picks.map((labels) => [...labels]) } : {}),
       sentAt: new Date(this.now()).toISOString(),
+      version: crypto.randomUUID(),
       deliveredAt: null,
       reflectedAt: null,
       promptDeliveries: 0,
@@ -332,14 +340,13 @@ class DecisionAnswerDelivery {
       decision.answer?.sentAt && !decision.answer.deliveredAt && !decision.answer.ignoredAt && !decision.awaitingAnswerUntil && ['waiting', 'provisional'].includes(decision.state)
     ));
     if (!pending.length) return null;
-    const at = new Date(this.now()).toISOString();
-    const messages = pending.map((decision) => decisionAnswerText(decision));
     for (const decision of pending) {
+      if (typeof decision.answer.version === 'string') continue;
       this.state.setDecisionLifecycle(sessionId, decision.id, {
-        answer: { ...decision.answer, deliveredAt: at },
+        answer: { ...decision.answer, version: crypto.randomUUID() },
       }, this.now());
     }
-    return messages.join('\n');
+    return pending.map((decision) => decisionAnswerText(this.state.decisionFor(sessionId, decision.id))).join('\n');
   }
 
   deliverPostToolBatch(sessionId) {
@@ -349,21 +356,159 @@ class DecisionAnswerDelivery {
 
   notifySessions(sessionIds, message) {
     if (!Array.isArray(sessionIds) || typeof message !== 'string' || !message.trim()) return false;
+    let accepted = true;
+    let changed = false;
     for (const sessionId of new Set(sessionIds)) {
       if (!isStoredSessionId(sessionId)) continue;
-      const pending = this.sessionNotifications.get(sessionId) || [];
-      pending.push(message.slice(0, 8000));
-      this.sessionNotifications.set(sessionId, pending.slice(-20));
+      changed = true;
+      const pending = this.pendingSessionNotifications.get(sessionId) || [];
+      if (pending.length >= MAX_SESSION_NOTIFICATIONS) {
+        accepted = false;
+        const previous = this.pendingSessionNotificationOverflow.get(sessionId);
+        this.pendingSessionNotificationOverflow.set(sessionId, {
+          id: crypto.randomUUID(),
+          count: (previous?.count || 0) + 1,
+          updatedAt: new Date(this.now()).toISOString(),
+        });
+      } else {
+        pending.push({ id: crypto.randomUUID(), message: message.slice(0, 8000), createdAt: new Date(this.now()).toISOString() });
+        this.pendingSessionNotifications.set(sessionId, pending);
+      }
       this.signal(sessionId);
     }
-    return true;
+    if (changed) {
+      this.state.touch();
+      this.state.requestStoreWrite(true);
+    }
+    return accepted;
   }
 
   deliverSessionNotifications(sessionId) {
-    const pending = this.sessionNotifications.get(sessionId);
-    if (!pending?.length) return null;
-    this.sessionNotifications.delete(sessionId);
-    return [...pending, SESSION_NOTIFICATION_REPLY_LANGUAGE].join('\n');
+    const pending = this.pendingSessionNotifications.get(sessionId) || [];
+    const overflow = this.pendingSessionNotificationOverflow.get(sessionId);
+    if (!pending.length && !overflow) return null;
+    const messages = pending.map((record) => record.message);
+    if (overflow) messages.push(`${overflow.count} 件の通知は、未受領通知の上限に達したため登録されませんでした。ダッシュボードの最新状態を確認してください。`);
+    return [...messages, SESSION_NOTIFICATION_REPLY_LANGUAGE].join('\n');
+  }
+
+  hookDeliveryRequestKey(action, requestId, generation = null) {
+    return JSON.stringify([action, requestId, generation]);
+  }
+
+  getHookDelivery(sessionId, action, requestId, generation = null) {
+    const records = this.pendingHookDeliveries.get(sessionId);
+    if (!records) return null;
+    let changed = false;
+    for (const [key, record] of records) {
+      if (Date.parse(record.expiresAt) <= this.now()) {
+        records.delete(key);
+        changed = true;
+      }
+    }
+    if (!records.size) this.pendingHookDeliveries.delete(sessionId);
+    if (changed) {
+      this.state.touch();
+      this.state.requestStoreWrite(true);
+    }
+    return records.get(this.hookDeliveryRequestKey(action, requestId, generation)) || null;
+  }
+
+  canReplayStopDelivery(sessionId, record, parentAlive = true) {
+    return Number.isSafeInteger(record.generation) && parentAlive && !this.closed && !this.endedSessions.has(sessionId) &&
+      this.stopGenerations.get(sessionId) === record.generation &&
+      !this.state.sessionHasEnded?.(sessionId);
+  }
+
+  answerVersionsForDelivery(sessionId, action, decisionId = null, response = null) {
+    let decisions;
+    if (action === 'ask-finish') {
+      const decision = decisionId ? this.state.decisionFor(sessionId, decisionId) : null;
+      decisions = response?.outcome === 'answered' && decision ? [decision] : [];
+    } else {
+      decisions = this.state.decisionsFor(sessionId).filter((decision) => {
+        if (action === 'user-prompt-submit') {
+          return decision.answer?.sentAt && !decision.answer.reflectedAt && !decision.answer.ignoredAt &&
+            !decision.awaitingAnswerUntil && decision.answer.promptDeliveries < 3 && ['waiting', 'provisional'].includes(decision.state);
+        }
+        return decision.answer?.sentAt && !decision.answer.deliveredAt && !decision.answer.ignoredAt &&
+          !decision.awaitingAnswerUntil && ['waiting', 'provisional'].includes(decision.state);
+      });
+    }
+    return decisions.flatMap((decision) => decision.answer?.version
+      ? [{ decisionId: decision.id, version: decision.answer.version, prompt: action === 'user-prompt-submit' }]
+      : []);
+  }
+
+  recordHookDelivery({ sessionId, action, requestId, response, requestGeneration = null, generation = null, decisionId = null }) {
+    const requestKey = this.hookDeliveryRequestKey(action, requestId, requestGeneration);
+    const existing = this.getHookDelivery(sessionId, action, requestId, requestGeneration);
+    if (existing) return existing;
+    let records = this.pendingHookDeliveries.get(sessionId);
+    if (!records) {
+      records = new Map();
+      this.pendingHookDeliveries.set(sessionId, records);
+    }
+    const now = this.now();
+    for (const [key, record] of records) {
+      if (Date.parse(record.expiresAt) <= now) records.delete(key);
+    }
+    while (records.size >= MAX_HOOK_DELIVERY_RECORDS_PER_SESSION) {
+      const oldestAcknowledged = [...records].filter(([, record]) => record.acknowledgedAt)
+        .sort((left, right) => Date.parse(left[1].createdAt) - Date.parse(right[1].createdAt))[0];
+      if (!oldestAcknowledged) return null;
+      records.delete(oldestAcknowledged[0]);
+    }
+    const deliveryId = crypto.randomUUID();
+    const delivery = {
+      deliveryId,
+      requestKey,
+      action,
+      requestId,
+      generation: Number.isSafeInteger(generation) ? generation : null,
+      response: { ...response, deliveryId },
+      answerVersions: this.answerVersionsForDelivery(sessionId, action, decisionId, response),
+      notificationIds: action === 'ask-finish' ? [] : (this.pendingSessionNotifications.get(sessionId) || []).map((record) => record.id),
+      overflowId: action === 'ask-finish' ? null : this.pendingSessionNotificationOverflow.get(sessionId)?.id || null,
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + HOOK_DELIVERY_TTL_MS).toISOString(),
+      acknowledgedAt: null,
+    };
+    records.set(requestKey, delivery);
+    this.state.touch();
+    this.state.requestStoreWrite(true);
+    return delivery;
+  }
+
+  acknowledgeHookDelivery(sessionId, deliveryId) {
+    const records = this.pendingHookDeliveries.get(sessionId);
+    const record = records && [...records.values()].find((candidate) => candidate.deliveryId === deliveryId);
+    if (!record) return false;
+    if (record.acknowledgedAt) return true;
+    const acknowledgedAt = new Date(this.now()).toISOString();
+    for (const item of record.answerVersions) {
+      const decision = this.state.decisionFor(sessionId, item.decisionId);
+      if (decision?.answer?.version !== item.version) continue;
+      const answer = {
+        ...decision.answer,
+        deliveredAt: decision.answer.deliveredAt || acknowledgedAt,
+        ...(item.prompt ? { promptDeliveries: Math.min(3, (Number.isInteger(decision.answer.promptDeliveries) ? decision.answer.promptDeliveries : 0) + 1) } : {}),
+      };
+      this.state.setDecisionLifecycle(sessionId, item.decisionId, { answer }, this.now());
+    }
+    if (record.notificationIds.length) {
+      const pending = this.pendingSessionNotifications.get(sessionId) || [];
+      const retained = pending.filter((notification) => !record.notificationIds.includes(notification.id));
+      if (retained.length) this.pendingSessionNotifications.set(sessionId, retained);
+      else this.pendingSessionNotifications.delete(sessionId);
+    }
+    if (record.overflowId && this.pendingSessionNotificationOverflow.get(sessionId)?.id === record.overflowId) {
+      this.pendingSessionNotificationOverflow.delete(sessionId);
+    }
+    record.acknowledgedAt = acknowledgedAt;
+    this.state.touch();
+    this.state.requestStoreWrite(true);
+    return true;
   }
 
   deliverPrompt(sessionId, eventId, hookAt = this.now()) {
@@ -372,16 +517,14 @@ class DecisionAnswerDelivery {
     const pending = this.state.decisionsFor(sessionId).filter((decision) => (
       decision.answer?.sentAt && !decision.answer.reflectedAt && !decision.answer.ignoredAt && !decision.awaitingAnswerUntil && decision.answer.promptDeliveries < 3 && ['waiting', 'provisional'].includes(decision.state)
     ));
-    const messages = [this.deliverSessionNotifications(sessionId), ...pending.map((decision) => decisionAnswerText(decision))].filter(Boolean);
     for (const decision of pending) {
-      this.state.setDecisionLifecycle(sessionId, decision.id, {
-        answer: {
-          ...decision.answer,
-          deliveredAt: decision.answer.deliveredAt || new Date(this.now()).toISOString(),
-          promptDeliveries: decision.answer.promptDeliveries + 1,
-        },
-      }, this.now());
+      if (typeof decision.answer.version !== 'string') {
+        this.state.setDecisionLifecycle(sessionId, decision.id, {
+          answer: { ...decision.answer, version: crypto.randomUUID() },
+        }, this.now());
+      }
     }
+    const messages = [this.deliverSessionNotifications(sessionId), ...pending.map((decision) => decisionAnswerText(decision))].filter(Boolean);
     return messages.length ? messages.join('\n') : null;
   }
 
@@ -487,7 +630,6 @@ class DecisionAnswerDelivery {
     this.taskNudges.sessionEnded(sessionId);
     this.stopReviewReminders.delete(sessionId);
     this.remindedReviewHeads.delete(sessionId);
-    this.sessionNotifications.delete(sessionId);
     this.handleLifecycleEvent(sessionId, 'SessionEnd', `SessionEnd:${endedAt}`, endedAt);
     this.clearSessionAskWaits(sessionId);
     // 待ちの印が残ると、再開後に送った回答が通常の配信経路から外れたままになる。

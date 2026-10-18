@@ -111,7 +111,7 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
   const context = vm.createContext({
     fetchUi: async () => ({ ok: true, headers: { get: () => 'same' }, json: async () => state }), checkUiVersion: () => false,
     syncDisplayPreferences: async () => {}, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, renderRestartNote() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
+    applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     pendingStateReads: 0, AbortSignal: { timeout: () => ({}) },
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastStateEtag: 'same', liveStatus: {}, render: () => assert.fail('状態全体は描き直さない'),
@@ -130,7 +130,7 @@ function refreshContext(fetch, syncDisplayPreferences = async () => {}) {
     fetch, reportWebFailure: (...args) => failures.push(args), initialUiVersion: 'v1', uiUpdatePending: false,
     hasUnsentAnswerDraft: () => false, location: { reload: () => { reloadCount += 1; } },
     syncDisplayPreferences, updateConnectionNote() {}, header: { dataset: {} },
-    applyAwayState() {}, renderRestartNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
+    applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState() {}, applyAppVersion() {}, refreshConfirmPending: false,
     refreshSequence: 0, appliedRefreshSequence: 0, pendingStateReads: 0, pullRequestUnconfirmedResults: new Map(),
     AbortSignal: { timeout: (milliseconds) => ({ timeoutMs: milliseconds }) },
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',

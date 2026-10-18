@@ -1522,10 +1522,11 @@ test('Agent 起動後の PostToolBatch はタスク催促を返し、タスク�
   });
   assert.equal(eventResponse.status, 202);
 
+  let batchRequestNumber = 0;
   const postToolBatch = () => request(runtime.info.port, {
     method: 'POST', path: '/api/hooks/answers',
     body: JSON.stringify({
-      action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: sessionId, id: 'batch-1',
+      action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: sessionId, id: `batch-${++batchRequestNumber}`,
     }),
     headers,
   });

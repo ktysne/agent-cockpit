@@ -27,6 +27,7 @@ const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const STORE_PRUNE_MIN_INTERVAL_MS = 60_000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
+const MAX_HOOK_DELIVERY_RECORDS_PER_SESSION = 128;
 const pullRequestRecordKey = pullRequestKey;
 const relatedPullRequestRecordKey = pullRequestKey;
 const pullRequestRepositoryKey = repositoryKey;
@@ -50,6 +51,65 @@ function validStoredSessionId(value) {
 
 function validTimestamp(value, nullable = false) {
   return (nullable && value === null) || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+}
+
+function validHookDeliveryRecord(record) {
+  return isRecord(record) && typeof record.deliveryId === 'string' && record.deliveryId.length > 0 && record.deliveryId.length <= 256 &&
+    typeof record.requestKey === 'string' && record.requestKey.length > 0 && record.requestKey.length <= 1024 &&
+    typeof record.action === 'string' && record.action.length > 0 && record.action.length <= 64 &&
+    typeof record.requestId === 'string' && record.requestId.length > 0 && record.requestId.length <= 256 &&
+    (record.generation === null || Number.isSafeInteger(record.generation)) && isRecord(record.response) &&
+    Array.isArray(record.answerVersions) && record.answerVersions.every((item) => isRecord(item) &&
+      typeof item.decisionId === 'string' && item.decisionId.length > 0 && item.decisionId.length <= 256 &&
+      typeof item.version === 'string' && item.version.length > 0 && item.version.length <= 256 && typeof item.prompt === 'boolean') &&
+    Array.isArray(record.notificationIds) && record.notificationIds.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 256) &&
+    (record.overflowId === null || (typeof record.overflowId === 'string' && record.overflowId.length > 0 && record.overflowId.length <= 256)) &&
+    validTimestamp(record.createdAt) && validTimestamp(record.expiresAt) && validTimestamp(record.acknowledgedAt, true);
+}
+
+function normalizePendingHookDeliveries(value) {
+  const normalized = new Map();
+  if (!isRecord(value)) return normalized;
+  for (const [sessionId, records] of Object.entries(value)) {
+    if (!validStoredSessionId(sessionId) || !Array.isArray(records)) continue;
+    const pending = new Map();
+    for (const record of records) {
+      if (!validHookDeliveryRecord(record)) continue;
+      pending.set(record.requestKey, structuredClone(record));
+    }
+    const retained = [...pending.values()].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+    while (retained.length > MAX_HOOK_DELIVERY_RECORDS_PER_SESSION) {
+      const oldestAcknowledged = retained.findIndex((record) => record.acknowledgedAt);
+      if (oldestAcknowledged === -1) break;
+      retained.splice(oldestAcknowledged, 1);
+    }
+    if (retained.length) normalized.set(sessionId, new Map(retained.map((record) => [record.requestKey, record])));
+  }
+  return normalized;
+}
+
+function normalizePendingSessionNotifications(value) {
+  const normalized = new Map();
+  if (!isRecord(value)) return normalized;
+  for (const [sessionId, records] of Object.entries(value)) {
+    if (!validStoredSessionId(sessionId) || !Array.isArray(records)) continue;
+    const pending = records.filter((record) => isRecord(record) && typeof record.id === 'string' && record.id.length > 0 && record.id.length <= 256 &&
+      typeof record.message === 'string' && record.message.length <= 8000 && validTimestamp(record.createdAt))
+      .map((record) => ({ id: record.id, message: record.message, createdAt: record.createdAt }));
+    if (pending.length) normalized.set(sessionId, pending);
+  }
+  return normalized;
+}
+
+function normalizePendingSessionNotificationOverflow(value) {
+  const normalized = new Map();
+  if (!isRecord(value)) return normalized;
+  for (const [sessionId, record] of Object.entries(value)) {
+    if (!validStoredSessionId(sessionId) || !isRecord(record) || typeof record.id !== 'string' || record.id.length === 0 || record.id.length > 256 ||
+      !Number.isSafeInteger(record.count) || record.count < 1 || !validTimestamp(record.updatedAt)) continue;
+    normalized.set(sessionId, { id: record.id, count: record.count, updatedAt: record.updatedAt });
+  }
+  return normalized;
 }
 
 function stableStringify(value) {
@@ -213,7 +273,8 @@ function validPullRequestRetarget(record) {
   return isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
     Number.isSafeInteger(record.number) && record.number > 0 && typeof record.base === 'string' && record.base.length <= 500 &&
     (record.fromNumber === null || record.fromNumber === undefined || (Number.isSafeInteger(record.fromNumber) && record.fromNumber > 0)) &&
-    (record.previousBaseRefName === undefined || validBranchName(record.previousBaseRefName));
+    (record.previousBaseRefName === undefined || validBranchName(record.previousBaseRefName)) &&
+    (record.completed === undefined || typeof record.completed === 'boolean');
 }
 
 function validMergedPullRequest(record) {
@@ -411,6 +472,9 @@ function normalizeStore(value) {
     plans,
     askDecisionBindings,
     decisionLifecycles,
+    pendingHookDeliveries: normalizePendingHookDeliveries(value.pendingHookDeliveries),
+    pendingSessionNotifications: normalizePendingSessionNotifications(value.pendingSessionNotifications),
+    pendingSessionNotificationOverflow: normalizePendingSessionNotificationOverflow(value.pendingSessionNotificationOverflow),
     closedTasks,
     hiddenSessions,
     deletedSessions,
@@ -1507,6 +1571,9 @@ class DashboardState {
     this.finishedOutsideEventsAskDecisionIds = new Map();
     this.decisionOverrides = new Map();
     this.decisionLifecycles = new Map();
+    this.pendingHookDeliveries = new Map();
+    this.pendingSessionNotifications = new Map();
+    this.pendingSessionNotificationOverflow = new Map();
     this.estimates = new Map();
     this.hiddenSessions = new Set();
     this.hiddenSessionUpdatedAt = new Map();
@@ -1591,10 +1658,16 @@ class DashboardState {
       const decisionIds = new Set((this.plans.get(sessionId)?.decisions || []).map((decision) => decision.id));
       for (const [decisionId, lifecycle] of lifecycles) {
         if (!decisionIds.has(decisionId)) lifecycles.delete(decisionId);
-        else delete lifecycle.awaitingAnswerUntil;
+        else {
+          delete lifecycle.awaitingAnswerUntil;
+          if (lifecycle.answer && typeof lifecycle.answer.version !== 'string') lifecycle.answer.version = crypto.randomUUID();
+        }
       }
       if (!lifecycles.size) this.decisionLifecycles.delete(sessionId);
     }
+    this.pendingHookDeliveries = store.pendingHookDeliveries;
+    this.pendingSessionNotifications = store.pendingSessionNotifications;
+    this.pendingSessionNotificationOverflow = store.pendingSessionNotificationOverflow;
     for (const record of store.closedTasks) {
       const task = this.plans.get(record.session_id)?.tasks.find((item) => item.title === record.title);
       if (!task || task.state !== record.stateAtClose) continue;
@@ -1667,6 +1740,13 @@ class DashboardState {
     }
     let mergeHistoryChanged = false;
     let sessionRecordsChanged = false;
+    for (const [sessionId, records] of this.pendingHookDeliveries) {
+      const retained = new Map([...records].filter(([, record]) => Date.parse(record.expiresAt) > now));
+      if (retained.size === records.size) continue;
+      if (retained.size) this.pendingHookDeliveries.set(sessionId, retained);
+      else this.pendingHookDeliveries.delete(sessionId);
+      sessionRecordsChanged = true;
+    }
     for (const [sessionId, deletedAt] of this.deletedSessions) {
       if (now - Date.parse(deletedAt) <= STORE_RETENTION_MS) continue;
       this.deletedSessions.delete(sessionId);
@@ -1680,6 +1760,7 @@ class DashboardState {
       const sessionIds = new Set([
         ...this.plans.keys(), ...this.decisionLifecycles.keys(),
         ...this.closedTasks.keys(), ...this.pullRequests.keys(),
+        ...this.pendingSessionNotifications.keys(), ...this.pendingSessionNotificationOverflow.keys(),
       ]);
       for (const sessionId of sessionIds) {
         if (this.sessions.has(sessionId) || this.sessionFiles.has(sessionId)) continue;
@@ -1737,6 +1818,9 @@ class DashboardState {
       timestamps.push(Date.parse(record.addedAt));
       if (record.mergedAt) timestamps.push(Date.parse(record.mergedAt));
     }
+    for (const record of this.pendingSessionNotifications.get(sessionId) || []) timestamps.push(Date.parse(record.createdAt));
+    const overflow = this.pendingSessionNotificationOverflow.get(sessionId);
+    if (overflow) timestamps.push(Date.parse(overflow.updatedAt));
     const finite = timestamps.filter(Number.isFinite);
     return finite.length ? Math.max(...finite) : NaN;
   }
@@ -1748,6 +1832,9 @@ class DashboardState {
     this.finishedOutsideEventsAskDecisionIds.delete(sessionId);
     this.decisionLifecycles.delete(sessionId);
     this.closedTasks.delete(sessionId);
+    this.pendingHookDeliveries.delete(sessionId);
+    this.pendingSessionNotifications.delete(sessionId);
+    this.pendingSessionNotificationOverflow.delete(sessionId);
     if (!keepPullRequests && this.pullRequests.delete(sessionId)) this.invalidatePullRequestRegistrationCache();
   }
 
@@ -1803,6 +1890,12 @@ class DashboardState {
     }));
     const askDecisionBindings = Object.fromEntries([...this.askDecisionBindings]
       .map(([sessionId, bindings]) => [sessionId, Object.fromEntries(bindings)]));
+    const pendingHookDeliveries = Object.fromEntries([...this.pendingHookDeliveries]
+      .map(([sessionId, records]) => [sessionId, [...records.values()].map((record) => structuredClone(record))]));
+    const pendingSessionNotifications = Object.fromEntries([...this.pendingSessionNotifications]
+      .map(([sessionId, records]) => [sessionId, records.map((record) => ({ ...record }))]));
+    const pendingSessionNotificationOverflow = Object.fromEntries([...this.pendingSessionNotificationOverflow]
+      .map(([sessionId, record]) => [sessionId, { ...record }]));
     const closedTasks = [...this.closedTasks].flatMap(([sessionId, tasks]) => [...tasks].map(([title, record]) => ({
       session_id: sessionId,
       title,
@@ -1820,6 +1913,9 @@ class DashboardState {
       plans,
       askDecisionBindings,
       decisionLifecycles,
+      pendingHookDeliveries,
+      pendingSessionNotifications,
+      pendingSessionNotificationOverflow,
       closedTasks,
       hiddenSessions,
       deletedSessions: Object.fromEntries(this.deletedSessions),
@@ -2387,6 +2483,8 @@ class DashboardState {
     const index = this.pullRequestRetargets.findIndex((item) => item.owner === record.owner && item.repo === record.repo && item.number === record.number);
     const next = { owner: record.owner, repo: record.repo, number: record.number, base: record.base, fromNumber: record.fromNumber ?? null };
     if (record.previousBaseRefName) next.previousBaseRefName = record.previousBaseRefName;
+    const completed = record.completed ?? this.pullRequestRetargets[index]?.completed;
+    if (completed !== undefined) next.completed = completed;
     if (index >= 0 && stableStringify(this.pullRequestRetargets[index]) === stableStringify(next)) return false;
     if (index >= 0) this.pullRequestRetargets[index] = next;
     else this.pullRequestRetargets.push(next);
@@ -2427,13 +2525,19 @@ class DashboardState {
   flushStoreWrite() {
     clearTimeout(this.storeWriteTimer);
     this.storeWriteTimer = null;
-    if (!this.storeWritePending || !this.storeWriter) return Promise.resolve();
+    if (!this.storeWriter) return Promise.resolve();
+    if (!this.storeWritePending) return this.storeWriter.retry?.('store.json') || Promise.resolve();
     this.storeWritePending = false;
     return this.measure('store', () => this.storeWriter.write('store.json', this.serializeStore()));
   }
 
   async waitForPersistence() {
-    if (this.storeWriter) await this.storeWriter.flush();
+    if (this.storeWriter) await (this.storeWriter.wait?.() || this.storeWriter.flush());
+  }
+
+  persistenceStatus() {
+    const status = this.storeWriter?.snapshot?.() || { status: 'saved', files: [] };
+    return this.storeWritePending && status.status === 'saved' ? { ...status, status: 'pending' } : status;
   }
 
   async flushPersistence() {

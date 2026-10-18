@@ -57,6 +57,30 @@ test('削除印を保存して復元し、旧形式は空として読む', async
   await old.flushPersistence();
 });
 
+test('PR の付け替え完了状態を保存して復元し旧形式は完了済みとして読む', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = new DashboardState({ homeDir });
+  const incomplete = { owner: 'example', repo: 'project', number: 2, base: 'main', fromNumber: 1, completed: false };
+  state.recordPullRequestRetarget(incomplete);
+  state.recordPullRequestRetarget({ ...incomplete, completed: true });
+  state.recordPullRequestRetarget({ ...incomplete, number: 3, completed: false });
+  await state.flushPersistence();
+  const storePath = path.join(homeDir, 'store.json');
+  const stored = JSON.parse(await fs.readFile(storePath, 'utf8'));
+  stored.retargetedPrs.push({ owner: 'example', repo: 'project', number: 4, base: 'main', fromNumber: 1 });
+  await fs.writeFile(storePath, JSON.stringify(stored));
+
+  const restored = await DashboardState.load(homeDir);
+  assert.deepEqual(restored.pullRequestRetargetsForRepo('example', 'project'), [
+    { ...incomplete, completed: true },
+    { ...incomplete, number: 3 },
+    { owner: 'example', repo: 'project', number: 4, base: 'main', fromNumber: 1 },
+  ]);
+  await restored.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(storePath, 'utf8'));
+  assert.deepEqual(saved.retargetedPrs, restored.pullRequestRetargetsForRepo('example', 'project'));
+});
+
 for (const branchKept of [true, false]) {
   test(`mergedHead の branchKept=${branchKept} を登録と関連の保存と復元で保持する`, async (t) => {
     const homeDir = await temporaryHome(t);
@@ -156,6 +180,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
   const decision = state.addDecision('restored-session', decisionInput('配置を選ぶ'), now);
   const answer = {
     choice: 'pick', note: '案 A で進める', picks: [['案 A']],
+    version: '00000000-0000-4000-8000-000000000001',
     sentAt: new Date(now + 1).toISOString(),
     deliveredAt: new Date(now + 2).toISOString(),
     reflectedAt: new Date(now + 3).toISOString(), promptDeliveries: 1,

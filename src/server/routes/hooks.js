@@ -69,6 +69,10 @@ function createHookRoutes(ctx) {
   // 一致しない要求と、行の中で不正と分かった要求は 400 にする。
   const hookAnswerActions = [
     {
+      matches: (body) => body.action === 'delivery-ack' && validText(body.delivery_id, 256),
+      run: (body) => ({ acknowledged: answerDelivery.acknowledgeHookDelivery(body.session_id, body.delivery_id) }),
+    },
+    {
       matches: (body) => body.action === 'ask-register' && body.event_name === 'PreToolUse' && Array.isArray(body.questions),
       run: (body) => answerDelivery.registerAsk({ sessionId: body.session_id, toolUseId: body.id, questions: body.questions, agentId: body.agent_id,
         provider: body.provider, toolName: body.tool_name }),
@@ -136,6 +140,12 @@ function createHookRoutes(ctx) {
     },
   ];
 
+  const deliveryActions = new Set(['ask-finish', 'post-tool-batch', 'post-tool-use', 'user-prompt-submit', 'stop-check', 'stop-poll']);
+
+  function hasHookOutput(result) {
+    return Boolean(result?.hookOutput || (typeof result?.stderrText === 'string' && result.stderrText));
+  }
+
   async function handleHookAnswers({ request, response, body }) {
     if (!body || typeof body !== 'object' || Array.isArray(body) || !validSessionId(body.session_id) || !validText(body.id, 256)) {
       jsonResponse(response, 400, { error: 'Invalid request' });
@@ -148,7 +158,35 @@ function createHookRoutes(ctx) {
         return;
       }
       const action = hookAnswerActions.find((candidate) => candidate.matches(body));
-      const result = action ? await action.run(body) : INVALID_ANSWER_REQUEST;
+      let result = INVALID_ANSWER_REQUEST;
+      if (action) {
+        const generation = body.action === 'stop-poll' ? body.generation : null;
+        const cached = deliveryActions.has(body.action)
+          ? answerDelivery.getHookDelivery(body.session_id, body.action, body.id, generation)
+          : null;
+        const replayAllowed = cached && (!['stop-check', 'stop-poll'].includes(body.action) ||
+          answerDelivery.canReplayStopDelivery(body.session_id, cached, body.parent_alive !== false));
+        if (replayAllowed) result = cached.response;
+        else if (cached && body.action === 'stop-check') result = { hookOutput: null, generation: null, wait: false };
+        else if (cached && body.action === 'stop-poll') result = { stderrText: null, done: true };
+        else result = await action.run(body);
+        if (result !== INVALID_ANSWER_REQUEST && deliveryActions.has(body.action) && hasHookOutput(result) && !replayAllowed) {
+          const delivery = answerDelivery.recordHookDelivery({
+            sessionId: body.session_id,
+            action: body.action,
+            requestId: body.id,
+            response: result,
+            requestGeneration: body.action === 'stop-poll' ? body.generation : null,
+            generation: body.action === 'stop-check' ? result.generation : body.action === 'stop-poll' ? body.generation : null,
+            decisionId: body.action === 'ask-finish' ? body.decision_id : null,
+          });
+          if (!delivery) {
+            jsonResponse(response, 503, { error: 'Delivery capacity reached' });
+            return;
+          }
+          result = delivery.response;
+        }
+      }
       if (result === INVALID_ANSWER_REQUEST) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;

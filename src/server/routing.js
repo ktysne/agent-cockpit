@@ -61,7 +61,13 @@ class RoutingState {
     if (!ROUTE_KEYS.has(key) || !ROUTE_VALUES.has(value)) throw new TypeError('Invalid route');
     const run = this.pending.then(async () => {
       const next = { ...this.value, [key]: value };
-      await this.writer.write('routing.json', next);
+      try {
+        await this.writer.write('routing.json', next);
+      } catch (error) {
+        // 採用しなかった設定が自動再保存だけで有効にならないよう、再試行の内容を現在値へ戻す。
+        await this.writer.write('routing.json', this.value).catch(() => {});
+        throw error;
+      }
       this.value = next;
       return this.snapshot();
     });
