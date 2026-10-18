@@ -194,13 +194,12 @@ function launchCommandTexts(text, depth = 0) {
   return [code, ...substitutions];
 }
 
-// 経路の判定(route.js)と同じ規則で起動を探す。
+// 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
 function extractCodexLaunchDefinition(command) {
-  for (const text of launchCommandTexts(pickString(command).replace(/\\\r?\n/g, ' '))) {
-    for (const [argument = ''] of codexAgentInvocations(text, (word) => /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word))) {
-      const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
-      if (definition) return definition;
-    }
+  const isCodexAgent = (word) => /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word);
+  for (const [argument = ''] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts)) {
+    const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
+    if (definition) return definition;
   }
   return '';
 }

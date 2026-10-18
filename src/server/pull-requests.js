@@ -712,24 +712,24 @@ function readGitRemoteUrls(root, execFileImpl) {
   });
 }
 
-// 各行は「remote.<名前>.url <URL>」の形。GitHub のリポジトリと判定できた remote だけを返す。
-function gitHubRemoteRepositories(stdout) {
-  const repositories = [];
+// 各行は「remote.<名前>.url <URL>」の形。GitHub のリポジトリと判定できた remote だけが owner と repo を持つ。
+function gitRemotes(stdout) {
+  const remotes = [];
   for (const line of stdout.split(/\r?\n/)) {
     const separator = line.indexOf(' ');
-    const repository = separator < 0 ? null : parseGitHubRepositoryRemote(line.slice(separator + 1));
+    if (separator < 0) continue;
     const key = line.slice(0, separator);
-    if (repository) repositories.push({ ...repository, name: key.slice('remote.'.length, key.lastIndexOf('.url')) });
+    remotes.push({ name: key.slice('remote.'.length, key.lastIndexOf('.url')), ...parseGitHubRepositoryRemote(line.slice(separator + 1)) });
   }
-  return repositories;
+  return remotes;
 }
 
-async function gitHubRemoteRepositoriesOf(root, execFileImpl, cache) {
+async function gitRemotesOf(root, execFileImpl, cache) {
   const cacheKey = process.platform === 'win32' ? root.toLowerCase() : root;
   if (cache?.has(cacheKey)) return cache.get(cacheKey);
-  const repositories = gitHubRemoteRepositories(await readGitRemoteUrls(root, execFileImpl));
-  cache?.set(cacheKey, repositories);
-  return repositories;
+  const remotes = gitRemotes(await readGitRemoteUrls(root, execFileImpl));
+  cache?.set(cacheKey, remotes);
+  return remotes;
 }
 
 function sameGitHubRepository(left, right) {
@@ -769,14 +769,17 @@ async function crossReviewToolAtHead(root, headSha, execFileImpl, cache) {
   return result;
 }
 
-// ローカルの base や別の remote は PR のリポジトリと内容が違うことがあるので、一致する remote の追跡ブランチだけを見る。
+// ローカルの base は PR のリポジトリと内容が違うことがあるので、remote の追跡ブランチだけを見る。
+// 渡した remote のどれかに道具があれば道具を使うリポジトリとし、古い追跡ブランチで「不要」にしない。
 async function crossReviewToolAtBase(root, baseRefName, remoteNames, execFileImpl) {
   if (!validBranchName(baseRefName)) return 'unknown';
+  let result = 'unknown';
   for (const name of remoteNames.filter(validBranchName)) {
-    const result = await crossReviewToolAt(root, `refs/remotes/${name}/${baseRefName}`, execFileImpl);
-    if (result !== 'unknown') return result;
+    const tool = await crossReviewToolAt(root, `refs/remotes/${name}/${baseRefName}`, execFileImpl);
+    if (tool === 'present') return 'present';
+    if (tool === 'absent') result = 'absent';
   }
-  return 'unknown';
+  return result;
 }
 
 async function readCrossReviewState(registration, pullRequest, options = {}) {
@@ -796,30 +799,28 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
   if (pullRequestRepository) {
     // フォークから upstream に作った PR は origin と食い違うため、どの GitHub の remote とも一致すれば続ける。
     // 道具の有無は別のリポジトリの判定にならないので、レビュー不要と判定する前に照合する。
-    const remotes = await gitHubRemoteRepositoriesOf(root, execFileImpl, remoteRepositoryCache);
-    const matchingRemotes = remotes.filter((remote) => sameGitHubRepository(remote, pullRequestRepository));
-    if (remotes.length && !matchingRemotes.length) {
+    const remotes = await gitRemotesOf(root, execFileImpl, remoteRepositoryCache);
+    const gitHubRemotes = remotes.filter((remote) => remote.owner);
+    const matchingRemotes = gitHubRemotes.filter((remote) => sameGitHubRepository(remote, pullRequestRepository));
+    if (gitHubRemotes.length && !matchingRemotes.length) {
       report('unknown', 'missing', 'repository-mismatch');
       return { unavailable: true, reason: 'repository-mismatch' };
     }
-    baseRemoteNames = matchingRemotes.map((remote) => remote.name);
+    // SSH の別名ホストなどで GitHub の remote と判定できないときは、PR のリポジトリを決められないのですべてを base の候補にする。
+    baseRemoteNames = (gitHubRemotes.length ? matchingRemotes : remotes).map((remote) => remote.name);
   }
   let headTool = tool.status === 'present' ? 'present'
     : await crossReviewToolAtHead(root, pullRequest?.headRefOid, execFileImpl, headToolCache);
   // head のコミットが手元に無いなどで確かめられないときは、base ブランチの道具の有無で、道具を使うリポジトリかを判断する。
-  // head を取り込んでいないだけで、道具を使わないリポジトリの PR を「確認できない」にせず、使うリポジトリの PR を「不要」にしないため。
+  // 「レビュー不要」は道具が無いと確かめられたときだけにし、確かめられない PR をマージの条件から外さない。
   if (headTool === 'unknown') headTool = await crossReviewToolAtBase(root, pullRequest?.baseRefName, baseRemoteNames, execFileImpl);
-  if (tool.status === 'missing') {
-    if (headTool === 'absent') {
-      report('unknown', 'missing', 'tool-absent');
-      return { notRequired: true, source: 'tool-absent' };
-    }
-    report('unknown', 'missing', 'tool-read');
-    return { unavailable: true };
-  }
-  if (tool.status === 'absent' && headTool !== 'present') {
+  if (headTool === 'absent') {
     report('unknown', 'missing', 'tool-absent');
     return { notRequired: true, source: 'tool-absent' };
+  }
+  if (tool.status === 'missing' || headTool === 'unknown') {
+    report('unknown', 'missing', 'tool-read');
+    return { unavailable: true };
   }
   let contents;
   try {

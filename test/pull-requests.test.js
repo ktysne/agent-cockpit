@@ -1855,17 +1855,17 @@ test('どの GitHub の remote とも PR のリポジトリが一致しないと
 test('クロスレビューの道具が無い worktree でも、remote が PR のリポジトリと食い違えばレビュー不要にせず確認不能にする', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
-  const remotes = (_file, _args, _options, callback) => callback(null, 'remote.origin.url https://github.com/other/tool-less.git\n');
+  const remotes = (_file, args, _options, callback) => callback(null, args[2] === 'ls-tree' ? '' : 'remote.origin.url https://github.com/other/tool-less.git\n');
   const mismatched = await readCrossReviewState(
     { number: 55, cwd: root },
-    { url: 'https://github.com/example/project/pull/55', headRefName: 'feat/pr' },
+    { url: 'https://github.com/example/project/pull/55', headRefName: 'feat/pr', headRefOid: 'a'.repeat(40) },
     { execFileImpl: remotes },
   );
   assert.deepEqual(mismatched, { unavailable: true, reason: 'repository-mismatch' });
 
   const matched = await readCrossReviewState(
     { number: 55, cwd: root },
-    { url: 'https://github.com/other/tool-less/pull/55', headRefName: 'feat/pr' },
+    { url: 'https://github.com/other/tool-less/pull/55', headRefName: 'feat/pr', headRefOid: 'a'.repeat(40) },
     { execFileImpl: remotes },
   );
   assert.deepEqual(matched, { notRequired: true, source: 'tool-absent' });
@@ -1992,7 +1992,8 @@ test('tools/cross-review.js が無い worktree はレビュー不要として扱
   await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
     branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: 'a'.repeat(40) } },
   }));
-  assert.deepEqual(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), {
+  const execFileImpl = (_file, _args, _options, callback) => callback(null, '');
+  assert.deepEqual(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr', headRefOid: 'a'.repeat(40) }, { execFileImpl }), {
     notRequired: true, source: 'tool-absent',
   });
 });
@@ -2128,6 +2129,7 @@ test('tools/cross-review.js が無い worktree の PR はレビュー不要の�
   const { github, tracker } = await trackerFixture(t, [31], root);
   github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', headSha)];
   github.comparisons.set(headSha, compareResult([headSha]));
+  tracker.gitExecFileImpl = (_file, _args, _options, callback) => callback(null, '');
 
   await tracker.refreshRepo('example', 'project');
 
@@ -3316,7 +3318,7 @@ for (const scenario of [
   { name: 'base に道具があり状態ファイルが破損', base: TOOL_ENTRY, contents: '{broken', expected: { unavailable: true } },
   { name: 'base に道具があり記録がある', base: TOOL_ENTRY, contents: ROUND_TWO_STATE, round: 2 },
   { name: 'base に道具が無い', base: '', contents: ROUND_TWO_STATE, expected: { notRequired: true, source: 'tool-absent' } },
-  { name: 'base も確かめられない', base: undefined, contents: ROUND_TWO_STATE, expected: { notRequired: true, source: 'tool-absent' } },
+  { name: 'base も確かめられない', base: undefined, contents: ROUND_TWO_STATE, expected: { unavailable: true } },
 ]) {
   test(`道具の無い worktree で head を確かめられないときは base で判断する (${scenario.name})`, async (t) => {
     const f = await headToolFixture(t, { contents: scenario.contents });
@@ -3336,6 +3338,9 @@ for (const scenario of [
     refs: { 'refs/remotes/b/main': '' }, expected: { notRequired: true, source: 'tool-absent' } },
   { name: '一致する remote が分からなければローカルのブランチを見ない',
     config: null, refs: { 'refs/heads/main': '' }, expected: { unavailable: true } },
+  { name: 'GitHub と判定できる remote が無ければすべての remote を見る',
+    config: 'remote.origin.url git@github-work:example/project.git\nremote.mirror.url https://example.com/project.git\n',
+    refs: { 'refs/remotes/origin/main': '', 'refs/remotes/mirror/main': TOOL_ENTRY }, expected: { unavailable: true } },
 ]) {
   test(`消えた cwd の base は PR のリポジトリの追跡ブランチで確かめる (${scenario.name})`, async (t) => {
     const f = await headToolFixture(t, { missing: true });

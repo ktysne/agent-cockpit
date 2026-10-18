@@ -48,6 +48,7 @@ test('引数や文字列中のラッパー名とオプション呼び出しは C
     "cat > p.md <<'EOF'\nbash ~/.claude/tools/codex-agent.sh impl-hard\nEOF",
     '# 実行例: cd repo && bash codex-agent.sh impl-hard',
     "echo '$(bash codex-agent.sh impl-hard)'",
+    "bash -lc 'cat > prompt.md <<EOF\nbash ~/.claude/tools/codex-agent.sh impl-hard\nEOF'",
   ]) {
     const state = new DashboardState();
     state.addEvent(claudeEvent('PreToolUse', { tool_input: { command } }));

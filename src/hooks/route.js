@@ -50,11 +50,14 @@ function segmentStartsWithEnv(segment) {
   return commandName(firstCommand) === 'env';
 }
 
-/** 前置きとシェルの起動をたどり、isScript に合う語で始まる起動ごとに、その後ろの語の列を返す。 */
-function codexAgentInvocations(command, isScript, depth = 0) {
+/**
+ * 前置きとシェルの起動をたどり、isScript に合う語で始まる起動ごとに、その後ろの語の列を返す。
+ * prepare は、各コマンドの文字列(シェルの -c の文字列を含む)を、探す範囲の文字列の列に変える。
+ */
+function codexAgentInvocations(command, isScript, prepare = (text) => [text], depth = 0) {
   if (typeof command !== 'string') return [];
   if (depth >= 8) return [];
-  return commandSegments(command).flatMap((segment) => {
+  return prepare(command).flatMap((text) => commandSegments(text)).flatMap((segment) => {
     let ungrouped = segment.trim();
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
@@ -66,7 +69,7 @@ function codexAgentInvocations(command, isScript, depth = 0) {
     for (let index = 1; index < words.length;) {
       const option = words[index];
       if (option === '-c' || option === '--command' || /^-[^-]*c[^-]*$/.test(option)) {
-        return codexAgentInvocations(words[index + 1] || '', isScript, depth + 1);
+        return codexAgentInvocations(words[index + 1] || '', isScript, prepare, depth + 1);
       }
       if (option === '--help' || option === '--version' || option === '-help' || option === '-version') return [];
       if (option === '--') return isScript(words[index + 1] || '') ? [words.slice(index + 2)] : [];

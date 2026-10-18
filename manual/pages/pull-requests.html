@@ -254,7 +254,8 @@
     <p>PR を登録した作業ツリーを消した後は、PR の今の head のコミットに <code>tools/cross-review.js</code> があるかを確かめます。
     head のコミットが手元に無いときは、PR のマージ先のブランチで確かめます。
     無ければ <span class="ui">レビュー不要</span>、あるか、確かめられなければ <span class="ui">状態を確認できない</span> と出します。
-    作業ツリーを <code>tools/cross-review.js</code> の無い別のブランチに切り替えても、PR の head(手元に無ければマージ先のブランチ)にあれば、記録どおりの状態を出します。</p>
+    作業ツリーを <code>tools/cross-review.js</code> の無い別のブランチに切り替えても、PR の head(手元に無ければマージ先のブランチ)にあれば、記録どおりの状態を出します。
+    PR の head とマージ先のブランチのどちらでも確かめられないときは、<span class="ui">状態を確認できない</span> と出します。</p>
   </details>
 
   <h2 id="pr-mergeable">「マージできます」の条件</h2>
