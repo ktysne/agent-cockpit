@@ -668,7 +668,11 @@ async function detectCrossReviewTool(cwd, fileSystem = fs) {
   try {
     const cwdStat = await fileSystem.stat(cwd);
     if (!cwdStat.isDirectory()) return { status: 'unknown' };
-  } catch {
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(error.code)) {
+      const { root } = await findWorktreeRoot(cwd, fileSystem);
+      return root ? { status: 'missing', root } : { status: 'unknown' };
+    }
     return { status: 'unknown' };
   }
 
@@ -691,6 +695,7 @@ function crossReviewReadOptions(options) {
     fileSystem: isFileSystem ? options : options?.fileSystem || fs,
     execFileImpl: options?.execFileImpl || execFile,
     remoteRepositoryCache: options?.remoteRepositoryCache,
+    headToolCache: options?.headToolCache,
   };
 }
 
@@ -729,14 +734,35 @@ function sameGitHubRepository(left, right) {
   return left.owner.toLowerCase() === right.owner.toLowerCase() && left.repo.toLowerCase() === right.repo.toLowerCase();
 }
 
+async function crossReviewToolAtHead(root, headSha, execFileImpl, cache) {
+  if (!isCompleteCommitSha(headSha)) return 'unknown';
+  const key = JSON.stringify([process.platform === 'win32' ? root.toLowerCase() : root, headSha.toLowerCase()]);
+  if (cache?.has(key)) return cache.get(key);
+  const result = await new Promise((resolve) => {
+    try {
+      execFileImpl('git', ['-C', root, 'ls-tree', '--full-tree', headSha, '--', 'tools/cross-review.js'], {
+        encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
+      }, (error, stdout) => {
+        if (error || typeof stdout !== 'string') return resolve('unknown');
+        if (stdout === '') return resolve('absent');
+        resolve(/^[0-7]{6} blob (?:[a-f0-9]{40}|[a-f0-9]{64})\ttools\/cross-review\.js\r?\n?(?![\s\S])/i.test(stdout) ? 'present' : 'unknown');
+      });
+    } catch {
+      resolve('unknown');
+    }
+  });
+  cache?.set(key, result);
+  return result;
+}
+
 async function readCrossReviewState(registration, pullRequest, options = {}) {
-  const { fileSystem, execFileImpl, remoteRepositoryCache } = crossReviewReadOptions(options);
+  const { fileSystem, execFileImpl, remoteRepositoryCache, headToolCache } = crossReviewReadOptions(options);
   const report = (file, head = 'missing', failure = 'none', state = {}) => options.observeReview?.(registration, { file, head, failure, ...state });
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
   // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
   const tool = await detectCrossReviewTool(registration.cwd, fileSystem);
-  if (tool.status !== 'present' && tool.status !== 'absent') {
+  if (!['present', 'absent', 'missing'].includes(tool.status)) {
     report('unknown', 'missing', 'tool-read');
     return { unavailable: true };
   }
@@ -751,7 +777,17 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
       return { unavailable: true, reason: 'repository-mismatch' };
     }
   }
-  if (tool.status === 'absent') {
+  const headTool = tool.status === 'present' ? 'present'
+    : await crossReviewToolAtHead(root, pullRequest?.headRefOid, execFileImpl, headToolCache);
+  if (tool.status === 'missing') {
+    if (headTool === 'absent') {
+      report('unknown', 'missing', 'tool-absent');
+      return { notRequired: true, source: 'tool-absent' };
+    }
+    report('unknown', 'missing', 'tool-read');
+    return { unavailable: true };
+  }
+  if (tool.status === 'absent' && headTool !== 'present') {
     report('unknown', 'missing', 'tool-absent');
     return { notRequired: true, source: 'tool-absent' };
   }
@@ -811,6 +847,8 @@ function listWorktrees(root, execFileImpl = execFile) {
         worktrees.push(current);
       } else if (current && line.startsWith('branch refs/heads/')) {
         current.branch = line.slice('branch refs/heads/'.length);
+      } else if (current && /^prunable(?: |$)/.test(line)) {
+        current.prunable = true;
       }
     }
     return worktrees;
@@ -838,8 +876,14 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   const { root } = await findWorktreeRoot(registration.cwd, fileSystem);
   if (!root) return selected;
   const sameRoot = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+  let cwdMissing = false;
+  try {
+    await fileSystem.stat(registration.cwd);
+  } catch (error) {
+    cwdMissing = ['ENOENT', 'ENOTDIR'].includes(error.code);
+  }
   for (const worktree of await listWorktrees(root, options.execFileImpl)) {
-    if (sameRoot(worktree.path, root)) continue;
+    if (worktree.prunable || (!cwdMissing && sameRoot(worktree.path, root))) continue;
     const candidate = await readCrossReviewState({ ...registration, cwd: worktree.path }, pullRequest, options);
     if (candidate?.reason === 'repository-mismatch') continue;
     const hasRecord = Number.isSafeInteger(candidate?.round);
@@ -849,14 +893,16 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   return selected;
 }
 
-// 記録のある worktree を優先し、同じ優先度なら今の head で収束した記録、次に今の head をレビューした記録を選ぶ。
+// レビュー記録、未実施、確認不能、道具なしの順で選ぶ(理由は docs/design/server.md の「PR の表示」)。
+// 同じ優先度なら今の head で収束した記録、次に今の head をレビューした記録を優先する。
 function shouldReplaceCrossReview(current, candidate, headSha) {
-  const priority = (review) => review?.source === 'recorded' ? 5 : review === undefined ? 0
-    : review?.notRequired === true ? 1 : review === null ? 2 : review?.unavailable === true ? 3 : 4;
+  const priority = (review) => review === undefined ? 0
+    : review?.notRequired === true ? 1 : review === null ? 3 : review?.unavailable === true ? 2 : 4;
   const currentPriority = priority(current);
   const candidatePriority = priority(candidate);
   if (candidatePriority !== currentPriority) return candidatePriority > currentPriority;
-  if (!current || !candidate || current.notRequired === true || candidate.notRequired === true) return false;
+  if (!current || !candidate || current.notRequired === true || candidate.notRequired === true
+    || !Number.isSafeInteger(current.round) || !Number.isSafeInteger(candidate.round)) return false;
   const head = String(headSha || '').toLowerCase();
   const convergedAtHead = (review) => review.triage?.round === review.round && review.triage.outcome === 'converged' &&
     review.triage.sha === head.toLowerCase();
@@ -1083,8 +1129,13 @@ class PullRequestTracker {
 
   start() {
     if (this.timer) return;
-    void this.refreshAll();
-    this.timer = setInterval(() => { void this.refreshAll(); }, 60_000);
+    const refresh = () => {
+      void this.refreshAll().catch((error) => {
+        this.diagnostics?.record('warn', 'merge', 'pr.refresh.failed', { name: error?.name });
+      });
+    };
+    refresh();
+    this.timer = setInterval(refresh, 60_000);
     this.timer.unref?.();
   }
 
@@ -1711,19 +1762,15 @@ class PullRequestTracker {
     const productGroups = productGroupsFor(owner, repo, registrations);
     const createdIdentities = new Set();
     const remoteRepositoryCache = new Map();
+    const headToolCache = new Map();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
     this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);
     for (const registration of registrations) {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
       if (!pullRequest) continue;
-      const skip = this.state.crossReviewSkip?.(owner, repo, registration.number);
-      if (skip?.headRefOid === pullRequest.headRefOid.toLowerCase()) {
-        crossReviewByNumber.set(registration.number, { notRequired: true, source: 'recorded', reason: skip.reason });
-        continue;
-      }
       const review = await this.readCrossReviewState(registration, pullRequest, {
-        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache,
+        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, headToolCache,
         observeReview: (record, result) => {
           const key = `${repositoryKey(owner, repo)}:${record.number}:${record.cwd}`;
           const signature = JSON.stringify(result);
@@ -1746,6 +1793,14 @@ class PullRequestTracker {
           reviewedSha: review.reviewedSha,
           triage: review.triage,
         }));
+    }
+    for (const [number, review] of crossReviewByNumber) {
+      const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === number);
+      const skip = this.state.crossReviewSkip?.(owner, repo, number);
+      if (skip?.headRefOid !== pullRequest.headRefOid.toLowerCase()) continue;
+      const converged = review?.triage?.round === review?.round && review?.triage?.outcome === 'converged'
+        && review.triage.sha === pullRequest.headRefOid.toLowerCase();
+      if (!converged) crossReviewByNumber.set(number, { notRequired: true, source: 'recorded', reason: skip.reason });
     }
     for (const [productKey, group] of productGroups) {
       const assembled = assemblePullRequestStacks({

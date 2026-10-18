@@ -135,7 +135,7 @@ test('待機中の Claude サブエージェントと背景 Codex があるセ�
   }
   await send('ended-claude', { hook_event_name: 'SubagentStop', agent_id: 'claude-task' });
   await send('ended-claude', { hook_event_name: 'Stop' });
-  await send('waiting-codex', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'codex-launch', summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard' });
+  await send('waiting-codex', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'codex-launch', summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard', codexLaunchDefinition: 'impl-hard' });
   await send('waiting-codex', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'codex-launch' });
   await send('waiting-codex', { hook_event_name: 'Stop' });
   await send('waiting-claude', { hook_event_name: 'Stop' });
@@ -1679,6 +1679,30 @@ test('再起動後の Codex --wait は実行 ID の定義からモデルと effo
   assert.deepEqual([agent.gpt.model, agent.gpt.effort, agent.gpt.active], ['gpt-5.5-codex', 'xhigh', false]);
 });
 
+test('Claude ホームに定義が無いとき userHome の .claude から Codex の仮モデルと effort を読む', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const userHome = path.join(homeDir, 'user');
+  const definitionPath = path.join(userHome, '.claude', 'gpt-agents', 'impl-hard.md');
+  await fs.mkdir(path.dirname(definitionPath), { recursive: true });
+  await fs.writeFile(definitionPath, '---\ncodex_model: gpt-user-home-definition\ncodex_reasoning_effort: max\n---\n');
+  const runtime = await startServer({ homeDir, claudeHome, userHome, port: 0 });
+  t.after(() => runtime.close());
+
+  const started = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({
+      session_id: 'user-home-definition', hook_event_name: 'PreToolUse', hookAt: 100,
+      tool_name: 'Bash', tool_use_id: 'codex-launch',
+      summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md', codexLaunchDefinition: 'impl-hard',
+    }),
+  });
+  assert.equal(started.status, 202);
+
+  const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const [agent] = state.sessions.find((session) => session.session_id === 'user-home-definition').agents;
+  assert.deepEqual([agent.model, agent.effort, agent.active], ['gpt-user-home-definition', 'max', true]);
+});
+
 test('クロスレビュー定義から Codex の仮モデルを読み、未許可の定義名は行を作らない', async (t) => {
   const { homeDir, claudeHome } = await temporaryHome(t);
   const definitionPath = path.join(claudeHome, 'gpt-agents', 'codex-review.md');
@@ -2455,7 +2479,7 @@ test('画面からタスクと終了可能なエージェントを終了にで�
   state.addEvent({ session_id: sessionId, hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'agent-1', agent_type: 'impl-hard' });
   state.addEvent({
     session_id: sessionId, hook_event_name: 'PreToolUse', hookAt: 2, agent_id: 'agent-1',
-    tool_name: 'Bash', tool_use_id: 'bash-1', summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md',
+    tool_name: 'Bash', tool_use_id: 'bash-1', summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md', codexLaunchDefinition: 'impl-hard',
   });
   state.addEvent({ session_id: sessionId, hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'agent-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
   state.addEvent({ session_id: sessionId, hook_event_name: 'SubagentStop', hookAt: 4, agent_id: 'agent-1' });
@@ -2492,7 +2516,7 @@ test('画面からタスクと終了可能なエージェントを終了にで�
   const rootSessionId = 'close-root-codex';
   state.addEvent({
     session_id: rootSessionId, hook_event_name: 'PreToolUse', hookAt: 1,
-    tool_name: 'Bash', tool_use_id: 'bash-root', summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md',
+    tool_name: 'Bash', tool_use_id: 'bash-root', summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md', codexLaunchDefinition: 'impl-hard',
   });
   state.addEvent({ session_id: rootSessionId, hook_event_name: 'PostToolUse', hookAt: 2, tool_name: 'Bash', tool_use_id: 'bash-root' });
   state.addEvent({ session_id: rootSessionId, hook_event_name: 'Stop', hookAt: 3 });

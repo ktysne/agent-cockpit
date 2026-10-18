@@ -2,10 +2,123 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeHookEvent, runHook } = require('../src/hooks/event');
 const { DashboardState, deriveSessions } = require('../src/server/state');
+const { sanitizeEvent } = require('../src/server/events');
 const { hookHeaders, jsonBody, request, startTestServer } = require('./support/server');
 
 const parentId = 'claude-parent';
 const command = 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md';
+
+test('コマンド位置の起動は引用符や長いパスを含んでも全文の定義名で行を作る', () => {
+  for (const command of [
+    'bash "$HOME/.claude/tools/codex-agent.sh" impl-hard < "C:/tmp/p.md"',
+    "bash '/c/Users/me/.claude/tools/codex-agent.sh' impl-hard < p.md",
+    'bash "C:/User Data/tools/codex-agent.sh" impl-hard',
+    `cd ${'long-directory/'.repeat(12)} && bash /tools/codex-agent.sh impl-hard < p.md`,
+    ...['\n', '&&', '||', ';', '|', '('].map(separator => `true ${separator} sh codex-agent.cmd impl-hard`),
+    'codex-agent.ps1 impl-hard',
+  ]) {
+    const state = new DashboardState();
+    const event = claudeEvent('PreToolUse', { tool_input: { command } });
+    assert.equal(sanitizeEvent(event).codexDefinition, 'impl-hard', command);
+    state.addEvent(event);
+    assert.equal(state.snapshot().sessions[0].agents[0].agent_type, 'impl-hard', command);
+  }
+});
+
+test('引数や文字列中のラッパー名とオプション呼び出しは Codex の行を作らない', () => {
+  for (const command of [
+    'git diff -- tools/codex-agent.sh docs/x',
+    'git add tools/codex-agent.sh test/x.sh',
+    'wc -l ~/.claude/tools/codex-agent.sh 2>/dev/null',
+    'grep -rn "codex-agent.sh impl-standard" docs',
+    'echo "手順; bash codex-agent.sh impl-hard"',
+    '"codex-agent.sh impl-hard"',
+    'bash codex-agent.sh --header-of impl-hard',
+    'bash codex-agent.sh --wait impl-hard-20261019-110000-7',
+  ]) {
+    const state = new DashboardState();
+    state.addEvent(claudeEvent('PreToolUse', { tool_input: { command } }));
+    assert.deepEqual(state.snapshot().sessions[0].agents, [], command);
+  }
+});
+
+function backgroundLaunch(state, definition = 'impl-hard', startedAt = 100) {
+  launch(state, 'launch', { hookAt: startedAt, tool_input: { command: `bash codex-agent.sh ${definition}` } });
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: startedAt + 1, tool_response: { backgroundTaskId: 'task-a' } }));
+}
+
+test('killed と stopped の通知に結果が無ければ背景 Codex は終了未確認になる', () => {
+  for (const status of ['killed', 'stopped']) {
+    const state = new DashboardState();
+    backgroundLaunch(state);
+    state.addEvent({ session_id: parentId, hook_event_name: 'BackgroundTaskEnd', hookAt: 300,
+      backgroundTaskEnds: [{ taskId: 'task-a', status }] });
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.equal(agent.active, false);
+    assert.equal(agent.unconfirmed, true);
+    assert.equal(agent.waitEnded, true);
+  }
+});
+
+test('背景レビューへ別定義の実行 ID の結果を割り当てない', () => {
+  const state = new DashboardState();
+  backgroundLaunch(state, 'codex-review');
+  state.addEvent(claudeEvent('PostToolUse', { tool_use_id: 'read', hookAt: 300,
+    tool_response: 'codex-agent: run=impl-standard-20261019-110000-7\ncodex-agent: result=ok' }));
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.active, true);
+  assert.equal(agent.runId, undefined);
+});
+
+test('停止通知で終了未確認になった行も実行 ID が一致する遅延結果で終了する', () => {
+  const state = new DashboardState();
+  backgroundLaunch(state);
+  const runId = 'impl-hard-20261019-110000-7';
+  state.addEvent({ session_id: parentId, hook_event_name: 'BackgroundTaskEnd', hookAt: 300,
+    backgroundTaskEnds: [{ taskId: 'task-a', status: 'killed',
+      codexOutput: { runLine: `codex-agent: run=${runId}` } }] });
+  state.addEvent(claudeEvent('PostToolUse', { tool_use_id: 'wait-result', hookAt: 400,
+    tool_response: `codex-agent: run=${runId}\ncodex-agent: result=ok` }));
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.resultReceived, true);
+  assert.equal(agent.unconfirmed, false);
+});
+
+test('停止通知でも待機状態行があればその状態で稼働と終了未確認を決める', () => {
+  for (const [status, active, unconfirmed] of [
+    ['waiting', true, false], ['orphaned', false, true], ['unverified', false, true],
+    ['vanished', false, false], ['not-found', false, false],
+  ]) {
+    const state = new DashboardState();
+    backgroundLaunch(state);
+    state.addEvent({ session_id: parentId, hook_event_name: 'BackgroundTaskEnd', hookAt: 300,
+      backgroundTaskEnds: [{ taskId: 'task-a', status: 'stopped',
+        codexOutput: { waitStatusLine: `codex-agent: ${status} run=impl-hard-20261019-110000-7` } }] });
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.deepEqual([agent.active, agent.unconfirmed === true], [active, unconfirmed], status);
+  }
+});
+
+test('実行 ID の定義と秒単位の起動時刻が合う結果だけを背景行へ割り当てる', () => {
+  for (const [started, expected] of [['10:59:59', false], ['11:00:00', true], ['', true]]) {
+    const state = new DashboardState();
+    backgroundLaunch(state, 'impl-hard', Date.parse('2026-10-19T11:00:00.900Z'));
+    const run = `codex-agent: run=impl-hard-20261019-110000-7${started ? ` pid=7 started=2026-10-19T${started}Z` : ''}`;
+    state.addEvent(claudeEvent('PostToolUse', { tool_use_id: 'read', hookAt: Date.parse('2026-10-19T11:01:00Z'),
+      tool_response: `${run}\ncodex-agent: result=ok` }));
+    assert.equal(state.snapshot().sessions[0].agents[0].resultReceived === true, expected, started);
+  }
+});
+
+test('引用された結果行の後に本物の結果行があれば最後の結果で終了する', () => {
+  const state = new DashboardState();
+  launch(state);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: 300,
+    tool_response: '```\ncodex-agent: result=rate-limited\n```\ncodex-agent: result=ok' }));
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.resultReceived, true);
+  assert.equal(agent.unavailable, '');
+});
 
 function claudeEvent(name, fields = {}) {
   return makeHookEvent({ session_id: parentId, hook_event_name: name, tool_name: 'Bash',

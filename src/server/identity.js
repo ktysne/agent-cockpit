@@ -111,10 +111,18 @@ function claudeHomeFromOptions(options = {}) {
   return path.join(options.userHome || require('node:os').homedir(), '.claude');
 }
 
-// bridge は CLAUDE_CONFIG_DIR を見ずに ~/.claude/tools/ へ置く作りなので、Claude のホームに加えて ~/.claude も探す。
-function codexAgentScriptPaths(claudeHome, userHome = require('node:os').homedir()) {
-  const paths = [path.join(claudeHome, 'tools', 'codex-agent.sh'), path.join(userHome, '.claude', 'tools', 'codex-agent.sh')];
+// bridge は CLAUDE_CONFIG_DIR を見ずに ~/.claude の tools/ と gpt-agents/ を使う作りなので、Claude のホームに加えて ~/.claude も探す。
+function pathsInClaudeHomes(claudeHome, userHome, ...segments) {
+  const paths = [path.join(claudeHome, ...segments), path.join(userHome, '.claude', ...segments)];
   return paths[0] === paths[1] ? [paths[0]] : paths;
+}
+
+function codexAgentScriptPaths(claudeHome, userHome = require('node:os').homedir()) {
+  return pathsInClaudeHomes(claudeHome, userHome, 'tools', 'codex-agent.sh');
+}
+
+function codexAgentDefinitionPaths(agentName, claudeHome, userHome = require('node:os').homedir()) {
+  return pathsInClaudeHomes(claudeHome, userHome, 'gpt-agents', `${agentName}.md`);
 }
 
 function cockpitHomeFromOptions(options = {}) {
@@ -124,4 +132,4 @@ function cockpitHomeFromOptions(options = {}) {
   return path.join(options.userHome || require('node:os').homedir(), '.agent-cockpit');
 }
 
-module.exports = { productFromCwd, branchFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions };
+module.exports = { productFromCwd, branchFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, codexAgentDefinitionPaths, cockpitHomeFromOptions };

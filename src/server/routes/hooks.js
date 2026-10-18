@@ -10,7 +10,7 @@ const { applyReviewSkip } = require('./review-skip');
 const { keepImportedCriteria } = require('../plan-updates');
 
 function createHookRoutes(ctx) {
-  const { state, answerDelivery, claudeHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
+  const { state, answerDelivery, claudeHome, userHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
 
   function refreshPullRequestsAfterCommand(event) {
     const registrations = state.readOnlyPullRequestRegistrations();
@@ -224,7 +224,7 @@ function createHookRoutes(ctx) {
       const preliminary = sanitizeEvent(body, { product });
       const codexAgentName = preliminary?.codexDefinition || preliminary?.codexWaitDefinition;
       if (codexAgentName) {
-        codexDefinitionMetadata = await codexAgentDefinition(codexAgentName, claudeHome);
+        codexDefinitionMetadata = await codexAgentDefinition(codexAgentName, claudeHome, userHome);
       }
     }
 

@@ -148,11 +148,10 @@ function parseCodexRunLine(value) {
   return match && CODEX_RUN_ID_PATTERN.test(match[1]) ? match[1] : null;
 }
 
-// 定義の名前は英数字か _ で始まる。--wait などのオプションは起動ではなく、背景の実行の結果を取り出す呼び出しである。
-function parseCodexLaunch(summary) {
-  if (typeof summary !== 'string') return null;
-  const match = summary.match(/(?:^|[\\/\s])codex-agent(?:\.sh|\.cmd|\.ps1)?\s+['"]?([A-Za-z0-9_][A-Za-z0-9_.-]*)/i);
-  return match ? match[1] : null;
+function parseCodexRunStartedAt(value) {
+  if (typeof value !== 'string') return null;
+  const started = value.slice(0, 1024).trim().match(/^codex-agent:\s*run=[^\s]+\s+pid=\d+\s+started=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)(?:\s|$)/)?.[1];
+  return started && Number.isFinite(Date.parse(started)) ? started : null;
 }
 
 function sanitizeEvent(input, metadata = {}) {
@@ -221,7 +220,8 @@ function sanitizeEvent(input, metadata = {}) {
 
   if (eventName === 'PreToolUse') {
     event.summary = shortString(input.summary, 80) || event.tool_name;
-    event.codexDefinition = parseCodexLaunch(event.summary);
+    event.codexDefinition = event.tool_name === 'Bash' && typeof input.codexLaunchDefinition === 'string' &&
+      /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}$/.test(input.codexLaunchDefinition) ? input.codexLaunchDefinition : null;
     if (event.tool_name === 'Bash' && !event.codexDefinition && CODEX_REVIEW_DEFINITIONS.has(input.codexReviewDefinition)) {
       event.codexDefinition = input.codexReviewDefinition;
       event.codexReviewLaunch = true;
@@ -282,7 +282,11 @@ function sanitizeEvent(input, metadata = {}) {
     const runId = parseCodexRunLine(input.codexOutput.runLine);
     if (audit) event.codexAudit = audit;
     if (result) event.codexResult = result;
-    if (runId) event.codexRunId = runId;
+    if (runId) {
+      event.codexRunId = runId;
+      const startedAt = parseCodexRunStartedAt(input.codexOutput.runLine);
+      if (startedAt) event.codexRunStartedAt = startedAt;
+    }
     const waitStatus = typeof input.codexOutput.waitStatusLine === 'string'
       && input.codexOutput.waitStatusLine.slice(0, 1024).trim().match(/^codex-agent:\s*(waiting|vanished|orphaned|unverified|not-found)\s+run=/);
     if (waitStatus) event.codexWaitStatus = waitStatus[1];
@@ -307,7 +311,11 @@ function sanitizeEvent(input, metadata = {}) {
         const runId = parseCodexRunLine(item.codexOutput.runLine);
         if (audit) end.codexAudit = audit;
         if (result) end.codexResult = result;
-        if (runId) end.codexRunId = runId;
+        if (runId) {
+          end.codexRunId = runId;
+          const startedAt = parseCodexRunStartedAt(item.codexOutput.runLine);
+          if (startedAt) end.codexRunStartedAt = startedAt;
+        }
         const waitStatus = typeof item.codexOutput.waitStatusLine === 'string'
           && item.codexOutput.waitStatusLine.slice(0, 1024).trim().match(/^codex-agent:\s*(waiting|vanished|orphaned|unverified|not-found)\s+run=/);
         if (waitStatus) end.codexWaitStatus = waitStatus[1];
@@ -327,7 +335,6 @@ module.exports = {
   recommendedOptionFor,
   MAX_ASK_OPTIONS,
   QUESTION_TEXT_LIMIT,
-  parseCodexLaunch,
   sanitizeQuestions,
   sanitizeCodexQuestions,
   isQuestionTool,

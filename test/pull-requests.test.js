@@ -1479,7 +1479,7 @@ test('マージ可能件数は選択した条件に従い、レビュー不要�
   });
   await tracker.refreshReviewGroups('example', 'project');
   [group] = tracker.snapshot();
-  assert.deepEqual(group.trees[0].crossReview, { notRequired: true, source: 'recorded', reason: '変更が文言だけのため' });
+  assert.deepEqual(group.trees[0].crossReview.triage, { round: 2, sha: headSha, outcome: 'converged' });
   assert.equal(group.mergeableCount, 1);
 
   const nextHead = 'b'.repeat(40);
@@ -3239,3 +3239,184 @@ test('予約した取り直しの時刻に同じリポジトリの取得が動�
   tracker.close();
   t.mock.timers.reset();
 });
+
+async function headToolFixture(t, { missing = false, tool = false, contents, headSha = 'a'.repeat(40) } = {}) {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  if (tool) await installCrossReview(root);
+  if (contents !== undefined) await fs.writeFile(path.join(root, '.cross-review-state.json'), contents);
+  const calls = [];
+  const execFileImpl = (_file, args, options, callback) => {
+    calls.push({ args, options });
+    if (args[2] === 'config') callback(null, 'remote.origin.url https://github.com/example/project.git\n');
+    else if (args[2] === 'ls-tree') callback(null, '');
+    else callback(null, `worktree ${root}\nbranch refs/heads/feat/open\n`);
+  };
+  return { root, calls, registration: { number: 31, cwd: missing ? path.join(root, 'missing') : root },
+    pr: ghPullRequest(31, 'feat/open', 'main', headSha), options: { execFileImpl } };
+}
+
+for (const headSha of ['a'.repeat(40), 'b'.repeat(64)]) {
+  test(`消えた cwd の PR は head に道具が無ければレビュー不要になる (${headSha.length} 桁 SHA)`, async (t) => {
+    const f = await headToolFixture(t, { missing: true, headSha });
+    assert.deepEqual(await readCrossReviewStateAcrossWorktrees(f.registration, f.pr, f.options), { notRequired: true, source: 'tool-absent' });
+    const call = f.calls.find(({ args }) => args[2] === 'ls-tree');
+    assert.deepEqual(call.args, ['-C', f.root, 'ls-tree', '--full-tree', headSha, '--', 'tools/cross-review.js']);
+    assert.equal(call.options.shell, false);
+    assert.equal(call.options.windowsHide, true);
+    assert.equal(call.options.timeout, 10_000);
+  });
+}
+
+for (const scenario of [
+  { name: '道具がある', stdout: `100644 blob ${'b'.repeat(40)}\ttools/cross-review.js\n` },
+  { name: 'コミットが手元に無い', error: Object.assign(new Error('missing commit'), { code: 128 }) },
+  { name: '出力の形が合わない', stdout: 'unexpected output' },
+  { name: '余分な空行がある', stdout: `100644 blob ${'b'.repeat(40)}\ttools/cross-review.js\n\n` },
+  { name: 'タイムアウトする', error: Object.assign(new Error('timeout'), { killed: true }) },
+  { name: '同期の起動失敗になる', throws: true },
+]) {
+  test(`消えた cwd で head の確認が「${scenario.name}」なら確認不能を保つ`, async (t) => {
+    const f = await headToolFixture(t, { missing: true });
+    const original = f.options.execFileImpl;
+    f.options.execFileImpl = (file, args, options, callback) => {
+      if (args[2] === 'worktree') return callback(null, `worktree ${f.root}\nbranch refs/heads/main\n`);
+      if (args[2] !== 'ls-tree') return original(file, args, options, callback);
+      if (scenario.throws) throw Object.assign(new Error('spawn'), { code: 'EPERM' });
+      callback(scenario.error, scenario.stdout);
+    };
+    assert.deepEqual(await readCrossReviewStateAcrossWorktrees(f.registration, f.pr, f.options), { unavailable: true });
+  });
+}
+
+test('消えた cwd の remote が別リポジトリなら head の道具を照会しない', async (t) => {
+  const f = await headToolFixture(t, { missing: true });
+  f.options.execFileImpl = (_file, args, _options, callback) => {
+    assert.equal(args[2], 'config');
+    callback(null, 'remote.origin.url https://github.com/other/project.git\n');
+  };
+  assert.deepEqual(await readCrossReviewState(f.registration, f.pr, f.options), { unavailable: true, reason: 'repository-mismatch' });
+});
+
+for (const contents of [undefined, '{broken', JSON.stringify({ branches: { 'feat/open': { round: 2, dismissed: [] } } })]) {
+  test(`現在のブランチに道具が無くても PR の head にあれば状態ファイルを読む (${contents === undefined ? '未作成' : contents === '{broken' ? '破損' : '記録あり'})`, async (t) => {
+    const f = await headToolFixture(t, { contents });
+    const original = f.options.execFileImpl;
+    f.options.execFileImpl = (file, args, options, callback) => args[2] === 'ls-tree'
+      ? callback(null, `100644 blob ${'b'.repeat(40)}\ttools/cross-review.js\n`) : original(file, args, options, callback);
+    const result = await readCrossReviewStateAcrossWorktrees(f.registration, f.pr, f.options);
+    if (contents === undefined) assert.equal(result, null);
+    else if (contents === '{broken') assert.deepEqual(result, { unavailable: true });
+    else assert.equal(result.round, 2);
+  });
+}
+
+test('消えた cwd の親の根も PR のブランチの記録を持てば候補にする', async (t) => {
+  const f = await headToolFixture(t, { missing: true, tool: true,
+    contents: JSON.stringify({ branches: { 'feat/open': { round: 2, dismissed: [] } } }) });
+  const original = f.options.execFileImpl;
+  f.options.execFileImpl = (file, args, options, callback) => args[2] === 'worktree'
+    ? callback(null, `worktree ${f.root}\nbranch refs/heads/main\n`) : original(file, args, options, callback);
+  assert.equal((await readCrossReviewStateAcrossWorktrees(f.registration, f.pr, f.options)).round, 2);
+});
+
+test('prunable の worktree が残っていても PR の取り直しは例外にならず状態を保つ', async (t) => {
+  const f = await headToolFixture(t, { tool: true, contents: '{broken' });
+  const { tracker, github } = await trackerFixture(t, [31], f.root);
+  github.openPullRequests = [f.pr];
+  const observed = [];
+  tracker.readCrossReviewState = (registration, pr, options) => readCrossReviewStateAcrossWorktrees(registration, pr, {
+    ...options, observeReview: (record) => observed.push(record.cwd),
+  });
+  tracker.gitExecFileImpl = (_file, args, _options, callback) => callback(null, args[2] === 'worktree'
+    ? `worktree ${f.root}\nbranch refs/heads/main\n\nworktree ${path.join(f.root, 'deleted')}\nbranch refs/heads/feat/open\nprunable gitdir file points to non-existent location\n`
+    : '');
+  await tracker.refreshRepo('example', 'project');
+  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { unavailable: true });
+  assert.deepEqual(observed, [f.root]);
+});
+
+test('同じ PR の登録が両方確認不能でも取り直しは例外にならない', async (t) => {
+  const f = await headToolFixture(t, { tool: true, contents: '{broken' });
+  const { tracker, state, github } = await trackerFixture(t, [31], f.root);
+  state.registerPullRequest('session-other', { url: f.pr.url }, { cwd: f.root, product: { key: 'project', name: 'project' } });
+  github.openPullRequests = [f.pr];
+  tracker.gitExecFileImpl = f.options.execFileImpl;
+  await tracker.refreshRepo('example', 'project');
+  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { unavailable: true });
+});
+
+for (const order of [['missing', 'valid'], ['valid', 'missing']]) {
+  test(`確認不能の登録があっても未実施を優先して催促する (${order.join(' → ')})`, async (t) => {
+    const f = await headToolFixture(t, { tool: true });
+    const { tracker, state, github } = await trackerFixture(t, []);
+    for (const name of order) state.registerPullRequest(`session-${name}`, { url: f.pr.url }, {
+      cwd: name === 'valid' ? f.root : path.join(f.root, 'missing'), product: { key: 'project', name: 'project' },
+    });
+    github.openPullRequests = [f.pr];
+    tracker.gitExecFileImpl = (_file, _args, _options, callback) => callback(new Error('unavailable'));
+    await tracker.refreshRepo('example', 'project');
+    assert.equal(tracker.snapshot()[0].trees[0].crossReview, null);
+    assert.deepEqual(await tracker.missingReviewRecords('session-valid'), [{ owner: 'example', repo: 'project', number: 31, headRefOid: f.pr.headRefOid }]);
+  });
+}
+
+test('同じ根と head の道具確認を一度の取り直しで使い回す', async (t) => {
+  const f = await headToolFixture(t, { missing: true });
+  const { tracker, state, github } = await trackerFixture(t, [31], f.registration.cwd);
+  state.registerPullRequest('session-other', { url: f.pr.url }, { cwd: f.registration.cwd, product: { key: 'project', name: 'project' } });
+  github.openPullRequests = [f.pr];
+  tracker.gitExecFileImpl = f.options.execFileImpl;
+  await tracker.refreshRepo('example', 'project');
+  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { notRequired: true, source: 'tool-absent' });
+  assert.equal(f.calls.filter(({ args }) => args[2] === 'ls-tree').length, 1);
+});
+
+for (const timer of [false, true]) {
+  test(`${timer ? '定期' : '初回'}の PR 取り直しが reject しても例外名だけを診断に残す`, async (t) => {
+    const root = await temporaryDirectory(t);
+    const { Diagnostics } = require('../src/server/diagnostics');
+    const diagnostics = new Diagnostics({ homeDir: root });
+    const { tracker } = await trackerFixture(t, []);
+    tracker.diagnostics = diagnostics;
+    let calls = 0;
+    tracker.refreshAll = async () => {
+      if (!timer || calls++ > 0) throw new TypeError('private-message /private/path');
+    };
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    t.after(() => tracker.close());
+    tracker.start();
+    if (timer) t.mock.timers.tick(60_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    const entries = (await diagnostics.readRun(diagnostics.run)).filter((entry) => entry.msg === 'pr.refresh.failed');
+    assert.deepEqual(entries.map(({ level, tag, data }) => ({ level, tag, data })), [
+      { level: 'warn', tag: 'merge', data: { name: 'TypeError' } },
+    ]);
+    assert.doesNotMatch(JSON.stringify(entries), /private|stack|message/);
+  });
+}
+
+for (const scenario of [
+  { name: '今の head の収束', round: 2, outcome: 'converged', keepRecord: true },
+  { name: '前の往復の収束', round: 1, outcome: 'converged' },
+  { name: '別の head の収束', round: 2, outcome: 'converged', sha: 'b'.repeat(40) },
+  { name: '対応中の記録', round: 2, outcome: 'fixing' },
+  { name: '未実施', missing: true },
+  { name: '確認不能', broken: true },
+]) {
+  test(`レビュー不要の記録後に「${scenario.name}」を読むと${scenario.keepRecord ? '収束記録を優先する' : '理由付きの不要を維持する'}`, async (t) => {
+    const headSha = 'a'.repeat(40);
+    const contents = scenario.broken ? '{broken' : JSON.stringify({ branches: scenario.missing ? {} : {
+      'feat/open': { round: 2, dismissed: [], lastTriage: { round: scenario.round, sha: scenario.sha || headSha, outcome: scenario.outcome } },
+    } });
+    const f = await headToolFixture(t, { tool: true, contents });
+    const { tracker, state, github } = await trackerFixture(t, [31], f.root);
+    state.setCrossReviewSkip({ owner: 'example', repo: 'project', number: 31, headRefOid: headSha, reason: '文言だけの変更', recordedAt: new Date().toISOString() });
+    github.openPullRequests = [f.pr];
+    tracker.gitExecFileImpl = f.options.execFileImpl;
+    await tracker.refreshRepo('example', 'project');
+    const review = tracker.snapshot()[0].trees[0].crossReview;
+    if (scenario.keepRecord) assert.deepEqual(review.triage, { round: 2, sha: headSha, outcome: 'converged' });
+    else assert.deepEqual(review, { notRequired: true, source: 'recorded', reason: '文言だけの変更' });
+  });
+}

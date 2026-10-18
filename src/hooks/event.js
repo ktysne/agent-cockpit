@@ -1,8 +1,8 @@
 const { planUpdateForTool } = require('../server/plan-updates');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
-const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution, parseCodexLaunch } = require('../server/events');
-const { readRouting } = require('../server/routing');
+const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
+const { effectiveRouteForSubagentStart } = require('./route');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, persistedOutputPath, readTaskOutputFile } = require('../shared/task-output');
@@ -134,6 +134,11 @@ function commandPositionText(command) {
     else if (context === 'substitution' && character === ')') contexts.pop();
   }
   return characters.join('');
+}
+
+function extractCodexLaunchDefinition(command) {
+  const match = commandPositionText(command).match(/(?:^|&&|\|\||[;|(\r\n])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:"(?:[^"\r\n]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?"|'(?:[^'\r\n]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?'|(?:[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?)[ \t]+["']?([A-Za-z0-9_][A-Za-z0-9_.-]*)(?=["']?(?:$|[\s;&|<>)]))/im);
+  return match ? match[1] : '';
 }
 
 function extractCodexWaitRunId(command) {
@@ -383,6 +388,8 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     event.summary = inputSummary(event.tool_name, input.tool_input);
     if (event.tool_name === 'Bash') {
       const command = pickString(input.tool_input?.command);
+      const codexLaunchDefinition = extractCodexLaunchDefinition(command);
+      if (codexLaunchDefinition) event.codexLaunchDefinition = codexLaunchDefinition;
       const codexWaitRunId = extractCodexWaitRunId(command);
       if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
       const codexReviewDefinition = extractCodexReviewDefinition(command);
@@ -439,10 +446,10 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     // 終了コードが 0 以外の Bash は PostToolUseFailure の error に出力が載ることがある。
     const codexOutput = { ...codexOutputLines(input.error), ...codexOutputLines(input.tool_response) };
     // Claude Code は 30000 文字を超える出力の先頭だけを stdout に残すので、出力の最後に出る結果行は全文のファイルから読む。
-    if (event.tool_name === 'Bash' && !codexOutput.resultLine) {
+    if (event.tool_name === 'Bash') {
       const command = pickString(input.tool_input?.command);
       const outputPath = persistedOutputPath(input.tool_response?.persistedOutputPath);
-      if (outputPath && (parseCodexLaunch(command) || extractCodexReviewDefinition(command) || extractCodexWaitRunId(command))) {
+      if (outputPath && (extractCodexLaunchDefinition(command) || extractCodexReviewDefinition(command) || extractCodexWaitRunId(command))) {
         let output = null;
         try { output = (options.readTaskOutput || readTaskOutputFile)(outputPath); } catch {}
         if (typeof output === 'string') Object.assign(codexOutput, codexOutputLines(output));
@@ -518,7 +525,10 @@ async function runHook(input, options = {}) {
     if (Number.isInteger(pid) && pid > 0) event.codexPid = pid;
   }
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
-  if (event.provider !== 'codex' && event.hook_event_name === 'SubagentStart') event.route = (await readRouting(homeDir)).agents;
+  if (event.provider !== 'codex' && event.hook_event_name === 'SubagentStart') {
+    const route = effectiveRouteForSubagentStart(event, options);
+    if (route !== null) event.route = route;
+  }
   let dashboardUrl = null;
 
   if (event.hook_event_name === 'SessionStart') {

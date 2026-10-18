@@ -22,7 +22,7 @@ test('委譲へ分類し直した Codex thread の行が消えると版が進む
   const state = new DashboardState();
   const launch = {
     session_id: 'parent', hook_event_name: 'PreToolUse', tool_name: 'Bash',
-    summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md', hookAt: 100,
+    summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md', codexLaunchDefinition: 'impl-hard', hookAt: 100,
   };
   state.addEvent(launch);
   state.addEvent({
@@ -1385,7 +1385,7 @@ test('SessionEnd より後に遅れて届いたイベントで終了済みセッ
 function launchCodex(state, sessionId, toolUseId, hookAt, agentId, agentDefinition = null, definition = 'impl-hard') {
   state.addEvent({
     session_id: sessionId, hook_event_name: 'PreToolUse', hookAt, agent_id: agentId,
-    tool_name: 'Bash', tool_use_id: toolUseId, summary: `bash ~/.claude/tools/codex-agent.sh ${definition} < prompt.md`,
+    tool_name: 'Bash', tool_use_id: toolUseId, summary: `bash ~/.claude/tools/codex-agent.sh ${definition} < prompt.md`, codexLaunchDefinition: definition,
   }, agentDefinition ? { codexAgentDefinition: agentDefinition } : undefined);
 }
 
@@ -2426,7 +2426,7 @@ test('背景クロスレビューの完了通知の exit=3 は、status が fail
 
     const [agent] = state.snapshot().sessions[0].agents;
     assert.deepEqual([agent.active, agent.unconfirmed, agent.unavailable, agent.resultReceived], [
-      false, false, expectedUnavailable, expectedResultReceived,
+      false, status === 'killed', expectedUnavailable, expectedResultReceived,
     ]);
   }
 });

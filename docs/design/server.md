@@ -287,8 +287,8 @@ state が `merged` の登録は残す。
 | イベント | 送る項目 |
 |---|---|
 | 共通 | `session_id`、`hook_event_name`、`cwd`、`agent_id`、`agent_type`、`hookAt` |
-| PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで。切り詰めた場合は末尾に「…」を付ける)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る |
-| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex の起動か `--wait` の Bash で、出力から結果行を得られず、`tool_response.persistedOutputPath` が絶対パスでファイル名が `<英数字、_、->.txt` の形なら、そのファイルの先頭と末尾の各 64KB から Codex の行を読み、出力から得た行より優先する。Claude Code は 30000 文字を超える出力の先頭だけを `stdout` に残して全文をこのファイルに置き、結果行は出力の最後に出るためである。`stderr` は見ない(bridge は Codex の行を標準出力へ出す)。PostToolUse の Codex の終了の判定は「サブエージェントのモデルと effort」の節に従う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash の PostToolUse では、コマンド先頭の `cd <パス> &&` から解決した絶対パスを `commandCwd` として送る(変数展開、`~`、引用符なしの `\`、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない) |
+| PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで。切り詰めた場合は末尾に「…」を付ける)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る。Bash では、コマンドの全文から見つけた Codex の起動の定義名を `codexLaunchDefinition` として送る(見つけ方は「サブエージェントのモデルと effort」の節) |
+| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex の起動、クロスレビューの起動、`--wait` の Bash で、`tool_response.persistedOutputPath` が絶対パスでファイル名が `<英数字、_、->.txt` の形なら、出力の結果行の有無によらず、そのファイルの先頭と末尾の各 64KB から Codex の行を読み、出力から得た行より優先する。Claude Code は 30000 文字を超える出力の先頭だけを `stdout` に残して全文をこのファイルに置き、本物の結果行は出力の最後に出るためである(先頭に残った結果行は、最終報告に引用されたものでありうる)。`stderr` は見ない(bridge は Codex の行を標準出力へ出す)。PostToolUse の Codex の終了の判定は「サブエージェントのモデルと effort」の節に従う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash の PostToolUse では、コマンド先頭の `cd <パス> &&` から解決した絶対パスを `commandCwd` として送る(変数展開、`~`、引用符なしの `\`、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない) |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。UserPromptSubmit では、`prompt` が `<task-notification>` で始まるときだけ通知を全件読み、`status` が終わり(`completed`、`failed`、`killed`、`stopped`)のものの `task-id` と `status` を `backgroundTaskEnds` に載せる。開発者が入力に引用した通知を、終了と取り違えないためである。出力ファイルの読み取りは 8 件までとし、`output-file` が絶対パスで、ファイル名が `<task-id>.output` と一致する場合は、先頭と末尾の各 64KB から Codex の監査行、結果行、実行 ID の行だけを `codexOutput` に載せる。128KB 以下のファイルは全体を読む。出力ファイルが無い通知には `outputMissing` を付け、Codex の行を終了未確認にする。上限を超えて読まなかった通知と、出力を読めなかった通知は送らず、記録ファイルを読み直すサーバーの照合に任せる。出力に `waiting` があれば行を閉じてはならないためである。サーバーの照合は、セッションの一覧から `cwd` を得られなければ、フックが最初に送った `cwd` で記録ファイルを探す。サーバーが受ける `backgroundTaskEnds` は最大 32 件とする。プロンプト本文と `summary` は送らない |
@@ -413,6 +413,7 @@ Windows のルート相対パスは `\` で始め、相対パスは実行環境�
 
 PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツール `cockpit_add_pr` から登録し、`store.json` に保存する。
 常駐サーバーは `gh` の保存済み認証を使い、60 秒ごとにリポジトリの状態を取得する。
+定期取得が例外で失敗しても常駐サーバーは止めず、診断記録 `pr.refresh.failed` に残す。
 登録と関連 PR のどちらにも、開いているか未確定の記録(`state` が `open`、`unknown`、`null`)が無いリポジトリは、最後に取得を始めてから 15 分経つまで定期取得を飛ばす。
 初回の取得、登録の追加、確定操作の確かめ直しの取得(`refreshRepoFresh`)は間引かない。
 `git push` または `gh pr` の後は、フックが送る `--repo` または `-R` の指定を優先し、指定がなければコマンドの `cd` 先、次にイベントの `cwd` から製品を決める。
@@ -428,12 +429,15 @@ PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツ�
 `PullRequestTracker.execute` を通る `gh` は表示設定 `display.ghConcurrencyLimit` の本数までとし、残りは待ち行列に入れる。上限は払い出しのたびに読み直す。下げても実行中の `gh` は止めず、実行数が新しい上限を下回ってから次を起動する。
 開発者が画面で確定したマージ、base の付け替え、ブランチの削除とその結果の確認は、定期取得より待ち行列で優先する。
 `gh` の 20 秒の期限は、待ち時間を含めず、起動してからの時間に掛ける。
-base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha`、`triage` を設定する。`triage` は状態ファイルの `lastTriage` を `{round, sha, outcome}` に検証したもので、`sha` は 40 桁か 64 桁の小文字、`outcome` は `fixing`、`converged`、`halted` のいずれか。無いか形が合わなければ `null` とする。表示の規則は計画書の決定「クロスレビューの結論の表示」を正本とする。セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は「レビュー不要」とする。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。
+base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha`、`triage` を設定する。`triage` は状態ファイルの `lastTriage` を `{round, sha, outcome}` に検証したもので、`sha` は 40 桁か 64 桁の小文字、`outcome` は `fixing`、`converged`、`halted` のいずれか。無いか形が合わなければ `null` とする。表示の規則は計画書の決定「クロスレビューの結論の表示」を正本とする。セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は「レビュー不要」とする。ただし、PR の head のコミットに `tools/cross-review.js` があれば(`git ls-tree` で確かめる)、道具がある worktree と同じく状態ファイルを読む。worktree が道具の無い別のブランチへ切り替わっても、記録を「不要」で隠さないためである。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。
 状態ファイルは、登録の `cwd` の worktree に加えて、同じリポジトリのほかの worktree からも探す。PR の head のブランチをチェックアウトしている worktree は記録の有無を問わず候補にし、それ以外の worktree はそのブランチの記録を持つときだけ候補にする。スタックを 1 つの worktree で積むと、下の段のブランチはどこにもチェックアウトされないためである。
+登録の `cwd` が消えたときは、親へ上って見つかる worktree の根で下の remote の照合をしてから、PR の head のコミットに `tools/cross-review.js` があるかを確かめる。無ければ「レビュー不要」とし、あるか、コミットが手元に無いなどで確かめられなければ「確認できない」とする。消えた worktree の状態ファイルは読めないためである。このとき見つけた根も、ほかの worktree と同じ規則の候補にする。`git worktree list` で `prunable` の worktree(フォルダーが無い)は候補にしない。
+登録や worktree の候補が複数あるときは、往復の記録、記録なし(レビュー未実施)、確認できない、道具なし(レビュー不要)の順に選び、同じ順位なら今の head で収束した記録、次に今の head をレビューした記録を選ぶ。確認できない値で、確かめられた「レビュー未実施」を隠さない(催促は未実施の PR だけを対象にするため)。確認できない値を道具なしより上に置くのは、確かめられない worktree の PR をレビュー不要と扱わないためである。不要の記録は、選んだ値に下の規則で重ねる。
 登録の `cwd` と製品は、`commandCwd` があればそこから決める。`cockpit_add_pr` で登録し直しても、登録済みの `cwd` と製品は変えない。
 cwd の worktree の GitHub の remote のどれも PR のリポジトリと一致しないときは、クロスレビューを「確認できない」とし、その worktree をほかの worktree の候補からも外す。remote が読めないときや GitHub の remote が無いときは、この照合をしない。
 表示設定 `display.mergeableCondition` は「マージ操作が可能」「CI が成功」「現在の head のクロスレビューが収束または不要」の各条件を選ぶ。既定は最後の条件まで求める。収束は `lastTriage.round` と現在の round が一致し、`lastTriage.sha` と現在の head が一致する場合だけ有効とする。操作可否は CI とクロスレビューを含めずに判定し、選択条件を満たすかどうかでカードの緑表示、待ち条件と件数を決める。操作可だが条件が残る場合も、確認欄に警告を出して開発者が実行できる。
 クロスレビュー不要記録は PR の owner/repo/番号、head SHA、理由を `store.json` の `crossReviewSkips` に保存する。MCP の `cockpit_skip_review` は登録元セッションからのみ記録でき、ダッシュボードの操作は起動時の秘密値と必須 Origin を照合して記録または取り消す。どちらもサーバーが最新の PR head を取り直して照合し、別の head には適用しない。head が変われば記録を無効にし、PR 登録の保持期限に合わせて削除する。
+不要の記録がある PR でも状態ファイルを読み、今の head で収束した記録があれば、不要の記録より収束を優先する。収束後マージの予約は不要の記録だけでは実行しないので、記録の後の収束を隠さないためである。
 メインセッションの Stop 開始時だけ、登録先 repo の進行中の再取得を待ってからローカルのレビュー記録を読み直し、記録の無い PR があればレビュー不要の記録を促す。
 `stop-start` は判定を待たずに generation を返し、判定は最初の `stop-poll` または `stop-check` で待つ。`stop-start` のフックは 1 秒で打ち切るため。
 待機と読み直しの合計上限は 3 秒とし、失敗や時間切れでは催促せず Stop を続ける。`stop-check` のフックは、この上限に 2 秒を足した時間まで応答を待つ。Claude の `stop-poll` のフックは、この上限と long-poll の上限を足した時間まで待つ。
@@ -451,6 +455,7 @@ MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り
 compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
 判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
 ダッシュボードから即時マージする口は、秘密値と必須 Origin を照合し、登録済みスタックの一番下と現在の head をサーバーで確かめる。`gh pr merge` には画面で確認した `--match-head-commit` を渡す。PR 行の予約チェックからは画面で見た head、方式、ブランチ削除の有無を予約口に送り、条件がそろっていればクロスレビューの最後の `converged` 記録の SHA を `--match-head-commit` に渡してその場でマージする。確認欄は予約状態にかかわらず即時マージ専用とする。
+道具が無い PR(`crossReview` が `{notRequired: true, source: 'tool-absent'}`)には、予約が無ければ予約のチェックを出さない。予約は収束記録が無いと実行しないためである。予約が残っていれば、取り消せるように出す。
 子 PR の base は head ブランチを削除する場合(自動削除を含む)だけ付け替え、残す場合と fork では付け替えない。
 子の base を変える外部操作より先に、子と親の PR 番号および変更前後の base を `completed: false` で `store.json` に保存し、保存完了後に `gh pr edit` を呼ぶ。edit が成功した後に `completed: true` を保存する。保存に失敗した場合は edit せずマージを失敗させる。`completed: false` の記録は親への依存として残すが、表示する base と `retargetedFrom` には使わない。`completed` が無い旧形式の記録は完了済みとして扱う。retarget 記録を持つ子は、完了状態にかかわらず、親 PR が取得済みのマージ候補で `MERGED` と確認されるまで、即時・予約の両方でマージしない。マージできない理由には「親 PR #N のマージ確認待ち」を出す。親が open 一覧に無いだけ、未マージで closed、または取得失敗だけでは待ちを解除しない。親が未マージで closed の場合は再オープンしてマージする。確認後は現在の head、レビュー、CI、積み直し条件を再評価する。
 `mergedHead` のない旧マージ済み記録は refresh ごとに最大 5 件を `gh pr view` で補完し、通知を再発火させず、失敗を画面へ出さずに同じプロセス内で 1 回まで再試行する。
@@ -475,7 +480,7 @@ compare の失敗や 250 件超で全件を確認できない場合はマージ�
 即時マージは画面の SHA、許可方式、スタック最下段、現在のマージ操作条件を gh で取り直して確かめる。予約は方式とブランチ削除の有無を保存し、GitHub の自動マージ予約 API は呼ばない。同じリポジトリの即時マージと予約は到着順に待ち、リポジトリ、PR の順にロックを取り、一件ずつ実行する。予約確認もリポジトリ、PR の順にロックを取る。予約確認自身の処理中に再入した確認は重複実行せず、手動操作がリポジトリロックを保持または待機している場合は確認を保留し、手動操作の待機列が空いた後に再評価する。予約中でも即時マージを拒まない。成功後はマージ検出処理が予約を消し、失敗した場合は予約を残す。
 `/reserve` は保存直後にも同じ PR の予約条件を確認する。条件がそろっていれば、クロスレビュー収束記録の SHA を `--match-head-commit` に指定してその場でマージし、即時マージと同じ結果(`merged`、`branchDeleted`、`queued`、`warning`)を応答する。条件がそろっていなければ `reserved: true` と予約を応答する。
 リポジトリの状態を取り直すたびに予約を確認する。最後のクロスレビュー記録が現在の round の `converged` で SHA が現在の head と一致し、スタック最下段、ドラフトでない、コンフリクトなし、CI 成功を満たし、レビュー承認が必須のリポジトリでは GitHub レビューが承認済みの場合、通常のマージ手順でその収束 SHA を `--match-head-commit` に指定する。`review.notRequired` だけでは予約によるマージを実行しない。head が収束 SHA と違う場合は予約を維持し、新しい head の収束を待つ。サーバー停止中に条件がそろった場合は起動後最初の PR 状態取得で処理する。
-画面からの予約取消、PR のクローズ、最後のクロスレビュー記録の `halted` ではローカル予約を消し、画面と作成元セッションへ知らせる。
+画面からの予約取消、PR のクローズ、今の往復のクロスレビューの結論が `halted`(`lastTriage.round` が現在の round と等しい)のときはローカル予約を消し、画面と作成元セッションへ知らせる。`halted` の後に次の往復が始まっていれば、結論待ちとして予約を残す。
 予約取消の知らせは記録時刻から 1 分で画面から隠し、常駐サーバーは期限を過ぎた知らせを配らない。
 旧形式の GitHub 自動マージ予約は読み込み時に捨て、GitHub 側の取消 API は呼ばない。
 マージ履歴、予約、リポジトリごとの前回方式は `store.json` に保存し、マージ履歴は 24 時間で消す。予約取消の通知はメモリーに持ち、該当 PR グループの `reservationNotices` で画面へ配る。
@@ -502,10 +507,12 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - PostToolUse の `resolvedModel` は、その行のモデルに反映する。
 - Agent 呼び出しの説明は、PostToolUse で Agent の実行中ツールを消す前に、対象の行へ書く。SubagentStart の時点の結び付けは到着順で誤ることがあるので、既に説明があっても呼び出し自身の説明で上書きする。
 - Claude のモデル名は、画面では `claude-sonnet-5-5` を `Sonnet 5.5` のように読みやすく表示する。
-- Bash の PreToolUse で `codex-agent.sh <定義名>` を見つけたら、`~/.claude/gpt-agents/<定義名>.md` の frontmatter の `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
+- Bash の PreToolUse では、コマンドの全文から、ヒアドキュメントより前のコマンドの位置(行頭か `;`、`&&`、`||`、`|`、`(`、改行の後)にある `codex-agent.sh <定義名>` を Codex の起動として扱う。前に `bash` か `sh` が付く形と、パスを引用符で囲んだ形を受ける。引数や文字列の中の `codex-agent.sh`(`git diff -- tools/codex-agent.sh` など)と、`--wait` などのオプションの呼び出しは起動として扱わない。要約は 80 字で切られ、引数に現れたパスと起動を区別できないためである。
+- 起動を見つけたら、Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)を先に、そこが `~/.claude` と異なる場合は後者も対象にして `gpt-agents/<定義名>.md` を探し、先に読めた定義の frontmatter から `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
 - Bash の PreToolUse では、要約の切り詰め前にコマンド位置にあるクロスレビュー起動も Codex 呼び出しとして扱う。
 - `npm run review:codex` と `node tools/cross-review.js codex` は `codex-review`、`--fix` 付きと `npm run review:codex:fix` は `codex-subagent` の定義を使い、`--no-codex-agent` 付きは対象にしない。
 - `codex-agent.sh` の起動の PostToolUse は、結果行を受けたときに終了とし、結果行が無ければ背景で動いているものとして扱う。
+- 出力に結果行が複数あれば最後の行を使い、監査行と run 行は最初の行を使う。bridge は結果行を出力の最後に出し、それより前の結果行は最終報告に引用されたものでありうるためである。
 - クロスレビューの起動の PostToolUse は、`backgroundTaskId` が無ければ結果行が無くても終了にする。クロスレビューの CLI はレビュアーの終了まで戻らず、差分が無いときと bridge を通らない直接起動では Codex の行を出さないためである。`backgroundTaskId` があれば、`codex-agent.sh` の起動と同じく背景の行として完了通知で閉じる。
 - クロスレビューの行では、`codex-agent: result=failed exit=3` の行を、呼び出しが失敗で終わったとき(PostToolUseFailure と、完了通知の status が `failed` のとき)だけ結果として扱う。それ以外では結果行が無いものとして扱い、背景の出力を読んだ呼び出しのこの行では何もしない。bridge が終了コード 3 を返すと、クロスレビューの CLI は同じプロンプトで直接起動へ切り替えてレビューを続けるためである。
 - Codex 呼び出しを開始したイベントに親の `agent_id` がある場合は、GPT のモデル、effort、`codex_home` を親の行へまとめる。
@@ -513,13 +520,14 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - 監査行が届いたらモデル、effort、`codex_home` を実際の値に置き換える。
 - 結果行が `rate-limited` なら「GPT 不使用(利用上限)」、`unavailable` なら「GPT 不使用(使用不能)」を表示する。
 - GPT 側の情報を取得できない場合は、モデルの札を表示しない。
-- 背景で起動した Codex は、同じ親の後続ツールの PostToolUse 出力に結果行が現れたとき、まず一致する実行 ID の行を終了にする。無ければ、出力を読んだ背景タスク ID が起動時に記録した背景タスク ID と一致する Codex の行(親は問わない)を終了にする。どちらも無い場合は、実行 ID を持たないか結果行の実行 ID と一致する候補が一つだけならその行を終了にする。結果行に実行 ID が無い場合は、実行 ID を持つ行を候補に含めない。候補が複数なら行を終了にせず、終了未確認のまま残す。`--wait` の状態の行(`orphaned`、`unverified`)で終了未確認にした行は、ラッパーが既に消えていて結果行が届かないので、この候補にしない。
+- 背景で起動した Codex は、同じ親の後続ツールの PostToolUse 出力に結果行が現れたとき、まず一致する実行 ID の行を終了にする。無ければ、出力を読んだ背景タスク ID が起動時に記録した背景タスク ID と一致する Codex の行(親は問わない)を終了にする。どちらも無い場合は、実行 ID を持たないか結果行の実行 ID と一致する候補が一つだけならその行を終了にする。結果行に実行 ID があるときは、実行 ID の定義名が行の定義と同じで、run 行の `started=` が行の開始の 1 秒前より前でない行だけを候補にする(`started=` は秒で切り捨てられている)。別の実行の結果行や、過去のログを読んだ出力の結果行を割り当てないためである。結果行に実行 ID が無い場合は、実行 ID を持つ行を候補に含めない。候補が複数なら行を終了にせず、終了未確認のまま残す。`--wait` の状態の行(`orphaned`、`unverified`)や停止の通知で終了未確認にした行は、ラッパーの出力に結果行が届かないので、この候補にしない(実行 ID の一致でだけ結果を受ける)。
 - 背景タスクの完了通知は UserPromptSubmit とメインの記録ファイルの両方から取り込む。
   終了状態の通知の task-id が同じセッションの背景タスク ID と一致する、稼働中か終了未確認で結果を受けていない背景 Codex の行を終了にする。
   行に背景タスク ID が無い場合だけ、出力ファイルの `codex-agent: run=` と行の実行 ID の一致で照合し、どちらかが無ければ終了にしない。
   記録ファイルから得た通知は、行の開始より古いものを使わない。
   出力ファイルは絶対パスでファイル名が `<task-id>.output` のものだけを読み、記録ファイルの経路では非同期に 1 回 8 件まで読む。
-  先頭と末尾の各 64KB から結果行が得られれば既存の結果処理を適用し、結果行が無ければ監査行と実行 ID を反映して稼働中と終了未確認の印を外す。
+  先頭と末尾の各 64KB から結果行が得られれば既存の結果処理を適用し、結果行が無ければ監査行と実行 ID を反映して終了にする。
+  ただし、`--wait` の状態の行があれば下の `--wait` の規則に従う。無いときは、通知の status が `killed` か `stopped` のとき、出力ファイルが無いとき、行に背景タスク ID が無いときは終了未確認にする。bridge は Bash を止めても停止を Codex へ伝えず、Codex は動き続けるためである。
   記録ファイルの経路は内部イベント `BackgroundTaskEnd` を追加し、メインの状態、最終活動時刻、ターンの区切りを変えない。
   終了した行は次の読み取りの対象から外す。
   `BackgroundTaskEnd` と Claude の `Interrupt` は内部イベントとして、フックと `/api/events` からは受け付けない。
@@ -727,12 +735,12 @@ MCP が渡す `ppid` と `CLAUDE_CODE_SESSION_ID` のうち、常駐サーバー
 書き込みは `POST /api/routing` だけで受け付け、画面用秘密値と `validRequiredUiOrigin` を照合する。
 ファイルは `AtomicJsonWriter` が一時ファイルから rename して保存する。
 
-`GET /api/state` は現在の経路を返す。`event.js` は `SubagentStart` の送信時に `agents` の値を `route` として記録し、画面は起動時の値と現在値が異なる稼働中の行に「変更前」を表示する。
-同期フック `route.js` は `SubagentStart` 時点の `agents` を `route-agents/` に記録し、指定がある場合は `additionalContext` へ差し込む。記録名は session ID と agent ID を小文字の 16 進数文字列にして作り、一時ファイルから rename して保存する。`PreToolUse` はこの記録を参照するため、起動後に設定を変えても稼働中の経路は変わらない。Claude 経路では `codex-agent.sh` 呼び出しを拒否し、Codex と既定の経路は拒否しない。同じサブエージェントの `SubagentStart` が再び届いても記録は上書きせず、終了時にも消さない。再開したサブエージェントの経路を初回のまま保つためである。記録は読むたびに更新時刻を進め、開始時に 24 時間使われていない記録を削除する。記録の読み書きに失敗したフックは応答を返さない。
+`GET /api/state` は現在の経路を返す。`event.js` は Claude セッションの `SubagentStart` で bridge の有無を確認し、bridge がある場合は `route-agents/` の記録があればその値を、記録がなければ現在の `agents` を `route` として送る。route.js を登録していない環境でも現在の設定値を送るため、画面の札を登録漏れの診断に使える。bridge が無ければ `route` を送らない。`event.js` は記録を書き換えない。画面は起動時の値と現在値が異なる稼働中の行に「変更前」を表示する。
+同期フック `route.js` は `SubagentStart` 時点の `agents` を `route-agents/` に記録し、指定がある場合は `additionalContext` へ差し込む。記録名は session ID と agent ID を小文字の 16 進数文字列にして作り、一時ファイルから rename して保存する。`PreToolUse` はこの記録を参照するため、起動後に設定を変えても稼働中の経路は変わらない。Claude 経路では `codex-agent.sh` 呼び出しを拒否し、Codex と既定の経路は拒否しない。同じサブエージェントの `SubagentStart` が再び届いても記録は上書きせず、終了時にも消さない。再開したサブエージェントの経路を初回のまま保つためである。`route.js` が記録を読むたびに更新時刻を進め、開始時に 24 時間使われていない記録を削除する。記録の読み書きに失敗したフックは応答を返さない。
 `review` の値は ai-cross-review がレビューを回す直前に `node tools/cross-review.js route` で読む。agent-cockpit 側は保存するだけで、セッションへ差し込まない。
 
 サブエージェントの経路は claude-codex-bridge の `codex-agent.sh` があるときだけ意味を持つ。`GET /api/state` は Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)か `~/.claude` のどちらかに `tools/codex-agent.sh` があるかを `integrations.codexAgent` で返し、画面は無ければサブエージェントの段と経路の札を出さない。`route.js` も同じ場所を確かめ、無ければ `SubagentStart` で何も差し込まない。`~/.claude` も見るのは、bridge が `CLAUDE_CONFIG_DIR` を見ずに `~/.claude/tools/` へ置く作りだからである。
-クロスレビューの経路は ai-cross-review を使うリポジトリでだけ意味を持つ。`GET /api/state` は、稼働中のセッション(セッションファイルの `cwd`)と PR を登録したセッション(登録の記録の `cwd`)から worktree の根を探し、そのどれかに `tools/cross-review.js` があるかを `integrations.crossReview` で返す。セッションファイルが読めない環境でも、PR の登録があれば判定できる。判定は PR の `crossReview` と同じ探し方を使う。画面は偽ならクロスレビューの段を出さず、2 つの連携がどちらも無ければ経路の欄を出さない。
+クロスレビューの経路は ai-cross-review を使うリポジトリでだけ意味を持つ。`GET /api/state` は、稼働中のセッション(セッションファイルの `cwd`)と PR を登録したセッション(登録の記録の `cwd`)から worktree の根を探し、そのどれかに `tools/cross-review.js` があるかを `integrations.crossReview` で返す。セッションファイルが読めない環境でも、PR の登録があれば判定できる。判定は、各 `cwd` から親へ上って見つかる worktree の根に `tools/cross-review.js` があるかで行う。画面は偽ならクロスレビューの段を出さず、2 つの連携がどちらも無ければ経路の欄を出さない。
 
 ## 外部リンク
 

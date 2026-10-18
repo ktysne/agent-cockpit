@@ -119,19 +119,45 @@ function writeRouteRecord(recordPath, route, fileSystem) {
   }
 }
 
-// 掃除の期限を最後に使ってからの時間にするため、読めた記録は更新時刻を進める。
-function readRouteRecord(recordPath, fileSystem) {
+function readRouteRecordValue(recordPath, fileSystem) {
   try {
     const record = JSON.parse(fileSystem.readFileSync(recordPath, 'utf8'));
     if (!record || !ROUTE_VALUES.has(record.route)) return null;
-    try {
-      const now = new Date();
-      fileSystem.utimesSync(recordPath, now, now);
-    } catch {}
     return record.route;
   } catch {
     return null;
   }
+}
+
+// 掃除の期限を最後に使ってからの時間にするため、読めた記録は更新時刻を進める。
+function readRouteRecord(recordPath, fileSystem) {
+  const route = readRouteRecordValue(recordPath, fileSystem);
+  if (!route) return null;
+  try {
+    const now = new Date();
+    fileSystem.utimesSync(recordPath, now, now);
+  } catch {}
+  return route;
+}
+
+function codexAgentScriptExists(options, fileSystem) {
+  return codexAgentScriptPaths(claudeHomeFromOptions(options), options.userHome).some((scriptPath) => {
+    try {
+      return fileSystem.existsSync(scriptPath);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function effectiveRouteForSubagentStart(input, options = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || input.hook_event_name !== 'SubagentStart') return null;
+  const fileSystem = options.fileSystem || fs;
+  if (!codexAgentScriptExists(options, fileSystem)) return null;
+  const homeDir = cockpitHomeFromOptions(options);
+  const recordPath = routeRecordPath(input, homeDir);
+  if (!recordPath) return null;
+  return readRouteRecordValue(recordPath, fileSystem) || readRouting(homeDir, fileSystem)?.agents || null;
 }
 
 function outputForRoute(input, options = {}) {
@@ -143,14 +169,7 @@ function outputForRoute(input, options = {}) {
   const homeDir = cockpitHomeFromOptions(options);
   const fileSystem = options.fileSystem || fs;
   if (isStart) {
-    const scriptExists = (scriptPath) => {
-      try {
-        return fileSystem.existsSync(scriptPath);
-      } catch {
-        return false;
-      }
-    };
-    if (!codexAgentScriptPaths(claudeHomeFromOptions(options), options.userHome).some(scriptExists)) return null;
+    if (!codexAgentScriptExists(options, fileSystem)) return null;
     const directory = path.join(homeDir, 'route-agents');
     try {
       fileSystem.mkdirSync(directory, { recursive: true });
@@ -200,4 +219,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, commandInvokesCodexAgent, outputForInputText, outputForRoute, readRouting };
+module.exports = { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, commandInvokesCodexAgent, effectiveRouteForSubagentStart, outputForInputText, outputForRoute, readRouting };
