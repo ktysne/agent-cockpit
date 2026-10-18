@@ -552,30 +552,42 @@ test('終わったセッションは待機中で未完了のものが無い場�
   }
 });
 
-test('種類別の判断事項は有効な回答を送ったものを後ろに並べ、無視された回答は経過時間で並べる', () => {
-  const age = functionSource(pageHtml, 'kindDecisionWaitAge');
-  const effective = functionSource(pageHtml, 'hasEffectiveAnswer');
-  assert.ok(age && effective);
+test('種類別の判断欄は期限、待ち時間、状態の順に並び、同順位では順序が安定する', () => {
+  const names = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems'];
+  const functions = names.map((name) => functionSource(pageHtml, name));
+  assert.ok(functions.every(Boolean));
   const context = pageContext(pageHtml, {});
-  vm.runInContext(`${effective}\n${age}`, context);
+  vm.runInContext(functions.join('\n'), context);
 
   const now = Date.now();
-  const decisions = [
-    { id: 'sent', state: 'waiting', createdAt: new Date(now - 60 * 60_000).toISOString(), answer: { sentAt: new Date(now).toISOString() } },
-    { id: 'waiting', state: 'waiting', createdAt: new Date(now - 30 * 60_000).toISOString() },
-    {
-      id: 'ignored',
-      state: 'provisional',
-      createdAt: new Date(now - 50 * 60_000).toISOString(),
-      updatedAt: new Date(now - 10 * 60_000).toISOString(),
-      answer: { sentAt: new Date(now - 20 * 60_000).toISOString(), ignoredAt: new Date(now - 10 * 60_000).toISOString() },
-    },
-    { id: 'recent', state: 'waiting', createdAt: new Date(now - 60_000).toISOString() },
+  const at = (minutes) => new Date(now + minutes * 60_000).toISOString();
+  const sameStart = at(-90);
+  const wait = (id, sessionId, startedAt) => ({ kind: 'permission', session: { session_id: sessionId }, wait: { target_tool_use_id: id, startedAt }, card: { id } });
+  const decision = (id, sessionId, state, fields = {}) => ({ kind: 'decision', session: { session_id: sessionId }, decision: { id, state, createdAt: at(-30), updatedAt: at(-30), ...fields }, card: { id } });
+  const items = [
+    decision('sent', 'a', 'waiting', { createdAt: at(-600), answer: { sentAt: at(-1) } }),
+    decision('provisional-at', 'a', 'provisional', { provisionalAt: at(-2), updatedAt: at(-100) }),
+    decision('provisional-fallback', 'a', 'provisional', { updatedAt: at(-20) }),
+    decision('ignored', 'a', 'provisional', { provisionalAt: at(-10), answer: { sentAt: at(-5), ignoredAt: at(-4) } }),
+    decision('waiting-invalid-start', 'a', 'waiting', { createdAt: '時刻不明', awaitingAnswerUntil: '期限不明' }),
+    decision('waiting-invalid-deadline', 'a', 'waiting', { createdAt: at(-30), awaitingAnswerUntil: '期限不明' }),
+    wait('permission-old', 'z', at(-120)),
+    wait('permission-tie', 'z', sameStart),
+    decision('waiting-tie', 'a', 'waiting', { createdAt: sameStart }),
+    decision('deadline-late', 'z', 'waiting', { createdAt: at(-120), awaitingAnswerUntil: at(15) }),
+    decision('deadline-tie-z', 'z', 'waiting', { awaitingAnswerUntil: at(5) }),
+    decision('deadline-tie-a', 'a', 'waiting', { awaitingAnswerUntil: at(5) }),
+    decision('deadline-near', 'z', 'waiting', { createdAt: at(-1), awaitingAnswerUntil: at(2) }),
   ];
-  const ordered = decisions.map((decision) => ({ decision, age: context.kindDecisionWaitAge(decision) }))
-    .sort((left, right) => right.age - left.age);
+  const ordered = () => [...items].sort(context.compareKindJudgmentItems).map(({ card }) => card.id);
+  const expected = [
+    'deadline-near', 'deadline-tie-a', 'deadline-tie-z', 'deadline-late',
+    'permission-old', 'waiting-tie', 'permission-tie', 'waiting-invalid-deadline', 'waiting-invalid-start',
+    'provisional-fallback', 'ignored', 'provisional-at', 'sent',
+  ];
 
-  assert.deepEqual(ordered.map(({ decision }) => decision.id), ['waiting', 'ignored', 'recent', 'sent']);
+  assert.deepEqual(ordered(), expected);
+  assert.deepEqual(ordered(), expected);
 });
 
 test('種類別の今やっていることは行が無いとき本文を出さない', () => {
@@ -605,7 +617,9 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
     orderedSectionKeys: (keys) => keys,
     isFilterShown: () => false,
   });
-  vm.runInContext(`${element}\n${render}`, context);
+  const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
+    .map((name) => functionSource(pageHtml, name)).join('\n');
+  vm.runInContext(`${element}\n${kindSort}\n${render}`, context);
 
   const now = context.renderKindSections([]).find((section) => section.title === '今やっていること');
   assert.equal(now.body.className, 'body now');
