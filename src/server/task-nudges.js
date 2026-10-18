@@ -5,6 +5,8 @@ const NO_TASKS_REMINDER = 'タスクが登録されていない。アプリの�
 const SUBAGENT_REMINDER = 'サブエージェントが終わった後にタスクが書き直されていない。報告に合わせてアプリのタスク一覧の各項目の状態を更新する。一覧は cockpit の 1 つのタスクの完了条件として取り込まれる。題を登録するときは `cockpit_set_tasks` で 1 件登録し、完了条件は書かなくてよい。';
 const SET_TASKS_NO_TASKS_REMINDER = 'タスクが登録されていない。`cockpit_set_tasks` で今の作業のタスクと完了条件を登録する。';
 const SET_TASKS_SUBAGENT_REMINDER = 'サブエージェントが終わった後にタスクが書き直されていない。報告に合わせて `cockpit_set_tasks` で状態を更新する。';
+const STALE_TASKS_REMINDER = '前のタスクがすべて完了したまま、新しい作業が続いている。新しい依頼なら、アプリのタスク一覧を新しい作業に合わせ、`cockpit_set_tasks` で題だけを 1 件 (`[{title, state:"doing"}]`) 登録する。同じ依頼の続きなら、そのままでよい。';
+const SET_TASKS_STALE_TASKS_REMINDER = '前のタスクがすべて完了したまま、新しい作業が続いている。新しい依頼なら、`cockpit_set_tasks` で今の作業のタスクと完了条件を登録する。同じ依頼の続きなら、そのままでよい。';
 
 class TaskNudges {
   constructor({ state, now = Date.now } = {}) {
@@ -21,6 +23,8 @@ class TaskNudges {
         mainToolUseCount: 0,
         lastMainToolUseAt: null,
         agentStartedWithoutTasks: false,
+        agentStartedWithCompletedTasks: false,
+        staleTasksNudgedTurnAt: null,
         lastSubagentStopAt: null,
         nudgedSubagentStopAt: null,
         lastTaskWriteAt: null,
@@ -46,6 +50,7 @@ class TaskNudges {
       session.turnStartedAt = eventAt;
       session.mainToolUseCount = 0;
       session.agentStartedWithoutTasks = false;
+      session.agentStartedWithCompletedTasks = false;
       session.lastMainToolUseAt = null;
       return;
     }
@@ -63,8 +68,10 @@ class TaskNudges {
     session.lastMainToolUseAt = session.lastMainToolUseAt === null
       ? eventAt
       : Math.max(session.lastMainToolUseAt, eventAt);
-    if (event.tool_name === 'Agent' && !this.hasTasks(event.session_id)) {
-      session.agentStartedWithoutTasks = true;
+    if (event.tool_name === 'Agent') {
+      const tasks = this.tasksFor(event.session_id);
+      if (!tasks.length) session.agentStartedWithoutTasks = true;
+      else if (tasks.every((task) => task.state === 'done')) session.agentStartedWithCompletedTasks = true;
     }
   }
 
@@ -78,12 +85,14 @@ class TaskNudges {
     session.lastNudgeAt = null;
     session.mainToolUseCount = 0;
     session.agentStartedWithoutTasks = false;
+    session.agentStartedWithCompletedTasks = false;
   }
 
   reminderFor(sessionId) {
     const session = this.sessionFor(sessionId);
     const now = this.now();
-    const hasTasks = this.hasTasks(sessionId);
+    const tasks = this.tasksFor(sessionId);
+    const hasTasks = tasks.length > 0;
     const subagentReportIsStale = hasTasks && session.lastSubagentStopAt !== null &&
       session.lastSubagentStopAt > (session.lastTaskWriteAt ?? -1) &&
       session.lastSubagentStopAt !== session.nudgedSubagentStopAt &&
@@ -91,7 +100,13 @@ class TaskNudges {
     const noTasksReminderIsDue = !hasTasks && (
       session.mainToolUseCount >= TASK_REMINDER_TOOL_COUNT || session.agentStartedWithoutTasks
     );
-    if (!subagentReportIsStale && !noTasksReminderIsDue) return null;
+    const staleTasksReminderIsDue = tasks.length > 0 && tasks.every((task) => task.state === 'done') &&
+      session.turnStartedAt !== null &&
+      (session.lastTaskWriteAt === null || session.lastTaskWriteAt <= session.turnStartedAt) &&
+      (session.mainToolUseCount >= TASK_REMINDER_TOOL_COUNT || session.agentStartedWithCompletedTasks) &&
+      // 同じ依頼の続きなら一覧はそのままでよいので、1 つのターンで繰り返さない。
+      session.staleTasksNudgedTurnAt !== session.turnStartedAt;
+    if (!subagentReportIsStale && !noTasksReminderIsDue && !staleTasksReminderIsDue) return null;
     if (session.lastNudgeAt !== null && now - session.lastNudgeAt < TASK_REMINDER_INTERVAL_MS) return null;
 
     session.lastNudgeAt = now;
@@ -99,11 +114,13 @@ class TaskNudges {
     const setTasksOnly = this.state.providerForSession?.(sessionId) === 'codex' ||
       this.state.getDisplayPreferences?.()?.importAppTasks !== true;
     if (subagentReportIsStale) return setTasksOnly ? SET_TASKS_SUBAGENT_REMINDER : SUBAGENT_REMINDER;
-    return setTasksOnly ? SET_TASKS_NO_TASKS_REMINDER : NO_TASKS_REMINDER;
+    if (noTasksReminderIsDue) return setTasksOnly ? SET_TASKS_NO_TASKS_REMINDER : NO_TASKS_REMINDER;
+    session.staleTasksNudgedTurnAt = session.turnStartedAt;
+    return setTasksOnly ? SET_TASKS_STALE_TASKS_REMINDER : STALE_TASKS_REMINDER;
   }
 
-  hasTasks(sessionId) {
-    return (this.state.planSummary(sessionId).tasks || []).length > 0;
+  tasksFor(sessionId) {
+    return this.state.planSummary(sessionId).tasks || [];
   }
 }
 
@@ -114,5 +131,7 @@ module.exports = {
   SUBAGENT_REMINDER,
   SET_TASKS_NO_TASKS_REMINDER,
   SET_TASKS_SUBAGENT_REMINDER,
+  STALE_TASKS_REMINDER,
+  SET_TASKS_STALE_TASKS_REMINDER,
   TaskNudges,
 };
