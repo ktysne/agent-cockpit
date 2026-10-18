@@ -21,36 +21,36 @@
     },
     {
       "do": "wait",
-      "selector": "#root > section.kind-section:nth-child(4)"
+      "selector": "#root > section.kind-section:nth-child(5)"
     },
     {
       "do": "screenshot",
       "name": "judgment",
       "target": [
-        "#root > section.kind-section:nth-child(1) > .head",
-        "#root > section.kind-section:nth-child(1) .decision-card .decision-head"
+        "#root > section.kind-section:nth-child(2) > .head",
+        "#root > section.kind-section:nth-child(2) .decision-card .decision-head"
       ],
       "parts": {
-        "kind.judgment-head": "#root > section.kind-section:nth-child(1) > .head h2",
-        "kind.card-product": "#root > section.kind-section:nth-child(1) .decision-card .decision-head .prod-tag",
-        "kind.card-state": "#root > section.kind-section:nth-child(1) .decision-card .decision-head .badge.wait",
-        "kind.card-time": "#root > section.kind-section:nth-child(1) .decision-card .decision-head time"
+        "kind.judgment-head": "#root > section.kind-section:nth-child(2) > .head h2",
+        "kind.card-product": "#root > section.kind-section:nth-child(2) .decision-card .decision-head .prod-tag",
+        "kind.card-state": "#root > section.kind-section:nth-child(2) .decision-card .decision-head .badge.permission",
+        "kind.card-time": "#root > section.kind-section:nth-child(2) .decision-card .decision-head time"
       }
     },
     {
       "do": "screenshot",
       "name": "now",
       "target": [
-        "#root > section.kind-section:nth-child(4) > .head",
-        "#root > section.kind-section:nth-child(4) .now-row:nth-child(1)"
+        "#root > section.kind-section:nth-child(5) > .head",
+        "#root > section.kind-section:nth-child(5) .now-row:nth-child(1)"
       ],
       "parts": {
-        "kind.now-head": "#root > section.kind-section:nth-child(4) > .head h2",
+        "kind.now-head": "#root > section.kind-section:nth-child(5) > .head h2",
         "kind.row-tags": [
-          "#root > section.kind-section:nth-child(4) .now-row:nth-child(1) .prod-tag",
-          "#root > section.kind-section:nth-child(4) .now-row:nth-child(1) .session-tag"
+          "#root > section.kind-section:nth-child(5) .now-row:nth-child(1) .prod-tag",
+          "#root > section.kind-section:nth-child(5) .now-row:nth-child(1) .session-tag"
         ],
-        "kind.row-time": "#root > section.kind-section:nth-child(4) .now-row:nth-child(1) time"
+        "kind.row-time": "#root > section.kind-section:nth-child(5) .now-row:nth-child(1) time"
       }
     }
   ]

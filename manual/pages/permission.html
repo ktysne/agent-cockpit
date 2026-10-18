@@ -8,9 +8,8 @@
   <div class="note">許可待ちのカードが出たら、そのセッションを開いている Claude Code の画面で許可または拒否を選んでください。
   ダッシュボードから許可を出すことはできません。
   ダッシュボードは、許可待ちが起きていることと、待たせている時間を知らせる表示だけを受け持ちます。</div>
-  <p>どのセッションを開けばよいかは、カードの最下段に書いてあります。
-  プロダクトの名前と、セッションの名前が出ます。
-  カードにも、操作するアプリの案内が出ます。</p>
+  <p>どこで操作すればよいかは、カードの最下段の 1 行に書いてあります。
+  操作するアプリ(Claude Code または Codex)、プロダクトの名前、セッションの名前が出ます。</p>
 
   <h2 id="permission-checking">実行許可を確認中</h2>
   <p>Codex からツールの実行前の許可要求を受けたときは、<span class="ui">今やっていること</span> に <span class="ui">実行許可を確認中</span> と出ます。
@@ -27,13 +26,13 @@
   <h2 id="permission-card">許可待ちのカード</h2>
   <p>許可待ちのカードは、セッションが許可を求める通知を出した時点で現れます。
   許可を求めているのがメインセッションか、サブエージェントかは、見出しで分かります。</p>
-  <figure class="guide-map" id="permission-card-map" data-shot="permission-card/waiting" data-alt="許可待ちのカード。見出しに、メインがツールの実行許可を待っているとあり、許可待ちの札と待ち時間が続く。その下にツールの名前とコマンド、最下段にプロダクト名とセッション名がある">
+  <figure class="guide-map" id="permission-card-map" data-shot="permission-card/waiting" data-alt="許可待ちのカード。見出しに、メインがツールの実行許可を待っているとあり、許可待ちの札と待ち時間が続く。その下にツールの名前とコマンド、最下段に、操作するアプリ、プロダクト名、セッション名を示す案内がある">
     <ol class="guide-list">
       <li data-part="permission.who"><b>見出し</b>：許可を待っている作業者の名前に、<span class="ui">がツールの実行許可を待っている</span> が続きます。メインセッションのときは、名前が「メイン」になります。</li>
       <li data-part="permission.chip"><b><span class="ui">許可待ち</span> の札</b>：許可待ちのカードであることを示します。</li>
       <li data-part="permission.time"><b>待ち時間</b>：許可を求める通知が出てからの時間です。「3 分待機中」の形で出ます。時刻が分からないときは <span class="ui">時刻不明</span> と出ます。</li>
       <li data-part="permission.tool" data-place="right"><b>ツール</b>：許可を待っているツールの名前と、コマンドです。ファイルを扱うツールでは、ファイルのパスが出ます。</li>
-      <li data-part="permission.meta" data-place="right"><b>プロダクトとセッション</b>：Claude Code で開くセッションを示します。</li>
+      <li data-part="permission.meta" data-place="right"><b>操作する場所</b>：許可を出すアプリと、開くプロダクトとセッションを示します。</li>
     </ol>
   </figure>
   <p>Claude Code のカードは、許可を待っていたツールが終わると消えます。

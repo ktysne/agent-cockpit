@@ -10,6 +10,8 @@ const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, pullRequestKey
 const { cloneDisplay, defaultDisplay, normalizeDisplay } = require('./display-preferences');
 
 const CODEX_UNKNOWN_ANSWER_NOTE = '元の画面で回答済み(内容は不明)';
+// 次の入力は質問への回答とは限らないので、回答を確かめたと読めない言い方にする。
+const CODEX_NEXT_INPUT_NOTE = '次の入力を検出(回答は未確認)';
 const { isStoredSessionId } = require('./session-ids');
 const { isRecord } = require('./value-utils');
 
@@ -1411,7 +1413,7 @@ function applySessionLifecycle(session, event) {
       decision.state = answered ? 'resolved' : 'withdrawn';
       decision.updatedAt = isoTime(event.hookAt);
       decision.resolvedAt = decision.updatedAt;
-      decision.resolution = answered ? { chosen: [], note: CODEX_UNKNOWN_ANSWER_NOTE } : null;
+      decision.resolution = answered ? { chosen: [], note: CODEX_NEXT_INPUT_NOTE } : null;
     }
   }
   if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {

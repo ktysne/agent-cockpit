@@ -258,7 +258,9 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     isFilterShown: () => false,
     orderedSectionKeys: (keys) => keys,
   });
-  vm.runInContext(`${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
+  const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
+    .map((name) => functionSource(web, name)).join('\n');
+  vm.runInContext(`${kindSort}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
   const activitySection = kindContext.renderKinds([{ pullRequestGroups: [] }]).find((section) => section.title === '今やっていること');
   const activity = activitySection.body;
   assert.equal(activity.className, 'body now');
@@ -483,7 +485,9 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     isFilterShown: () => false,
     orderedSectionKeys: (keys) => keys,
   });
-  vm.runInContext(`${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
+  const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
+    .map((name) => functionSource(web, name)).join('\n');
+  vm.runInContext(`${kindSort}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
   const sections = kindContext.renderKinds([{ pullRequestGroups: [] }]);
   const tasks = sections.find((section) => section.title === 'タスクと完了条件');
   const activity = sections.find((section) => section.title === '今やっていること');
@@ -531,6 +535,34 @@ test('種類別の空欄は本文と枠を省き、件数付きの見出し一�
   const mockKind = functionSource(mock, 'renderKindMode');
   assert.match(mockKind, /class="kind-empty"/);
   assert.doesNotMatch(mockKind, /class="empty">ありません/);
+});
+
+test('元の画面で答える判断事項は、終わるまでだけ回答を求める案内を出す', () => {
+  const webFunctions = ['answerDraftKey', 'answerDraftChanged', 'originalScreenAction', 'appendDecisionCard', 'appendDecisionAnswer']
+    .map((name) => functionSource(web, name));
+  assert.ok(webFunctions.every(Boolean));
+  const context = pageContext(web, {
+    answerErrors: new Map(),
+    element: fakeElement,
+    decisionElapsedLabel: () => null,
+    decisionAnswerAvailability: () => ({ active: false, viaDialog: true }),
+    answerDraftFor: () => ({}),
+    appendContextTags() {},
+    badge: (_label, tone = '') => fakeElement('span', tone),
+    decisionStateLabel: (state) => state,
+    answerStatusText: () => '',
+    absoluteTimeLabel: () => '12:00',
+    sessionDisplayName: () => '週切り替え',
+  });
+  vm.runInContext(`${webFunctions.join('\n')}\nthis.renderDecision = appendDecisionCard;`, context);
+  const metaFor = (state) => {
+    const list = fakeElement('div');
+    context.renderDecision(list, { id: `decision-${state}`, state, title: '重複した質問', questions: [] },
+      { name: 'shift-planner' }, { session_id: 'session-1', provider: 'claude' });
+    return descendants(list).filter((node) => node.className === 'meta').map((node) => node.textContent);
+  };
+  assert.deepEqual(metaFor('waiting'), ['Claude Code の shift-planner 「週切り替え」で回答してください。']);
+  for (const state of ['resolved', 'withdrawn']) assert.deepEqual(metaFor(state), ['shift-planner 「週切り替え」']);
 });
 
 test('判断事項の解決内容と回答状態は余白のある一行にまとまる', () => {

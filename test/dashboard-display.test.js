@@ -754,7 +754,8 @@ test('種類別とプロダクト別のセクションは既定の欄順に従�
       mainRow: () => ({ marker: 'main' }),
     });
     vm.runInContext([constants, sectionOrderKeys, defaultOrder, normalize, ordered, visiblePullRequests, endedDecision,
-      functionSource(web, 'sessionOrigin'), renderKinds, renderSession].join('\n'), context);
+      ...['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
+        .map((name) => functionSource(web, name)), functionSource(web, 'sessionOrigin'), renderKinds, renderSession].join('\n'), context);
     const kindSections = JSON.parse(JSON.stringify(
       context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label),
     ));

@@ -482,12 +482,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
     <div class="settings-theme-row">
       <label for="settings-since-seen-select">前回見てから</label>
       <select id="settings-since-seen-select" name="sinceSeen" aria-describedby="settings-since-seen-note">
-        <option value="always">常に</option>
-        <option value="away">離席中のみ</option>
-        <option value="never">出さない</option>
+        <option value="show">表示する</option>
+        <option value="hide">表示しない</option>
       </select>
     </div>
-    <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
+    <p class="meta" id="settings-since-seen-note">離席中に起きた変化を、既読にするまで表示します。</p>
     <fieldset class="settings-mergeable-condition" aria-describedby="settings-mergeable-condition-note">
       <legend>「マージできます」と出す条件</legend>
       <label><input type="radio" name="mergeableCondition" value="operation"><span>マージの操作ができる</span><small>スタックの一番下で、ドラフト、積み直し、コンフリクト、GitHub のレビュー待ちがない。</small></label>
@@ -1057,7 +1056,8 @@ function applyAway(away) {
 
 const sinceSeenSelect = document.getElementById('settings-since-seen-select');
 function applySinceSeenMode(mode) {
-  ui.sinceSeenMode = ['always', 'away', 'never'].includes(mode) ? mode : 'away';
+  ui.sinceSeenMode = ['show', 'always', 'away'].includes(mode) ? 'show'
+    : ['hide', 'never'].includes(mode) ? 'hide' : 'show';
   sinceSeenSelect.value = ui.sinceSeenMode;
 }
 
@@ -1848,6 +1848,42 @@ function ageMinutes(item) {
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 }
 
+function kindMockJudgmentSortKey(item) {
+  if (item.wait) {
+    const wait = item.wait;
+    const itemId = wait.id || wait.target_tool_use_id || [wait.agent_id || wait.who || '', wait.tool_name || wait.tool || '', wait.summary || wait.detail || ''].join('\0');
+    return { group: 0, deadline: null, age: ageMinutes(wait), tieBreaker: `${item.session.id}\0${itemId}` };
+  }
+
+  const { decision } = item;
+  const tieBreaker = `${item.session.id}\0${decision.id}`;
+  if (answerOf(decision.id).sent) return { group: 2, deadline: null, age: 0, tieBreaker };
+  const state = effectiveDecisionState(decision);
+  const age = Number.isFinite(decision.waitMin) ? decision.waitMin : ageMinutes(decision);
+  if (state === 'waiting') {
+    return { group: 0, deadline: Number.isFinite(decision.awaitingMin) ? decision.awaitingMin : null, age, tieBreaker };
+  }
+  return { group: 1, deadline: null, age, tieBreaker };
+}
+
+function compareKindMockJudgmentItems(left, right) {
+  const leftKey = kindMockJudgmentSortKey(left);
+  const rightKey = kindMockJudgmentSortKey(right);
+  if (leftKey.group !== rightKey.group) return leftKey.group - rightKey.group;
+  if (leftKey.group === 0) {
+    if (leftKey.deadline !== null || rightKey.deadline !== null) {
+      if (leftKey.deadline === null) return 1;
+      if (rightKey.deadline === null) return -1;
+      if (leftKey.deadline !== rightKey.deadline) return leftKey.deadline - rightKey.deadline;
+    } else if (leftKey.age !== rightKey.age) {
+      return rightKey.age - leftKey.age;
+    }
+  } else if (leftKey.group === 1 && leftKey.age !== rightKey.age) {
+    return rightKey.age - leftKey.age;
+  }
+  return leftKey.tieBreaker < rightKey.tieBreaker ? -1 : leftKey.tieBreaker > rightKey.tieBreaker ? 1 : 0;
+}
+
 const sessionsByActivity = p => visibleSessions(p).sort((a, b) => ageMinutes(a.main) - ageMinutes(b.main));
 
 function sessionDisplayName(session) {
@@ -2000,21 +2036,23 @@ const waitLabel = m => {
 };
 const isNew = (p, item) => !!item.isNew && !ui.seen.includes(p.id);
 
+function originalScreenAction(p, session, action) {
+  const app = session.provider === 'codex' ? 'Codex' : 'Claude Code';
+  return `${app} の ${p.name} 「${sessionDisplayName(session)}」で${action}`;
+}
+
 function permCard(p, session, x, withTag) {
   const long = isLongWait(x.waitMin);
   return `<article class="decision blocking perm ${long ? 'long-wait' : ''}">
     <div class="dhead">${sessionTag(p, session, withTag)}<span class="dtitle">${esc(x.who)}がツールの実行許可を待っている</span>
       <span class="chip danger">許可待ち</span>${waitLabel(x.waitMin)}</div>
     <div class="ctx">${esc(x.tool)}: <code>${esc(x.detail)}</code></div>
-    <div class="meta">${esc(p.name)} 「${esc(sessionDisplayName(session))}」</div>
-    <div class="meta">このセッションを開いている Claude Code の画面で許可または拒否を選んでください。</div>
+    <div class="meta">${esc(originalScreenAction(p, session, '許可または拒否を選んでください。'))}</div>
   </article>`;
 }
 const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => ageMinutes(a) - ageMinutes(b));
 
-// 離席中の期間に起きた変化だけを常駐サーバーが返し、画面は最後に見た時刻と比べる想定。
-// 「離席中のみ」では、離席中でない間は「前回見てから」が無いものとして扱う。既読の時刻は進めない。
-const sinceSeenVisible = () => ui.sinceSeenMode !== 'never' && (ui.sinceSeenMode !== 'away' || ui.away);
+const sinceSeenVisible = () => ui.sinceSeenMode !== 'hide';
 function providerOrigin(providers) {
   const values = Array.isArray(providers) ? providers : typeof providers === 'string' ? [providers] : [];
   const hasClaude = values.includes('claude');
@@ -2040,10 +2078,10 @@ function originAttributes(providers, showOriginBands = true) {
   return origin ? ` class="origin-${origin}" data-origin="${origin}"` : '';
 }
 
-function newsBox(p, withTag, showOriginBands = true) {
+function newsBox(p, withTag, showOriginBands = true, showMarkAll = false) {
   if (!sinceSeenVisible() || !p.news.length || ui.seen.includes(p.id)) return '';
   return `<div class="news"><div class="nhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}前回見てから (${p.news.length} 件)
-    <button type="button" class="link-btn" data-seen="${p.id}">既読にする</button></div>
+    <button type="button" class="link-btn" data-seen="${p.id}">既読にする</button>${showMarkAll ? '<button type="button" class="link-btn" data-seen-all="true">すべて既読にする</button>' : ''}</div>
     <ul>${p.news.map(n => `<li${originAttributes(n.providers ?? n.provider ?? 'claude', showOriginBands)}>${esc(n.t)}</li>`).join('')}</ul></div>`;
 }
 
@@ -2162,7 +2200,7 @@ function decisionCard(p, session, d, withTag) {
       </div>
       ${answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
       ${d.verify && a.sent ? verifyNextLine(d, a.sent) : ''}
-    </div>` : viaDialog ? `<div class="meta">${esc(p.name)} 「${esc(sessionDisplayName(session))}」</div>` : ''}
+    </div>` : viaDialog ? `<div class="meta">${esc(originalScreenAction(p, session, '回答してください。'))}</div>` : ''}
     ${!active && answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
     ${summary ? `<div class="decision-summary">${summary}</div>` : ''}</article>`;
 }
@@ -3058,6 +3096,8 @@ function renderProductMode(showOriginBands = true) {
       : '表示するセッションがありません。Claude Code か Codex でセッションを開始すると、ここに表示されます。'}</div>`;
   }
   const pinnedCount = ps.filter(p => ui.pinned.includes(p.id)).length;
+  const unseenProducts = ui.sinceSeenMode !== 'hide' ? ps.filter(p => Array.isArray(p.news) && p.news.length && !ui.seen.includes(p.id)) : [];
+  const markAllSeenProductId = unseenProducts.length > 1 ? unseenProducts.find(p => !ui.collapsed.includes(p.id))?.id ?? null : null;
   return ps.map((p, i) => {
     const pend = pendingDecisions(p);
     const sessions = sessionsByActivity(p);
@@ -3066,7 +3106,7 @@ function renderProductMode(showOriginBands = true) {
     const sessionOrderIndex = sectionOrder.indexOf('sessions');
     const prsBeforeSessions = sectionOrder.indexOf('prs') < sessionOrderIndex;
     const content = sectionOrder.map(key => {
-      if (key === 'sinceSeen') return newsBox(p, false, showOriginBands);
+      if (key === 'sinceSeen') return newsBox(p, false, showOriginBands, p.id === markAllSeenProductId);
       if (key === 'sessions') return sessions.map(session => sessionBlock(p, session, showOriginBands)).join('');
       if (!isShown('prs')) return '';
       const pullRequests = `<h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false, showOriginBands)}`;
@@ -3103,11 +3143,10 @@ function renderKindMode(showOriginBands = true) {
   const section = (title, body, extra = '', emptyCount = 0) => body
     ? `<section class="section"><div class="head"><h2>${title}</h2>${extra}</div><div class="body">${body}</div></section>`
     : `<section class="kind-empty"><h2>${title}<span class="count">${emptyCount ? `(${emptyCount} 件)` : '（なし）'}</span></h2>${extra}</section>`;
-  // 種類別では、許可待ちと判断事項をまとめて待ちの長い順に並べる(送信済みは後ろ)
   const waits = sessions.flatMap(({ p, session }) => [
-    ...visiblePerms(session).map(wait => ({ age: wait.waitMin, html: permCard(p, session, wait, true) })),
-    ...visibleDecisions(session).map(d => ({ age: answerOf(d.id).sent ? -1 : (d.waitMin || 0), html: decisionCard(p, session, d, true) })),
-  ]).sort((a, b) => b.age - a.age);
+    ...visiblePerms(session).map(wait => ({ session, wait, html: permCard(p, session, wait, true) })),
+    ...visibleDecisions(session).map(decision => ({ session, decision, html: decisionCard(p, session, decision, true) })),
+  ]).sort(compareKindMockJudgmentItems);
   const visibleDecisionItems = waits.map(x => x.html).join('');
   const hiddenJudgmentItems = sessions.some(({ session }) => hasHiddenJudgmentItems(session));
   const endedDecisionEntries = kindEndedDecisionEntries(sessions);
@@ -3121,7 +3160,11 @@ function renderKindMode(showOriginBands = true) {
   const decisionControls = endedDecisionToggle ? `<div class="kind-section-controls">${endedDecisionToggle}</div>` : '';
   const decisions = decisionItems;
   const showJudgment = Boolean(decisionItems || endedDecisionToggle) || !hiddenJudgmentItems;
+  const unseenProducts = ui.sinceSeenMode !== 'hide' ? ps.filter(p => Array.isArray(p.news) && p.news.length && !ui.seen.includes(p.id)) : [];
   const news = ps.map(p => newsBox(p, true, showOriginBands)).join('');
+  const sinceSeenControls = unseenProducts.length > 1
+    ? '<div class="kind-section-controls"><button type="button" class="link-btn" data-seen-all="true">すべて既読にする</button></div>'
+    : '';
   const showEndedAgents = ui.expandedKindAgents && !ui.hideFinished;
   const nowRowsByAge = sessions.flatMap(({ p, session }) => {
     const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || showEndedAgents);
@@ -3152,7 +3195,7 @@ function renderKindMode(showOriginBands = true) {
     : '';
   const prs = ps.filter(p => reservationNoticeRows(p) || (ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true, showOriginBands)).join('');
   const sections = {
-    sinceSeen: news ? section('前回見てから', news) : '',
+    sinceSeen: news ? section('前回見てから', news, sinceSeenControls) : '',
     judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls, waits.length + endedDecisionEntries.length) : '',
     tasks: section('タスクと完了条件', tasks, taskControls, todoTaskCount + doneTaskCount),
     now: section('今やっていること', now, activityControls, nowRowsByAge.length + endedAgentCount),
@@ -3440,6 +3483,10 @@ document.addEventListener('click', e => {
     return;
   } else if (t.dataset.closeMergeResult) {
     closePullRequestMergeResult(t.dataset.closeMergeResult);
+  } else if (t.dataset.seenAll) {
+    const unseenProducts = orderedProducts().filter(p => sinceSeenVisible() && Array.isArray(p.news) && p.news.length && !ui.seen.includes(p.id));
+    if (unseenProducts.length < 2) return;
+    ui.seen = [...new Set([...ui.seen, ...unseenProducts.map(p => p.id)])];
   } else if (t.dataset.seen) {
     ui.seen = [...new Set([...ui.seen, t.dataset.seen])];
   } else if (t.dataset.route) {

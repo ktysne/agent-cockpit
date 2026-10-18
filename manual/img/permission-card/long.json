@@ -2,15 +2,15 @@
   "name": "long",
   "target": "article.permission.long-wait",
   "width": 1524,
-  "height": 244,
+  "height": 206,
   "parts": [
     {
       "key": "permission.card",
       "bounds": {
         "x": 0,
-        "y": 0,
+        "y": 1,
         "width": 1524,
-        "height": 243
+        "height": 205
       },
       "visible": true
     },
@@ -18,7 +18,7 @@
       "key": "permission.who",
       "bounds": {
         "x": 32,
-        "y": 26,
+        "y": 27,
         "width": 420,
         "height": 45
       },
@@ -28,7 +28,7 @@
       "key": "permission.chip",
       "bounds": {
         "x": 468,
-        "y": 28,
+        "y": 29,
         "width": 114,
         "height": 44
       },
@@ -38,7 +38,7 @@
       "key": "permission.time",
       "bounds": {
         "x": 599,
-        "y": 30,
+        "y": 31,
         "width": 129,
         "height": 38
       },
@@ -48,7 +48,7 @@
       "key": "permission.tool",
       "bounds": {
         "x": 32,
-        "y": 80,
+        "y": 81,
         "width": 1466,
         "height": 45
       },

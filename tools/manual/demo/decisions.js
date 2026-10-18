@@ -28,7 +28,12 @@ module.exports = function decisions() {
       const key = 'parcel-main';
       const sessionId = demo.sessions.get(key).id;
       const sendAnswer = (decisionId, body) => demo.ui(`/api/decisions/${decisionId}/answer`, { session_id: sessionId, ...body });
-      const deliverBatch = () => hookAnswer(key, { action: 'post-tool-batch', event_name: 'PostToolBatch', id: `batch-${Date.now()}` });
+      // 渡した時刻は受領が届いて初めて付くので、実際のフックと同じく受け取った配信を受領する。
+      const deliverBatch = async () => {
+        const response = await hookAnswer(key, { action: 'post-tool-batch', event_name: 'PostToolBatch', id: `batch-${Date.now()}` });
+        if (typeof response?.deliveryId !== 'string') return;
+        await hookAnswer(key, { action: 'delivery-ack', event_name: 'DeliveryAck', id: `ack-${response.deliveryId}`, delivery_id: response.deliveryId });
+      };
 
       at(160);
       await hook(key, { hook_event_name: 'SessionStart', source: 'startup' });

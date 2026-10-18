@@ -492,12 +492,11 @@ h3.sub .count { font-weight: normal; }
     <div class="settings-theme-row">
       <label for="settings-since-seen-select">前回見てから</label>
       <select id="settings-since-seen-select" name="sinceSeen" aria-describedby="settings-since-seen-note">
-        <option value="always">常に</option>
-        <option value="away">離席中のみ</option>
-        <option value="never">出さない</option>
+        <option value="show">表示する</option>
+        <option value="hide">表示しない</option>
       </select>
     </div>
-    <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
+    <p class="meta" id="settings-since-seen-note">離席中に起きた変化を、既読にするまで表示します。</p>
     <fieldset class="settings-mergeable-condition" aria-describedby="settings-mergeable-condition-note">
       <legend>「マージできます」と出す条件</legend>
       <label><input type="radio" name="mergeableCondition" value="operation"><span>マージの操作ができる</span><small>スタックの一番下で、ドラフト、積み直し、コンフリクト、GitHub のレビュー待ちがない。</small></label>
@@ -722,7 +721,7 @@ const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
 let lastVersion = null;
 let lastState = null;
 let lastStateEtag = null;
-let sinceSeenMode = 'away';
+let sinceSeenMode = 'show';
 let showIdleSessions = false;
 let hasRenderedState = false;
 let answerNoteComposing = false;
@@ -1123,21 +1122,22 @@ themeSelect.addEventListener('change', () => {
 });
 
 function applySinceSeenMode(mode) {
-  sinceSeenMode = ['always', 'away', 'never'].includes(mode) ? mode : 'away';
+  sinceSeenMode = ['show', 'hide'].includes(mode) ? mode : 'show';
   sinceSeenSelect.value = sinceSeenMode;
 }
 
 function storedSinceSeenMode() {
   try {
     const mode = localStorage.getItem(SINCE_SEEN_STORAGE_KEY);
-    if (mode === 'always' || mode === 'away' || mode === 'never') return mode;
+    if (mode === 'show' || mode === 'always' || mode === 'away') return 'show';
+    if (mode === 'hide' || mode === 'never') return 'hide';
   } catch {
   }
-  return 'away';
+  return 'show';
 }
 
 function visibleSinceSeen(state) {
-  if (sinceSeenMode === 'never' || (sinceSeenMode === 'away' && header.dataset.away !== 'true')) return [];
+  if (sinceSeenMode === 'hide') return [];
   return Array.isArray(state?.sinceSeen) ? state.sinceSeen : [];
 }
 
@@ -3460,11 +3460,15 @@ function appendPermissionWaits(body, session, product, withTags = false, multipl
       }
       card.append(context);
     }
-    card.append(element('div', 'meta', `${product.name} 「${sessionDisplayName(session)}」`));
-    card.append(element('div', 'meta', 'このセッションを開いている Claude Code の画面で許可または拒否を選んでください。'));
+    card.append(element('div', 'meta', originalScreenAction(product, session, '許可または拒否を選んでください。')));
     list.append(card);
   }
   body.append(list);
+}
+
+function originalScreenAction(product, session, action) {
+  const app = session.provider === 'codex' ? 'Codex' : 'Claude Code';
+  return `${app} の ${product.name} 「${sessionDisplayName(session)}」で${action}`;
 }
 
 function decisionStateLabel(state) {
@@ -3601,7 +3605,10 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   const questions = decision.questions || [];
   const { active, viaDialog } = decisionAnswerAvailability(decision);
   if (viaDialog) {
-    card.append(element('div', 'meta', `${product.name} 「${sessionDisplayName(session)}」`));
+    const ended = decision.state === 'resolved' || decision.state === 'withdrawn';
+    card.append(element('div', 'meta', ended
+      ? `${product.name} 「${sessionDisplayName(session)}」`
+      : originalScreenAction(product, session, '回答してください。')));
     if (savedError) {
       const error = element('div', 'answer-error', savedError);
       error.setAttribute('role', 'alert');
@@ -4035,7 +4042,7 @@ function sharedBranch(product) {
   return product.branches.size === 1 ? [...product.branches][0] : '';
 }
 
-function productSection(product, index, products, pinnedCount, showOriginBands = true) {
+function productSection(product, index, products, pinnedCount, showOriginBands = true, markAllSeenProductKey = null) {
   const pinned = displayPreferences.pinned.includes(product.key);
   const section = element('section', `section ${pinned ? 'pinned' : ''}`.trim());
   const head = element('div', 'head');
@@ -4069,7 +4076,7 @@ function productSection(product, index, products, pinnedCount, showOriginBands =
 
   const body = element('div', 'body');
   body.hidden = displayPreferences.collapsed.includes(product.key);
-  const news = sinceSeenBox(product, false, showOriginBands);
+  const news = sinceSeenBox(product, false, showOriginBands, product.key === markAllSeenProductKey);
   const sectionOrder = productCardSectionOrder();
   const sessionOrderIndex = sectionOrder.indexOf('sessions');
   const prsBeforeSessions = sectionOrder.indexOf('prs') < sessionOrderIndex;
@@ -4124,7 +4131,21 @@ function kindSection(title, content, extra, emptyCount = 0) {
   return section;
 }
 
-function sinceSeenBox(product, withProductTag, showOriginBands = true) {
+let sinceSeenActionInFlight = false;
+
+function markAllSeenButton() {
+  const button = element('button', 'link-btn', 'すべて既読にする');
+  button.type = 'button';
+  button.dataset.seenAll = 'true';
+  button.disabled = sinceSeenActionInFlight;
+  return button;
+}
+
+function setSinceSeenButtonsDisabled(disabled) {
+  root.querySelectorAll('[data-seen], [data-seen-all]').forEach((button) => { button.disabled = disabled; });
+}
+
+function sinceSeenBox(product, withProductTag, showOriginBands = true, showMarkAll = false) {
   const entry = visibleSinceSeen(lastState).find((item) => item.product?.key === product.key);
   if (!entry?.items?.length) return null;
   const box = element('div', 'news');
@@ -4134,7 +4155,9 @@ function sinceSeenBox(product, withProductTag, showOriginBands = true) {
   const seen = element('button', 'link-btn', '既読にする');
   seen.type = 'button';
   seen.dataset.seen = product.key;
+  seen.disabled = sinceSeenActionInFlight;
   header.append(seen);
+  if (showMarkAll) header.append(markAllSeenButton());
   const list = element('ul');
   for (const item of entry.items) {
     const origin = showOriginBands ? providerOrigin(item.providers ?? item.provider) : '';
@@ -4162,10 +4185,59 @@ function kindEndedDecisionEntries(references) {
   return entries.sort((left, right) => itemTimestamp(right.decision) - itemTimestamp(left.decision));
 }
 
-function kindDecisionWaitAge(decision) {
+function kindWaitAge(startedAt, now = Date.now()) {
+  const timestamp = Date.parse(startedAt);
+  return Number.isFinite(timestamp) ? Math.max(0, now - timestamp) : 0;
+}
+
+function kindDecisionWaitAge(decision, now = Date.now()) {
   if (hasEffectiveAnswer(decision)) return -1;
-  const timestamp = Date.parse(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt);
-  return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : 0;
+  const startedAt = decision.state === 'waiting' ? decision.createdAt : decision.provisionalAt || decision.updatedAt;
+  return kindWaitAge(startedAt, now);
+}
+
+function kindPermissionWaitKey(wait) {
+  return wait.target_tool_use_id || [wait.agent_id || '', wait.tool_name, wait.summary].join('\0');
+}
+
+function kindJudgmentSortKey(item, now = Date.now()) {
+  const itemId = item.kind === 'permission' ? kindPermissionWaitKey(item.wait) : item.decision.id;
+  const tieBreaker = `${item.session.session_id}\0${itemId}`;
+  if (item.kind === 'permission') {
+    return { group: 0, deadline: null, age: kindWaitAge(item.wait.startedAt, now), tieBreaker };
+  }
+
+  const { decision } = item;
+  if (hasEffectiveAnswer(decision)) return { group: 2, deadline: null, age: 0, tieBreaker };
+  if (decision.state === 'waiting') {
+    const deadline = Date.parse(decision.awaitingAnswerUntil);
+    return {
+      group: 0,
+      deadline: Number.isFinite(deadline) ? deadline : null,
+      age: kindDecisionWaitAge(decision, now),
+      tieBreaker,
+    };
+  }
+  return { group: 1, deadline: null, age: kindDecisionWaitAge(decision, now), tieBreaker };
+}
+
+function compareKindJudgmentItems(left, right) {
+  const now = Date.now();
+  const leftKey = kindJudgmentSortKey(left, now);
+  const rightKey = kindJudgmentSortKey(right, now);
+  if (leftKey.group !== rightKey.group) return leftKey.group - rightKey.group;
+  if (leftKey.group === 0) {
+    if (leftKey.deadline !== null || rightKey.deadline !== null) {
+      if (leftKey.deadline === null) return 1;
+      if (rightKey.deadline === null) return -1;
+      if (leftKey.deadline !== rightKey.deadline) return leftKey.deadline - rightKey.deadline;
+    } else if (leftKey.age !== rightKey.age) {
+      return rightKey.age - leftKey.age;
+    }
+  } else if (leftKey.group === 1 && leftKey.age !== rightKey.age) {
+    return rightKey.age - leftKey.age;
+  }
+  return leftKey.tieBreaker < rightKey.tieBreaker ? -1 : leftKey.tieBreaker > rightKey.tieBreaker ? 1 : 0;
 }
 
 function kindEndedAgentCount(references) {
@@ -4182,12 +4254,12 @@ function renderKindSections(products, showOriginBands = true) {
       const holder = element('div');
       appendPermissionWaits(holder, { ...session, permissionWaits: [wait] }, product, true, multipleSessions);
       const card = holder.firstElementChild?.firstElementChild;
-      if (card) waitingItems.push({ age: Date.now() - Date.parse(wait.startedAt), card });
+      if (card) waitingItems.push({ kind: 'permission', session, wait, card });
     }
     for (const decision of shownActiveDecisions(session)) {
       const list = element('div', 'decision-list');
       appendDecisionCard(list, decision, product, session, true, multipleSessions);
-      waitingItems.push({ age: kindDecisionWaitAge(decision), card: list.firstElementChild });
+      waitingItems.push({ kind: 'decision', session, decision, card: list.firstElementChild });
     }
 
   }
@@ -4204,7 +4276,7 @@ function renderKindSections(products, showOriginBands = true) {
   if (endedDecisionItems.length) {
     appendKindToggle(endedDecisionControls, 'decisions', showEndedDecisions, endedDecisionItems.length, '解決済みと取り下げ');
   }
-  waitingItems.sort((left, right) => right.age - left.age);
+  waitingItems.sort(compareKindJudgmentItems);
   const judgment = element('div', 'body');
   for (const item of waitingItems) if (item.card) judgment.append(item.card);
   const hasHiddenJudgments = references.some(({ session }) => hasHiddenJudgmentItems(session));
@@ -4247,8 +4319,13 @@ function renderKindSections(products, showOriginBands = true) {
     const news = sinceSeenBox(product, true, showOriginBands);
     if (news) sinceSeenContent.append(news);
   }
+  const sinceSeenCount = sinceSeenContent.children.length;
+  const sinceSeenControls = element('div', 'kind-section-controls');
+  if (sinceSeenCount > 1) sinceSeenControls.append(markAllSeenButton());
   const sections = {
-    sinceSeen: sinceSeenContent.children.length ? kindSection('前回見てから', sinceSeenContent) : null,
+    sinceSeen: sinceSeenContent.children.length
+      ? kindSection('前回見てから', sinceSeenContent, sinceSeenControls.children.length ? sinceSeenControls : null, sinceSeenCount)
+      : null,
     judgment: waitingItems.length || endedDecisionItems.length || !hasHiddenJudgments
       ? kindSection('あなたの判断が必要なこと', judgment, endedDecisionItems.length ? endedDecisionControls : null, waitingItems.length + endedDecisionItems.length)
       : null,
@@ -4343,7 +4420,11 @@ function render(state) {
 
   if (displayPreferences.mode === 'product') {
     const pinnedCount = products.filter((product) => displayPreferences.pinned.includes(product.key)).length;
-    root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount, showOriginBands)));
+    const sinceSeenProductKeys = new Set(sinceSeen.filter((entry) => entry.product?.key && entry.items?.length).map((entry) => entry.product.key));
+    const markAllSeenProductKey = sinceSeenProductKeys.size > 1
+      ? products.find((product) => sinceSeenProductKeys.has(product.key) && !displayPreferences.collapsed.includes(product.key))?.key || null
+      : null;
+    root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount, showOriginBands, markAllSeenProductKey)));
   } else {
     root.replaceChildren(...renderKindSections(products, showOriginBands));
   }
@@ -4681,8 +4762,10 @@ function closeTaskButton(button) {
 }
 
 async function markProductSeen(button) {
+  if (sinceSeenActionInFlight || button.disabled) return;
+  sinceSeenActionInFlight = true;
   const productKey = button.dataset.seen;
-  button.disabled = true;
+  setSinceSeenButtonsDisabled(true);
   try {
     const response = await postUiAction('/api/seen', { productKey, generatedAt: lastState?.generatedAt });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -4692,7 +4775,42 @@ async function markProductSeen(button) {
     liveStatus.textContent = '項目を既読にできませんでした';
     showWriteError('項目を既読にできませんでした');
   } finally {
-    if (button.isConnected) button.disabled = false;
+    sinceSeenActionInFlight = false;
+    setSinceSeenButtonsDisabled(false);
+  }
+}
+
+async function markAllProductsSeen(button) {
+  if (sinceSeenActionInFlight || button.disabled) return;
+  const state = lastState;
+  const entries = visibleSinceSeen(state).filter((entry) => entry.product?.key && entry.items?.length);
+  if (entries.length < 2) return;
+  const generatedAt = state?.generatedAt;
+  sinceSeenActionInFlight = true;
+  setSinceSeenButtonsDisabled(true);
+  let failed = false;
+  try {
+    for (const { product } of entries) {
+      try {
+        const response = await postUiAction('/api/seen', { productKey: product.key, generatedAt });
+        if (!response.ok) failed = true;
+      } catch {
+        failed = true;
+      }
+    }
+    await refresh();
+    if (failed) {
+      liveStatus.textContent = '項目を既読にできませんでした';
+      showWriteError('項目を既読にできませんでした');
+    } else {
+      liveStatus.textContent = '前回見てからの項目を既読にしました。';
+    }
+  } catch {
+    liveStatus.textContent = '項目を既読にできませんでした';
+    showWriteError('項目を既読にできませんでした');
+  } finally {
+    sinceSeenActionInFlight = false;
+    setSinceSeenButtonsDisabled(false);
   }
 }
 
@@ -5010,6 +5128,10 @@ document.addEventListener('click', (event) => {
   }
   if (button.dataset.seen) {
     void markProductSeen(button);
+    return;
+  }
+  if (button.dataset.seenAll) {
+    void markAllProductsSeen(button);
     return;
   }
   if (button.dataset.openMerge) {
@@ -5514,17 +5636,14 @@ async function refresh() {
     appliedRefreshSequence = Math.max(appliedRefreshSequence, sequence);
     const hadUnconfirmedResults = pullRequestUnconfirmedResults.size > 0;
     if (refreshConfirmPending && !hasUnsentAnswerDraft(state)) setRefreshConfirmPending(false);
-    const awayBefore = header.dataset.away;
     applyAwayState(state.away);
     applyUpdateState(state.update);
     renderRestartNote(state);
     renderPersistenceNote(state);
     applyAppVersion(state.appVersion, state.runtime);
-    // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
-    const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
     const pullRequestExpiry = pullRequestExpirySignature(state.pullRequests);
     const pullRequestExpiryChanged = pullRequestExpiry !== renderedPullRequestExpirySignature;
-    if (state.version === lastVersion && (stateBodyChanged || sinceSeenVisibilityChanged || pullRequestExpiryChanged || hadUnconfirmedResults)) {
+    if (state.version === lastVersion && (stateBodyChanged || pullRequestExpiryChanged || hadUnconfirmedResults)) {
       render(state);
       renderedPullRequestExpirySignature = pullRequestExpiry;
     }
