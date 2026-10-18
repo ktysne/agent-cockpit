@@ -3,10 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { cssDeclarations, functionSource, pageContext } = require('./support/page-context');
+const { readWebPage, cssDeclarations, functionSource, pageContext } = require('./support/page-context');
 
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
-const web = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+const web = readWebPage();
 
 test('接続案内は一覧の前に、注記は一覧の後ろに置き、固定表示に含めない', () => {
   for (const html of [mock, web]) {

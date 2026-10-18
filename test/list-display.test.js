@@ -3,10 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { functionSource, pageContext } = require('./support/page-context');
+const { readWebPage, functionSource, pageContext } = require('./support/page-context');
 
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
-const web = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+const web = readWebPage();
 
 function eventListenerSource(source, eventName) {
   return source.match(new RegExp(`document\\.addEventListener\\('${eventName}', (e => \\{[\\s\\S]*?\\n\\})\\);`))?.[1];

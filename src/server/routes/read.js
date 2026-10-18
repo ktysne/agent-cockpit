@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { composeUiTemplate, readUiTemplateStamp } = require('../ui-template');
 const { readSourceCommit } = require('../source-revision');
 const { SECURITY_HEADERS, jsonResponse, textResponse, escapeHtmlAttribute } = require('../http-helpers');
 const { APP_NAME } = require('../server-constants');
@@ -53,10 +54,9 @@ function createReadRoutes(ctx) {
   // 画面のファイルは大きいので、更新時刻か大きさが変わったときだけ読み直す。
   async function readDiskUiVersion() {
     try {
-      const stat = await fs.stat(webPath);
-      const stamp = `${stat.mtimeMs}:${stat.size}`;
-      if (stamp !== diskUiStamp) {
-        cachedDiskUiVersion = templateVersion(await fs.readFile(webPath));
+      const stamp = await readUiTemplateStamp(webPath, diskUiStamp);
+      if (stamp.stamp !== diskUiStamp?.stamp) {
+        cachedDiskUiVersion = templateVersion(await composeUiTemplate(webPath));
         diskUiStamp = stamp;
       }
       return cachedDiskUiVersion;
@@ -202,11 +202,11 @@ function createReadRoutes(ctx) {
     try {
       let content;
       if (dev) {
-        content = await fs.readFile(webPath);
+        content = await composeUiTemplate(webPath);
         uiVersion = templateVersion(content);
       } else {
         if (!uiTemplate) {
-          templateReading ||= fs.readFile(webPath).then(bytes => {
+          templateReading ||= composeUiTemplate(webPath).then(bytes => {
             uiTemplate = bytes;
             uiVersion = templateVersion(bytes);
           }).finally(() => { templateReading = null; });

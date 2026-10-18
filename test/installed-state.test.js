@@ -6,19 +6,47 @@ const { temporaryDirectory } = require('./support/temp');
 const { startTestServer, request, jsonBody } = require('./support/server');
 
 async function installedServer(t, options = {}) {
+  const { template = '<meta name="cockpit-ui-version" content="">first', parts = {}, ...serverOptions } = options;
   const { directory: sourceRoot } = temporaryDirectory(t);
   const webPath = path.join(sourceRoot, 'index.html');
-  await fs.writeFile(webPath, '<meta name="cockpit-ui-version" content="">first');
+  await fs.writeFile(webPath, template);
+  for (const [name, content] of Object.entries(parts)) await fs.writeFile(path.join(sourceRoot, name), content);
   await fs.writeFile(path.join(sourceRoot, 'package.json'), JSON.stringify({ version: '1.4.0' }));
   await fs.mkdir(path.join(sourceRoot, '.git'));
   await fs.writeFile(path.join(sourceRoot, '.git/HEAD'), 'a'.repeat(40));
   let now = Date.now();
   const server = await startTestServer(t, { sourceRoot, webPath, appVersion: '1.4.0',
-    readSourceCommit: undefined, stateCacheNow: () => now, ...options });
+    readSourceCommit: undefined, stateCacheNow: () => now, ...serverOptions });
   return { ...server, sourceRoot, webPath, advance: () => { now += 5_000; },
     page: () => request(server.info.port, { path: '/' }),
     state: async etag => request(server.info.port, { path: '/api/state', headers: etag ? { 'if-none-match': etag } : {} }),
   };
+}
+
+for (const dev of [false, true]) {
+  test(dev ? 'dev は部品だけの更新でも画面と版を更新する' : '本番は部品だけの更新を再起動待ちにし起動時の画面を配信する', async t => {
+    const server = await installedServer(t, { dev,
+      template: '<meta name="cockpit-ui-version" content="">\r\n<!-- cockpit:include diagnostics.html -->\r\n',
+      parts: { 'diagnostics.html': 'first\n' },
+    });
+    const before = jsonBody(await server.state());
+    assert.match((await server.page()).body, /first\n$/);
+    await fs.writeFile(path.join(server.sourceRoot, 'diagnostics.html'), 'second\r\n');
+    server.advance();
+    const after = jsonBody(await server.state());
+    assert.notEqual(after.installed.uiVersion, before.installed.uiVersion);
+    assert.equal(after.restartRequired, !dev);
+    assert.equal(after.uiVersion === before.uiVersion, !dev);
+    const page = await server.page();
+    assert.match(page.body, dev ? /second\r\n$/ : /first\n$/);
+    assert.equal(page.body.match(/content="([a-f0-9]{16})"/)[1], after.uiVersion);
+  });
+
+  test(`${dev ? 'dev' : '本番'} は印の指す部品が無いと起動に失敗する`, async t => {
+    await assert.rejects(installedServer(t, { dev,
+      template: '<!-- cockpit:include diagnostics.html -->\n',
+    }), { code: 'ENOENT' });
+  });
 }
 
 for (const dev of [false, true]) {

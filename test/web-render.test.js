@@ -4,10 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createFakeClock } = require('../tools/manual/fake-clock');
-const { cssDeclarations, functionSource, pageContext, sourceBetween } = require('./support/page-context');
+const { readWebPage, cssDeclarations, functionSource, pageContext, sourceBetween } = require('./support/page-context');
 
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
-const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
+const pageHtml = readWebPage().replace(/\r\n/g, '\n');
 const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
 test('PR の取得エラーに unknown の記録がある場合だけ登録解除ボタンを表示し、開くとやめるへ、やめると元のボタンへフォーカスを移す', () => {
@@ -627,7 +627,7 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
 });
 
 function reloadHarness(initialUiVersion, drafts = []) {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'answerValueFor', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks', 'recommendedOptionsForQuestions']
     .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
@@ -650,7 +650,7 @@ function reloadHarness(initialUiVersion, drafts = []) {
 }
 
 function renderHarness(initialDraftNote = '保存済みの下書き') {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const render = functionSource(html, 'render');
   const renderDeferredState = functionSource(html, 'renderDeferredState');
   const visibleSinceSeen = functionSource(html, 'visibleSinceSeen');
@@ -775,7 +775,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
 }
 
 function taskRenderHarness() {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const functions = ['element', 'appendExpandToggle', 'appendPlanToggle', 'taskVisibility', 'appendTasks']
     .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
@@ -820,7 +820,7 @@ function taskRenderHarness() {
 }
 
 function externalLinkHarness(responseStatus) {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const postUiAction = functionSource(html, 'postUiAction');
   const openExternalLink = functionSource(html, 'openExternalLink');
   const defaultBrowserUrl = functionSource(html, 'defaultBrowserUrl');
@@ -1014,7 +1014,7 @@ test('今すぐ読み込み直す操作は下書きがあっても再読み込�
 });
 
 test('作業中ツールは表示幅を超えた部分を CSS の省略記号で示す', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const source = readWebPage();
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
   const style = (html, selector) => Object.fromEntries(cssDeclarations(html, selector));
   const sortedStyle = (html, selector) => Object.entries(style(html, selector)).sort();
@@ -1223,7 +1223,7 @@ test('モックの作業行も名前と時刻の後に全幅の詳細を並べ�
 });
 
 test('経路の段は連携に応じて表示し、無効なサブエージェントの札を隠す', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const routing = sourceBetween(html, 'function routeName', '\nasync function updateRouting');
   const routeTag = sourceBetween(html, 'function routeTag', '\nfunction appendModelLine');
   assert.ok(routing && routeTag);
@@ -1274,7 +1274,7 @@ test('経路の段は連携に応じて表示し、無効なサブエージェ�
 });
 
 test('クロスレビューの行は往復数と head の状態を表示する', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   assert.ok(helpers && component);
@@ -1449,7 +1449,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
 });
 
 test('マージと予約の確認欄は警告と照合用 SHA を表示する', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   assert.ok(helpers && component);
@@ -1550,7 +1550,7 @@ test('マージと予約の確認欄は警告と照合用 SHA を表示する', 
 });
 
 test('マージできる PR の件数タグはほかの件数タグと同じ形式で表示する', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const element = functionSource(html, 'element');
   const renderSummary = functionSource(html, 'renderSummary');
   const judgments = functionSource(html, 'countJudgments');
@@ -1604,7 +1604,7 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
 });
 
 test('PR カードは条件達成、条件待ち、操作不可を分け、待ち条件を確認欄の先頭に出す', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   assert.ok(helpers && component);
@@ -1695,7 +1695,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
 });
 
 test('マージできる PR は選択条件を満たし、登録セッションにマージボタンがあるものだけを数える', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const source = readWebPage();
   const functions = ['pullRequestKeys', 'convergedAtHead', 'pushedAfterConvergence', 'pullRequestCrossReviewSettled', 'pullRequestCrossReviewWaitReason', 'isCompleteCommitSha', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
     functionSource(source, name)
   ));
@@ -1731,7 +1731,7 @@ test('マージできる PR は選択条件を満たし、登録セッション�
 });
 
 test('見出しの判断待ちは有効な回答を数えず、無視された回答は数える', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const source = readWebPage();
   const functions = ['hasEffectiveAnswer', 'isActiveDecision', 'isAwaitingDecision'].map((name) => (
     functionSource(source, name)
   ));
@@ -1748,7 +1748,7 @@ test('見出しの判断待ちは有効な回答を数えず、無視された�
 });
 
 test('プロダクト別と種類別に前回見てからを表示し、新しい判断に印を付ける', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const source = readWebPage();
   const render = functionSource(source, 'render');
   const productSection = functionSource(source, 'productSection');
   const renderKindSections = functionSource(source, 'renderKindSections');
@@ -1780,7 +1780,7 @@ test('プロダクト別と種類別に前回見てからを表示し、新し�
 });
 
 test('すべて既読にするは各プロダクトへ同じ状態版を送り、一部失敗時も残りを処理する', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const source = readWebPage();
   const visibleSinceSeen = functionSource(source, 'visibleSinceSeen');
   const markAllProductsSeen = source.match(/async function markAllProductsSeen\(button\) \{[\s\S]*?\n\}/)?.[0];
   assert.ok(visibleSinceSeen && markAllProductsSeen);
@@ -1838,7 +1838,7 @@ test('すべて既読にするは各プロダクトへ同じ状態版を送り�
 });
 
 test('前回見てからの設定は表示するを既定にし、以前の保存値を読み替える', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const source = readWebPage();
   const names = ['applySinceSeenMode', 'storedSinceSeenMode', 'setSinceSeenMode', 'visibleSinceSeen'];
   const functions = names.map((name) => functionSource(source, name));
   assert.ok(functions.every(Boolean));
@@ -2091,7 +2091,7 @@ test('履歴は離席状態にかかわらず表示され、表示しない設�
 });
 
 test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下に動かせる', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const source = readWebPage();
   const functions = ['pullRequestOpenCount', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'visibleSinceSeen'].map((name) => (
     functionSource(source, name)
   ));
@@ -2181,7 +2181,7 @@ test('プロダクトを外す操作はまだ外していないセッション�
 });
 
 test('表示中のセッション、PR、PR のエラー、未読の変化が無いプロダクトはカードを出さない', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const source = readWebPage();
   const functions = ['pullRequestOpenCount', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
     functionSource(source, name)
   ));
@@ -2482,7 +2482,7 @@ test('指示欄と下書きの note が同じなら下書きを更新しない',
 });
 
 test('選択肢にフォーカスがある描き直しでは同じ input に戻す', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const render = functionSource(html, 'render');
   assert.ok(render);
   let activeElement;
@@ -2527,7 +2527,7 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
 });
 
 test('選択肢を押すと送る答えが表示され、回答を送るが有効になる', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const functionNames = [
     'answerDraftKey', 'answerDraftFor', 'answerValueFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
     'sameAnswerDraft', 'answerDraftChanged', 'clearAnswerErrorWhenDraftChanges',
@@ -2594,7 +2594,7 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
 });
 
 function decisionAnswerPickHarness(decision) {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const html = readWebPage().replace(/\r\n/g, '\n');
   const functionNames = [
     'answerDraftKey', 'answerDraftFor', 'answerValueFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
     'sameAnswerDraft', 'answerDraftChanged', 'clearAnswerErrorWhenDraftChanges',
@@ -2849,7 +2849,7 @@ test('モックでも保存済みの choice ok は推奨選択肢を押すと外
 });
 
 test('送信済みの推奨案で OK は推奨選択肢を選んだ下書きとして表示する', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const names = [
     'answerDraftFor', 'answerValueFor', 'copyAnswerPicks', 'recommendedOptionsForQuestions',
     'answerDraftChanged', 'sameAnswerPicks', 'displayRecommendedLabel', 'selectedAnswerLabels', 'answerMetaText', 'canSendDecisionAnswer', 'answerStatusText',
@@ -2905,7 +2905,7 @@ test('指示欄の変換中は描き直しを保留し、変換終了後に反�
 });
 
 test('PR マージ確認欄を表示し、登録キーと画面の head SHA だけを含む値を送る', async () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
@@ -3024,7 +3024,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
 });
 
 test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼先を無効化し、依頼済みの状態を表示する', async () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const absoluteTimeSource = functionSource(html, 'absoluteTimeLabel');
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
@@ -3161,7 +3161,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
 });
 
 test('PR 行のチェックで予約し、確認欄は常に即時マージする', async () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
@@ -3755,7 +3755,7 @@ test('終わったものを隠すとマージ済みとクローズ済みの PR �
 });
 
 test('マージ済み一覧に予約時と異なる SHA の警告を表示する', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const element = functionSource(html, 'element');
   const shortShaElement = functionSource(html, 'shortShaElement');
   const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
@@ -3810,7 +3810,7 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
 });
 
 test('マージ済み一覧は新しい順に5件を出し、古いPRをボタンで切り替える', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const element = functionSource(html, 'element');
   const expandToggle = functionSource(html, 'appendExpandToggle');
   const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
@@ -3904,7 +3904,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
 });
 
 test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに開閉状態を分ける', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const element = functionSource(html, 'element');
   const expandToggle = functionSource(html, 'appendExpandToggle');
   const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {', '\nfunction productGroups(');
@@ -3999,7 +3999,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
 });
 
 test('衝突の依頼の確認欄では、描き直しの後も同じ操作のボタンへフォーカスを戻す', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const render = functionSource(html, 'render');
   assert.ok(render);
 
@@ -4042,7 +4042,7 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
 });
 
 test('マージ操作ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const render = functionSource(html, 'render');
   assert.ok(render);
 
@@ -4202,7 +4202,7 @@ test('レビュー不要の通信後は有効な同じPRの操作へフォーカ
 });
 
 test('古い PR の開閉ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const render = functionSource(html, 'render');
   assert.ok(render);
 
@@ -4352,7 +4352,7 @@ test('一部完了のセッションでは完了タスクを表示できる', ()
 });
 
 test('種類別では未着手の合計数を一つのボタンで切り替える', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const functions = ['element', 'appendExpandToggle', 'taskVisibility', 'kindTodoTaskCount', 'kindDoneTaskCount', 'sessionOrigin', 'appendKindTaskSession', 'kindToggleLabel', 'appendKindToggle']
     .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
@@ -4429,7 +4429,7 @@ test('種類別では未着手の合計数を一つのボタンで切り替え�
 });
 
 test('離席の切り替えだけでは一覧を描き直さない', async () => {
-  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const html = readWebPage();
   const refresh = html.match(/async function refresh\(\) \{[\s\S]*?\n\}/)?.[0];
   const applyAwayState = functionSource(html, 'applyAwayState');
   assert.ok(refresh && applyAwayState);
@@ -4467,7 +4467,7 @@ test('離席の切り替えだけでは一覧を描き直さない', async () =>
 });
 
 test('文や名前を差し込むバッジは折り返し、枠の外へはみ出さない', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const source = readWebPage();
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 
   for (const html of [source, mock]) {

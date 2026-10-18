@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { composeUiTemplateSync } = require('../../src/server/ui-template');
 const {
   buildManual,
   decodeHtmlEntities,
@@ -17,7 +18,6 @@ const {
 const ROOT = path.resolve(__dirname, '../..');
 const MANUAL_ROOT = path.join(ROOT, 'manual');
 const DIST_ROOT = path.join(MANUAL_ROOT, 'dist');
-const DASHBOARD_PATH = path.join(ROOT, 'src/web/index.html');
 
 function attributeValues(source, tagName, attributeName) {
   const values = [];
@@ -207,7 +207,7 @@ function lintManual({ manualRoot = MANUAL_ROOT, distRoot = path.join(manualRoot,
 
   let dashboardSource = '';
   try {
-    dashboardSource = fs.readFileSync(dashboardPath, 'utf8');
+    dashboardSource = composeUiTemplateSync(dashboardPath).toString('utf8');
   } catch {
     errors.push(`${path.relative(repoRoot, dashboardPath).replace(/\\/g, '/')}: ファイルがありません`);
   }

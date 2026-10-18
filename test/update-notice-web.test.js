@@ -3,9 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { functionSource } = require('./support/page-context');
+const { readWebPage, functionSource } = require('./support/page-context');
 
-const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
+const html = readWebPage().replace(/\r\n/g, '\n');
 const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
 function noticeContext(navigator = {}) {
