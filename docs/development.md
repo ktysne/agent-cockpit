@@ -31,6 +31,7 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | `manual/` | 利用者向けマニュアルの原稿、撮影の定義、撮った画像、組み立てた結果(`dist/`) |
 | `tools/manual/` | マニュアルの組み立て、検査、デモ状態、撮影 |
 | `skills/agent-cockpit/` | メインセッションが読むスキル |
+| `skills/update-tools/` | agent-cockpit、ai-cross-review、claude-codex-bridge の更新を確かめて反映するスキル。Claude と Codex で共通 |
 | `test/` | テスト |
 
 ## テスト
