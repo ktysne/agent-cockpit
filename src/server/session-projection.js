@@ -467,7 +467,8 @@ function applyCodexLaunchCompletion(session, event) {
     } else if (placeholder) {
       applyCodexAudit(placeholder, event);
       // 合成の Interrupt は記録ファイルの時刻で並ぶので、終了未確認にした後に背景へ移った知らせが並ぶことがある。
-      if (placeholder.unconfirmed) {
+      // 止まったサブエージェントの背景の Codex は終了未確認にする規則があるので、その子は戻さない。
+      if (placeholder.unconfirmed && !session.stoppedAgentIds.has(placeholder.parent_agent_id)) {
         placeholder.active = true;
         placeholder.unconfirmed = false;
       }

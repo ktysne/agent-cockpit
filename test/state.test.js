@@ -1509,6 +1509,20 @@ test('SubagentStop は完了通知のない子の Codex 起動を終了未確認
   assert.equal(parent.closable, true);
 });
 
+test('SubagentStop より後に並んだ背景移行通知では、子の Codex 起動を終了未確認のまま残す', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'pending', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub', agent_type: 'impl-hard' });
+  launchCodex(state, 'pending', 'call', 2, 'sub');
+  state.addEvent({ session_id: 'pending', hook_event_name: 'SubagentStop', hookAt: 3, agent_id: 'sub' });
+  state.addEvent({
+    session_id: 'pending', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub',
+    tool_name: 'Bash', tool_use_id: 'call', backgroundTaskId: 'bg-call',
+  });
+  const parent = state.snapshot().sessions[0].agents[0];
+  assert.deepEqual([parent.gpt.active, parent.gpt.unconfirmed, parent.closable], [false, true, true]);
+});
+
 test('中断より後の背景移行通知は終了未確認の Codex 起動を稼働中に戻す', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
