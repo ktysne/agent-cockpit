@@ -68,7 +68,7 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{agents: SessionAgent[], stoppedAgentIds: Set<string>}} SessionAgents */
 
-/** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>}} SessionCodex */
+/** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, pendingCodexReview: Object<string, boolean>, codexLaunchToolIds: Set<string>}} SessionCodex */
 
 /** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>}} SessionDecisions */
 
@@ -105,6 +105,7 @@ function newSession(event, askDecisionState = {}) {
     ended: false,
     pendingCodex: Object.create(null),
     pendingCodexWait: Object.create(null),
+    pendingCodexReview: Object.create(null),
     agentToolBindings: Object.create(null),
   };
 }
@@ -143,6 +144,19 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
   }
 }
 
+// 前面のツールは呼び出し元のターンより長く続かないので、PostToolUse を受けないまま呼び出し元が止まった起動は終了未確認にする。
+// 背景へ移った知らせを受けていないので、--wait の候補にはしない。記録は遅れた PostToolUse の判定のために残す。
+function deactivatePendingCodex(session, parentAgentId) {
+  for (const [toolUseId, agentId] of Object.entries(session.pendingCodex)) {
+    if (session.pendingCodexWait[toolUseId]) continue;
+    const agent = agentFor(session, agentId);
+    if (agent?.active && sameAgent(agent.parent_agent_id, parentAgentId)) {
+      agent.active = false;
+      agent.unconfirmed = true;
+    }
+  }
+}
+
 function stopAgent(session, agentId, stoppedAgentIds) {
   const agent = agentFor(session, agentId);
   if (agent) {
@@ -151,6 +165,7 @@ function stopAgent(session, agentId, stoppedAgentIds) {
   }
   stoppedAgentIds.add(agentId);
   deactivateBackgroundedCodex(session, agentId);
+  deactivatePendingCodex(session, agentId);
   session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
   session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
 }
@@ -444,13 +459,24 @@ function applyCodexLaunchCompletion(session, event) {
     } else if (placeholder && eventName === 'PostToolUseFailure') {
       applyCodexAudit(placeholder, event);
       placeholder.active = false;
+    } else if (placeholder && session.pendingCodexReview[toolUseId] && !event.backgroundTaskId) {
+      // クロスレビューの CLI はレビュアーの終了まで戻らず、差分が無いときと直接起動では結果行を出さない。
+      applyCodexAudit(placeholder, event);
+      placeholder.active = false;
+      placeholder.unconfirmed = false;
     } else if (placeholder) {
       applyCodexAudit(placeholder, event);
+      // 合成の Interrupt は記録ファイルの時刻で並ぶので、終了未確認にした後に背景へ移った知らせが並ぶことがある。
+      if (placeholder.unconfirmed) {
+        placeholder.active = true;
+        placeholder.unconfirmed = false;
+      }
       placeholder.backgrounded = true;
       if (event.backgroundTaskId) placeholder.backgroundTaskId = event.backgroundTaskId;
     }
     delete session.pendingCodex[toolUseId];
     delete session.pendingCodexWait[toolUseId];
+    delete session.pendingCodexReview[toolUseId];
   }
 }
 
@@ -775,7 +801,7 @@ function applyPermissionPrompt(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'tools'> & SessionPermissions & SessionDecisions & Pick<SessionIdentity, 'provider'|'stopped'|'interrupted'|'turnKnown'|'ended'>} session
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions & SessionDecisions & SessionCodex & Pick<SessionAgents, 'agents'> & Pick<SessionIdentity, 'provider'|'stopped'|'interrupted'|'turnKnown'|'ended'>} session
  */
 function applySessionLifecycle(session, event) {
   // Interrupt は Stop と同じ後始末をしたうえで、メインなら中断の印を付ける。印は次の入力か新しい開始まで残す。
@@ -804,6 +830,7 @@ function applySessionLifecycle(session, event) {
 
   // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
   const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
+  if (!agentId && (startsIdle || eventName === 'Stop')) deactivatePendingCodex(session, null);
   if (startsIdle || eventName === 'UserPromptSubmit' || eventName === 'Stop') session.turnKnown = true;
   if (startsIdle) {
     session.permissionBoundaries.add(null);
@@ -875,7 +902,7 @@ function applyCodexWaitStart(session, event) {
 }
 
 /**
- * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'>} session
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexReview'>} session
  */
 function applyCodexLaunchStart(session, event) {
   const agentId = event.agent_id || null;
@@ -896,10 +923,12 @@ function applyCodexLaunchStart(session, event) {
   if (existingIndex >= 0) session.agents.splice(existingIndex, 1, agent);
   else session.agents.push(agent);
   session.pendingCodex[toolUseId] = agentIdForCall;
+  delete session.pendingCodexReview[toolUseId];
+  if (event.codexReviewLaunch) session.pendingCodexReview[toolUseId] = true;
 }
 
 /**
- * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexWait'>} session
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexWait'|'pendingCodexReview'>} session
  */
 function applyCodexStart(session, event) {
   const agentId = event.agent_id || null;

@@ -1422,7 +1422,7 @@ test('メインのクロスレビュー行は定義と監査行を反映し、�
   });
   state.addEvent({
     session_id: 'main-review', hook_event_name: 'PostToolUse', hookAt: 2,
-    tool_name: 'Bash', tool_use_id: 'review-call',
+    tool_name: 'Bash', tool_use_id: 'review-call', backgroundTaskId: 'review-bg',
     codexOutput: { auditLine: 'codex-agent: agent=codex-review model=gpt-review-actual effort=xhigh sandbox=read-only' },
   });
 
@@ -1463,6 +1463,65 @@ test('メインのクロスレビュー行は定義と監査行を反映し、�
   assert.deepEqual([byId['sub-1'].gpt.model, byId['sub-1'].gpt.active], [
     'gpt-subagent-actual', true,
   ]);
+});
+
+test('クロスレビューが背景へ移らず結果行なしで戻ると監査情報を反映して終了する', async (t) => {
+  await temporaryHome(t);
+  for (const codexOutput of [undefined, { auditLine: 'codex-agent: agent=codex-review model=gpt-review-actual effort=high' }]) {
+    const state = new DashboardState();
+    launchCodexReview(state, 'review', 'call', 1, 'codex-review', { model: 'gpt-definition', effort: 'low' });
+    state.addEvent({
+      session_id: 'review', hook_event_name: 'PostToolUse', hookAt: 2,
+      tool_name: 'Bash', tool_use_id: 'call', codexOutput,
+    });
+    const agent = state.snapshot().sessions[0].agents[0];
+    assert.equal(agent.active, false);
+    assert.equal(agent.unconfirmed, false);
+    assert.equal(agent.resultReceived, undefined);
+    assert.equal(agent.model, codexOutput ? 'gpt-review-actual' : 'gpt-definition');
+  }
+});
+
+for (const stop of ['Stop', 'Interrupt']) {
+  test(`メインの ${stop} は完了通知のない Codex 起動を手動で閉じられる終了未確認にする`, async (t) => {
+    await temporaryHome(t);
+    const state = new DashboardState();
+    launchCodex(state, 'pending', 'call', 1);
+    if (stop === 'Interrupt') state.recordInterruption('pending', 2);
+    else state.addEvent({ session_id: 'pending', hook_event_name: stop, hookAt: 2 });
+    const agent = state.snapshot().sessions[0].agents[0];
+    assert.equal(agent.active, false);
+    assert.equal(agent.unconfirmed, true);
+    assert.equal(agent.closable, true);
+  });
+}
+
+test('SubagentStop は完了通知のない子の Codex 起動を終了未確認にする', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'pending', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub', agent_type: 'impl-hard' });
+  launchCodex(state, 'pending', 'call', 2, 'sub');
+  state.addEvent({ session_id: 'pending', hook_event_name: 'SubagentStop', hookAt: 3, agent_id: 'sub' });
+  const parent = state.snapshot().sessions[0].agents[0];
+  assert.equal(parent.gpt.active, false);
+  assert.equal(parent.gpt.unconfirmed, true);
+  assert.equal(parent.unconfirmed, true);
+  assert.equal(parent.closable, true);
+});
+
+test('中断より後の背景移行通知は終了未確認の Codex 起動を稼働中に戻す', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchCodex(state, 'pending', 'call', 1);
+  state.addEvent({
+    session_id: 'pending', hook_event_name: 'PostToolUse', hookAt: 3,
+    tool_name: 'Bash', tool_use_id: 'call', backgroundTaskId: 'bg-call',
+  });
+  state.recordInterruption('pending', 2);
+  const agent = state.snapshot().sessions[0].agents[0];
+  assert.equal(agent.active, true);
+  assert.equal(agent.unconfirmed, false);
+  assert.equal(agent.backgroundTaskId, 'bg-call');
 });
 
 test('背景で起動した Codex は後続の Read 出力にある結果行で終了し、親の GPT 情報にまとまる', async (t) => {
