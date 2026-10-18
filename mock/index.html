@@ -3268,7 +3268,9 @@ document.addEventListener('click', e => {
       setTimeout(() => {
         const decision = allSessions().flatMap(session => session.decisions).find(d => d.id === key);
         verifyLaunches.set(key, { state: 'running', ...decision?.verify?.launched, at: new Date().toISOString() });
-        render();
+        // 全体を描き直すと書きかけの回答欄のフォーカスと IME の変換が切れるので、確認欄だけを差し替える。
+        const panel = document.querySelector(`.decision[data-id="${CSS.escape(key)}"] .verify`);
+        if (panel && decision) panel.outerHTML = verifyPanel(decision);
       }, 3000);
       return;
     }
