@@ -256,7 +256,8 @@ function createUiSessionRoutes(ctx) {
       jsonResponse(response, 404, { error: 'セッションが見つかりません' });
       return;
     }
-    const result = await state.worktreeInfo.openTerminal(state.transcriptCwdFor(session.session_id));
+    const result = await state.worktreeInfo.openTerminal(state.transcriptCwdFor(session.session_id),
+      state.getDisplayPreferences?.()?.terminal ?? 'auto');
     jsonResponse(response, result.status, result);
   }
 

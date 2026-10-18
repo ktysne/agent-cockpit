@@ -436,6 +436,7 @@ test('画面は未設定や不正なサーバー値を表示設定の既定値�
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 3,
     DEFAULT_IDLE_HIDE_MINUTES: 10,
     DEFAULT_GH_CONCURRENCY_LIMIT: 8,
+    TERMINAL_LABELS: { auto: '自動', 'windows-terminal': 'Windows Terminal', pwsh: 'PowerShell 7', powershell: 'Windows PowerShell', cmd: 'コマンドプロンプト' },
     FILTERS: ['permission', 'blocking', 'provisional', 'agents', 'prs'].map((key) => ({ key })),
   });
   vm.runInContext(`${settings}\n${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
@@ -453,6 +454,7 @@ test('画面は未設定や不正なサーバー値を表示設定の既定値�
     importAppTasksAsked: false,
     diagnosticsLevel: 'info',
     mergeableCondition: 'cross-review',
+    terminal: 'auto',
   });
   const initial = context.normalizeDisplay({});
   assert.equal(initial.mode, 'kind');
@@ -461,6 +463,8 @@ test('画面は未設定や不正なサーバー値を表示設定の既定値�
     'tasks', 'sinceSeen', 'judgment', 'prs', 'now',
   ]);
   assert.equal(context.normalizeDisplay({ ...base, hideFinished: false }).hideFinished, false);
+  assert.equal(context.normalizeDisplay({ ...base, terminal: 'unknown' }).terminal, 'auto');
+  assert.equal(context.normalizeDisplay({ ...base, terminal: 'cmd' }).terminal, 'cmd');
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).longWaitMinutes, 15);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).awayAnswerWaitMinutes, 3);
   for (const idleHideMinutes of [4, 1441, 30.5]) {
@@ -1175,6 +1179,7 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   };
   const hideFinishedInput = { checked: false };
   const importAppTasksInput = { checked: true };
+  const terminalSelect = { value: 'auto' };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
   const context = pageContext(web, {
     document: { activeElement: longWaitMinutesInput },
@@ -1189,9 +1194,10 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     DEFAULT_GH_CONCURRENCY_LIMIT: 8,
     hideFinishedInput,
     importAppTasksInput,
+    terminalSelect,
     mergeableConditionInputs,
     diagnosticsLevelSelect: { value: 'info', closest: () => ({ open: false }) },
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, ghConcurrencyLimit: 12, hideFinished: false, importAppTasks: true, mergeableCondition: 'ci' },
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, ghConcurrencyLimit: 12, hideFinished: false, importAppTasks: true, mergeableCondition: 'ci', terminal: 'auto' },
   });
   vm.runInContext(`${settings}\n${render}`, context);
   context.renderDisplaySettings();
@@ -1215,8 +1221,9 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
   const idleHideMinutesInput = { value: '30' };
   const hideFinishedInput = { checked: true };
   const importAppTasksInput = { checked: true };
+  const terminalSelect = { value: 'auto' };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { mergeableCondition: 'cross-review' };
+  const displayPreferences = { mergeableCondition: 'cross-review', terminal: 'auto' };
   let activeElement = null;
   const context = pageContext(web, {
     document: { get activeElement() { return activeElement; } },
@@ -1225,6 +1232,7 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
     idleHideMinutesInput,
     hideFinishedInput,
     importAppTasksInput,
+    terminalSelect,
     displayPreferences: { ...displayPreferences, importAppTasks: true },
     displayPreferenceSaveStates: new Map(),
     displayPreferencesReady: true,

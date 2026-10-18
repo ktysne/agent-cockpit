@@ -7,6 +7,13 @@ const { findWorktreeRootSync } = require('./git-worktree');
 
 const REFRESH_INTERVAL_MS = 5000;
 const TERMINAL_INTERVAL_MS = 1500;
+const TERMINAL_LABELS = Object.freeze({
+  auto: '自動',
+  'windows-terminal': 'Windows Terminal',
+  pwsh: 'PowerShell 7',
+  powershell: 'Windows PowerShell',
+  cmd: 'コマンドプロンプト',
+});
 
 class WorktreeInfo {
   constructor(options = {}) {
@@ -97,30 +104,45 @@ class WorktreeInfo {
     return { branch: branch.trim(), uncommitted, ...(base ? { base: base.replace(/^refs\/remotes\/origin\//, ''), ahead } : {}) };
   }
 
-  // 名前だけで起動するとカレントディレクトリから探されるため、どの候補も環境変数から作った絶対パスで起動する。
-  // Windows Terminal の無い環境(Windows 10 の既定)では PowerShell へ落とす。常駐サーバーから直接起動すると標準入力が空で
-  // すぐ終わるので、cmd の start で新しいコンソールを開く。worktree のパスはコマンド行に入れず、作業ディレクトリでだけ渡す。
-  terminalCommand(root) {
+  // 実行ファイルは絶対パスで起動し、worktree のパスは cwd で渡す。
+  // PowerShell と cmd は cmd の start から開き、新しいコンソールを維持する。
+  terminalCommand(root, preference = 'auto') {
     const { LOCALAPPDATA: localAppData, ProgramFiles: programFiles, SystemRoot: systemRoot } = this.environment;
     const exists = file => file && path.isAbsolute(file) && fs.existsSync(file);
     const wt = localAppData && path.join(localAppData, 'Microsoft', 'WindowsApps', 'wt.exe');
-    if (exists(wt)) return { file: wt, args: ['-w', 'new', '-d', root], options: { detached: true, windowsHide: true, shell: false, stdio: 'ignore' } };
     const cmd = systemRoot && path.join(systemRoot, 'System32', 'cmd.exe');
-    const shell = [
-      programFiles && path.join(programFiles, 'PowerShell', '7', 'pwsh.exe'),
-      systemRoot && path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-    ].find(exists);
-    if (!exists(cmd) || !shell) return null;
-    return { file: cmd, args: [`/d /c start "worktree" "${shell}" -NoExit`],
-      options: { detached: true, windowsHide: true, shell: false, stdio: 'ignore', cwd: root, windowsVerbatimArguments: true } };
+    const pathPwsh = (this.environment.PATH || this.environment.Path || '').split(path.delimiter)
+      .filter(directory => path.isAbsolute(directory)).map(directory => path.join(directory, 'pwsh.exe'));
+    const pwsh = [programFiles && path.join(programFiles, 'PowerShell', '7', 'pwsh.exe'), ...pathPwsh].find(exists);
+    const powershell = systemRoot && path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const start = (shell, terminal, keepOpen = true) => {
+      if (!exists(cmd) || !exists(shell)) return null;
+      const suffix = keepOpen ? ' -NoExit' : '';
+      return { terminal, file: cmd, args: [`/d /c start "worktree" "${shell}"${suffix}`],
+        options: { detached: true, windowsHide: true, shell: false, stdio: 'ignore', cwd: root, windowsVerbatimArguments: true } };
+    };
+
+    if (preference === 'windows-terminal' || preference === 'auto') {
+      if (exists(wt)) return { terminal: 'windows-terminal', file: wt, args: ['-w', 'new', '-d', root],
+        options: { detached: true, windowsHide: true, shell: false, stdio: 'ignore' } };
+      if (preference === 'windows-terminal') return null;
+    }
+    if (preference === 'pwsh') return start(pwsh, 'pwsh');
+    if (preference === 'powershell') return start(powershell, 'powershell');
+    if (preference === 'cmd') return start(cmd, 'cmd', false);
+    if (preference === 'auto') return start(pwsh || powershell, pwsh ? 'pwsh' : 'powershell');
+    return null;
   }
 
-  async openTerminal(cwd) {
+  async openTerminal(cwd, preference = 'auto') {
     const location = this.locate(cwd);
     if (!location || location.missing) return { status: 404, error: 'worktree が見つかりません (削除済み)' };
     if (this.platform !== 'win32') return { status: 400, error: 'ターミナルで開く操作は Windows で使えます' };
-    const terminal = this.terminalCommand(location.path);
-    if (!terminal) return { status: 404, error: 'ターミナル (wt.exe か PowerShell) が見つかりません' };
+    const selected = Object.hasOwn(TERMINAL_LABELS, preference) ? preference : 'auto';
+    const terminal = this.terminalCommand(location.path, selected);
+    if (!terminal) return { status: 404, error: selected === 'auto'
+      ? 'ターミナル (wt.exe か PowerShell) が見つかりません'
+      : `${TERMINAL_LABELS[selected]} が見つかりません。設定で別の端末を選んでください` };
     const last = this.terminalRequests.get(location.path);
     if (last !== undefined && this.now() - last < TERMINAL_INTERVAL_MS) return { status: 429, error: '少し待ってから、もう一度開いてください' };
     this.terminalRequests.set(location.path, this.now());
@@ -130,7 +152,7 @@ class WorktreeInfo {
         child.once('error', reject);
         child.once('spawn', () => { child.unref(); resolve(); });
       });
-      return { status: 200, opened: true };
+      return { status: 200, opened: true, terminal: terminal.terminal };
     } catch { return { status: 400, error: 'ターミナルを開けませんでした' }; }
   }
 }
