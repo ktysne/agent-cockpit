@@ -133,20 +133,28 @@ test('全件完了の一覧があるターンで Agent を起動すると一覧�
   assert.equal(nudges.reminderFor('stale-agent'), STALE_TASKS_REMINDER);
 });
 
-test('全件完了の一覧への案内も同じセッションでは 10 分空ける', () => {
+test('全件完了の一覧への案内は 1 つのターンで 1 回にし、次のターンでは 10 分空けて出す', () => {
   const state = new DashboardState();
   state.patchDisplayPreferences({ importAppTasks: true });
   state.setTasks('stale-interval', [completedTask()], START - 1);
   const { nudges, setNow } = makeNudges({ state });
   nudges.tasksWritten('stale-interval', START - 1);
+  const useTools = (from) => {
+    for (let index = 1; index <= 5; index += 1) {
+      nudges.afterEvent(event('stale-interval', 'PreToolUse', from + index, { tool_name: 'Read' }));
+    }
+  };
   nudges.afterEvent(event('stale-interval', 'UserPromptSubmit', START));
-  for (let index = 1; index <= 5; index += 1) {
-    nudges.afterEvent(event('stale-interval', 'PreToolUse', START + index, { tool_name: 'Read' }));
-  }
+  useTools(START);
   assert.equal(nudges.reminderFor('stale-interval'), STALE_TASKS_REMINDER);
-  setNow(START + TASK_REMINDER_INTERVAL_MS - 1);
-  assert.equal(nudges.reminderFor('stale-interval'), null);
   setNow(START + TASK_REMINDER_INTERVAL_MS);
+  useTools(START + 10);
+  assert.equal(nudges.reminderFor('stale-interval'), null);
+
+  const nextTurn = START + TASK_REMINDER_INTERVAL_MS + 100;
+  nudges.afterEvent(event('stale-interval', 'UserPromptSubmit', nextTurn));
+  useTools(nextTurn);
+  setNow(nextTurn + 10);
   assert.equal(nudges.reminderFor('stale-interval'), STALE_TASKS_REMINDER);
 });
 

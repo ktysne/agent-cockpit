@@ -24,6 +24,7 @@ class TaskNudges {
         lastMainToolUseAt: null,
         agentStartedWithoutTasks: false,
         agentStartedWithCompletedTasks: false,
+        staleTasksNudgedTurnAt: null,
         lastSubagentStopAt: null,
         nudgedSubagentStopAt: null,
         lastTaskWriteAt: null,
@@ -102,7 +103,9 @@ class TaskNudges {
     const staleTasksReminderIsDue = tasks.length > 0 && tasks.every((task) => task.state === 'done') &&
       session.turnStartedAt !== null &&
       (session.lastTaskWriteAt === null || session.lastTaskWriteAt <= session.turnStartedAt) &&
-      (session.mainToolUseCount >= TASK_REMINDER_TOOL_COUNT || session.agentStartedWithCompletedTasks);
+      (session.mainToolUseCount >= TASK_REMINDER_TOOL_COUNT || session.agentStartedWithCompletedTasks) &&
+      // 同じ依頼の続きなら一覧はそのままでよいので、1 つのターンで繰り返さない。
+      session.staleTasksNudgedTurnAt !== session.turnStartedAt;
     if (!subagentReportIsStale && !noTasksReminderIsDue && !staleTasksReminderIsDue) return null;
     if (session.lastNudgeAt !== null && now - session.lastNudgeAt < TASK_REMINDER_INTERVAL_MS) return null;
 
@@ -112,6 +115,7 @@ class TaskNudges {
       this.state.getDisplayPreferences?.()?.importAppTasks !== true;
     if (subagentReportIsStale) return setTasksOnly ? SET_TASKS_SUBAGENT_REMINDER : SUBAGENT_REMINDER;
     if (noTasksReminderIsDue) return setTasksOnly ? SET_TASKS_NO_TASKS_REMINDER : NO_TASKS_REMINDER;
+    session.staleTasksNudgedTurnAt = session.turnStartedAt;
     return setTasksOnly ? SET_TASKS_STALE_TASKS_REMINDER : STALE_TASKS_REMINDER;
   }
 
