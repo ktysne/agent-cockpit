@@ -8,6 +8,16 @@
 - `src/server/` は常駐サーバー、`src/hooks/` はフックから呼ぶスクリプト、`src/web/` は画面である。
 - 画面の見た目は [mock/index.html](../../mock/index.html) とそろえる。画面にはセッション、判断事項、タスク、サブエージェント、許可待ち、プルリクエストなどの状態を表示する。
 
+状態の保持と保存要求は `src/server/state.js` の `DashboardState` が担う。
+イベント列からのセッションの組み立ては `session-projection.js` に置く。
+イベントは `hookAt` と `sequence` の順に並べ、通常のイベントは前段の共通処理、種類別の処理、後段の共通処理の順で適用する。
+`BackgroundTaskEnd` は背景タスクの終了処理だけを適用する。
+適用時の副作用は渡されたセッションにだけ及び、保存要求は出さない。
+
+「前回見てから」の行の組み立ては `since-seen.js` に置く。
+このモジュールは時刻と候補を受けて行を作り、候補の取り出し、既読時刻の更新と保存要求は `DashboardState` が担う。
+共有するプロダクトの検査と複製は `product-utils.js` に置き、これらのモジュールから `state.js` を参照しない。
+
 ## 置き場
 
 常駐サーバーの置き場は `~/.agent-cockpit/` で、環境変数 `AGENT_COCKPIT_HOME` で差し替えられる。
