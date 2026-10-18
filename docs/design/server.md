@@ -507,6 +507,7 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - `npm run review:codex` と `node tools/cross-review.js codex` は `codex-review`、`--fix` 付きと `npm run review:codex:fix` は `codex-subagent` の定義を使い、`--no-codex-agent` 付きは対象にしない。
 - `codex-agent.sh` の起動の PostToolUse は、結果行を受けたときに終了とし、結果行が無ければ背景で動いているものとして扱う。
 - クロスレビューの起動の PostToolUse は、`backgroundTaskId` が無ければ結果行が無くても終了にする。クロスレビューの CLI はレビュアーの終了まで戻らず、差分が無いときと bridge を通らない直接起動では Codex の行を出さないためである。`backgroundTaskId` があれば、`codex-agent.sh` の起動と同じく背景の行として完了通知で閉じる。
+- クロスレビューの行では、`codex-agent: result=failed exit=3` の行を、呼び出しが失敗で終わったとき(PostToolUseFailure と、完了通知の status が `failed` のとき)だけ結果として扱う。それ以外では結果行が無いものとして扱い、背景の出力を読んだ呼び出しのこの行では何もしない。bridge が終了コード 3 を返すと、クロスレビューの CLI は同じプロンプトで直接起動へ切り替えてレビューを続けるためである。
 - Codex 呼び出しを開始したイベントに親の `agent_id` がある場合は、GPT のモデル、effort、`codex_home` を親の行へまとめる。
 - 親が特定できないメインセッションからの呼び出しは、独立した行にする。
 - 監査行が届いたらモデル、effort、`codex_home` を実際の値に置き換える。

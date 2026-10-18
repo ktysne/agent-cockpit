@@ -2152,6 +2152,24 @@ test('終了コードが 0 以外で PostToolUseFailure になった Codex も�
   assert.deepEqual([agent.gpt.unavailable, agent.gpt.active], ['使用不能', false]);
 });
 
+test('クロスレビューの exit=3 は PostToolUse では結果にせず、PostToolUseFailure では使用不能にする', async (t) => {
+  await temporaryHome(t);
+  for (const [hook_event_name, expectedUnavailable, expectedResultReceived] of [
+    ['PostToolUse', '', undefined],
+    ['PostToolUseFailure', '使用不能', true],
+  ]) {
+    const state = new DashboardState();
+    launchCodexReview(state, `review-${hook_event_name}`, 'call', 1, 'codex-review', { model: 'gpt-review', effort: 'low' });
+    state.addEvent({
+      session_id: `review-${hook_event_name}`, hook_event_name, hookAt: 2,
+      tool_name: 'Bash', tool_use_id: 'call', codexOutput: { resultLine: 'codex-agent: result=failed exit=3' },
+    });
+
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.deepEqual([agent.active, agent.unavailable, agent.resultReceived], [false, expectedUnavailable, expectedResultReceived]);
+  }
+});
+
 test('監査行だけの出力では Codex を終了にせず、背景で動いているものとして扱う', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
@@ -2375,6 +2393,42 @@ test('完了通知の結果行は同じ親の背景 Codex のうち task ID が�
   assert.deepEqual(replayed.map((agent) => [agent.backgroundTaskId, agent.active, agent.resultReceived]), [
     ['taska', true, undefined], ['taskb', false, true],
   ]);
+});
+
+test('背景クロスレビューの出力を読んだ呼び出しの exit=3 では、行を稼働中のまま残す', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchBackgroundCodexInMain(state, 'bg-review-output', 'launch', 'task-a', 1);
+  state.addEvent({
+    session_id: 'bg-review-output', hook_event_name: 'PostToolUse', hookAt: 3,
+    tool_name: 'Read', tool_use_id: 'read-a', backgroundOutputTaskId: 'task-a',
+    codexOutput: { resultLine: 'codex-agent: result=failed exit=3' },
+  });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.active, agent.unavailable, agent.resultReceived], [true, '', undefined]);
+});
+
+test('背景クロスレビューの完了通知の exit=3 は、status が failed のときだけ使用不能にする', async (t) => {
+  await temporaryHome(t);
+  for (const [status, expectedUnavailable, expectedResultReceived] of [
+    ['completed', '', undefined],
+    ['killed', '', undefined],
+    ['failed', '使用不能', true],
+  ]) {
+    const state = new DashboardState();
+    const sessionId = `bg-review-${status}`;
+    launchBackgroundCodexInMain(state, sessionId, 'launch', 'task-a', 1);
+    state.addEvent({
+      session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: 3,
+      backgroundTaskEnds: [{ taskId: 'task-a', status, codexOutput: { resultLine: 'codex-agent: result=failed exit=3' } }],
+    });
+
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.deepEqual([agent.active, agent.unconfirmed, agent.unavailable, agent.resultReceived], [
+      false, false, expectedUnavailable, expectedResultReceived,
+    ]);
+  }
 });
 
 test('結果行のない完了通知は背景 Codex を稼働中から外し、状態再生でも保つ', async (t) => {
