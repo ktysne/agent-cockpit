@@ -4162,10 +4162,59 @@ function kindEndedDecisionEntries(references) {
   return entries.sort((left, right) => itemTimestamp(right.decision) - itemTimestamp(left.decision));
 }
 
-function kindDecisionWaitAge(decision) {
+function kindWaitAge(startedAt, now = Date.now()) {
+  const timestamp = Date.parse(startedAt);
+  return Number.isFinite(timestamp) ? Math.max(0, now - timestamp) : 0;
+}
+
+function kindDecisionWaitAge(decision, now = Date.now()) {
   if (hasEffectiveAnswer(decision)) return -1;
-  const timestamp = Date.parse(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt);
-  return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : 0;
+  const startedAt = decision.state === 'waiting' ? decision.createdAt : decision.provisionalAt || decision.updatedAt;
+  return kindWaitAge(startedAt, now);
+}
+
+function kindPermissionWaitKey(wait) {
+  return wait.target_tool_use_id || [wait.agent_id || '', wait.tool_name, wait.summary].join('\0');
+}
+
+function kindJudgmentSortKey(item, now = Date.now()) {
+  const itemId = item.kind === 'permission' ? kindPermissionWaitKey(item.wait) : item.decision.id;
+  const tieBreaker = `${item.session.session_id}\0${itemId}`;
+  if (item.kind === 'permission') {
+    return { group: 0, deadline: null, age: kindWaitAge(item.wait.startedAt, now), tieBreaker };
+  }
+
+  const { decision } = item;
+  if (hasEffectiveAnswer(decision)) return { group: 2, deadline: null, age: 0, tieBreaker };
+  if (decision.state === 'waiting') {
+    const deadline = Date.parse(decision.awaitingAnswerUntil);
+    return {
+      group: 0,
+      deadline: Number.isFinite(deadline) ? deadline : null,
+      age: kindDecisionWaitAge(decision, now),
+      tieBreaker,
+    };
+  }
+  return { group: 1, deadline: null, age: kindDecisionWaitAge(decision, now), tieBreaker };
+}
+
+function compareKindJudgmentItems(left, right) {
+  const now = Date.now();
+  const leftKey = kindJudgmentSortKey(left, now);
+  const rightKey = kindJudgmentSortKey(right, now);
+  if (leftKey.group !== rightKey.group) return leftKey.group - rightKey.group;
+  if (leftKey.group === 0) {
+    if (leftKey.deadline !== null || rightKey.deadline !== null) {
+      if (leftKey.deadline === null) return 1;
+      if (rightKey.deadline === null) return -1;
+      if (leftKey.deadline !== rightKey.deadline) return leftKey.deadline - rightKey.deadline;
+    } else if (leftKey.age !== rightKey.age) {
+      return rightKey.age - leftKey.age;
+    }
+  } else if (leftKey.group === 1 && leftKey.age !== rightKey.age) {
+    return rightKey.age - leftKey.age;
+  }
+  return leftKey.tieBreaker < rightKey.tieBreaker ? -1 : leftKey.tieBreaker > rightKey.tieBreaker ? 1 : 0;
 }
 
 function kindEndedAgentCount(references) {
@@ -4182,12 +4231,12 @@ function renderKindSections(products, showOriginBands = true) {
       const holder = element('div');
       appendPermissionWaits(holder, { ...session, permissionWaits: [wait] }, product, true, multipleSessions);
       const card = holder.firstElementChild?.firstElementChild;
-      if (card) waitingItems.push({ age: Date.now() - Date.parse(wait.startedAt), card });
+      if (card) waitingItems.push({ kind: 'permission', session, wait, card });
     }
     for (const decision of shownActiveDecisions(session)) {
       const list = element('div', 'decision-list');
       appendDecisionCard(list, decision, product, session, true, multipleSessions);
-      waitingItems.push({ age: kindDecisionWaitAge(decision), card: list.firstElementChild });
+      waitingItems.push({ kind: 'decision', session, decision, card: list.firstElementChild });
     }
 
   }
@@ -4204,7 +4253,7 @@ function renderKindSections(products, showOriginBands = true) {
   if (endedDecisionItems.length) {
     appendKindToggle(endedDecisionControls, 'decisions', showEndedDecisions, endedDecisionItems.length, '解決済みと取り下げ');
   }
-  waitingItems.sort((left, right) => right.age - left.age);
+  waitingItems.sort(compareKindJudgmentItems);
   const judgment = element('div', 'body');
   for (const item of waitingItems) if (item.card) judgment.append(item.card);
   const hasHiddenJudgments = references.some(({ session }) => hasHiddenJudgmentItems(session));

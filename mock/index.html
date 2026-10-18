@@ -1819,6 +1819,42 @@ function ageMinutes(item) {
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 }
 
+function kindMockJudgmentSortKey(item) {
+  if (item.wait) {
+    const wait = item.wait;
+    const itemId = wait.id || wait.target_tool_use_id || [wait.agent_id || wait.who || '', wait.tool_name || wait.tool || '', wait.summary || wait.detail || ''].join('\0');
+    return { group: 0, deadline: null, age: ageMinutes(wait), tieBreaker: `${item.session.id}\0${itemId}` };
+  }
+
+  const { decision } = item;
+  const tieBreaker = `${item.session.id}\0${decision.id}`;
+  if (answerOf(decision.id).sent) return { group: 2, deadline: null, age: 0, tieBreaker };
+  const state = effectiveDecisionState(decision);
+  const age = Number.isFinite(decision.waitMin) ? decision.waitMin : ageMinutes(decision);
+  if (state === 'waiting') {
+    return { group: 0, deadline: Number.isFinite(decision.awaitingMin) ? decision.awaitingMin : null, age, tieBreaker };
+  }
+  return { group: 1, deadline: null, age, tieBreaker };
+}
+
+function compareKindMockJudgmentItems(left, right) {
+  const leftKey = kindMockJudgmentSortKey(left);
+  const rightKey = kindMockJudgmentSortKey(right);
+  if (leftKey.group !== rightKey.group) return leftKey.group - rightKey.group;
+  if (leftKey.group === 0) {
+    if (leftKey.deadline !== null || rightKey.deadline !== null) {
+      if (leftKey.deadline === null) return 1;
+      if (rightKey.deadline === null) return -1;
+      if (leftKey.deadline !== rightKey.deadline) return leftKey.deadline - rightKey.deadline;
+    } else if (leftKey.age !== rightKey.age) {
+      return rightKey.age - leftKey.age;
+    }
+  } else if (leftKey.group === 1 && leftKey.age !== rightKey.age) {
+    return rightKey.age - leftKey.age;
+  }
+  return leftKey.tieBreaker < rightKey.tieBreaker ? -1 : leftKey.tieBreaker > rightKey.tieBreaker ? 1 : 0;
+}
+
 const sessionsByActivity = p => visibleSessions(p).sort((a, b) => ageMinutes(a.main) - ageMinutes(b.main));
 
 function sessionDisplayName(session) {
@@ -3006,11 +3042,10 @@ function renderKindMode(showOriginBands = true) {
   const section = (title, body, extra = '', emptyCount = 0) => body
     ? `<section class="section"><div class="head"><h2>${title}</h2>${extra}</div><div class="body">${body}</div></section>`
     : `<section class="kind-empty"><h2>${title}<span class="count">${emptyCount ? `(${emptyCount} 件)` : '（なし）'}</span></h2>${extra}</section>`;
-  // 種類別では、許可待ちと判断事項をまとめて待ちの長い順に並べる(送信済みは後ろ)
   const waits = sessions.flatMap(({ p, session }) => [
-    ...visiblePerms(session).map(wait => ({ age: wait.waitMin, html: permCard(p, session, wait, true) })),
-    ...visibleDecisions(session).map(d => ({ age: answerOf(d.id).sent ? -1 : (d.waitMin || 0), html: decisionCard(p, session, d, true) })),
-  ]).sort((a, b) => b.age - a.age);
+    ...visiblePerms(session).map(wait => ({ session, wait, html: permCard(p, session, wait, true) })),
+    ...visibleDecisions(session).map(decision => ({ session, decision, html: decisionCard(p, session, decision, true) })),
+  ]).sort(compareKindMockJudgmentItems);
   const visibleDecisionItems = waits.map(x => x.html).join('');
   const hiddenJudgmentItems = sessions.some(({ session }) => hasHiddenJudgmentItems(session));
   const endedDecisionEntries = kindEndedDecisionEntries(sessions);

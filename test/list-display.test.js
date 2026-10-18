@@ -257,7 +257,9 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     isFilterShown: () => false,
     orderedSectionKeys: (keys) => keys,
   });
-  vm.runInContext(`${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
+  const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
+    .map((name) => functionSource(web, name)).join('\n');
+  vm.runInContext(`${kindSort}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
   const activitySection = kindContext.renderKinds([{ pullRequestGroups: [] }]).find((section) => section.title === '今やっていること');
   const activity = activitySection.body;
   assert.equal(activity.className, 'body now');
@@ -482,7 +484,9 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     isFilterShown: () => false,
     orderedSectionKeys: (keys) => keys,
   });
-  vm.runInContext(`${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
+  const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
+    .map((name) => functionSource(web, name)).join('\n');
+  vm.runInContext(`${kindSort}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
   const sections = kindContext.renderKinds([{ pullRequestGroups: [] }]);
   const tasks = sections.find((section) => section.title === 'タスクと完了条件');
   const activity = sections.find((section) => section.title === '今やっていること');
