@@ -288,7 +288,7 @@ state が `merged` の登録は残す。
 |---|---|
 | 共通 | `session_id`、`hook_event_name`、`cwd`、`agent_id`、`agent_type`、`hookAt` |
 | PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで。切り詰めた場合は末尾に「…」を付ける)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る |
-| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。PostToolUse の Codex は結果行を受けたときに終了と判定し、監査行だけなら背景で動いているものとして扱う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash の PostToolUse では、コマンド先頭の `cd <パス> &&` から解決した絶対パスを `commandCwd` として送る(変数展開、`~`、引用符なしの `\`、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない) |
+| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex の起動か `--wait` の Bash で、出力から結果行を得られず、`tool_response.persistedOutputPath` が絶対パスでファイル名が `<英数字、_、->.txt` の形なら、そのファイルの先頭と末尾の各 64KB から Codex の行を読み、出力から得た行より優先する。Claude Code は 30000 文字を超える出力の先頭だけを `stdout` に残して全文をこのファイルに置き、結果行は出力の最後に出るためである。`stderr` は見ない(bridge は Codex の行を標準出力へ出す)。PostToolUse の Codex の終了の判定は「サブエージェントのモデルと effort」の節に従う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash の PostToolUse では、コマンド先頭の `cd <パス> &&` から解決した絶対パスを `commandCwd` として送る(変数展開、`~`、引用符なしの `\`、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない) |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。UserPromptSubmit では、`prompt` が `<task-notification>` で始まるときだけ通知を全件読み、`status` が終わり(`completed`、`failed`、`killed`、`stopped`)のものの `task-id` と `status` を `backgroundTaskEnds` に載せる。開発者が入力に引用した通知を、終了と取り違えないためである。出力ファイルの読み取りは 8 件までとし、`output-file` が絶対パスで、ファイル名が `<task-id>.output` と一致する場合は、先頭と末尾の各 64KB から Codex の監査行、結果行、実行 ID の行だけを `codexOutput` に載せる。128KB 以下のファイルは全体を読む。出力ファイルが無い通知には `outputMissing` を付け、Codex の行を終了未確認にする。上限を超えて読まなかった通知と、出力を読めなかった通知は送らず、記録ファイルを読み直すサーバーの照合に任せる。出力に `waiting` があれば行を閉じてはならないためである。サーバーの照合は、セッションの一覧から `cwd` を得られなければ、フックが最初に送った `cwd` で記録ファイルを探す。サーバーが受ける `backgroundTaskEnds` は最大 32 件とする。プロンプト本文と `summary` は送らない |
@@ -505,6 +505,8 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - Bash の PreToolUse で `codex-agent.sh <定義名>` を見つけたら、`~/.claude/gpt-agents/<定義名>.md` の frontmatter の `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
 - Bash の PreToolUse では、要約の切り詰め前にコマンド位置にあるクロスレビュー起動も Codex 呼び出しとして扱う。
 - `npm run review:codex` と `node tools/cross-review.js codex` は `codex-review`、`--fix` 付きと `npm run review:codex:fix` は `codex-subagent` の定義を使い、`--no-codex-agent` 付きは対象にしない。
+- `codex-agent.sh` の起動の PostToolUse は、結果行を受けたときに終了とし、結果行が無ければ背景で動いているものとして扱う。
+- クロスレビューの起動の PostToolUse は、`backgroundTaskId` が無ければ結果行が無くても終了にする。クロスレビューの CLI はレビュアーの終了まで戻らず、差分が無いときと bridge を通らない直接起動では Codex の行を出さないためである。`backgroundTaskId` があれば、`codex-agent.sh` の起動と同じく背景の行として完了通知で閉じる。
 - Codex 呼び出しを開始したイベントに親の `agent_id` がある場合は、GPT のモデル、effort、`codex_home` を親の行へまとめる。
 - 親が特定できないメインセッションからの呼び出しは、独立した行にする。
 - 監査行が届いたらモデル、effort、`codex_home` を実際の値に置き換える。
@@ -522,6 +524,13 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
   `BackgroundTaskEnd` と Claude の `Interrupt` は内部イベントとして、フックと `/api/events` からは受け付けない。
   Codex の `Interrupt` は実際のフックの通知なので、従来どおり受け付ける。
 - 結果行が現れないままサブエージェントが `SubagentStop` を迎えたときは、背景 Codex を終了未確認にする。
+- PostToolUse を受けないまま呼び出し元が止まった Codex の起動(中断、フックの送信の失敗)は、終了未確認にする。前面のツールは呼び出し元のターンより長く続かないためである。
+  メインは Stop(合成の Interrupt を含む)と、source が startup、resume、clear の SessionStart で、サブエージェントは `SubagentStop` で判定する。
+  背景へ移った知らせを受けていないので、`--wait` の候補にはしない。
+  `--wait` の呼び出しは、止めても Codex が背景で動き続けるので対象にしない。
+  UserPromptSubmit では判定しない。背景タスクの完了通知は、前面のツールの実行中にも UserPromptSubmit として届くためである。
+  後から PostToolUse が並び、背景で動いているものとして扱うときは、稼働中に戻す。合成の Interrupt の時刻は記録ファイルの時刻で、実際の PostToolUse より前に並ぶことがあるためである。
+  ただし、呼び出し元のサブエージェントが止まった後なら戻さない。止まったサブエージェントの背景 Codex は終了未確認にする規則と、並び順によらずそろえるためである。
 - メインの `Stop` では、メイン直下の背景 Codex を稼働中のまま残す。
 - 「終了にする」は、終了未確認の行、メイン直下で稼働中の背景 Codex の行、背景で起動した稼働中の Claude のサブエージェントの行に表示する。
   `Agent` ツールの `PostToolUse` が届いた時点でサブエージェントが稼働中なら、背景で起動したものとみなす。

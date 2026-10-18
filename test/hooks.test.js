@@ -415,6 +415,7 @@ test('クロスレビュー定義は Bash の許可値だけを受け、既存�
     codexReviewDefinition, summary,
   });
   assert.equal(sanitize('Bash', 'codex-review').codexDefinition, 'codex-review');
+  assert.equal(sanitize('Bash', 'codex-review').codexReviewLaunch, true);
   assert.equal(sanitize('Bash', 'codex-subagent').codexDefinition, 'codex-subagent');
   assert.equal(sanitize('Bash', 'untrusted-definition').codexDefinition, null);
   assert.equal(sanitize('Read', 'codex-review').codexDefinition, null);
@@ -422,6 +423,7 @@ test('クロスレビュー定義は Bash の許可値だけを受け、既存�
     sanitize('Bash', 'codex-review', 'bash ~/.claude/tools/codex-agent.sh custom < prompt.md').codexDefinition,
     'custom',
   );
+  assert.equal(sanitize('Bash', 'codex-review', 'bash ~/.claude/tools/codex-agent.sh custom < prompt.md').codexReviewLaunch, undefined);
 });
 
 test('Codex の --wait の状態の行を、監査行と結果行とは別に抜き出す', () => {
@@ -694,4 +696,42 @@ test('フックは BackgroundTaskEnd と Claude の内部 Interrupt を送らな
     assert.equal(makeHookEvent({ session_id: 'internal', hook_event_name }), null);
     if (hook_event_name === 'BackgroundTaskEnd') assert.equal(makeHookEvent({ session_id: 'internal', hook_event_name }, 1, { provider: 'codex' }), null);
   }
+});
+
+test('Codex の起動と待機は保存された出力から末尾の結果行を取得する', () => {
+  const outputPath = path.resolve('review-output.txt');
+  for (const command of ['bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md', 'npm run review:codex', 'bash ~/.claude/tools/codex-agent.sh --wait impl-hard-20261003-123456-7']) {
+    const readPaths = [];
+    const event = makeHookEvent({
+      session_id: 'persisted', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'call',
+      tool_input: { command },
+      tool_response: { stdout: 'codex-agent: waiting run=impl-hard-20261003-123456-7', persistedOutputPath: outputPath },
+    }, 1, { readTaskOutput(filePath) {
+      readPaths.push(filePath);
+      return 'codex-agent: vanished run=impl-hard-20261003-123456-7\ncodex-agent: result=ok';
+    } });
+    assert.deepEqual(readPaths, [outputPath]);
+    assert.equal(event.codexOutput.resultLine, 'codex-agent: result=ok');
+    assert.equal(event.codexOutput.waitStatusLine, 'codex-agent: vanished run=impl-hard-20261003-123456-7');
+  }
+});
+
+test('Codex に関係のないコマンドの保存出力は読まない', () => {
+  const readPaths = [];
+  makeHookEvent({
+    session_id: 'persisted', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'call',
+    tool_input: { command: 'npm test' }, tool_response: { persistedOutputPath: path.resolve('output.txt') },
+  }, 1, { readTaskOutput(filePath) { readPaths.push(filePath); return 'codex-agent: result=ok'; } });
+  assert.deepEqual(readPaths, []);
+});
+
+test('Codex の保存出力は絶対パスで許可されたファイル名のときだけ読む', () => {
+  const readPaths = [];
+  for (const persistedOutputPath of ['relative.txt', path.resolve('output.log'), path.resolve('名前.txt'), path.resolve(`${'a'.repeat(65)}.txt`)]) {
+    makeHookEvent({
+      session_id: 'persisted', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'call',
+      tool_input: { command: 'npm run review:codex' }, tool_response: { persistedOutputPath },
+    }, 1, { readTaskOutput(filePath) { readPaths.push(filePath); return ''; } });
+  }
+  assert.deepEqual(readPaths, []);
 });

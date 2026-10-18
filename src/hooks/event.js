@@ -1,11 +1,11 @@
 const { planUpdateForTool } = require('../server/plan-updates');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
-const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
+const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution, parseCodexLaunch } = require('../server/events');
 const { readRouting } = require('../server/routing');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
-const { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, readTaskOutputFile } = require('../shared/task-output');
+const { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, persistedOutputPath, readTaskOutputFile } = require('../shared/task-output');
 const path = require('node:path');
 const { appendPendingHook } = require('../client/hooks-pending');
 const { promisify } = require('node:util');
@@ -438,6 +438,16 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     if (backgroundOutputTaskId) event.backgroundOutputTaskId = backgroundOutputTaskId;
     // 終了コードが 0 以外の Bash は PostToolUseFailure の error に出力が載ることがある。
     const codexOutput = { ...codexOutputLines(input.error), ...codexOutputLines(input.tool_response) };
+    // Claude Code は 30000 文字を超える出力の先頭だけを stdout に残すので、出力の最後に出る結果行は全文のファイルから読む。
+    if (event.tool_name === 'Bash' && !codexOutput.resultLine) {
+      const command = pickString(input.tool_input?.command);
+      const outputPath = persistedOutputPath(input.tool_response?.persistedOutputPath);
+      if (outputPath && (parseCodexLaunch(command) || extractCodexReviewDefinition(command) || extractCodexWaitRunId(command))) {
+        let output = null;
+        try { output = (options.readTaskOutput || readTaskOutputFile)(outputPath); } catch {}
+        if (typeof output === 'string') Object.assign(codexOutput, codexOutputLines(output));
+      }
+    }
     if (Object.keys(codexOutput).length) event.codexOutput = codexOutput;
   } else if (eventName === 'Notification') {
     event.notification_type = pickString(input.notification_type).slice(0, 100);

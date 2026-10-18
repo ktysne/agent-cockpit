@@ -65,6 +65,10 @@ function taskOutputPath(taskId, value) {
   return typeof value === 'string' && path.isAbsolute(value) && path.basename(value) === `${taskId}.output` ? value : '';
 }
 
+function persistedOutputPath(value) {
+  return typeof value === 'string' && path.isAbsolute(value) && /^[A-Za-z0-9_-]{1,64}\.txt$/.test(path.basename(value)) ? value : '';
+}
+
 async function readTaskOutputFileAsync(filePath) {
   let file;
   try {
@@ -98,4 +102,4 @@ function joinOutputChunks(head, tail) {
   return `${head.slice(0, headBoundary + 1)}\n${tailBoundary < 0 ? '' : tail.slice(tailBoundary + 1)}`;
 }
 
-module.exports = { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, readTaskOutputFile, readTaskOutputFileAsync };
+module.exports = { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, persistedOutputPath, readTaskOutputFile, readTaskOutputFileAsync };

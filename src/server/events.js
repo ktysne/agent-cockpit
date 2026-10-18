@@ -224,6 +224,7 @@ function sanitizeEvent(input, metadata = {}) {
     event.codexDefinition = parseCodexLaunch(event.summary);
     if (event.tool_name === 'Bash' && !event.codexDefinition && CODEX_REVIEW_DEFINITIONS.has(input.codexReviewDefinition)) {
       event.codexDefinition = input.codexReviewDefinition;
+      event.codexReviewLaunch = true;
     }
     const codexWaitRunId = shortString(input.codexWaitRunId, 256) || '';
     const codexWaitMatch = codexWaitRunId.match(CODEX_RUN_ID_PATTERN);
