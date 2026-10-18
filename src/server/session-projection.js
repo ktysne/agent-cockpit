@@ -68,7 +68,7 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{agents: SessionAgent[], stoppedAgentIds: Set<string>}} SessionAgents */
 
-/** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, pendingCodexReview: Object<string, boolean>, codexLaunchToolIds: Set<string>}} SessionCodex */
+/** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>, codexReviewAgentIds: Set<string>}} SessionCodex */
 
 /** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>}} SessionDecisions */
 
@@ -105,7 +105,7 @@ function newSession(event, askDecisionState = {}) {
     ended: false,
     pendingCodex: Object.create(null),
     pendingCodexWait: Object.create(null),
-    pendingCodexReview: Object.create(null),
+    codexReviewAgentIds: new Set(),
     agentToolBindings: Object.create(null),
   };
 }
@@ -187,13 +187,23 @@ function applyCodexAudit(agent, event) {
   agent.codex_home = event.codexAudit.codex_home || agent.codex_home || '';
 }
 
+// exit=3 は GPT 側が未導入か無効で、Codex を起動していない。
+function isCodexNotStartedResult(result) {
+  return result?.status === 'failed' && result.exitCode === 3;
+}
+
+// bridge が Codex を起動しなくても、クロスレビューの CLI は同じプロンプトで直接起動へ切り替えてレビューを続ける。
+// そのため、クロスレビューの行では、呼び出しが失敗で終わったときだけ exit=3 を結果として扱う。
+function ignoresReviewResult(session, agent, result, endedInFailure) {
+  return session.codexReviewAgentIds.has(agent.agent_id) && isCodexNotStartedResult(result) && !endedInFailure;
+}
+
 // 監査行は Codex の起動前に出るので、終わったと判定するのは結果行を受けたときだけにする。
 function completeCodexAgent(agent, event) {
   applyCodexAudit(agent, event);
   const result = event.codexResult;
   if (result?.status === 'rate-limited') agent.unavailable = '利用上限';
-  // exit=3 は GPT 側が未導入か無効で、Codex を起動していない。
-  if (result?.status === 'unavailable' || (result?.status === 'failed' && result.exitCode === 3)) agent.unavailable = '使用不能';
+  if (result?.status === 'unavailable' || isCodexNotStartedResult(result)) agent.unavailable = '使用不能';
   agent.active = false;
   agent.unconfirmed = false;
   agent.resultReceived = true;
@@ -445,7 +455,8 @@ function applyCodexLaunchCompletion(session, event) {
     const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
     if (placeholder) session.codexLaunchToolIds.add(toolUseId);
     if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
-    if (placeholder && event.codexResult) {
+    if (placeholder && event.codexResult &&
+      !ignoresReviewResult(session, placeholder, event.codexResult, eventName === 'PostToolUseFailure')) {
       completeCodexAgent(placeholder, event);
     } else if (placeholder && session.pendingCodexWait[toolUseId]) {
       // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
@@ -459,7 +470,7 @@ function applyCodexLaunchCompletion(session, event) {
     } else if (placeholder && eventName === 'PostToolUseFailure') {
       applyCodexAudit(placeholder, event);
       placeholder.active = false;
-    } else if (placeholder && session.pendingCodexReview[toolUseId] && !event.backgroundTaskId) {
+    } else if (placeholder && session.codexReviewAgentIds.has(placeholder.agent_id) && !event.backgroundTaskId) {
       // クロスレビューの CLI はレビュアーの終了まで戻らず、差分が無いときと直接起動では結果行を出さない。
       applyCodexAudit(placeholder, event);
       placeholder.active = false;
@@ -477,12 +488,11 @@ function applyCodexLaunchCompletion(session, event) {
     }
     delete session.pendingCodex[toolUseId];
     delete session.pendingCodexWait[toolUseId];
-    delete session.pendingCodexReview[toolUseId];
   }
 }
 
 /**
- * @param {Pick<SessionCodex, 'codexLaunchToolIds'> & Pick<SessionAgents, 'agents'>} session
+ * @param {Pick<SessionCodex, 'codexLaunchToolIds'|'codexReviewAgentIds'> & Pick<SessionAgents, 'agents'>} session
  */
 function applyCodexResult(session, event) {
   const agentId = event.agent_id || null;
@@ -504,6 +514,8 @@ function applyCodexResult(session, event) {
     const targetAgent = matched
       ? (matched.resultReceived ? null : matched)
       : uniqueBackgroundedCodex(session, agentId, event.codexRunId);
+    // 途中の出力を読んだだけでは、直接起動へ切り替えたレビューが続いているかを判断できない。
+    if (targetAgent && ignoresReviewResult(session, targetAgent, event.codexResult, false)) return;
     if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
     if (targetAgent) completeCodexAgent(targetAgent, event);
   }
@@ -518,7 +530,7 @@ function applyBackgroundTaskEnds(session, event) {
       (item.backgroundTaskId ? item.backgroundTaskId === end.taskId : Boolean(end.codexRunId && item.runId === end.codexRunId)));
     if (!agent) continue;
     if (!agent.runId && end.codexRunId) agent.runId = end.codexRunId;
-    if (end.codexResult) {
+    if (end.codexResult && !ignoresReviewResult(session, agent, end.codexResult, end.status === 'failed')) {
       completeCodexAgent(agent, end);
       continue;
     }
@@ -903,7 +915,7 @@ function applyCodexWaitStart(session, event) {
 }
 
 /**
- * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexReview'>} session
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'codexReviewAgentIds'>} session
  */
 function applyCodexLaunchStart(session, event) {
   const agentId = event.agent_id || null;
@@ -924,12 +936,12 @@ function applyCodexLaunchStart(session, event) {
   if (existingIndex >= 0) session.agents.splice(existingIndex, 1, agent);
   else session.agents.push(agent);
   session.pendingCodex[toolUseId] = agentIdForCall;
-  delete session.pendingCodexReview[toolUseId];
-  if (event.codexReviewLaunch) session.pendingCodexReview[toolUseId] = true;
+  if (event.codexReviewLaunch) session.codexReviewAgentIds.add(agentIdForCall);
+  else session.codexReviewAgentIds.delete(agentIdForCall);
 }
 
 /**
- * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexWait'|'pendingCodexReview'>} session
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexWait'|'codexReviewAgentIds'>} session
  */
 function applyCodexStart(session, event) {
   const agentId = event.agent_id || null;
