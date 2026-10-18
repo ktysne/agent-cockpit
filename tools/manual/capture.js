@@ -16,6 +16,7 @@ const SCALES = new Set([1, 2]);
 const DEFAULT_WIDTH = 850;
 const DEFAULT_HEIGHT = 900;
 const DEFAULT_WAIT_MS = 10_000;
+const DISPLAY_STORAGE_KEY = 'agent-cockpit.display';
 const FIRST_RENDER_WAIT_MS = 20_000;
 const THEMES = new Set(['dark', 'light']);
 const PART_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -109,9 +110,12 @@ function validateShotDefinition(definition, { label = '撮影の定義', scenari
 }
 
 // localStorage には文字列しか入らない。文字列はそのまま、それ以外は JSON にして書く。
+// 取り込みの確認は一度だけ出る全面のダイアログで撮影の画面を覆うので、表示設定は確認済みとして始める。
 function storageEntries(definition) {
   const entries = { 'agent-cockpit.theme': definition.theme };
   for (const [key, value] of Object.entries(definition.storage)) entries[key] = typeof value === 'string' ? value : JSON.stringify(value);
+  const display = entries[DISPLAY_STORAGE_KEY] === undefined ? {} : JSON.parse(entries[DISPLAY_STORAGE_KEY]);
+  entries[DISPLAY_STORAGE_KEY] = JSON.stringify({ importAppTasksAsked: true, ...display });
   return entries;
 }
 
