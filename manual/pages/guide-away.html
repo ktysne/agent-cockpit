@@ -11,7 +11,8 @@
         <li>席を外す前に、離席中にする</li>
         <li>回答を待つ時間の中で、質問に答える</li>
         <li>締切を過ぎて推奨で進んだ判断事項に、戻ってから答える</li>
-        <li>戻ったら「前回見てから」で変化を確かめて既読にし、離席中を外す</li>
+        <li>戻ったら「前回見てから」で変化を確かめて既読にする</li>
+        <li>確認し終えたら離席中を外す</li>
       </ul>
     </div>
     <div>
@@ -82,18 +83,18 @@
   </ol>
 
   <h2 id="guide-away-since-seen">戻ったら変化を確かめて既読にする</h2>
-  <p>席を外している間に起きた変化は、離席中にしている間、<span class="ui">前回見てから</span> の欄に出ます。
-  設定の <span class="ui">前回見てから</span> が最初の設定の <span class="ui">離席中のみ</span> のときは、離席中を外すと欄が出なくなるので、離席中を外す前に確かめます。
-  既読にしなかった変化は記録に残り、次に離席中にしたときか、設定を <span class="ui">常に</span> にしたときに、また出ます(<a href="away.html#away-since-seen">前回見てから</a>)。</p>
+  <p>席を外している間に起きた変化は、<span class="ui">前回見てから</span> の欄に出て、離席中を外したあとも既読にするまで残ります。
+  設定を <span class="ui">表示しない</span> にすると欄は隠れます(<a href="away.html#away-since-seen">前回見てから</a>)。</p>
   <ol class="steps">
     <li><b>変化を確かめる</b>プロダクト別では設定の欄の並び順に従って、種類別では専用の欄に、<span class="ui">前回見てから</span> の欄が出ます。
       プロダクト shift-planner には、「PR #115(週の開始曜日を設定にする)をマージした」など 3 件の変化が、新しい順に並びます。
-      欄が出ないときは、設定の <span class="ui">前回見てから</span> が <span class="ui">出さない</span> になっていないか、<span class="ui">離席中のみ</span> のときは離席中になっているかを確かめます(<a href="settings.html#settings-since-seen">前回見てから</a>)。
+      欄が出ないときは、設定の <span class="ui">前回見てから</span> が <span class="ui">表示しない</span> になっていないか確かめます(<a href="settings.html#settings-since-seen">前回見てから</a>)。
       <figure class="guide-map" data-shot="guide-away-return/unseen" data-crop-y="130-740" data-crop="0-1100" data-width="550" 
               data-alt="shift-planner のカードの先頭。前回見てから 3 件の欄に、PR #115 のマージ、タスクの完了、PR #119 の作成が並び、既読にするのリンクがある。その下の判断事項のカードには新着の印が付いている"></figure></li>
     <li><b>既読にする</b>確かめ終えたら、<span class="ui">既読にする</span> を押します。
       そのプロダクトの欄が消え、判断事項の <span class="ui">新着</span> の印も外れます。
       既読にするのはプロダクトごとなので、ほかのプロダクトの欄は残ります。
+      未読のプロダクトが 2 つ以上あるときは、<span class="ui">すべて既読にする</span> でまとめて片付けられます。
       <figure class="guide-map" data-shot="guide-away-return/seen" data-crop-y="0-520" data-crop="0-1100" data-width="550" 
               data-alt="既読にした後の shift-planner のカード。前回見てからの欄が消え、判断事項のカードの新着の印も外れている"></figure></li>
   </ol>

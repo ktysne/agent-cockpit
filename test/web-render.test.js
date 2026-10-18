@@ -1749,31 +1749,102 @@ test('見出しの判断待ちは有効な回答を数えず、無視された�
 
 test('プロダクト別と種類別に前回見てからを表示し、新しい判断に印を付ける', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const render = functionSource(source, 'render');
   const productSection = functionSource(source, 'productSection');
   const renderKindSections = functionSource(source, 'renderKindSections');
+  const markAllSeenButton = functionSource(source, 'markAllSeenButton');
   const appendDecisionCard = functionSource(source, 'appendDecisionCard');
   const markProductSeen = source.match(/async function markProductSeen\(button\) \{[\s\S]*?\n\}/)?.[0];
+  const markAllProductsSeen = source.match(/async function markAllProductsSeen\(button\) \{[\s\S]*?\n\}/)?.[0];
 
+  assert.ok(render);
   assert.ok(productSection);
   assert.ok(renderKindSections);
+  assert.ok(markAllSeenButton);
   assert.ok(appendDecisionCard);
   assert.ok(markProductSeen);
-  assert.match(productSection, /sinceSeenBox\(product, false, showOriginBands\)/);
+  assert.ok(markAllProductsSeen);
+  assert.match(productSection, /sinceSeenBox\(product, false, showOriginBands, product\.key === markAllSeenProductKey\)/);
   assert.match(renderKindSections, /sinceSeenBox\(product, true, showOriginBands\)/);
+  assert.match(renderKindSections, /if \(sinceSeenCount > 1\) sinceSeenControls\.append\(markAllSeenButton\(\)\)/);
+  assert.match(render, /sinceSeenProductKeys\.size > 1/);
+  assert.match(render, /products\.find\(\(product\) => sinceSeenProductKeys\.has\(product\.key\) && !displayPreferences\.collapsed\.includes\(product\.key\)\)/);
   assert.match(source, /前回見てから \(\$\{entry\.items\.length\} 件\)/);
   assert.match(source, /seen\.dataset\.seen = product\.key/);
+  assert.match(markAllSeenButton, /button\.dataset\.seenAll = 'true'/);
   assert.match(source, /postUiAction\('\/api\/seen'/);
   assert.match(markProductSeen, /generatedAt: lastState\?\.generatedAt/);
+  assert.match(markAllProductsSeen, /productKey: product\.key, generatedAt/);
+  assert.match(markAllProductsSeen, /setSinceSeenButtonsDisabled\(true\)/);
   assert.match(appendDecisionCard, /if \(decision\.isNew\) header\.append\(badge\('新着', 'new-mark'\)\)/);
 });
 
-test('前回見てからの設定は離席中のみを既定にし、有効な保存値を保つ', () => {
+test('すべて既読にするは各プロダクトへ同じ状態版を送り、一部失敗時も残りを処理する', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const visibleSinceSeen = functionSource(source, 'visibleSinceSeen');
+  const markAllProductsSeen = source.match(/async function markAllProductsSeen\(button\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(visibleSinceSeen && markAllProductsSeen);
+
+  const entries = ['one', 'failed', 'three'].map((key) => ({
+    product: { key },
+    items: [{ text: key }],
+  }));
+  const requests = [];
+  const buttons = [
+    { disabled: false, isConnected: true, dataset: { seenAll: 'true' } },
+    ...entries.map(({ product }) => ({ disabled: false, isConnected: true, dataset: { seen: product.key } })),
+  ];
+  let resolveFirst;
+  let refreshCount = 0;
+  let context;
+  const errors = [];
+  const liveStatus = { textContent: '' };
+  context = pageContext(pageHtml, {
+    lastState: { generatedAt: 'state-530', sinceSeen: entries },
+    sinceSeenMode: 'show',
+    root: { querySelectorAll: () => buttons },
+    postUiAction: async (_path, body) => {
+      requests.push(body);
+      if (body.productKey === 'one') return new Promise((resolve) => { resolveFirst = resolve; });
+      return { ok: body.productKey !== 'failed' };
+    },
+    refresh: async () => {
+      refreshCount += 1;
+      context.lastState = {
+        ...context.lastState,
+        sinceSeen: context.lastState.sinceSeen.filter((entry) => entry.product.key === 'failed'),
+      };
+    },
+    liveStatus,
+    showWriteError: (message) => errors.push(message),
+  });
+  vm.runInContext(`let sinceSeenActionInFlight = false;\n${visibleSinceSeen}\n${markAllProductsSeen}\nfunction setSinceSeenButtonsDisabled(disabled) { root.querySelectorAll('[data-seen], [data-seen-all]').forEach((button) => { button.disabled = disabled; }); }`, context);
+
+  const pending = context.markAllProductsSeen(buttons[0]);
+  assert.equal(buttons.every((button) => button.disabled), true);
+  await context.markAllProductsSeen(buttons[0]);
+  assert.equal(requests.length, 1);
+  resolveFirst({ ok: true });
+  await pending;
+
+  assert.deepEqual(requests.map(({ productKey, generatedAt }) => [productKey, generatedAt]), [
+    ['one', 'state-530'], ['failed', 'state-530'], ['three', 'state-530'],
+  ]);
+  assert.equal(refreshCount, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.visibleSinceSeen(context.lastState))).map((entry) => entry.product.key), ['failed']);
+  assert.equal(liveStatus.textContent, '項目を既読にできませんでした');
+  assert.deepEqual(errors, ['項目を既読にできませんでした']);
+  assert.equal(buttons.every((button) => !button.disabled), true);
+});
+
+test('前回見てからの設定は表示するを既定にし、以前の保存値を読み替える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const names = ['applySinceSeenMode', 'storedSinceSeenMode', 'setSinceSeenMode', 'visibleSinceSeen'];
   const functions = names.map((name) => functionSource(source, name));
   assert.ok(functions.every(Boolean));
-  assert.match(source, /id="settings-since-seen-select"[\s\S]*?<option value="always">常に<\/option>[\s\S]*?<option value="away">離席中のみ<\/option>[\s\S]*?<option value="never">出さない<\/option>/);
-  assert.match(source, /「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。/);
+  assert.match(source, /let sinceSeenMode = 'show'/);
+  assert.match(source, /id="settings-since-seen-select"[\s\S]*?<option value="show">表示する<\/option>[\s\S]*?<option value="hide">表示しない<\/option>/);
+  assert.match(source, /離席中に起きた変化を、既読にするまで表示します。/);
   assert.match(source, /applySinceSeenMode\(storedSinceSeenMode\(\)\)/);
 
   const storage = new Map();
@@ -1791,42 +1862,47 @@ test('前回見てからの設定は離席中のみを既定にし、有効な�
     lastState: { sinceSeen: [] },
     render: () => { renderCount += 1; },
   });
-  vm.runInContext(`let sinceSeenMode = 'away';\n${functions.join('\n')}`, context);
+  vm.runInContext(`let sinceSeenMode = 'show';\n${functions.join('\n')}`, context);
 
-  assert.equal(context.storedSinceSeenMode(), 'away');
+  assert.equal(context.storedSinceSeenMode(), 'show');
   context.applySinceSeenMode(context.storedSinceSeenMode());
-  assert.equal(sinceSeenSelect.value, 'away');
+  assert.equal(sinceSeenSelect.value, 'show');
+
+  storage.set('agent-cockpit.since-seen', 'show');
+  assert.equal(context.storedSinceSeenMode(), 'show');
+  storage.set('agent-cockpit.since-seen', 'hide');
+  assert.equal(context.storedSinceSeenMode(), 'hide');
 
   storage.set('agent-cockpit.since-seen', 'always');
-  assert.equal(context.storedSinceSeenMode(), 'always');
+  assert.equal(context.storedSinceSeenMode(), 'show');
   context.applySinceSeenMode(context.storedSinceSeenMode());
-  assert.equal(sinceSeenSelect.value, 'always');
+  assert.equal(sinceSeenSelect.value, 'show');
 
   storage.set('agent-cockpit.since-seen', 'away');
-  assert.equal(context.storedSinceSeenMode(), 'away');
+  assert.equal(context.storedSinceSeenMode(), 'show');
   context.applySinceSeenMode(context.storedSinceSeenMode());
-  assert.equal(sinceSeenSelect.value, 'away');
+  assert.equal(sinceSeenSelect.value, 'show');
 
   storage.set('agent-cockpit.since-seen', 'sometimes');
-  assert.equal(context.storedSinceSeenMode(), 'away');
-  context.setSinceSeenMode('away');
-  assert.equal(storage.get('agent-cockpit.since-seen'), 'away');
+  assert.equal(context.storedSinceSeenMode(), 'show');
+  context.setSinceSeenMode('show');
+  assert.equal(storage.get('agent-cockpit.since-seen'), 'show');
   assert.equal(renderCount, 1);
   storage.set('agent-cockpit.since-seen', 'never');
-  assert.equal(context.storedSinceSeenMode(), 'never');
+  assert.equal(context.storedSinceSeenMode(), 'hide');
   context.applySinceSeenMode(context.storedSinceSeenMode());
-  assert.equal(sinceSeenSelect.value, 'never');
-  context.setSinceSeenMode('never');
-  assert.equal(storage.get('agent-cockpit.since-seen'), 'never');
+  assert.equal(sinceSeenSelect.value, 'hide');
+  context.setSinceSeenMode('hide');
+  assert.equal(storage.get('agent-cockpit.since-seen'), 'hide');
   assert.deepEqual(JSON.parse(JSON.stringify(context.visibleSinceSeen({ sinceSeen: [{ items: [{ text: '履歴' }] }] }))), []);
   assert.equal(renderCount, 2);
   context.setSinceSeenMode('invalid');
-  assert.equal(storage.get('agent-cockpit.since-seen'), 'away');
-  assert.equal(sinceSeenSelect.value, 'away');
+  assert.equal(storage.get('agent-cockpit.since-seen'), 'show');
+  assert.equal(sinceSeenSelect.value, 'show');
   assert.equal(renderCount, 3);
 
   localStorage.getItem = () => { throw new Error('storage unavailable'); };
-  assert.equal(context.storedSinceSeenMode(), 'away');
+  assert.equal(context.storedSinceSeenMode(), 'show');
 });
 
 test('終わったもののチェックは表示設定として保存し、失敗時に戻してフォーカス中は同期しない', async () => {
@@ -1943,7 +2019,7 @@ test('終わったもののチェックは表示設定として保存し、失�
 
 });
 
-test('離席中のみでは履歴を離席状態で描き分け、非表示中の並び順に使わない', async () => {
+test('履歴は離席状態にかかわらず表示され、表示しない設定では隠れる', async () => {
   const harness = renderHarness();
   const product = { key: 'history-only', name: '履歴のみ' };
   const state = {
@@ -1958,13 +2034,17 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
   harness.context.render(state);
   assert.equal(harness.orderedSinceSeen.length, 1);
 
-  harness.context.sinceSeenMode = 'away';
+  harness.context.sinceSeenMode = 'show';
   harness.context.render(state);
-  assert.deepEqual(JSON.parse(JSON.stringify(harness.orderedSinceSeen)), []);
+  assert.equal(harness.orderedSinceSeen.length, 1);
 
   harness.context.header.dataset.away = 'true';
   harness.context.render(state);
   assert.equal(harness.orderedSinceSeen.length, 1);
+
+  harness.context.sinceSeenMode = 'hide';
+  harness.context.render(state);
+  assert.deepEqual(JSON.parse(JSON.stringify(harness.orderedSinceSeen)), []);
 
   const sinceSeenBox = functionSource(harness.html, 'sinceSeenBox');
   const visibleSinceSeen = functionSource(harness.html, 'visibleSinceSeen');
@@ -1975,7 +2055,7 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
 
   const boxContext = pageContext(pageHtml, {
     lastState: state,
-    sinceSeenMode: 'away',
+    sinceSeenMode: 'show',
     header: { dataset: { away: 'false' } },
     document: { createTextNode: (text) => ({ textContent: text }) },
     element: (tagName, className = '', textContent = '') => ({
@@ -1987,9 +2067,7 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
       append(...children) { this.children.push(...children); },
     }),
   });
-  vm.runInContext(`${visibleSinceSeen}\n${functionSource(harness.html, 'providerOrigin')}\n${sinceSeenBox}`, boxContext);
-  assert.equal(boxContext.sinceSeenBox(product, false), null);
-  boxContext.header.dataset.away = 'true';
+  vm.runInContext(`let sinceSeenActionInFlight = false;\n${visibleSinceSeen}\n${functionSource(harness.html, 'providerOrigin')}\n${sinceSeenBox}`, boxContext);
   const box = boxContext.sinceSeenBox(product, false);
   assert.ok(box);
   assert.equal(box.children[0].children[0].textContent, '前回見てから (1 件)');
@@ -4350,13 +4428,14 @@ test('種類別では未着手の合計数を一つのボタンで切り替え�
   ]);
 });
 
-test('「離席中のみ」では、版が同じでも離席の切り替えを受け取ったら描き直す', async () => {
+test('離席の切り替えだけでは一覧を描き直さない', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const refresh = html.match(/async function refresh\(\) \{[\s\S]*?\n\}/)?.[0];
   const applyAwayState = functionSource(html, 'applyAwayState');
   assert.ok(refresh && applyAwayState);
+  assert.doesNotMatch(refresh, /sinceSeenVisibilityChanged/);
 
-  const run = async (mode, awaySequence) => {
+  const run = async (awaySequence) => {
     let renders = 0;
     let index = 0;
     const context = pageContext(pageHtml, {
@@ -4378,15 +4457,13 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       liveStatus: { textContent: '' },
     });
     context.AbortSignal = { timeout: () => ({}) };
-    vm.runInContext(`${functionSource(pageHtml, 'fetchUi')}\n${functionSource(pageHtml, 'reportWebFailure')}\n${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, refreshConfirmPending = false, sinceSeenMode = '${mode}';`, context);
+    vm.runInContext(`${functionSource(pageHtml, 'fetchUi')}\n${functionSource(pageHtml, 'reportWebFailure')}\n${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, refreshConfirmPending = false;`, context);
     for (let step = 0; step < awaySequence.length; step += 1) await context.refresh();
     return renders;
   };
 
-  // 1 回目は版が変わって描き、2 回目以降は版が同じで離席だけが変わる。
-  assert.equal(await run('away', [false, true, false]), 3);
-  assert.equal(await run('away', [false, false]), 1);
-  assert.equal(await run('always', [false, true, false]), 1);
+  assert.equal(await run([false, true, false]), 1);
+  assert.equal(await run([false, false]), 1);
 });
 
 test('文や名前を差し込むバッジは折り返し、枠の外へはみ出さない', () => {
@@ -4778,7 +4855,7 @@ test('Codex が状態にあるときセッション、PR、「前回見てから
       { text: 'Unknown' },
     ] }],
   });
-  vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'providerOrigin')}\n${functionSource(pageHtml, 'sinceSeenBox')}`, seenContext);
+  vm.runInContext(`let sinceSeenActionInFlight = false;\n${helpers}\n${functionSource(pageHtml, 'providerOrigin')}\n${functionSource(pageHtml, 'sinceSeenBox')}`, seenContext);
   const hiddenOrigins = seenContext.sinceSeenBox(product, false, false).children[1].children;
   assert.equal(hiddenOrigins.some((item) => /origin-(claude|codex|both)/.test(item.className) || item.dataset?.origin), false);
   const listItems = seenContext.sinceSeenBox(product, false, true).children[1].children;
