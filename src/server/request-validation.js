@@ -56,6 +56,7 @@ function validDecisionOptions(value) {
     if (
       !option || typeof option !== 'object' || Array.isArray(option) ||
       !validText(option.label, 200) || !validText(option.description, 2000, true) ||
+      (option.next !== undefined && !validText(option.next, 2000, true)) ||
       (option.recommended !== undefined && typeof option.recommended !== 'boolean')
     ) return false;
     if (option.recommended) recommendedCount += 1;
@@ -73,13 +74,38 @@ function validPlanInput(body) {
   if (body.kind === 'tasks') return validTasks(body.tasks);
   if (body.kind === 'add_decision') {
     return validText(body.title, 200) && validText(body.context, 2000, true) &&
-      ['waiting', 'provisional'].includes(body.state) && validDecisionOptions(body.options);
+      ['waiting', 'provisional'].includes(body.state) && validDecisionOptions(body.options) &&
+      (body.verify === undefined || validVerify(body.verify));
   }
+  if (body.kind === 'report_launch') return validText(body.id, 256) && validLaunchTarget(body) &&
+    Object.keys(body).every(key => ['kind', 'id', 'url', 'process', 'ppid', 'claudeCodeSessionId', 'codexSessionId'].includes(key));
   if (body.kind === 'update_decision') {
     return validText(body.id, 256) && ['provisional', 'resolved'].includes(body.state) &&
       validChosen(body.chosen) && validText(body.note, 2000, true);
   }
   return false;
+}
+
+function validLaunchTarget(value) {
+  const hasUrl = Object.hasOwn(value, 'url');
+  const hasProcess = Object.hasOwn(value, 'process');
+  if (hasUrl === hasProcess) return false;
+  if (hasProcess) return validText(value.process, 500);
+  if (!validText(value.url, 2048) || /[\u0000-\u0020\u007f]/.test(value.url)) return false;
+  try { return ['http:', 'https:'].includes(new URL(value.url).protocol); } catch { return false; }
+}
+
+function validVerify(value, stored = false) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = stored ? ['steps', 'launched'] : ['steps'];
+  return Object.keys(value).every(key => keys.includes(key)) && Array.isArray(value.steps) &&
+    value.steps.length >= 1 && value.steps.length <= 10 && value.steps.every(step =>
+      step && typeof step === 'object' && !Array.isArray(step) &&
+      Object.keys(step).every(key => ['cmd', 'note'].includes(key)) &&
+      validText(step.cmd, 500) && validText(step.note, 500, true)) &&
+    (value.launched === undefined || (stored && validLaunchTarget(value.launched) &&
+      Object.keys(value.launched).every(key => ['url', 'process', 'at'].includes(key)) &&
+      typeof value.launched.at === 'string' && Number.isFinite(Date.parse(value.launched.at))));
 }
 
 function decisionSummaries(state, sessionId) {
@@ -97,5 +123,7 @@ module.exports = {
   validDecisionOptions,
   validChosen,
   validPlanInput,
+  validVerify,
+  validLaunchTarget,
   decisionSummaries,
 };

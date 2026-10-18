@@ -48,7 +48,7 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
   assert.equal(responses[0].id, 1);
   assert.equal(responses[0].result.serverInfo.name, 'agent-cockpit');
   assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), [
-    'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_update_decision', 'cockpit_add_pr', 'cockpit_skip_review',
+    'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_report_launch', 'cockpit_update_decision', 'cockpit_add_pr', 'cockpit_skip_review',
   ]);
   const setTasksTool = responses[1].result.tools.find((tool) => tool.name === 'cockpit_set_tasks');
   const criteriaSchema = setTasksTool.inputSchema.properties.tasks.items.properties.criteria.items;

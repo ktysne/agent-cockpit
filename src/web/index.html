@@ -422,6 +422,15 @@ h3.sub .count { font-weight: normal; }
 @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
 .settings-resource-links { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
 /* cockpit:include diagnostics.css */
+.verify { display: grid; gap: 8px; margin: 0 0 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.verify-row { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; font-size: 13px; }
+.verify-label { flex: none; width: 5em; color: var(--text-2); font-size: 12px; }
+.verify code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.verify-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.verify-actions .ghost { min-height: 36px; font-size: 13px; color: var(--text); }
+.verify-steps { margin: 0; padding-left: 1.6em; display: grid; gap: 6px; font-size: 13px; }
+.verify-steps .why { display: block; color: var(--text-2); font-size: 12px; }
+.worktree-links { display: inline-flex; gap: 10px; }
 </style>
 </head>
 <body>
@@ -3048,7 +3057,7 @@ function clearAnswerErrorWhenDraftChanges(key, previous, next, card) {
 function decisionAnswerAvailability(decision) {
   const questions = decision.questions || [];
   const duplicateQuestions = new Set(questions.map((question) => question.question)).size !== questions.length;
-  const waitingForAnswer = decision.state === 'waiting' && Boolean(decision.awaitingAnswerUntil);
+  const waitingForAnswer = decision.state === 'waiting' && (decision.source === 'mcp' || Boolean(decision.awaitingAnswerUntil));
   const hasSentAnswer = Boolean(decision.answer?.sentAt);
   return {
     active: !duplicateQuestions && (decision.state === 'provisional' || waitingForAnswer || (decision.state === 'waiting' && hasSentAnswer)),
@@ -3164,6 +3173,141 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   card.append(answerBox);
 }
 
+const worktreeActionStatus = new Map();
+const worktreeActionInFlight = new Set();
+
+function worktreeStatus(key) {
+  const status = element('span', 'meta', worktreeActionStatus.get(key) || '');
+  status.setAttribute('role', 'status');
+  return status;
+}
+
+function worktreeButton(label, action, session, decision, text, compact = false, index = '') {
+  const key = decision?.id || `session:${session.session_id}`;
+  const button = element('button', compact ? 'link-btn' : 'ghost', label);
+  button.type = 'button';
+  // 定期の描き直しでボタンが作り直されてもフォーカスを戻せるように、操作を識別する印を付ける。
+  Object.assign(button.dataset, { worktreeKey: key, worktreeAction: action, worktreeIndex: String(index) });
+  button.disabled = worktreeActionInFlight.has(`${key}:${action}`);
+  button.addEventListener('click', () => { void runWorktreeAction(action, session, decision, text); });
+  return button;
+}
+
+function appendWorktreeButtons(target, session, decision, compact = false) {
+  const worktree = session.worktree;
+  const terminal = worktreeButton('ターミナルで開く', 'terminal', session, decision, null, compact);
+  terminal.disabled ||= !worktree || worktree.missing;
+  target.append(terminal);
+  if (worktree?.missing) target.append(element('span', 'meta', 'worktree が見つかりません (削除済み)'));
+  else if (worktree) target.append(worktreeButton('パスをコピー', 'copy', session, decision, worktree.path, compact));
+}
+
+function verifyLaunchPending(decision) {
+  return Boolean(decision.launchRequestedAt && (!decision.verify.launched ||
+    Date.parse(decision.launchRequestedAt) > Date.parse(decision.verify.launched.at)));
+}
+
+function appendVerifyPanel(card, decision, session) {
+  const panel = element('div', 'verify');
+  const row = (label, ...contents) => {
+    const line = element('div', 'verify-row');
+    line.append(element('span', 'verify-label', label), ...contents);
+    panel.append(line);
+    return line;
+  };
+  const worktree = session.worktree;
+  row('場所', element('code', '', worktree?.path || 'worktree が見つかりません'));
+  const branch = row('ブランチ', element('code', '', worktree?.branch || '読み取り中'));
+  if (worktree?.base && Number.isFinite(worktree.ahead)) branch.append(element('span', 'meta', `${worktree.base} から ${worktree.ahead} コミット先行`));
+  if (Number.isFinite(worktree?.uncommitted)) branch.append(element('span', `chip ${worktree.uncommitted ? 'warn' : 'ok'}`,
+    worktree.uncommitted ? `未コミット ${worktree.uncommitted} ファイル` : 'すべてコミット済み'));
+  else if (worktree?.branch) branch.append(element('span', 'meta', '読み取り中'));
+  const pending = verifyLaunchPending(decision);
+  const launched = decision.verify.launched;
+  // 席にいる間の Codex は Stop で待たないので、依頼は次にプロンプトを送るまで届かない。
+  if (pending) row('アプリ', element('span', 'meta', session.provider === 'codex'
+    ? '起動を待っています。Codex のセッションには、次にプロンプトを送ると依頼が届きます'
+    : '起動を待っています。セッションが起動すると、ここに起動先が出ます'));
+  else if (launched) {
+    const line = row('アプリ', element('span', 'chip ok', '起動中'));
+    if (launched.url) {
+      const link = element('a');
+      link.href = launched.url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.append(element('code', '', launched.url));
+      line.append(link);
+    } else line.append(element('code', '', launched.process), element('span', 'meta', 'のウィンドウを開いた'));
+    line.append(element('span', 'meta', `${absoluteTimeLabel(launched.at)} にセッションが起動した`));
+  }
+  const actions = element('div', 'verify-actions');
+  // 起動に失敗して報告が来ないこともあるので、依頼中も押せるようにする。未配達の重複はサーバーが 409 で断る。
+  const launch = worktreeButton(pending || launched ? 'もう一度起動を頼む' : '起動を頼む', 'launch', session, decision);
+  launch.disabled ||= Boolean(worktree?.missing);
+  actions.append(launch);
+  appendWorktreeButtons(actions, session, decision);
+  actions.append(worktreeStatus(decision.id));
+  panel.append(actions);
+  if (decision.verify.steps.length) {
+    row('確かめ方');
+    const steps = element('ol', 'verify-steps');
+    for (const [index, step] of decision.verify.steps.entries()) {
+      const item = element('li');
+      item.append(element('code', '', step.cmd), worktreeButton('コピー', 'step', session, decision, step.cmd, true, index));
+      if (step.note) item.append(element('span', 'why', step.note));
+      steps.append(item);
+    }
+    panel.append(steps);
+  }
+  card.append(panel);
+}
+
+function verifyNextText(decision) {
+  const answer = decision.answer;
+  if (!answer?.sentAt) return '';
+  const options = decision.questions[0]?.options || [];
+  const selected = answer.choice === 'ok' ? options.find(option => option.recommended)
+    : answer.choice === 'pick' ? options.find(option => answer.picks?.[0]?.includes(option.label)) : null;
+  return selected?.next ? `次: ${selected.next}` : '';
+}
+
+function appendWorktreeLinks(target, session) {
+  if (!session.worktree || shownActiveDecisions(session).some(decision => decision.verify)) return;
+  const links = element('span', 'worktree-links');
+  appendWorktreeButtons(links, session, null, true);
+  links.append(worktreeStatus(`session:${session.session_id}`));
+  target.append(links);
+}
+
+async function runWorktreeAction(action, session, decision, text) {
+  const key = decision?.id || `session:${session.session_id}`;
+  const flightKey = `${key}:${action}`;
+  if (worktreeActionInFlight.has(flightKey)) return;
+  worktreeActionInFlight.add(flightKey);
+  worktreeActionStatus.delete(key);
+  if (lastState) render(lastState);
+  try {
+    if (action === 'copy' || action === 'step') await navigator.clipboard.writeText(text);
+    else {
+      const response = await postUiAction(action === 'launch' ? '/api/verify/launch' : '/api/worktree/terminal',
+        action === 'launch' ? { session_id: session.session_id, decision_id: decision.id }
+          : decision ? { decision_id: decision.id } : { session_id: session.session_id });
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error || '操作できませんでした');
+      }
+      if (action === 'launch') await refresh();
+    }
+    const messages = { terminal: 'ターミナルを開きました', copy: 'パスをコピーしました', step: 'コマンドをコピーしました' };
+    worktreeActionStatus.set(key, messages[action] || '');
+  } catch (error) {
+    worktreeActionStatus.set(key, action === 'copy' || action === 'step' ? 'コピーできませんでした。文字列を選択してコピーしてください' : error.message);
+  } finally {
+    worktreeActionInFlight.delete(flightKey);
+    if (lastState) render(lastState);
+  }
+}
+
 function appendDecisionCard(list, decision, product, session, withTags = false, multipleSessions = false) {
   const elapsed = decisionElapsedLabel(decision);
   const longWait = elapsed?.stale === true;
@@ -3191,6 +3335,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
   card.title = `id: ${decision.id}`;
   card.append(header);
   if (decision.context) card.append(element('p', 'decision-context', decision.context));
+  if (decision.verify && isActiveDecision(decision)) appendVerifyPanel(card, decision, session);
 
   for (const [questionIndex, question] of (decision.questions || []).entries()) {
     const questionBox = element('section', 'decision-question');
@@ -3244,6 +3389,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
     if (decision.resolution.note) summary.append(element('span', 'meta', decision.resolution.note));
   }
   appendDecisionAnswer(card, decision, product, session, summary);
+  if (decision.verify && verifyNextText(decision)) card.append(element('div', 'meta', verifyNextText(decision)));
   if (summary.children.length) card.append(summary);
   list.append(card);
 }
@@ -3459,13 +3605,19 @@ function sessionBlock(product, session, multipleSessions, showOriginBands = true
     const head = element('div', 'session-head');
     head.append(element('h3', '', sessionDisplayName(session)));
     if (!sharedBranch(product) && session.product?.branch) head.append(element('span', 'meta branch', session.product.branch));
+    if (session.worktree) appendWorktreeLinks(head, session);
     block.append(head);
   }
 
   const body = element('div', 'session-body');
   if (!multipleSessions) {
     const context = element('div', 'session-tag session-context', sessionDisplayName(session));
-    body.append(context);
+    if (session.worktree) {
+      const head = element('div', 'session-head');
+      head.append(context);
+      appendWorktreeLinks(head, session);
+      body.append(head);
+    } else body.append(context);
   }
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
   const hasEndedDecisions = !displayPreferences.hideFinished && session.decisions.some(isEndedDecision);
@@ -3889,6 +4041,7 @@ function render(state) {
                : active?.dataset?.cancelCloseTask ? { kind: 'cancel-close-task', key: active.dataset.cancelCloseTask }
                  : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
               : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
+              : active?.dataset?.worktreeAction ? { kind: 'worktree', key: active.dataset.worktreeKey, action: active.dataset.worktreeAction, index: active.dataset.worktreeIndex }
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
           : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' }
             : active?.hasAttribute('data-undo-hidden-sessions') ? { kind: 'undo-hidden' } : null;
@@ -3961,6 +4114,11 @@ function render(state) {
   }
 
   if (focusData) {
+    if (focusData.kind === 'worktree') {
+      [...root.querySelectorAll('[data-worktree-action]')].find((item) => item.dataset.worktreeKey === focusData.key &&
+        item.dataset.worktreeAction === focusData.action && item.dataset.worktreeIndex === focusData.index)?.focus({ preventScroll: true });
+      return;
+    }
     if (['answer-pick', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
       const control = [...root.querySelectorAll('[data-answer-pick], [data-answer-note], [data-send-answer]')].find((item) => (
         item.dataset.sessionId === focusData.sessionId &&

@@ -315,7 +315,7 @@ class DecisionAnswerDelivery {
   submitAnswer(sessionId, decisionId, choice, note, picks = []) {
     const decision = this.state.decisionFor(sessionId, decisionId);
     if (!decision || !canAnswerDecision(decision)) return null;
-    if (decision.state === 'waiting' && !decision.awaitingAnswerUntil && !decision.answer?.sentAt) return null;
+    if (decision.state === 'waiting' && decision.source !== 'mcp' && !decision.awaitingAnswerUntil && !decision.answer?.sentAt) return null;
     if (choice !== null && !['ok', 'pick'].includes(choice)) return false;
     if (choice === null && !note.trim()) return false;
     if (choice === 'ok' && recommendedOptions(decision).some((option) => !option)) return false;

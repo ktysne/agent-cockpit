@@ -982,6 +982,8 @@ function cloneResolution(resolution) {
 function cloneDecision(decision) {
   return {
     ...decision,
+    ...(decision.verify ? { verify: { ...decision.verify, steps: decision.verify.steps.map(step => ({ ...step })),
+      ...(decision.verify.launched ? { launched: { ...decision.verify.launched } } : {}) } } : {}),
     questions: decision.questions.map((question) => ({
       ...question,
       options: question.options.map((option) => ({ ...option })),

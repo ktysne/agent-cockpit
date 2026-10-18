@@ -17,6 +17,7 @@ function reportMcpWrite(info, options, data) {
 }
 const { COMPLETE_COMMIT_SHA_PATTERN, isCompleteCommitSha, parsePullRequestUrl, validRepositoryPart } = require('../server/pull-request-utils');
 const { isHookSessionId } = require('../server/session-ids');
+const { validLaunchTarget, validText } = require('../server/request-validation');
 
 const SERVER_NAME = 'agent-cockpit';
 const { version: SERVER_VERSION } = require('../../package.json');
@@ -94,14 +95,49 @@ const TOOL_DEFINITIONS = [
               label: { type: 'string', maxLength: 200 },
               description: { type: 'string', maxLength: 2000 },
               recommended: { type: 'boolean' },
+              next: { type: 'string', maxLength: 2000 },
             },
             required: ['label', 'description', 'recommended'],
             additionalProperties: false,
           },
           maxItems: 6,
         },
+        verify: {
+          type: 'object',
+          properties: {
+            steps: {
+              type: 'array', minItems: 1, maxItems: 10,
+              items: {
+                type: 'object',
+                properties: {
+                  cmd: { type: 'string', minLength: 1, maxLength: 500 },
+                  note: { type: 'string', maxLength: 500 },
+                },
+                required: ['cmd', 'note'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ['steps'],
+          additionalProperties: false,
+        },
       },
       required: ['title', 'context', 'state', 'options'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'cockpit_report_launch',
+    description: '未解決の確認依頼に、起動したアプリの URL またはプロセス名を記録します。判断事項の状態は変えません。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', minLength: 1, maxLength: 256 },
+        url: { type: 'string', maxLength: 2048, pattern: '^https?://' },
+        process: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+      required: ['id'],
+      oneOf: [{ required: ['url'] }, { required: ['process'] }],
       additionalProperties: false,
     },
   },
@@ -153,6 +189,8 @@ function toolResult(text, isError = false) {
 }
 
 function planArguments(toolName, args) {
+  if (toolName === 'cockpit_report_launch') return { kind: 'report_launch', id: args.id,
+    ...(args.url !== undefined ? { url: args.url } : { process: args.process }) };
   if (toolName === 'cockpit_set_tasks') return { kind: 'tasks', tasks: args.tasks };
   if (toolName === 'cockpit_add_decision') {
     return {
@@ -161,6 +199,7 @@ function planArguments(toolName, args) {
       context: args.context,
       state: args.state,
       options: args.options,
+      ...(args.verify !== undefined ? { verify: args.verify } : {}),
     };
   }
   return {
@@ -301,6 +340,8 @@ async function callTool(name, args, options = {}) {
   const tool = TOOL_DEFINITIONS.find((item) => item.name === name);
   if (!tool) return toolResult('指定されたツールはありません。', true);
   if (!args || typeof args !== 'object' || Array.isArray(args)) return toolResult('入力が正しくありません。', true);
+  if (name === 'cockpit_report_launch' && (!validText(args.id, 256) || !validLaunchTarget(args) ||
+    !Object.keys(args).every(key => ['id', 'url', 'process'].includes(key)))) return toolResult('入力が正しくありません。', true);
   options = { ...options, diagnosticTool: name };
   if (name === 'cockpit_add_pr') {
     const saved = await postPullRequest(args, options);

@@ -108,6 +108,7 @@ function createReadRoutes(ctx) {
   function generateState(now) {
     const deadline = { at: Infinity, propose(ms) { if (ms > now) this.at = Math.min(this.at, ms); } };
     const snapshot = state.snapshot();
+    if (snapshot.sessions.some(session => session.worktree)) deadline.propose(now + 5000);
     const pullRequests = pullRequestTracker?.snapshot(deadline) || [];
     const awayState = away.snapshot(deadline);
     const sinceSeen = state.snapshotSinceSeen(snapshot.sessions, pullRequests, now, awayState.periods, deadline);
