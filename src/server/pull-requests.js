@@ -718,7 +718,8 @@ function gitHubRemoteRepositories(stdout) {
   for (const line of stdout.split(/\r?\n/)) {
     const separator = line.indexOf(' ');
     const repository = separator < 0 ? null : parseGitHubRepositoryRemote(line.slice(separator + 1));
-    if (repository) repositories.push(repository);
+    const key = line.slice(0, separator);
+    if (repository) repositories.push({ ...repository, name: key.slice('remote.'.length, key.lastIndexOf('.url')) });
   }
   return repositories;
 }
@@ -768,10 +769,11 @@ async function crossReviewToolAtHead(root, headSha, execFileImpl, cache) {
   return result;
 }
 
-async function crossReviewToolAtBase(root, baseRefName, execFileImpl) {
+// ローカルの base や別の remote は PR のリポジトリと内容が違うことがあるので、一致する remote の追跡ブランチだけを見る。
+async function crossReviewToolAtBase(root, baseRefName, remoteNames, execFileImpl) {
   if (!validBranchName(baseRefName)) return 'unknown';
-  for (const ref of [`refs/remotes/origin/${baseRefName}`, `refs/heads/${baseRefName}`]) {
-    const result = await crossReviewToolAt(root, ref, execFileImpl);
+  for (const name of remoteNames.filter(validBranchName)) {
+    const result = await crossReviewToolAt(root, `refs/remotes/${name}/${baseRefName}`, execFileImpl);
     if (result !== 'unknown') return result;
   }
   return 'unknown';
@@ -790,20 +792,23 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
   }
   const { root } = tool;
   const pullRequestRepository = parsePullRequestUrl(pullRequest?.url);
+  let baseRemoteNames = [];
   if (pullRequestRepository) {
     // フォークから upstream に作った PR は origin と食い違うため、どの GitHub の remote とも一致すれば続ける。
     // 道具の有無は別のリポジトリの判定にならないので、レビュー不要と判定する前に照合する。
     const remotes = await gitHubRemoteRepositoriesOf(root, execFileImpl, remoteRepositoryCache);
-    if (remotes.length && !remotes.some((remote) => sameGitHubRepository(remote, pullRequestRepository))) {
+    const matchingRemotes = remotes.filter((remote) => sameGitHubRepository(remote, pullRequestRepository));
+    if (remotes.length && !matchingRemotes.length) {
       report('unknown', 'missing', 'repository-mismatch');
       return { unavailable: true, reason: 'repository-mismatch' };
     }
+    baseRemoteNames = matchingRemotes.map((remote) => remote.name);
   }
   let headTool = tool.status === 'present' ? 'present'
     : await crossReviewToolAtHead(root, pullRequest?.headRefOid, execFileImpl, headToolCache);
   // head のコミットが手元に無いなどで確かめられないときは、base ブランチの道具の有無で、道具を使うリポジトリかを判断する。
   // head を取り込んでいないだけで、道具を使わないリポジトリの PR を「確認できない」にせず、使うリポジトリの PR を「不要」にしないため。
-  if (headTool === 'unknown') headTool = await crossReviewToolAtBase(root, pullRequest?.baseRefName, execFileImpl);
+  if (headTool === 'unknown') headTool = await crossReviewToolAtBase(root, pullRequest?.baseRefName, baseRemoteNames, execFileImpl);
   if (tool.status === 'missing') {
     if (headTool === 'absent') {
       report('unknown', 'missing', 'tool-absent');

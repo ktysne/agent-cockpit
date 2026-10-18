@@ -3327,6 +3327,28 @@ for (const scenario of [
   });
 }
 
+for (const scenario of [
+  { name: 'fork の origin ではなく PR のリポジトリの upstream を見る',
+    config: 'remote.origin.url https://github.com/fork/project.git\nremote.upstream.url https://github.com/example/project.git\n',
+    refs: { 'refs/remotes/origin/main': '', 'refs/remotes/upstream/main': TOOL_ENTRY }, expected: { unavailable: true } },
+  { name: '一致する remote を順に見る',
+    config: 'remote.a.url https://github.com/example/project.git\nremote.b.url git@github.com:example/project.git\n',
+    refs: { 'refs/remotes/b/main': '' }, expected: { notRequired: true, source: 'tool-absent' } },
+  { name: '一致する remote が分からなければローカルのブランチを見ない',
+    config: null, refs: { 'refs/heads/main': '' }, expected: { unavailable: true } },
+]) {
+  test(`消えた cwd の base は PR のリポジトリの追跡ブランチで確かめる (${scenario.name})`, async (t) => {
+    const f = await headToolFixture(t, { missing: true });
+    f.options.execFileImpl = (_file, args, _options, callback) => {
+      if (args[2] === 'config') return scenario.config === null ? callback(new Error('unreadable')) : callback(null, scenario.config);
+      if (args[2] === 'worktree') return callback(null, `worktree ${f.root}\nbranch refs/heads/main\n`);
+      if (Object.hasOwn(scenario.refs, args[4])) return callback(null, scenario.refs[args[4]]);
+      callback(Object.assign(new Error('missing'), { code: 128 }), '');
+    };
+    assert.deepEqual(await readCrossReviewStateAcrossWorktrees(f.registration, f.pr, f.options), scenario.expected);
+  });
+}
+
 test('消えた cwd の remote が別リポジトリなら head の道具を照会しない', async (t) => {
   const f = await headToolFixture(t, { missing: true });
   f.options.execFileImpl = (_file, args, _options, callback) => {

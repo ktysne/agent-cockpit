@@ -22,6 +22,9 @@ test('コマンド位置の起動は前置きや引用符、長いパスを含�
     'CODEX_HOME=x env A=1 nohup bash ~/.claude/tools/codex-agent.sh impl-hard < p.md',
     'bash -lc "cd D:/repo; bash ~/.claude/tools/codex-agent.sh impl-hard"',
     'bash ~/.claude/tools/codex-agent.sh impl-hard <<\'EOF\'\n依頼文\nEOF',
+    'echo "$(bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md)"',
+    '# 実装を委譲する(cd repo && の後で起動する)\nbash ~/.claude/tools/codex-agent.sh impl-hard < p.md',
+    'echo "a << b"; bash ~/.claude/tools/codex-agent.sh impl-hard',
   ]) {
     const state = new DashboardState();
     const event = claudeEvent('PreToolUse', { tool_input: { command } });
@@ -43,6 +46,8 @@ test('引数や文字列中のラッパー名とオプション呼び出しは C
     'bash codex-agent.sh --wait impl-hard-20261019-110000-7',
     'timeout 600 grep codex-agent.sh impl-hard',
     "cat > p.md <<'EOF'\nbash ~/.claude/tools/codex-agent.sh impl-hard\nEOF",
+    '# 実行例: cd repo && bash codex-agent.sh impl-hard',
+    "echo '$(bash codex-agent.sh impl-hard)'",
   ]) {
     const state = new DashboardState();
     state.addEvent(claudeEvent('PreToolUse', { tool_input: { command } }));

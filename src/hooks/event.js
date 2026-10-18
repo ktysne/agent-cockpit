@@ -136,12 +136,71 @@ function commandPositionText(command) {
   return characters.join('');
 }
 
-// 経路の判定(route.js)と同じ規則で起動を探す。ヒアドキュメントの本文は依頼文なので見ない。
+function substitutionEnd(text, start) {
+  let depth = 1;
+  let quote = '';
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote === "'") {
+      if (character === "'") quote = '';
+    } else if (character === '\\') {
+      index += 1;
+    } else if (quote === '"') {
+      if (character === '"') quote = '';
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '(') {
+      depth += 1;
+    } else if (character === ')' && --depth === 0) {
+      return index;
+    }
+  }
+  return text.length;
+}
+
+// 起動を探すコマンドの文字列を返す。ヒアドキュメントの本文と引用符の外のコメントは、依頼文や説明なので外す。
+// コマンド置換 $( ) の中身は、二重引用符の中にあっても別のコマンドとして返す。
+function launchCommandTexts(text, depth = 0) {
+  let code = '';
+  const substitutions = [];
+  let quote = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      code += character;
+    } else if (character === '\\') {
+      code += text.slice(index, index + 2);
+      index += 1;
+    } else if (character === '$' && text[index + 1] === '(') {
+      const end = substitutionEnd(text, index + 2);
+      if (depth < 8) substitutions.push(...launchCommandTexts(text.slice(index + 2, end), depth + 1));
+      code += '_';
+      index = end;
+    } else if (quote === '"') {
+      if (character === '"') quote = '';
+      code += character;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      code += character;
+    } else if (character === '<' && text[index + 1] === '<') {
+      break;
+    } else if (character === '#' && (index === 0 || /\s/.test(text[index - 1]))) {
+      while (index + 1 < text.length && !/[\r\n]/.test(text[index + 1])) index += 1;
+    } else {
+      code += character;
+    }
+  }
+  return [code, ...substitutions];
+}
+
+// 経路の判定(route.js)と同じ規則で起動を探す。
 function extractCodexLaunchDefinition(command) {
-  const text = pickString(command).split('<<')[0].replace(/\\\r?\n/g, ' ');
-  for (const [argument = ''] of codexAgentInvocations(text, (word) => /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word))) {
-    const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
-    if (definition) return definition;
+  for (const text of launchCommandTexts(pickString(command).replace(/\\\r?\n/g, ' '))) {
+    for (const [argument = ''] of codexAgentInvocations(text, (word) => /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word))) {
+      const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
+      if (definition) return definition;
+    }
   }
   return '';
 }
