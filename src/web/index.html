@@ -3182,10 +3182,12 @@ function worktreeStatus(key) {
   return status;
 }
 
-function worktreeButton(label, action, session, decision, text, compact = false) {
+function worktreeButton(label, action, session, decision, text, compact = false, index = '') {
   const key = decision?.id || `session:${session.session_id}`;
   const button = element('button', compact ? 'link-btn' : 'ghost', label);
   button.type = 'button';
+  // 定期の描き直しでボタンが作り直されてもフォーカスを戻せるように、操作を識別する印を付ける。
+  Object.assign(button.dataset, { worktreeKey: key, worktreeAction: action, worktreeIndex: String(index) });
   button.disabled = worktreeActionInFlight.has(`${key}:${action}`);
   button.addEventListener('click', () => { void runWorktreeAction(action, session, decision, text); });
   return button;
@@ -3222,7 +3224,10 @@ function appendVerifyPanel(card, decision, session) {
   else if (worktree?.branch) branch.append(element('span', 'meta', '読み取り中'));
   const pending = verifyLaunchPending(decision);
   const launched = decision.verify.launched;
-  if (pending) row('アプリ', element('span', 'meta', '起動を待っています。セッションが起動すると、ここに起動先が出ます'));
+  // 席にいる間の Codex は Stop で待たないので、依頼は次にプロンプトを送るまで届かない。
+  if (pending) row('アプリ', element('span', 'meta', session.provider === 'codex'
+    ? '起動を待っています。Codex のセッションには、次にプロンプトを送ると依頼が届きます'
+    : '起動を待っています。セッションが起動すると、ここに起動先が出ます'));
   else if (launched) {
     const line = row('アプリ', element('span', 'chip ok', '起動中'));
     if (launched.url) {
@@ -3236,8 +3241,9 @@ function appendVerifyPanel(card, decision, session) {
     line.append(element('span', 'meta', `${absoluteTimeLabel(launched.at)} にセッションが起動した`));
   }
   const actions = element('div', 'verify-actions');
-  const launch = worktreeButton(pending ? '起動を頼みました' : launched ? 'もう一度起動を頼む' : '起動を頼む', 'launch', session, decision);
-  launch.disabled ||= pending || Boolean(worktree?.missing);
+  // 起動に失敗して報告が来ないこともあるので、依頼中も押せるようにする。未配達の重複はサーバーが 409 で断る。
+  const launch = worktreeButton(pending || launched ? 'もう一度起動を頼む' : '起動を頼む', 'launch', session, decision);
+  launch.disabled ||= Boolean(worktree?.missing);
   actions.append(launch);
   appendWorktreeButtons(actions, session, decision);
   actions.append(worktreeStatus(decision.id));
@@ -3245,9 +3251,9 @@ function appendVerifyPanel(card, decision, session) {
   if (decision.verify.steps.length) {
     row('確かめ方');
     const steps = element('ol', 'verify-steps');
-    for (const step of decision.verify.steps) {
+    for (const [index, step] of decision.verify.steps.entries()) {
       const item = element('li');
-      item.append(element('code', '', step.cmd), worktreeButton('コピー', 'step', session, decision, step.cmd, true));
+      item.append(element('code', '', step.cmd), worktreeButton('コピー', 'step', session, decision, step.cmd, true, index));
       if (step.note) item.append(element('span', 'why', step.note));
       steps.append(item);
     }
@@ -4035,6 +4041,7 @@ function render(state) {
                : active?.dataset?.cancelCloseTask ? { kind: 'cancel-close-task', key: active.dataset.cancelCloseTask }
                  : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
               : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
+              : active?.dataset?.worktreeAction ? { kind: 'worktree', key: active.dataset.worktreeKey, action: active.dataset.worktreeAction, index: active.dataset.worktreeIndex }
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
           : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' }
             : active?.hasAttribute('data-undo-hidden-sessions') ? { kind: 'undo-hidden' } : null;
@@ -4107,6 +4114,11 @@ function render(state) {
   }
 
   if (focusData) {
+    if (focusData.kind === 'worktree') {
+      [...root.querySelectorAll('[data-worktree-action]')].find((item) => item.dataset.worktreeKey === focusData.key &&
+        item.dataset.worktreeAction === focusData.action && item.dataset.worktreeIndex === focusData.index)?.focus({ preventScroll: true });
+      return;
+    }
     if (['answer-pick', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
       const control = [...root.querySelectorAll('[data-answer-pick], [data-answer-note], [data-send-answer]')].find((item) => (
         item.dataset.sessionId === focusData.sessionId &&

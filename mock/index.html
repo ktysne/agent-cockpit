@@ -2103,15 +2103,18 @@ function worktreeButtons(key, path, compact = false, missing = false) {
 
 function launchButton(d) {
   const launch = verifyLaunches.get(d.id);
-  if (launch?.state === 'requested') return '<button type="button" class="ghost" disabled>起動を頼みました</button>';
-  // 起動中も、落ちたときや直したあとに起動し直せるように残す。
-  const label = launch?.state === 'running' ? 'もう一度起動を頼む' : '起動を頼む';
+  // 依頼中と起動中も、起動に失敗したときや直したあとに頼み直せるように押せる。未配達の重複はサーバーが断る。
+  const label = launch ? 'もう一度起動を頼む' : '起動を頼む';
   return `<button type="button" class="ghost" data-wt-action="launch" data-wt-key="${esc(d.id)}">${label}</button>`;
 }
 
-function launchRow(d) {
+function launchRow(d, provider) {
   const launch = verifyLaunches.get(d.id);
-  if (launch?.state === 'requested') return '<div class="verify-row"><span class="verify-label">アプリ</span><span class="meta">起動を待っています。セッションが起動すると、ここに起動先が出ます</span></div>';
+  // 席にいる間の Codex は Stop で待たないので、依頼は次にプロンプトを送るまで届かない。
+  const waiting = provider === 'codex'
+    ? '起動を待っています。Codex のセッションには、次にプロンプトを送ると依頼が届きます'
+    : '起動を待っています。セッションが起動すると、ここに起動先が出ます';
+  if (launch?.state === 'requested') return `<div class="verify-row"><span class="verify-label">アプリ</span><span class="meta">${waiting}</span></div>`;
   if (launch?.state !== 'running') return '';
   const target = launch.url
     ? `<a href="${esc(launch.url)}" target="_blank" rel="noopener"><code>${esc(launch.url)}</code></a>`
@@ -2124,7 +2127,7 @@ function worktreeStatus(key) {
   return `<span class="meta" role="status">${status ? esc(status) : ''}</span>`;
 }
 
-function verifyPanel(d) {
+function verifyPanel(d, provider) {
   const v = d.verify;
   const commitState = v.uncommitted
     ? `<span class="chip warn">未コミット ${v.uncommitted} ファイル</span>`
@@ -2135,7 +2138,7 @@ function verifyPanel(d) {
   return `<div class="verify">
     <div class="verify-row"><span class="verify-label">場所</span><code>${esc(v.path)}</code></div>
     <div class="verify-row"><span class="verify-label">ブランチ</span><code>${esc(v.branch)}</code><span class="meta">${esc(v.base)} から ${v.ahead} コミット先行</span>${commitState}</div>
-    ${launchRow(d)}
+    ${launchRow(d, provider)}
     <div class="verify-actions">${launchButton(d)}${worktreeButtons(d.id, v.path)}${worktreeStatus(d.id)}</div>
     ${steps ? `<div class="verify-row"><span class="verify-label">確かめ方</span></div><ol class="verify-steps">${steps}</ol>` : ''}
   </div>`;
@@ -2189,7 +2192,7 @@ function decisionCard(p, session, d, withTag) {
   return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''} ${session.provider === 'codex' ? 'origin-codex' : ''}" data-id="${d.id}" data-session-id="${esc(session.id)}">
     <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
     <div class="ctx">${esc(d.ctx)}</div>
-    ${d.verify && (state === 'waiting' || state === 'provisional') ? verifyPanel(d) : ''}
+    ${d.verify && (state === 'waiting' || state === 'provisional') ? verifyPanel(d, session.provider) : ''}
     <ul class="options">${d.options.map((o, i) => {
       const body = `${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span>`;
       // 答えられるあいだは、選択肢そのものを押して答えに選べる。複数選択の質問だけ複数を選べる。
@@ -3271,7 +3274,7 @@ document.addEventListener('click', e => {
         verifyLaunches.set(key, { state: 'running', ...decision?.verify?.launched, at: new Date().toISOString() });
         // 全体を描き直すと書きかけの回答欄のフォーカスと IME の変換が切れるので、確認欄だけを差し替える。
         const panel = document.querySelector(`.decision[data-id="${CSS.escape(key)}"] .verify`);
-        if (panel && decision) panel.outerHTML = verifyPanel(decision);
+        if (panel && decision) panel.outerHTML = verifyPanel(decision, allSessions().find(session => session.decisions.includes(decision))?.provider);
       }, 3000);
       return;
     }

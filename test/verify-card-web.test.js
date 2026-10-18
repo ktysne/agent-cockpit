@@ -70,9 +70,27 @@ test('起動依頼が起動報告より新しい間だけ待機し、未取得�
   const flatten = node => [node, ...node.children.flatMap(flatten)];
   assert.match(root.textContent, /読み取り中/);
   assert.match(root.textContent, /worktree が見つかりません \(削除済み\)/);
-  assert.ok(flatten(root).find(node => node.textContent === '起動を頼みました').disabled);
+  assert.ok(flatten(root).find(node => node.textContent === 'もう一度起動を頼む').disabled);
   assert.ok(flatten(root).find(node => node.textContent === 'ターミナルで開く').disabled);
   assert.doesNotMatch(root.textContent, /未コミット|すべてコミット済み/);
+});
+
+test('起動依頼の待ち中も頼み直せ、Codex には届く操作を案内し、操作ボタンにフォーカス復元の印を付ける', () => {
+  const { session, decision } = fixture();
+  const live = context();
+  decision.launchRequestedAt = '2026-10-18T03:01:00Z';
+  const flatten = node => [node, ...node.children.flatMap(flatten)];
+  const root = element('article');
+  live.appendVerifyPanel(root, decision, session);
+  const again = flatten(root).find(node => node.textContent === 'もう一度起動を頼む');
+  assert.equal(again.disabled, false);
+  assert.match(root.textContent, /セッションが起動すると、ここに起動先が出ます/);
+  assert.deepEqual({ ...again.dataset }, { worktreeKey: decision.id, worktreeAction: 'launch', worktreeIndex: '' });
+  assert.deepEqual(flatten(root).filter(node => node.dataset?.worktreeAction === 'step').map(node => node.dataset.worktreeIndex),
+    decision.verify.steps.map((step, index) => String(index)));
+  const codex = element('article');
+  live.appendVerifyPanel(codex, decision, { ...session, provider: 'codex' });
+  assert.match(codex.textContent, /Codex のセッションには、次にプロンプトを送ると依頼が届きます/);
 });
 
 test('回答後は推奨または選んだ選択肢の next を表示し、説明文は使わない', () => {
