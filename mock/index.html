@@ -291,6 +291,15 @@ h3.sub .count { font-weight: normal; }
 .answer { display: grid; gap: 8px; }
 textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
 .answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.verify { display: grid; gap: 8px; margin: 0 0 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.verify-row { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; font-size: 13px; }
+.verify-label { flex: none; width: 5em; color: var(--text-2); font-size: 12px; }
+.verify code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.verify-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.verify-actions .ghost { min-height: 36px; font-size: 13px; color: var(--text); }
+.verify-steps { margin: 0; padding-left: 1.6em; display: grid; gap: 6px; font-size: 13px; }
+.verify-steps .why { display: block; color: var(--text-2); font-size: 12px; }
+.worktree-links { display: inline-flex; gap: 10px; }
 .decision-summary { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .primary { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
 .primary:disabled { opacity: .4; cursor: default; }
@@ -704,6 +713,8 @@ const DATA = {
       extraSessions: [
         {
           id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'checking', modelName: 'Opus 5.5', branch: 'feat/tempo-map-test',
+          // worktree はセッションの cwd が既定の checkout と別の worktree にあるときだけ付ける。
+          worktree: 'D:/Develop/rec-studio/.claude/worktrees/tempo-map-test-3f9a1c',
           main: { tool: 'Bash: npm test -- tempo-map', since: '1 分前' },
           perms: [{ id: 'rs-p1', phase: 'checking', who: 'メイン', tool: 'Bash', detail: 'npm test -- tempo-map', waitMin: 1 }],
           subagents: [{ type: 'test-writer', text: 'テンポ変換の境界値を確認', since: '2 分前', state: 'busy', sinceMin: 2,
@@ -712,12 +723,31 @@ const DATA = {
           tasks: [{ title: 'テンポ変換のテスト', state: 'doing', updatedMin: 1, criteria: [{ t: '小数 BPM の丸めを確認する', met: false }] }],
           tasksUpdatedMin: 1,
           decisions: [{ id: 'rs-5', waitMin: 2, awaitingMin: 3, title: '負のオフセットを許可するか', kind: 'waiting',
-            ctx: '既存データとの互換性を確認している。', options: [{ t: '負の値も許可する', why: '先行するカウントを保持できる', rec: true }] }],
+            ctx: '既存データとの互換性を確認している。', options: [{ t: '負の値も許可する', why: '先行するカウントを保持できる', rec: true }] },
+          // verify は確認依頼。場所とコミットの状態は常駐サーバーが worktree から読み、確かめ方だけをセッションが書く。
+          { id: 'rs-6', waitMin: 1, awaitingMin: 3, isNew: true, title: '小数 BPM の入力欄を確認してください', kind: 'waiting',
+            ctx: '入力欄で 120.5 のような小数を受け付け、小節線の位置に反映するようにした。',
+            verify: {
+              path: 'D:/Develop/rec-studio/.claude/worktrees/tempo-map-test-3f9a1c', branch: 'feat/tempo-map-test', base: 'main', ahead: 2, uncommitted: 3,
+              steps: [
+                { cmd: 'build-debug.bat', note: 'Debug ビルドを作る' },
+                { cmd: '"build\\src\\app\\RecStudio_artefacts\\Debug\\Rec Studio.exe"', note: 'テンポ欄に 120.5 を入力し、小節線がずれないかを見る' },
+              ],
+              // 起動を頼んだあとにセッションが返す起動先。Web アプリなら url、ネイティブアプリなら process を返す。
+              launched: { process: 'Rec Studio.exe (Debug)' },
+            },
+            options: [
+              { t: '確認した。コミットして PR を作る', why: 'クロスレビューを経て、マージは PR の欄で確かめてから行う', rec: true,
+                next: 'セッションがコミットして PR を作ると、PR の欄にクロスレビューとマージの段が出ます。' },
+              { t: '直してほしい点がある', why: '直す点を下の欄に書く。直し終わると、もう一度確認を頼まれる',
+                next: 'セッションが直したあと、このカードがもう一度届きます。' },
+            ] }],
         },
       ],
     },
     {
       id: 'agent-gc', name: 'agent-gc', branch: 'fix/worktree-scan', sessionTitle: 'worktree の削除条件', status: 'wait',
+      worktree: 'D:/Develop/agent-gc/.claude/worktrees/worktree-scan-81be02',
       main: { tool: '—', since: '18 分前' },
       perms: [],
       news: [{ t: 'PR #57 の CI が失敗した' }],
@@ -803,6 +833,7 @@ const DATA = {
         // 利用者がターンを中断した。セッションは生きていて次の入力を待つので、待機中とも終了とも分けて出し、終わったものを隠す設定でも隠さない。
         {
           id: 'agent-cockpit-interrupted', title: 'ターンを中断したセッション', status: 'interrupted', branch: 'claude/session-interrupted',
+          worktree: 'D:/Develop/agent-cockpit/.claude/worktrees/session-interrupted-5d20e7', worktreeMissing: true,
           main: { tool: '—', since: '3 分前' },
           perms: [], subagents: [],
           tasks: [{ title: '中断の検出を実装する', state: 'doing', updatedMin: 3, criteria: [{ t: '中断した行が「中断」と出る', met: false }] }],
@@ -852,7 +883,7 @@ const DATA = {
 for (const p of DATA.products) {
   const updatedAt = (minutesAgo) => new Date(Date.now() - Math.max(0, minutesAgo) * 60_000).toISOString();
   const mainSession = {
-    id: `${p.id}-main`, title: p.sessionTitle, status: p.status, branch: p.branch,
+    id: `${p.id}-main`, title: p.sessionTitle, status: p.status, branch: p.branch, worktree: p.worktree,
     main: p.main, perms: p.perms, subagents: p.subagents,
     tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
     tasksUpdatedMin: 5, decisions: p.decisions, lastUpdatedAt: updatedAt(p.lastUpdatedMin ?? 2),
@@ -860,7 +891,7 @@ for (const p of DATA.products) {
   p.sessions = [mainSession, ...(p.extraSessions || []).map(session => ({
     ...session, lastUpdatedAt: updatedAt(session.lastUpdatedMin ?? 2),
   }))];
-  for (const key of ['branch', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions', 'lastUpdatedMin']) delete p[key];
+  for (const key of ['branch', 'worktree', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions', 'lastUpdatedMin']) delete p[key];
 }
 
 DATA.products.push({
@@ -2056,6 +2087,73 @@ function newsBox(p, withTag, showOriginBands = true, showMarkAll = false) {
     <ul>${p.news.map(n => `<li${originAttributes(n.providers ?? n.provider ?? 'claude', showOriginBands)}>${esc(n.t)}</li>`).join('')}</ul></div>`;
 }
 
+// ターミナルは常駐サーバーが worktree で起動する口なので、秘密値と Origin を照合し、パスは画面から受けずにセッションの記録から引く。
+// 確認用アプリの起動はモデルが書いたコマンドを許可確認なしで動かさないため、cockpit では実行せず、回答の経路でセッションに頼む。
+const worktreeActionStatus = new Map();
+const verifyLaunches = new Map();
+const WORKTREE_ACTION_DONE = { terminal: 'ターミナルを開きました', copy: 'パスをコピーしました', step: 'コマンドをコピーしました' };
+
+function worktreeButtons(key, path, compact = false, missing = false) {
+  const cls = compact ? 'link-btn' : 'ghost';
+  const attrs = action => `data-wt-action="${action}" data-wt-key="${esc(key)}" data-wt-path="${esc(path)}"`;
+  if (missing) return `<button type="button" class="${cls}" disabled>ターミナルで開く</button><span class="meta">worktree が見つかりません (削除済み)</span>`;
+  return `<button type="button" class="${cls}" ${attrs('terminal')}>ターミナルで開く</button>`
+    + `<button type="button" class="${cls}" ${attrs('copy')}>パスをコピー</button>`;
+}
+
+function launchButton(d) {
+  const launch = verifyLaunches.get(d.id);
+  if (launch?.state === 'requested') return '<button type="button" class="ghost" disabled>起動を頼みました</button>';
+  // 起動中も、落ちたときや直したあとに起動し直せるように残す。
+  const label = launch?.state === 'running' ? 'もう一度起動を頼む' : '起動を頼む';
+  return `<button type="button" class="ghost" data-wt-action="launch" data-wt-key="${esc(d.id)}">${label}</button>`;
+}
+
+function launchRow(d) {
+  const launch = verifyLaunches.get(d.id);
+  if (launch?.state === 'requested') return '<div class="verify-row"><span class="verify-label">アプリ</span><span class="meta">起動を待っています。セッションが起動すると、ここに起動先が出ます</span></div>';
+  if (launch?.state !== 'running') return '';
+  const target = launch.url
+    ? `<a href="${esc(launch.url)}" target="_blank" rel="noopener"><code>${esc(launch.url)}</code></a>`
+    : `<code>${esc(launch.process)}</code><span class="meta">のウィンドウを開いた</span>`;
+  return `<div class="verify-row"><span class="verify-label">アプリ</span><span class="chip ok">起動中</span>${target}<span class="meta">${esc(absoluteTimeLabel(launch.at))} にセッションが起動した</span></div>`;
+}
+
+function worktreeStatus(key) {
+  const status = worktreeActionStatus.get(key);
+  return `<span class="meta" role="status">${status ? esc(status) : ''}</span>`;
+}
+
+function verifyPanel(d) {
+  const v = d.verify;
+  const commitState = v.uncommitted
+    ? `<span class="chip warn">未コミット ${v.uncommitted} ファイル</span>`
+    : '<span class="chip ok">すべてコミット済み</span>';
+  const steps = (v.steps || []).map((step, i) => `<li><code>${esc(step.cmd)}</code>
+    <button type="button" class="link-btn" data-wt-action="step" data-wt-key="${esc(d.id)}" data-wt-text="${esc(step.cmd)}">コピー</button>
+    ${step.note ? `<span class="why">${esc(step.note)}</span>` : ''}</li>`).join('');
+  return `<div class="verify">
+    <div class="verify-row"><span class="verify-label">場所</span><code>${esc(v.path)}</code></div>
+    <div class="verify-row"><span class="verify-label">ブランチ</span><code>${esc(v.branch)}</code><span class="meta">${esc(v.base)} から ${v.ahead} コミット先行</span>${commitState}</div>
+    ${launchRow(d)}
+    <div class="verify-actions">${launchButton(d)}${worktreeButtons(d.id, v.path)}${worktreeStatus(d.id)}</div>
+    ${steps ? `<div class="verify-row"><span class="verify-label">確かめ方</span></div><ol class="verify-steps">${steps}</ol>` : ''}
+  </div>`;
+}
+
+function verifyNextLine(d, sent) {
+  const index = sent.choice === 'ok' ? d.options.findIndex(o => o.rec) : picksOf(sent)[0];
+  const next = d.options[index]?.next;
+  return next ? `<div class="meta">次: ${esc(next)}</div>` : '';
+}
+
+// 確認依頼のカードが同じ操作を持つので、カードが出ている間は見出しに重ねて出さない。
+function worktreeLinks(session) {
+  if (!session.worktree || visibleDecisions(session).some(d => d.verify)) return '';
+  const key = `session:${session.id}`;
+  return `<span class="worktree-links">${worktreeButtons(key, session.worktree, true, session.worktreeMissing)}${worktreeStatus(key)}</span>`;
+}
+
 function decisionCard(p, session, d, withTag) {
   const a = answerOf(d.id);
   const draft = answerForUi(a, d);
@@ -2090,6 +2188,7 @@ function decisionCard(p, session, d, withTag) {
   return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''} ${session.provider === 'codex' ? 'origin-codex' : ''}" data-id="${d.id}" data-session-id="${esc(session.id)}">
     <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
     <div class="ctx">${esc(d.ctx)}</div>
+    ${d.verify && (state === 'waiting' || state === 'provisional') ? verifyPanel(d) : ''}
     <ul class="options">${d.options.map((o, i) => {
       const body = `${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span>`;
       // 答えられるあいだは、選択肢そのものを押して答えに選べる。複数選択の質問だけ複数を選べる。
@@ -2105,6 +2204,7 @@ function decisionCard(p, session, d, withTag) {
         ${statusLine}
       </div>
       ${answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
+      ${d.verify && a.sent ? verifyNextLine(d, a.sent) : ''}
     </div>` : viaDialog ? `<div class="meta">${esc(originalScreenAction(p, session, '回答してください。'))}</div>` : ''}
     ${!active && answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
     ${summary ? `<div class="decision-summary">${summary}</div>` : ''}</article>`;
@@ -2732,9 +2832,11 @@ function sessionBlock(p, session, showOriginBands = true) {
     || (!ui.hideFinished && session.decisions.some(isEndedDecision))
     || !hasHiddenJudgmentItems(session);
   return `<${groupTag} class="session-group ${multiple ? '' : 'single'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
-    ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}</div>` : ''}
+    ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}${worktreeLinks(session)}</div>` : ''}
     <div class="session-body">
-      ${multiple ? '' : `<div class="session-tag session-context">${esc(sessionDisplayName(session))}</div>`}
+      ${multiple ? '' : worktreeLinks(session)
+        ? `<div class="session-head"><span class="session-tag session-context">${esc(sessionDisplayName(session))}</span>${worktreeLinks(session)}</div>`
+        : `<div class="session-tag session-context">${esc(sessionDisplayName(session))}</div>`}
       ${orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
         judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
@@ -3156,6 +3258,30 @@ function render() {
 document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
+  if (t.dataset.wtAction) {
+    const { wtAction: action, wtKey: key } = t.dataset;
+    if (action === 'launch') {
+      verifyLaunches.set(key, { state: 'requested' });
+      worktreeActionStatus.delete(key);
+      render();
+      // モックでは、セッションが起動して確認依頼を更新するまでを数秒で再現する。
+      setTimeout(() => {
+        const decision = allSessions().flatMap(session => session.decisions).find(d => d.id === key);
+        verifyLaunches.set(key, { state: 'running', ...decision?.verify?.launched, at: new Date().toISOString() });
+        // 全体を描き直すと書きかけの回答欄のフォーカスと IME の変換が切れるので、確認欄だけを差し替える。
+        const panel = document.querySelector(`.decision[data-id="${CSS.escape(key)}"] .verify`);
+        if (panel && decision) panel.outerHTML = verifyPanel(decision);
+      }, 3000);
+      return;
+    }
+    const finish = ok => {
+      worktreeActionStatus.set(key, ok ? `${WORKTREE_ACTION_DONE[action]} (${absoluteTimeLabel(new Date().toISOString())})` : 'コピーできませんでした');
+      render();
+    };
+    if (action === 'copy' || action === 'step') copyDiagnosticText(action === 'copy' ? t.dataset.wtPath : t.dataset.wtText).then(finish);
+    else finish(true);
+    return;
+  }
   if (t.dataset.unregisterRepository) {
     const id = t.dataset.unregisterRepository;
     if (t.dataset.unregisterAction === 'open') repositoryUnregisterConfirmations.set(id, true);

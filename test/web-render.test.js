@@ -4900,7 +4900,7 @@ test('起点帯の判定は非表示セッション、PR の履歴、新着ま�
     esc: (value) => String(value),
     visibleDecisions: () => [], visiblePerms: () => [], hasHiddenJudgmentItems: () => true,
     sessionDisplayName: (session) => session.title, sharedBranch: () => '', orderedSectionKeys: (keys) => keys,
-    taskSessionBlock: () => '', mainRow: () => '', agentSection: () => '',
+    taskSessionBlock: () => '', mainRow: () => '', agentSection: () => '', worktreeLinks: () => '',
   });
   vm.runInContext(`${functionSource(mockHtml, 'sessionOrigin')}\n${functionSource(mockHtml, 'sessionBlock')}`, mockSessionContext);
   const mockSessionProduct = { sessions: [{}] };

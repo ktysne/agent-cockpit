@@ -222,6 +222,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     decisionSessionBlock: () => '',
     mainRow: () => '<div class="now-row main-row"></div>',
     agentSection: () => '',
+    worktreeLinks: () => '',
     esc: (value) => String(value ?? ''),
   });
   vm.runInContext(`${functionSource(mock, 'sessionOrigin')}\n${mockSession}\nthis.renderSession = sessionBlock;`, mockContext);
