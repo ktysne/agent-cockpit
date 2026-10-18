@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { readWebPage, functionSource, pageContext } = require('./support/page-context');
+const { readWebPage, functionSource, displayPageContext: pageContext } = require('./support/page-context');
 
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 const web = readWebPage();
@@ -25,6 +25,7 @@ class FakeElement {
   }
 
   append(...nodes) { this.children.push(...nodes); }
+  replaceChildren(...nodes) { this.children = nodes; this._textContent = ''; }
   addEventListener(type, listener) { this.listeners.set(type, listener); }
   setAttribute(name, value) { this.attributes[name] = value; }
   querySelector() { return null; }
@@ -977,7 +978,7 @@ test('マージ確認欄の文言は実装とモックでそろえる', () => {
   assert.match(mock, /\$\{closedHere \? '<span class="meta">画面で完了にした<\/span>' : ''\}/);
 });
 
-test('完了済みを隠した件数を知らせ、表示する操作で設定を解除する', () => {
+test('完了済みの件数を保ち、表示する操作と隠す操作は設定を変えない', () => {
   const countsSource = functionSource(web, 'finishedHiddenCounts');
   const noteSource = functionSource(web, 'renderFinishedNote');
   assert.ok(countsSource && noteSource);
@@ -992,8 +993,9 @@ test('完了済みを隠した件数を知らせ、表示する操作で設定�
     hideFinishedInput,
     recordDeletionConfirmations: new Map(), appendRecordDeletion() {},
     changeDisplaySetting: (key, input) => changes.push([key, input.checked]),
+    lastState: {}, render() {},
   });
-  vm.runInContext(`${countsSource}\n${noteSource}\nthis.countHidden = finishedHiddenCounts; this.renderFinished = renderFinishedNote;`, context);
+  vm.runInContext(`${countsSource}\n${functionSource(web, 'finishedToggle')}\n${noteSource}\nthis.countHidden = finishedHiddenCounts; this.renderFinished = renderFinishedNote;`, context);
   const counts = context.countHidden([
     { finished: true, tasks: [{ state: 'done' }] },
     { finished: true, tasks: [] },
@@ -1008,11 +1010,17 @@ test('完了済みを隠した件数を知らせ、表示する操作で設定�
   const show = note.children[1];
   assert.equal(show.textContent, '表示する');
   show.listeners.get('click')();
-  assert.equal(hideFinishedInput.checked, false);
-  assert.deepEqual(changes, [['hideFinished', false]]);
+  assert.equal(hideFinishedInput.checked, true);
+  assert.deepEqual(changes, []);
+  assert.equal(context.showFinishedTemporarily, true);
+  context.renderFinished(counts);
+  assert.match(note.children[0].textContent, /終わったものを表示しています/);
+  assert.equal(note.children[1].textContent, '隠す');
+  note.children[1].listeners.get('click')();
+  assert.equal(context.showFinishedTemporarily, false);
   assert.match(web, /終わったものを隠しています。下の「表示する」から表示できます。/);
   assert.match(mock, /終わったものを隠しています。下の「表示する」から表示できます。/);
-  assert.match(mock, /終わったものを隠しています \(\$\{finishedParts\.join\('、'\)\}\)/);
+  assert.match(mock, /終わったものを表示しています/);
 });
 
 test('更新の無いセッションを隠す条件、件数、ページ内の表示切り替えを行う', () => {
@@ -1118,7 +1126,7 @@ test('マージ結果の一行と予約時の SHA 違いを完了表示の設定
   const automaticHidden = { owner: 'example', repo: 'project', product: { key: 'project-f' }, openCount: 0, mergeHistory: [{ number: 54, automatic: true, automaticResult: {} }] };
   assert.deepEqual(JSON.parse(JSON.stringify(context.visibleGroups([automaticShown, automaticHidden]))), [automaticShown]);
   assert.match(web, /items\.filter\(\(item\) => item\.headMismatch === true\)/);
-  assert.match(mock, /visibleMerged = ui\.hideFinished \? mergedNewestFirst\.filter\(\(\{ pr \}\) => pr\.headMismatch === true\)/);
+  assert.match(mock, /visibleMerged = hidesFinished\(\) \? mergedNewestFirst\.filter\(\(\{ pr \}\) => pr\.headMismatch === true\)/);
   const mockLine = functionSource(mock, 'pullRequestMergeResultLine');
   assert.ok(mockLine);
   const mockContext = pageContext(mock, { METHOD_LABEL: { squash: 'スカッシュ' } });
@@ -1775,7 +1783,7 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
   assert.equal(withoutMergeResult.root.children.length, 1);
 });
 
-test('モックの終わった項目の表示設定が保存できたら一覧を描き直す', () => {
+test('モックの終わった項目の表示は保存せず一時的に切り替える', () => {
   const handlerSource = eventListenerSource(mock, 'click');
   assert.ok(handlerSource);
   const previous = { hideFinished: true };
@@ -1791,9 +1799,10 @@ test('モックの終わった項目の表示設定が保存できたら一覧�
   });
   vm.runInContext(`this.handleClick = ${handlerSource};`, context);
   context.handleClick({ target: { closest: () => button } });
-  assert.equal(context.ui.hideFinished, false);
-  assert.equal(hideFinishedInput.checked, false);
-  assert.equal(savedPreferences, previous);
+  assert.equal(context.ui.hideFinished, true);
+  assert.equal(context.ui.showFinishedTemporarily, true);
+  assert.equal(hideFinishedInput.checked, true);
+  assert.equal(savedPreferences, undefined);
   assert.equal(renders, 1);
 });
 
@@ -1852,4 +1861,169 @@ test('予約のマージ先が変わった理由は画面とモックで同じ�
     assert.deepEqual(Array.from(webWaits), ['予約時のマージ先 main と現在のマージ先 aggregate が異なる']);
     assert.deepEqual(Array.from(mockWaits), Array.from(webWaits));
   }
+});
+
+
+test('種類別の PR 見出しは対象件数があるときだけ終わったものを切り替える', () => {
+  const context = pageContext(web, {
+    displayPreferences: { hideFinished: true }, lastState: { pullRequests: [{ mergeHistory: [{ number: 1 }] }] },
+    DEFAULT_SECTION_ORDER: ['prs'], expandedKindSections: new Set(), element: fakeElement,
+    sessionReferences: () => [], kindEndedDecisionEntries: () => [], kindEndedAgentCount: () => 0,
+    kindTodoTaskCount: () => 0, kindDoneTaskCount: () => 0, sinceSeenBox: () => null,
+    visiblePullRequestGroups: () => [], isFilterShown: () => true, orderedSectionKeys: keys => keys,
+    kindSection: (title, body, controls) => ({ title, body, controls }), compareKindJudgmentItems: () => 0,
+    render() {},
+  });
+  vm.runInContext(['finishedHiddenCounts', 'finishedToggle', 'renderKindSections'].map(name => functionSource(web, name)).join('\n'), context);
+  const section = () => context.renderKindSections([], true, context.finishedHiddenCounts([], context.lastState.pullRequests).pullRequests)[0];
+  let toggle = section().controls.children[0];
+  assert.equal(toggle.className, 'ended-toggle');
+  assert.equal(toggle.dataset.showFinished, 'kind');
+  assert.equal(toggle.textContent, '終わったものを表示 (PR 1 件)');
+  toggle.listeners.get('click')();
+  toggle = section().controls.children[0];
+  assert.equal(toggle.textContent, '終わったものを隠す');
+  toggle.listeners.get('click')();
+  assert.equal(context.hidesFinished(), true);
+  context.lastState.pullRequests = [];
+  assert.equal(section().controls, null);
+  context.displayPreferences.hideFinished = false;
+  assert.equal(section().controls, null);
+});
+
+test('隠した種類をすべて表示した後は元の配列へ戻せ、札の操作で取り消しを消す', () => {
+  const note = fakeElement('div');
+  const patches = [];
+  const context = pageContext(web, {
+    displayPreferences: { hidden: ['prs', 'agents'] }, FILTERS: [{ key: 'prs', label: 'PR', color: '' }, { key: 'agents', label: 'エージェント', color: '' }],
+    summary: fakeElement('div'), element: fakeElement, lastState: {},
+    document: { getElementById: () => note, createTextNode: text => fakeElement('text', '', text) },
+    countJudgments: () => ({}), pullRequestMergeableCount: () => 0, pullRequestOpenCount: () => 0,
+    saveDisplayPreferences(patch) { patches.push(patch); Object.assign(context.displayPreferences, patch); },
+    render() { context.renderSummary([]); },
+  });
+  vm.runInContext(['renderSummary', 'isFilterShown', 'toggleFilter'].map(name => functionSource(web, name)).join('\n'), context);
+  context.renderSummary([]);
+  note.children[1].listeners.get('click')();
+  assert.match(note.textContent, /隠した種類をすべて表示しました。元に戻す/);
+  assert.equal(note.hidden, false);
+  note.children[1].listeners.get('click')();
+  assert.deepEqual(JSON.parse(JSON.stringify(patches)), [{ hidden: [] }, { hidden: ['prs', 'agents'] }]);
+  assert.equal(context.hiddenKindsUndo, null);
+  note.children[1].listeners.get('click')();
+  context.toggleFilter('prs');
+  assert.equal(context.hiddenKindsUndo, null);
+  assert.doesNotMatch(note.textContent, /元に戻す/);
+});
+
+test('種類の全表示の保存に失敗したら取り消しの案内を消し、取り消しの保存に失敗したら案内を戻す', async () => {
+  const note = fakeElement('div');
+  const context = pageContext(web, {
+    displayPreferences: { hidden: ['prs'] }, FILTERS: [{ key: 'prs', label: 'PR', color: '' }],
+    summary: fakeElement('div'), element: fakeElement, lastState: {},
+    document: { getElementById: () => note, createTextNode: text => fakeElement('text', '', text) },
+    countJudgments: () => ({}), pullRequestMergeableCount: () => 0, pullRequestOpenCount: () => 0,
+    saveDisplayPreferences(patch) {
+      const previous = context.displayPreferences.hidden;
+      Object.assign(context.displayPreferences, patch);
+      return Promise.resolve().then(() => { context.displayPreferences.hidden = previous; return false; });
+    },
+    render() { context.renderSummary([]); },
+  });
+  vm.runInContext(functionSource(web, 'renderSummary'), context);
+  context.renderSummary([]);
+  note.children[1].listeners.get('click')();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.hiddenKindsUndo, null);
+  assert.match(note.textContent, /非表示: PR/);
+
+  context.displayPreferences.hidden = [];
+  context.hiddenKindsUndo = ['prs'];
+  context.renderSummary([]);
+  note.children[1].listeners.get('click')();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(context.hiddenKindsUndo), ['prs']);
+  assert.match(note.textContent, /隠した種類をすべて表示しました。元に戻す/);
+});
+
+test('一時表示中は隠す対象が 0 件になっても下端に「隠す」を残す', () => {
+  const note = { hidden: true, children: [], replaceChildren(...children) { this.children = children; } };
+  const context = pageContext(web, {
+    displayPreferences: { hideFinished: true }, showFinishedTemporarily: true, element: fakeElement,
+    document: { getElementById: () => note }, recordDeletionConfirmations: new Map(), appendRecordDeletion() {},
+    lastState: {}, render() {},
+  });
+  vm.runInContext(`${functionSource(web, 'hidesFinished')}\n${functionSource(web, 'finishedToggle')}\n${functionSource(web, 'renderFinishedNote')}`, context);
+  context.renderFinishedNote({ sessions: 0, pullRequests: 0 });
+  assert.equal(note.hidden, false);
+  assert.equal(note.children[0].textContent, '終わったものを表示しています');
+  assert.equal(note.children[1].textContent, '隠す');
+  context.showFinishedTemporarily = false;
+  context.renderFinishedNote({ sessions: 0, pullRequests: 0 });
+  assert.equal(note.hidden, true);
+});
+
+
+function visibilityFocusHarness(active, replacements, empty = false) {
+  let focused;
+  for (const button of replacements) {
+    button.focus = () => { focused = button; };
+    button.setAttribute = () => {};
+    button.hasAttribute = name => name === 'data-show-all' && Boolean(button.dataset.showAll);
+  }
+  const context = pageContext(web, {
+    displayPreferences: { mode: 'kind', hideFinished: true }, lastState: { sessions: [], pullRequests: [] },
+    answerNoteComposing: false, HTMLTextAreaElement: class TextArea {}, element: fakeElement,
+    document: { activeElement: active, querySelectorAll: () => replacements,
+      querySelector: selector => selector === '[data-show-all]' ? replacements.find(button => button.dataset.showAll)
+        : selector === '[data-show-finished="note"]' ? replacements.find(button => button.dataset.showFinished === 'note') : null },
+    root: { replaceChildren() {}, querySelectorAll: () => [] },
+    renderRouting() {}, renderSummary() {}, renderExcludedNote() {}, renderFinishedNote() {}, renderIdleNote() {}, updateTitle() {},
+    idleHiddenSessions: () => [], sessionsAfterIdleFilter: sessions => sessions,
+    finishedHiddenCounts: () => ({ sessions: 1, pullRequests: 1 }), finishedDeletionTargets: () => ({}),
+    visibleSinceSeen: () => [], orderedProducts: () => empty ? [] : [{}], renderKindSections: () => [],
+  });
+  vm.runInContext(['hasCodexOrigin', 'finishedToggle', 'render'].map(name => functionSource(web, name)).join('\n'), context);
+  return { context, get focused() { return focused; } };
+}
+
+test('終わったものの切り替えは見出しと下端の押した場所へフォーカスを戻す', () => {
+  for (const [location, empty] of [['kind', false], ['note', false], ['note', true]]) {
+    const active = { dataset: { showFinished: location }, hasAttribute: () => false };
+    const replacements = ['note', 'kind'].map(showFinished => ({ dataset: { showFinished } }));
+    const harness = visibilityFocusHarness(active, replacements, empty);
+    harness.context.finishedToggle(location, '表示する').listeners.get('click')();
+    assert.equal(harness.context.showFinishedTemporarily, true);
+    assert.equal(harness.focused.dataset.showFinished, location);
+  }
+});
+
+test('種類の全表示と取り消しは一覧が空でも切り替え後のボタンへフォーカスを戻す', () => {
+  for (const [value, empty] of [['true', false], ['undo', false], ['true', true], ['undo', true]]) {
+    const active = { dataset: { showAll: value }, hasAttribute: name => name === 'data-show-all' };
+    const replacement = { dataset: { showAll: value === 'undo' ? 'true' : 'undo' } };
+    const harness = visibilityFocusHarness(active, [replacement], empty);
+    harness.context.render(harness.context.lastState);
+    assert.equal(harness.focused, replacement);
+  }
+});
+
+test('モックは種類の全表示と外した全セッションの復元を取り消せる', () => {
+  const context = pageContext(mock, {
+    ui: { hidden: ['prs', 'agents'], hiddenSessions: ['one', 'two', 'idle'], hiddenSessionUpdatedAt: {} },
+    hiddenSessionsUndo: { productName: '作業', sessionIds: ['one'] }, save: () => true, render() {},
+    allSessions: () => [{ id: 'one' }, { id: 'two' }, { id: 'idle' }], isIdleHiddenSession: session => session.id === 'idle',
+  });
+  vm.runInContext(`this.handleClick = ${eventListenerSource(mock, 'click')};`, context);
+  const click = attribute => context.handleClick({ target: { closest: () => ({ dataset: {}, hasAttribute: name => name === attribute }) } });
+  click('data-show-all');
+  assert.deepEqual(Array.from(context.ui.hidden), []);
+  click('data-show-all');
+  assert.deepEqual(Array.from(context.ui.hidden), ['prs', 'agents']);
+  click('data-show-hidden-sessions');
+  assert.equal(context.hiddenSessionsUndo, null);
+  assert.deepEqual(Array.from(context.restoredHiddenSessionsUndo), ['one', 'two']);
+  click('data-undo-restored-sessions');
+  assert.deepEqual(Array.from(context.ui.hiddenSessions), ['one', 'two']);
+  assert.equal(context.restoredHiddenSessionsUndo, null);
 });

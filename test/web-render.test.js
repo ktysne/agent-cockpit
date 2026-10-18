@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createFakeClock } = require('../tools/manual/fake-clock');
-const { readWebPage, cssDeclarations, functionSource, pageContext, sourceBetween } = require('./support/page-context');
+const { readWebPage, cssDeclarations, functionSource, displayPageContext: pageContext, sourceBetween } = require('./support/page-context');
 
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const pageHtml = readWebPage().replace(/\r\n/g, '\n');
@@ -292,7 +292,7 @@ function recordDeletionHarness(sessions, postUiAction = async () => ({ ok: true,
     postUiAction, refresh: async () => {},
   });
   vm.runInContext(['isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
-    'renderExcludedNote', 'renderFinishedNote', 'renderIdleNote', 'finishedHiddenCounts', 'finishedDeletionTargets',
+    'finishedToggle', 'renderExcludedNote', 'renderFinishedNote', 'renderIdleNote', 'finishedHiddenCounts', 'finishedDeletionTargets',
     'recordDeletionTargetKey', 'intersectRecordDeletionTargets', 'countRecordDeletionTargets', 'appendRecordDeletion',
     'focusRecordDeletion', 'deleteNoteRecords', 'hasCodexOrigin', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
   context.render(context.lastState);
@@ -1997,7 +1997,9 @@ test('終わったもののチェックは表示設定として保存し、失�
   assert.deepEqual(JSON.parse(JSON.stringify(terminalPatch)), { terminal: 'powershell' });
   context.saveDisplayPreferences = saveDisplayPreferences;
 
+  context.showFinishedTemporarily = true;
   const saving = context.changeDisplaySetting('hideFinished', hideFinishedInput);
+  assert.equal(context.showFinishedTemporarily, false);
   assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { hideFinished: true });
   hideFinishedInput.checked = false;
   context.renderDisplaySettings();
@@ -5466,4 +5468,114 @@ test('401 で画面が変わり下書きが無ければ再送せず読み込み�
   vm.runInContext(functionSource(pageHtml, 'refreshUiSecret'), harness.context);
   assert.equal(await harness.context.refreshUiSecret(), false);
   assert.equal(harness.reloadCount, 1);
+});
+
+
+function hiddenSessionRestoreHarness(sessions, statuses = []) {
+  const requests = [];
+  const note = { hidden: true, children: [], replaceChildren(...children) { this.children = children; } };
+  let focused;
+  const element = (tagName, className, textContent) => ({ tagName, className, textContent, dataset: {}, focus() { focused = this; } });
+  const context = pageContext(pageHtml, {
+    lastState: { sessions }, hiddenSessionsUndo: null, recordDeletionConfirmations: new Map(),
+    document: { getElementById: () => note, querySelector: selector => {
+      const key = { '[data-clear-hidden-sessions]': 'clearHiddenSessions', '[data-undo-restored-sessions]': 'undoRestoredSessions' }[selector];
+      return note.children.find(child => child.dataset?.[key]);
+    } },
+    root: { querySelector: () => null }, element, isIdleHiddenSession: session => session.idle === true,
+    countJudgments: () => ({}), appendRecordDeletion() {}, liveStatus: {}, showWriteError() {},
+    postUiAction: async (url, body) => {
+      requests.push({ url, body });
+      const status = statuses.shift() || 200;
+      if (status === 200) for (const session of sessions) {
+        if (body.action === 'clear') session.hidden = false;
+        else if (body.session_ids?.includes(session.session_id) || body.session_id === session.session_id) session.hidden = body.action === 'hide';
+      }
+      return { ok: status === 200, status };
+    },
+    refresh: async () => context.renderExcludedNote(sessions),
+  });
+  vm.runInContext(['renderExcludedNote', 'runSessionAction'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  const handler = pageHtml.match(/document\.addEventListener\('click', (\(event\) => \{[\s\S]*?\n\})\);/)[1];
+  vm.runInContext(`this.handleClick = ${handler};`, context);
+  const action = context.runSessionAction;
+  let pending;
+  context.runSessionAction = (...args) => (pending = action(...args));
+  context.renderExcludedNote(sessions);
+  return { context, requests, note, get focused() { return focused; },
+    async click(key) { const button = note.children.find(child => child.dataset?.[key]); context.handleClick({ target: { closest: () => button } }); await pending; } };
+}
+
+test('外した全セッションを戻した後は、更新の無いものを除いて記録した ID だけを50件ずつ隠し直す', async () => {
+  const sessions = Array.from({ length: 52 }, (_, index) => ({ session_id: `hidden-${index}`, hidden: true, idle: index === 51 }));
+  sessions.push({ session_id: 'shown', hidden: false });
+  const harness = hiddenSessionRestoreHarness(sessions);
+  harness.context.hiddenSessionsUndo = { productName: '作業', sessionIds: ['hidden-0'] };
+  await harness.click('clearHiddenSessions');
+  assert.equal(harness.context.hiddenSessionsUndo, null);
+  assert.ok(harness.note.children.some(child => child.textContent === '外したセッション (51 件) を戻しました。'));
+  assert.equal(harness.focused.dataset.undoRestoredSessions, 'true');
+  await harness.click('undoRestoredSessions');
+  assert.deepEqual(harness.requests.slice(1).map(({ body }) => body.session_ids.length), [50, 1]);
+  assert.ok(harness.requests.every(({ url }) => url === '/api/hidden-sessions'));
+  assert.ok(sessions.slice(0, 51).every(session => session.hidden));
+  assert.equal(sessions[51].hidden, false);
+  assert.equal(sessions[52].hidden, false);
+  assert.equal(harness.context.restoredHiddenSessionsUndo, null);
+  assert.equal(harness.focused.dataset.clearHiddenSessions, 'true');
+});
+
+test('隠し直す途中の404と409を無視して残るセッションを処理する', async () => {
+  const sessions = Array.from({ length: 101 }, (_, index) => ({ session_id: `hidden-${index}`, hidden: true }));
+  const harness = hiddenSessionRestoreHarness(sessions, [200, 404, 409, 200]);
+  await harness.click('clearHiddenSessions');
+  await harness.click('undoRestoredSessions');
+  assert.deepEqual(harness.requests.slice(1).map(({ body }) => body.session_ids.length), [50, 50, 1]);
+  assert.equal(harness.context.liveStatus.textContent, undefined);
+  assert.equal(harness.context.restoredHiddenSessionsUndo, null);
+});
+
+test('全件復元の取り消し対象が別の画面で消えていたら、取り消しの案内を消す', async () => {
+  const sessions = [{ session_id: 'gone', hidden: true }];
+  const harness = hiddenSessionRestoreHarness(sessions, [200, 404]);
+  await harness.click('clearHiddenSessions');
+  sessions.splice(0);
+  await harness.click('undoRestoredSessions');
+  assert.equal(harness.context.restoredHiddenSessionsUndo, null);
+  assert.equal(harness.note.hidden, true);
+});
+
+test('全件を戻した後にセッションやプロダクトを外すと新しい操作だけを取り消せる', async () => {
+  for (const undoInfo of [null, { productName: '作業', sessionIds: ['hidden'] }]) {
+    const harness = hiddenSessionRestoreHarness([{ session_id: 'hidden', hidden: true }]);
+    await harness.click('clearHiddenSessions');
+    await harness.context.runSessionAction({ dataset: {} }, '/api/hidden-sessions', { action: 'hide', session_ids: ['hidden'] }, '失敗', false, undoInfo);
+    assert.equal(harness.context.restoredHiddenSessionsUndo, null);
+    assert.equal(harness.context.hiddenSessionsUndo, undoInfo);
+    assert.equal(harness.note.children.filter(child => child.textContent === '元に戻す').length, undoInfo ? 1 : 0);
+  }
+});
+
+test('記録削除で全件復元の取り消し対象から削除済み ID を除き、空なら案内を消す', async () => {
+  const harness = recordDeletionHarness([{ session_id: 'deleted', hidden: true }, { session_id: 'retained', hidden: false }], async () => ({ ok: true, json: async () => ({ deleted: { sessions: 1, pullRequests: 0 } }) }));
+  harness.context.restoredHiddenSessionsUndo = ['deleted', 'retained'];
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  await harness.context.deleteNoteRecords('excluded');
+  assert.deepEqual(Array.from(harness.context.restoredHiddenSessionsUndo), ['retained']);
+  harness.context.restoredHiddenSessionsUndo = ['deleted'];
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  await harness.context.deleteNoteRecords('excluded');
+  assert.equal(harness.context.restoredHiddenSessionsUndo, null);
+});
+
+
+test('終わったものを一時表示しても帯の件数と記録削除の対象を保つ', () => {
+  const harness = recordDeletionHarness([{ session_id: 'finished', finished: true }], async () => ({ ok: true }));
+  const targets = JSON.stringify(harness.context.recordDeletionTargets.get('finished'));
+  for (const message of ['終わったものを隠しています', '終わったものを表示しています']) {
+    assert.ok(harness.nodes().some(node => node.textContent.includes(message)));
+    assert.ok(harness.buttons().some(button => button.dataset.recordBand === 'finished' && button.dataset.recordAction === 'open'));
+    assert.equal(JSON.stringify(harness.context.recordDeletionTargets.get('finished')), targets);
+    harness.buttons().find(button => button.dataset.showFinished === 'note').listeners.click();
+  }
 });
