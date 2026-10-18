@@ -135,7 +135,8 @@
         <li>席を外す前に、離席中にする</li>
         <li>回答を待つ時間の中で、質問に答える</li>
         <li>締切を過ぎて推奨で進んだ判断事項に、戻ってから答える</li>
-        <li>戻ったら「前回見てから」で変化を確かめて既読にし、離席中を外す</li>
+        <li>戻ったら「前回見てから」で変化を確かめて既読にする</li>
+        <li>確認し終えたら離席中を外す</li>
       </ul>
     </div>
     <div>
@@ -185,25 +186,25 @@
   <ol class="steps">
     <li><div class="step-body"><b>仮に進んだ判断事項を見つける</b>状態が <span class="ui">仮に推奨案で進行中</span> に変わり、経過時間は <span class="ui">仮適用から</span> の形で出ます。
       プロダクト parcel-api のカードの「予約の排他制御に使うロックの方式」が、推奨の「行ロック」で進んでいます(<a href="away.html#away-timeout">回答が無いまま締切を過ぎたとき</a>)。
-      <span class="ui">新着</span> の印は、プロダクトを最後に既読にしてから作られた判断事項に付きます。</div><figure class="guide-map" id="guide-away-map-decisions-answer-initial" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1330" style="max-width:665px;min-width:min(600px, 665px)"><div class="gm-segment" style="flex-grow:1330;aspect-ratio:1330/810"><div class="gm-clip"><img src="img/decisions-answer/initial.png" width="788" height="405" alt="仮に推奨案で進行中の判断事項のカード。見出しに新着の印、題、仮に推奨案で進行中の札、仮適用からの経過時間がある。推奨の札が付いた行ロックと楽観ロックの選択肢、指示の欄、回答を送るボタンが並ぶ" loading="lazy" decoding="async" style="width:118.496%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+      <span class="ui">新着</span> の印は、プロダクトを最後に既読にしてから作られた判断事項に付きます。</div><figure class="guide-map" id="guide-away-map-decisions-answer-initial" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1330" style="max-width:665px;min-width:min(600px, 665px)"><div class="gm-segment" style="flex-grow:1330;aspect-ratio:1330/812"><div class="gm-clip"><img src="img/decisions-answer/initial.png" width="788" height="406" alt="仮に推奨案で進行中の判断事項のカード。見出しに新着の印、題、仮に推奨案で進行中の札、仮適用からの経過時間がある。推奨の札が付いた行ロックと楽観ロックの選択肢、指示の欄、回答を送るボタンが並ぶ" loading="lazy" decoding="async" style="width:118.496%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
     <li><div class="step-body"><b>戻ってから答える</b>「楽観ロック」を選び、指示の欄に「離席中は再試行の回数を 3 回までにする」と書いて、<span class="ui">回答を送る</span> を押します。
       この回答は、質問への答えではなく、作業への指示としてセッションに届きます。
       Codex は、次のツールの実行後か次の入力で受け取ります。
       離席中にターンが終わったときだけ、最大 59 分待って届けます(<a href="decisions.html#decisions-route">回答が届く経路</a>)。
-      セッションは、回答に沿って作業を直します(<a href="decisions.html#decisions-route">回答が届く経路</a>)。</div><figure class="guide-map" id="guide-away-map-decisions-answer-picked" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1330" style="max-width:665px;min-width:min(600px, 665px)"><div class="gm-segment" style="flex-grow:1330;aspect-ratio:1330/864"><div class="gm-clip"><img src="img/decisions-answer/picked.png" width="788" height="432" alt="楽観ロックを選び、離席中は再試行の回数を 3 回までにすると書いた回答欄。選んだ選択肢が枠で囲まれ、送る答えに楽観ロックと出て、回答を送るのボタンが押せる状態になっている" loading="lazy" decoding="async" style="width:118.496%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+      セッションは、回答に沿って作業を直します(<a href="decisions.html#decisions-route">回答が届く経路</a>)。</div><figure class="guide-map" id="guide-away-map-decisions-answer-picked" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1330" style="max-width:665px;min-width:min(600px, 665px)"><div class="gm-segment" style="flex-grow:1330;aspect-ratio:1330/866"><div class="gm-clip"><img src="img/decisions-answer/picked.png" width="788" height="433" alt="楽観ロックを選び、離席中は再試行の回数を 3 回までにすると書いた回答欄。選んだ選択肢が枠で囲まれ、送る答えに楽観ロックと出て、回答を送るのボタンが押せる状態になっている" loading="lazy" decoding="async" style="width:118.496%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
   </ol>
 
   <h2 id="guide-away-since-seen">戻ったら変化を確かめて既読にする</h2>
-  <p>席を外している間に起きた変化は、離席中にしている間、<span class="ui">前回見てから</span> の欄に出ます。
-  設定の <span class="ui">前回見てから</span> が最初の設定の <span class="ui">離席中のみ</span> のときは、離席中を外すと欄が出なくなるので、離席中を外す前に確かめます。
-  既読にしなかった変化は記録に残り、次に離席中にしたときか、設定を <span class="ui">常に</span> にしたときに、また出ます(<a href="away.html#away-since-seen">前回見てから</a>)。</p>
+  <p>席を外している間に起きた変化は、<span class="ui">前回見てから</span> の欄に出て、離席中を外したあとも既読にするまで残ります。
+  設定を <span class="ui">表示しない</span> にすると欄は隠れます(<a href="away.html#away-since-seen">前回見てから</a>)。</p>
   <ol class="steps">
     <li><div class="step-body"><b>変化を確かめる</b>プロダクト別では設定の欄の並び順に従って、種類別では専用の欄に、<span class="ui">前回見てから</span> の欄が出ます。
       プロダクト shift-planner には、「PR #115(週の開始曜日を設定にする)をマージした」など 3 件の変化が、新しい順に並びます。
-      欄が出ないときは、設定の <span class="ui">前回見てから</span> が <span class="ui">出さない</span> になっていないか、<span class="ui">離席中のみ</span> のときは離席中になっているかを確かめます(<a href="settings.html#settings-since-seen">前回見てから</a>)。</div><figure class="guide-map" id="guide-away-map-guide-away-return-unseen" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1100" style="max-width:550px;min-width:min(600px, 550px)"><div class="gm-segment" style="flex-grow:1100;aspect-ratio:1100/610"><div class="gm-clip"><img src="img/guide-away-return/unseen.png" width="816" height="615" alt="shift-planner のカードの先頭。前回見てから 3 件の欄に、PR #115 のマージ、タスクの完了、PR #119 の作成が並び、既読にするのリンクがある。その下の判断事項のカードには新着の印が付いている" loading="lazy" decoding="async" style="width:148.364%;margin-left:0%;margin-top:-11.818%"></div></div></div></div></figure></li>
+      欄が出ないときは、設定の <span class="ui">前回見てから</span> が <span class="ui">表示しない</span> になっていないか確かめます(<a href="settings.html#settings-since-seen">前回見てから</a>)。</div><figure class="guide-map" id="guide-away-map-guide-away-return-unseen" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1100" style="max-width:550px;min-width:min(600px, 550px)"><div class="gm-segment" style="flex-grow:1100;aspect-ratio:1100/610"><div class="gm-clip"><img src="img/guide-away-return/unseen.png" width="816" height="615" alt="shift-planner のカードの先頭。前回見てから 3 件の欄に、PR #115 のマージ、タスクの完了、PR #119 の作成が並び、既読にするのリンクがある。その下の判断事項のカードには新着の印が付いている" loading="lazy" decoding="async" style="width:148.364%;margin-left:0%;margin-top:-11.818%"></div></div></div></div></figure></li>
     <li><div class="step-body"><b>既読にする</b>確かめ終えたら、<span class="ui">既読にする</span> を押します。
       そのプロダクトの欄が消え、判断事項の <span class="ui">新着</span> の印も外れます。
-      既読にするのはプロダクトごとなので、ほかのプロダクトの欄は残ります。</div><figure class="guide-map" id="guide-away-map-guide-away-return-seen" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1100" style="max-width:550px;min-width:min(600px, 550px)"><div class="gm-segment" style="flex-grow:1100;aspect-ratio:1100/520"><div class="gm-clip"><img src="img/guide-away-return/seen.png" width="816" height="488" alt="既読にした後の shift-planner のカード。前回見てからの欄が消え、判断事項のカードの新着の印も外れている" loading="lazy" decoding="async" style="width:148.364%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+      既読にするのはプロダクトごとなので、ほかのプロダクトの欄は残ります。
+      未読のプロダクトが 2 つ以上あるときは、<span class="ui">すべて既読にする</span> でまとめて片付けられます。</div><figure class="guide-map" id="guide-away-map-guide-away-return-seen" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1100" style="max-width:550px;min-width:min(600px, 550px)"><div class="gm-segment" style="flex-grow:1100;aspect-ratio:1100/520"><div class="gm-clip"><img src="img/guide-away-return/seen.png" width="816" height="488" alt="既読にした後の shift-planner のカード。前回見てからの欄が消え、判断事項のカードの新着の印も外れている" loading="lazy" decoding="async" style="width:148.364%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
   </ol>
 
   <h2 id="guide-away-return">離席中を外す</h2>

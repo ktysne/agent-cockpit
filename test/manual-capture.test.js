@@ -91,9 +91,14 @@ test('localStorage には theme と storage を書き、文字列以外は JSON 
   const entries = storageEntries({ theme: 'light', storage: { 'agent-cockpit.display': { mode: 'kind' }, plain: 'text' } });
   assert.deepEqual(entries, {
     'agent-cockpit.theme': 'light',
-    'agent-cockpit.display': '{"mode":"kind"}',
+    'agent-cockpit.display': '{"importAppTasksAsked":true,"mode":"kind"}',
     plain: 'text',
   });
+});
+
+test('表示設定を指定しない撮影でも、取り込みの確認は済んだ状態で始める', () => {
+  const entries = storageEntries({ theme: 'dark', storage: {} });
+  assert.equal(entries['agent-cockpit.display'], '{"importAppTasksAsked":true}');
 });
 
 test('ページへ先に入れるスクリプトが、時計を固定し、既にある localStorage の値を残す', () => {
