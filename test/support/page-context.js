@@ -119,4 +119,14 @@ function pageContext(html, sandbox = {}) {
   return vm.createContext(sandbox);
 }
 
-module.exports = { readWebPage, cssDeclarations, functionSource, pageContext, sourceBetween };
+function displayPageContext(html, sandbox = {}) {
+  const context = pageContext(html, {
+    hiddenKindsUndo: null, restoredHiddenSessionsUndo: null,
+    ...(html.includes('let showFinishedTemporarily') ? { showFinishedTemporarily: false } : {}),
+    ...sandbox,
+  });
+  vm.runInContext(functionSource(html, 'hidesFinished'), context);
+  return context;
+}
+
+module.exports = { displayPageContext, readWebPage, cssDeclarations, functionSource, pageContext, sourceBetween };

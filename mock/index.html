@@ -645,9 +645,9 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
     <textarea id="update-prompt" aria-label="更新の依頼文" readonly hidden></textarea>
   </div>
   <div id="root"></div>
-  <div class="filter-note" id="filter-note" hidden></div>
-  <div class="excluded-note" id="excluded-note" hidden></div>
-  <div class="excluded-note" id="finished-note" hidden></div>
+  <div class="filter-note" id="filter-note" role="status" aria-live="polite" hidden></div>
+  <div class="excluded-note" id="excluded-note" role="status" aria-live="polite" hidden></div>
+  <div class="excluded-note" id="finished-note" role="status" aria-live="polite" hidden></div>
   <div class="excluded-note" id="idle-note" role="status" aria-live="polite" hidden></div>
 </main>
 
@@ -931,6 +931,9 @@ for (const [key, notice] of Object.entries(ui.reservationNotices)) {
 ui.mergeableCondition = ['operation', 'ci', 'cross-review'].includes(ui.mergeableCondition) ? ui.mergeableCondition : 'cross-review';
 ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.isArray(ui.reviewSkips) ? ui.reviewSkips : {};
 let hiddenSessionsUndo = null;
+let restoredHiddenSessionsUndo = null;
+let hiddenKindsUndo = null;
+Object.defineProperty(ui, 'showFinishedTemporarily', { value: false, writable: true });
 const recordDeletionConfirmations = new Map();
 const repositoryUnregisterConfirmations = new Map();
 let showIdleSessions = false;
@@ -1118,6 +1121,7 @@ for (const { key, input } of DISPLAY_INTEGER_SETTINGS) {
 }
 hideFinishedInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
+  ui.showFinishedTemporarily = false;
   ui.hideFinished = hideFinishedInput.checked;
   if (!saveDisplayPreferences(previous)) return;
   render();
@@ -1576,13 +1580,17 @@ function isIdleHiddenSession(session, now = Date.now()) {
   const updatedAt = Number.isFinite(hiddenAt) ? Math.max(Number.isFinite(lastUpdatedAt) ? lastUpdatedAt : hiddenAt, hiddenAt) : lastUpdatedAt;
   return Number.isFinite(updatedAt) && now - updatedAt > ui.idleHideMinutes * 60_000;
 }
+function hidesFinished() {
+  return ui.hideFinished && !ui.showFinishedTemporarily;
+}
+
 function idleHiddenSessions(sessions = allSessions(), now = Date.now()) {
-  return sessions.filter(session => !(ui.hideFinished && !ui.hiddenSessions.includes(session.id) && isFinishedSession(session))
+  return sessions.filter(session => !(hidesFinished() && !ui.hiddenSessions.includes(session.id) && isFinishedSession(session))
     && isIdleHiddenSession(session, now));
 }
 const visibleSessions = p => p.sessions.filter(s => !ui.deletedSessionIds.includes(s.id)
   && (!ui.hiddenSessions.includes(s.id) || isIdleHiddenSession(s))
-  && !(ui.hideFinished && !ui.hiddenSessions.includes(s.id) && isFinishedSession(s))
+  && !(hidesFinished() && !ui.hiddenSessions.includes(s.id) && isFinishedSession(s))
   && (showIdleSessions || !isIdleHiddenSession(s)));
 const effectiveDecisionState = d => d.kind;
 function isActiveDecision(decision) {
@@ -1725,6 +1733,10 @@ function deleteNoteRecords(band) {
   for (const id of sessions) delete ui.hiddenSessionUpdatedAt[id];
   ui.dismissedMergeHistory = [...new Set([...ui.dismissedMergeHistory, ...prs])];
   ui.deletedClosedPrs = [...new Set([...ui.deletedClosedPrs, ...closed])];
+  if (restoredHiddenSessionsUndo) {
+    restoredHiddenSessionsUndo = restoredHiddenSessionsUndo.filter(id => !sessions.includes(id));
+    if (!restoredHiddenSessionsUndo.length) restoredHiddenSessionsUndo = null;
+  }
   if (hiddenSessionsUndo) {
     hiddenSessionsUndo.sessionIds = hiddenSessionsUndo.sessionIds.filter(id => !sessions.includes(id));
     if (!hiddenSessionsUndo.sessionIds.length) hiddenSessionsUndo = null;
@@ -1764,8 +1776,10 @@ function renderSummary() {
     `<button type="button" class="chip ${x.cls}" data-filter="${x.key}" aria-pressed="${isShown(x.key)}" title="${isShown(x.key) ? '押すと非表示にする' : '押すと表示に戻す'}">${x.label} <strong>${counts[x.key]}</strong></button>`).join('');
   const hiddenCount = countHidden();
   const note = document.getElementById('filter-note');
-  note.hidden = ui.hidden.length === 0;
-  note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')} (${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>隠した種類をすべて表示する</button>`;
+  note.hidden = ui.hidden.length === 0 && !hiddenKindsUndo;
+  note.innerHTML = hiddenKindsUndo
+    ? `<span>隠した種類をすべて表示しました。</span><button type="button" class="link-btn" data-show-all="undo">元に戻す</button>`
+    : `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')} (${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>隠した種類をすべて表示する</button>`;
   const excluded = document.getElementById('excluded-note');
   const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id) && !isIdleHiddenSession(s));
   const hiddenJudgmentCounts = countJudgments(hiddenSessions);
@@ -1776,12 +1790,14 @@ function renderSummary() {
   const countNote = pendingCounts.length ? `、うち${pendingCounts.join('、')}` : '';
   const undo = hiddenSessionsUndo
     ? `<span>${esc(hiddenSessionsUndo.productName)} を一覧から外しました。</span><button type="button" class="link-btn" data-undo-hidden-sessions>元に戻す</button>`
-    : '';
+    : restoredHiddenSessionsUndo
+      ? `<span>外したセッション (${restoredHiddenSessionsUndo.length} 件) を戻しました。</span><button type="button" class="link-btn" data-undo-restored-sessions>元に戻す</button>`
+      : '';
   const showHidden = hiddenSessions.length
     ? `<span>外したセッション (${hiddenSessions.length} 件)${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>外したセッションを戻す</button>`
     : '';
   excluded.innerHTML = `${undo}${showHidden}${recordDeletionControls('excluded', { sessions: hiddenSessions.map(s => s.id), prs: [], closed: [] }, hiddenSessions.length)}`;
-  excluded.hidden = hiddenSessions.length === 0 && !hiddenSessionsUndo && !recordDeletionConfirmations.has('excluded');
+  excluded.hidden = hiddenSessions.length === 0 && !hiddenSessionsUndo && !restoredHiddenSessionsUndo && !recordDeletionConfirmations.has('excluded');
   const hiddenFinished = finishedHiddenCounts();
   const finishedParts = [
     hiddenFinished.sessions ? `セッション ${hiddenFinished.sessions} 件` : '',
@@ -1789,7 +1805,7 @@ function renderSummary() {
   ].filter(Boolean);
   const finished = document.getElementById('finished-note');
   finished.innerHTML = finishedParts.length
-    ? `<span>終わったものを隠しています (${finishedParts.join('、')})</span><button type="button" class="link-btn" data-show-finished>表示する</button>`
+    ? `<span>${hidesFinished() ? '終わったものを隠しています' : '終わったものを表示しています'} (${finishedParts.join('、')})</span><button type="button" class="link-btn" data-show-finished="note">${hidesFinished() ? '表示する' : '隠す'}</button>`
     : '';
   finished.innerHTML += recordDeletionControls('finished', finishedDeletionTargets(), hiddenFinished.sessions + hiddenFinished.pullRequests);
   finished.hidden = finishedParts.length === 0 && !recordDeletionConfirmations.has('finished');
@@ -1988,7 +2004,7 @@ function agentRow(p, session, agent, withTag, showOriginBands = false) {
 }
 
 function endedAgentToggle(session) {
-  if (ui.hideFinished) return '';
+  if (hidesFinished()) return '';
   const ended = session.subagents.filter(agent => isEndedAgent(session, agent));
   if (!ended.length) return '';
   const expanded = ui.expandedEndedAgents.includes(session.id);
@@ -1997,11 +2013,11 @@ function endedAgentToggle(session) {
 }
 
 function agentSection(p, session, withTag) {
-  const expanded = !ui.hideFinished && ui.expandedEndedAgents.includes(session.id);
+  const expanded = !hidesFinished() && ui.expandedEndedAgents.includes(session.id);
   const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || expanded)
     .sort((a, b) => ageMinutes(a) - ageMinutes(b));
   const rows = agents.map(agent => agentRow(p, session, agent, withTag)).join('');
-  const hasEnded = !ui.hideFinished && session.subagents.some(agent => isEndedAgent(session, agent));
+  const hasEnded = !hidesFinished() && session.subagents.some(agent => isEndedAgent(session, agent));
   const toggle = endedAgentToggle(session);
   if (!isShown('agents') && !rows && !toggle) return '';
   const empty = hasEnded ? '稼働中のサブエージェントはありません。' : 'サブエージェントはありません。';
@@ -2704,7 +2720,7 @@ function prBlock(p, withTag, showOriginBands = true) {
       ${prTree(p, r, showOriginBands)}</div>`).join('');
   const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
-  const visibleMerged = ui.hideFinished ? mergedNewestFirst.filter(({ pr }) => pr.headMismatch === true) : mergedNewestFirst;
+  const visibleMerged = hidesFinished() ? mergedNewestFirst.filter(({ pr }) => pr.headMismatch === true) : mergedNewestFirst;
   const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', visibleMerged.map(({ pr, m }) => {
     const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
     return `<span class="badge long ${pr.headMismatch === true ? 'warn' : 'mute'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`;
@@ -2730,7 +2746,7 @@ function prBlock(p, withTag, showOriginBands = true) {
 
 // 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
 function foldedPrLine(p, kind, label, badges, visibleWhileHidden = false) {
-  if (!badges.length || (ui.hideFinished && !visibleWhileHidden)) return '';
+  if (!badges.length || (hidesFinished() && !visibleWhileHidden)) return '';
   const key = `${kind}:${p.id}`;
   const expanded = ui.expandedMerged.includes(key);
   const olderCount = Math.max(0, badges.length - MERGED_VISIBLE_COUNT);
@@ -2742,7 +2758,7 @@ function foldedPrLine(p, kind, label, badges, visibleWhileHidden = false) {
 }
 
 function endedDecisionToggle(session) {
-  if (ui.hideFinished) return '';
+  if (hidesFinished()) return '';
   const ended = session.decisions.filter(isEndedDecision);
   if (!ended.length) return '';
   const expanded = ui.expandedEndedDecisions.includes(session.id);
@@ -2751,8 +2767,8 @@ function endedDecisionToggle(session) {
 
 function decisionSessionBlock(p, session, withTag) {
   const active = visibleDecisions(session).sort((a, b) => ageMinutes(a) - ageMinutes(b));
-  const ended = ui.hideFinished ? [] : session.decisions.filter(isEndedDecision);
-  const expanded = !ui.hideFinished && ui.expandedEndedDecisions.includes(session.id);
+  const ended = hidesFinished() ? [] : session.decisions.filter(isEndedDecision);
+  const expanded = !hidesFinished() && ui.expandedEndedDecisions.includes(session.id);
   const visible = expanded ? [...active, ...ended].sort((a, b) => ageMinutes(a) - ageMinutes(b)) : active;
   const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
   const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
@@ -2810,7 +2826,7 @@ function kindToggle(key, label, count, expanded) {
 }
 
 function kindEndedDecisionEntries(sessions) {
-  if (ui.hideFinished) return [];
+  if (hidesFinished()) return [];
   return sessions.flatMap(({ p, session }) => session.decisions
     .filter(isEndedDecision)
     .map(decision => ({ p, session, decision })))
@@ -2818,7 +2834,7 @@ function kindEndedDecisionEntries(sessions) {
 }
 
 function kindEndedAgentCount(sessions) {
-  if (ui.hideFinished) return 0;
+  if (hidesFinished()) return 0;
   return sessions.reduce((count, { session }) => count + session.subagents.filter(agent => isEndedAgent(session, agent)).length, 0);
 }
 
@@ -2855,7 +2871,7 @@ function sessionBlock(p, session, showOriginBands = true) {
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
-    || (!ui.hideFinished && session.decisions.some(isEndedDecision))
+    || (!hidesFinished() && session.decisions.some(isEndedDecision))
     || !hasHiddenJudgmentItems(session);
   return `<${groupTag} class="session-group ${multiple ? '' : 'single'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}${worktreeLinks(session)}</div>` : ''}
@@ -3120,7 +3136,7 @@ function renderProductMode(showOriginBands = true) {
   const ps = orderedProducts();
   if (!ps.length) {
     const hidden = finishedHiddenCounts();
-    return `<div class="empty">${hidden.sessions || hidden.pullRequests
+    return `<div class="empty">${hidesFinished() && (hidden.sessions || hidden.pullRequests)
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
       : idleHiddenSessions().length
         ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
@@ -3164,7 +3180,7 @@ function renderKindMode(showOriginBands = true) {
   const ps = orderedProducts();
   if (!ps.length) {
     const hidden = finishedHiddenCounts();
-    return `<div class="empty">${hidden.sessions || hidden.pullRequests
+    return `<div class="empty">${hidesFinished() && (hidden.sessions || hidden.pullRequests)
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
       : idleHiddenSessions().length
         ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
@@ -3196,7 +3212,7 @@ function renderKindMode(showOriginBands = true) {
   const sinceSeenControls = unseenProducts.length > 1
     ? '<div class="kind-section-controls"><button type="button" class="link-btn" data-seen-all="true">すべて既読にする</button></div>'
     : '';
-  const showEndedAgents = ui.expandedKindAgents && !ui.hideFinished;
+  const showEndedAgents = ui.expandedKindAgents && !hidesFinished();
   const nowRowsByAge = sessions.flatMap(({ p, session }) => {
     const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || showEndedAgents);
     return [
@@ -3224,13 +3240,14 @@ function renderKindMode(showOriginBands = true) {
   const taskControls = todoTaskToggle || doneTaskToggle
     ? `<div class="kind-section-controls">${todoTaskToggle}${doneTaskToggle}</div>`
     : '';
-  const prs = ps.filter(p => reservationNoticeRows(p) || (ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true, showOriginBands)).join('');
+  const finishedPrCount = ui.hideFinished ? finishedHiddenCounts().pullRequests : 0;
+  const prs = ps.filter(p => reservationNoticeRows(p) || (hidesFinished() ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true, showOriginBands)).join('');
   const sections = {
     sinceSeen: news ? section('前回見てから', news, sinceSeenControls) : '',
     judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls, waits.length + endedDecisionEntries.length) : '',
     tasks: section('タスクと完了条件', tasks, taskControls, todoTaskCount + doneTaskCount),
     now: section('今やっていること', now, activityControls, nowRowsByAge.length + endedAgentCount),
-    prs: isShown('prs') ? section('プルリクエスト', prs) : '',
+    prs: isShown('prs') ? section('プルリクエスト', prs, finishedPrCount ? `<div class="kind-section-controls"><button type="button" class="ended-toggle" data-show-finished="kind">${hidesFinished() ? `終わったものを表示 (PR ${finishedPrCount} 件)` : '終わったものを隠す'}</button></div>` : '') : '',
   };
   return orderedSectionKeys(DEFAULT_SECTION_ORDER).map(key => sections[key]).join('');
 }
@@ -3242,7 +3259,10 @@ function render() {
   const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
     : focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.reviewKey, action: active.dataset.reviewSkip }
-       : active?.dataset?.showFinished ? { kind: 'show-finished' }
+       : active?.dataset?.showFinished ? { kind: 'show-finished', location: active.dataset.showFinished }
+       : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
+       : active?.hasAttribute('data-show-hidden-sessions') ? { kind: 'restored-sessions' }
+       : active?.hasAttribute('data-undo-restored-sessions') ? { kind: 'restored-sessions' }
        : active?.dataset?.showIdle ? { kind: 'show-idle' }
       : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
         : active?.dataset?.cancelCloseTask ? { kind: 'task-close', key: active.dataset.cancelCloseTask }
@@ -3262,7 +3282,11 @@ function render() {
   } else if (focusData?.attribute) {
     [...document.querySelectorAll(`[${focusData.attribute}]`)].find(button => button.getAttribute(focusData.attribute) === focusData.value)?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'show-finished') {
-    (document.querySelector('[data-show-finished]') || document.querySelector('[data-mode="' + ui.mode + '"]'))?.focus({ preventScroll: true });
+    (document.querySelector('[data-show-finished="' + focusData.location + '"]') || document.querySelector('[data-mode="' + ui.mode + '"]'))?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'show-all') {
+    document.querySelector('[data-show-all]')?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'restored-sessions') {
+    (document.querySelector('[data-undo-restored-sessions]') || document.querySelector('[data-show-hidden-sessions]') || document.querySelector('#root .section h2'))?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'show-idle') {
     document.querySelector('[data-show-idle]')?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'close-merge-result') {
@@ -3366,18 +3390,35 @@ document.addEventListener('click', e => {
     return;
   }
   else if (t.hasAttribute('data-show-finished')) {
-    const previous = captureDisplayPreferences();
-    ui.hideFinished = false;
-    hideFinishedInput.checked = false;
-    if (saveDisplayPreferences(previous)) render();
+    ui.showFinishedTemporarily = !ui.showFinishedTemporarily;
+    render();
     return;
   }
   else if (t.dataset.filter) {
+    hiddenKindsUndo = null;
     const k = t.dataset.filter;
     ui.hidden = ui.hidden.includes(k) ? ui.hidden.filter(x => x !== k) : [...ui.hidden, k];
   }
-  else if (t.hasAttribute('data-show-all')) { ui.hidden = []; }
-  else if (t.hasAttribute('data-show-hidden-sessions')) { ui.hiddenSessions = []; hiddenSessionsUndo = null; }
+  else if (t.hasAttribute('data-show-all')) {
+    if (hiddenKindsUndo) {
+      ui.hidden = hiddenKindsUndo;
+      hiddenKindsUndo = null;
+    } else {
+      hiddenKindsUndo = [...ui.hidden];
+      ui.hidden = [];
+    }
+  }
+  else if (t.hasAttribute('data-show-hidden-sessions')) {
+    restoredHiddenSessionsUndo = allSessions().filter(s => ui.hiddenSessions.includes(s.id) && !isIdleHiddenSession(s)).map(s => s.id);
+    if (!restoredHiddenSessionsUndo.length) restoredHiddenSessionsUndo = null;
+    ui.hiddenSessions = [];
+    hiddenSessionsUndo = null;
+  }
+  else if (t.hasAttribute('data-undo-restored-sessions')) {
+    for (const id of restoredHiddenSessionsUndo || []) ui.hiddenSessionUpdatedAt[id] = new Date().toISOString();
+    ui.hiddenSessions = [...new Set([...ui.hiddenSessions, ...(restoredHiddenSessionsUndo || [])])];
+    restoredHiddenSessionsUndo = null;
+  }
   else if (t.hasAttribute('data-undo-hidden-sessions')) {
     if (hiddenSessionsUndo) {
       const restored = new Set(hiddenSessionsUndo.sessionIds);
@@ -3419,6 +3460,7 @@ document.addEventListener('click', e => {
   } else if (t.dataset.hideSession) {
     const id = t.dataset.hideSession;
     hiddenSessionsUndo = null;
+    restoredHiddenSessionsUndo = null;
     if (!ui.hiddenSessions.includes(id)) {
       ui.hiddenSessions.push(id);
       ui.hiddenSessionUpdatedAt[id] = new Date().toISOString();
@@ -3428,6 +3470,7 @@ document.addEventListener('click', e => {
     if (product) {
       const sessionIds = visibleSessions(product).filter(session => !ui.hiddenSessions.includes(session.id)).map(session => session.id);
       if (!sessionIds.length) return;
+      restoredHiddenSessionsUndo = null;
       hiddenSessionsUndo = { productName: product.name, sessionIds };
       for (const id of sessionIds) ui.hiddenSessionUpdatedAt[id] = new Date().toISOString();
       ui.hiddenSessions = [...new Set([

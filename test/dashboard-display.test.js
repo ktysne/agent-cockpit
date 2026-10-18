@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { readWebPage, cssDeclarations, functionSource, pageContext } = require('./support/page-context');
+const { readWebPage, cssDeclarations, functionSource, displayPageContext: pageContext } = require('./support/page-context');
 
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 const web = readWebPage();
@@ -28,7 +28,7 @@ test('接続案内は一覧の前に、注記は一覧の後ろに置き、固�
     assert.ok(root < hiddenKinds);
     assert.ok(hiddenKinds < hiddenSessions);
     assert.ok(hiddenSessions < finished);
-    assert.match(html.slice(finished), /id="finished-note" hidden><\/div>\s*<div class="excluded-note" id="idle-note"/);
+    assert.match(html.slice(finished), /id="finished-note" role="status" aria-live="polite" hidden><\/div>\s*<div class="excluded-note" id="idle-note"/);
     assert.ok(finished < idle);
   }
 });

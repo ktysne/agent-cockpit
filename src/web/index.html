@@ -552,9 +552,9 @@ h3.sub .count { font-weight: normal; }
     <textarea id="update-prompt" aria-label="更新の依頼文" readonly hidden></textarea>
   </div>
   <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
-  <div class="filter-note" id="filter-note" hidden></div>
-  <div class="excluded-note" id="excluded-note" hidden></div>
-  <div class="excluded-note" id="finished-note" hidden></div>
+  <div class="filter-note" id="filter-note" role="status" aria-live="polite" hidden></div>
+  <div class="excluded-note" id="excluded-note" role="status" aria-live="polite" hidden></div>
+  <div class="excluded-note" id="finished-note" role="status" aria-live="polite" hidden></div>
   <div class="excluded-note" id="idle-note" role="status" aria-live="polite" hidden></div>
 </main>
 <!-- cockpit:include diagnostics.html -->
@@ -633,6 +633,9 @@ let lastState = null;
 let lastStateEtag = null;
 let sinceSeenMode = 'show';
 let showIdleSessions = false;
+let showFinishedTemporarily = false;
+let hiddenKindsUndo = null;
+let restoredHiddenSessionsUndo = null;
 let hasRenderedState = false;
 let answerNoteComposing = false;
 let deferredRenderPending = false;
@@ -907,6 +910,7 @@ function displaySettingError(key) {
 }
 
 function changeDisplaySetting(key, input) {
+  if (key === 'hideFinished') showFinishedTemporarily = false;
   const setting = DISPLAY_INTEGER_SETTINGS.find((item) => item.key === key);
   const value = input.type === 'checkbox' ? input.checked : input.valueAsNumber;
   if (setting && input.type !== 'checkbox' && (!Number.isInteger(value) || value < setting.min || value > setting.max)) {
@@ -1559,12 +1563,24 @@ function renderSummary(sessions, pullRequestGroups = []) {
   const hiddenRowCounts = { ...counts, prs: pullRequestOpenCount(pullRequestGroups) };
   const hiddenCount = hiddenKinds.reduce((total, { key }) => total + hiddenRowCounts[key], 0);
   const note = document.getElementById('filter-note');
-  note.hidden = hiddenKinds.length === 0;
-  if (hiddenKinds.length) {
+  note.hidden = hiddenKinds.length === 0 && !hiddenKindsUndo;
+  if (hiddenKindsUndo) {
+    const undo = element('button', 'link-btn', '元に戻す');
+    undo.type = 'button';
+    undo.dataset.showAll = 'undo';
+    undo.addEventListener('click', () => {
+      const hidden = hiddenKindsUndo;
+      hiddenKindsUndo = null;
+      saveDisplayPreferences({ hidden });
+      render(lastState);
+    });
+    note.replaceChildren(element('span', '', '隠した種類をすべて表示しました。'), undo);
+  } else if (hiddenKinds.length) {
     const showAll = element('button', 'link-btn', '隠した種類をすべて表示する');
     showAll.type = 'button';
     showAll.dataset.showAll = 'true';
     showAll.addEventListener('click', () => {
+      hiddenKindsUndo = [...displayPreferences.hidden];
       saveDisplayPreferences({ hidden: [] });
       render(lastState);
     });
@@ -1581,7 +1597,7 @@ function renderExcludedNote(sessions) {
   const note = document.getElementById('excluded-note');
   const hiddenSessions = sessions.filter((session) => session.hidden === true && !isIdleHiddenSession(session));
   const hiddenCount = hiddenSessions.length;
-  note.hidden = hiddenCount === 0 && !hiddenSessionsUndo && !recordDeletionConfirmations.has('excluded');
+  note.hidden = hiddenCount === 0 && !hiddenSessionsUndo && !restoredHiddenSessionsUndo && !recordDeletionConfirmations.has('excluded');
   if (note.hidden) {
     note.replaceChildren();
     return;
@@ -1592,6 +1608,12 @@ function renderExcludedNote(sessions) {
     undo.type = 'button';
     undo.dataset.undoHiddenSessions = 'true';
     children.push(element('span', '', `${hiddenSessionsUndo.productName} を一覧から外しました。`), undo);
+  }
+  if (restoredHiddenSessionsUndo) {
+    const undo = element('button', 'link-btn', '元に戻す');
+    undo.type = 'button';
+    undo.dataset.undoRestoredSessions = 'true';
+    children.push(element('span', '', `外したセッション (${restoredHiddenSessionsUndo.length} 件) を戻しました。`), undo);
   }
   if (hiddenCount) {
     const showAll = element('button', 'link-btn', '外したセッションを戻す');
@@ -1654,7 +1676,7 @@ function appendRecordDeletion(note, band, targets, count) {
     recordDeletionConfirmations.delete(band);
     confirmation = null;
     // 確認を開いていたために出していた帯は、対象が無くなったら閉じる。
-    if (!count && !(band === 'excluded' && hiddenSessionsUndo)) note.hidden = true;
+    if (!count && !(band === 'excluded' && (hiddenSessionsUndo || restoredHiddenSessionsUndo))) note.hidden = true;
   }
   if (!count && !confirmation) return;
   const controls = element('span', 'record-deletion');
@@ -1731,6 +1753,11 @@ async function deleteNoteRecords(band) {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const result = await response.json();
       deleted += result.deleted.sessions + result.deleted.pullRequests;
+      if (restoredHiddenSessionsUndo) {
+        const ids = new Set(body.session_ids || []);
+        restoredHiddenSessionsUndo = restoredHiddenSessionsUndo.filter((id) => !ids.has(id));
+        if (!restoredHiddenSessionsUndo.length) restoredHiddenSessionsUndo = null;
+      }
       if (hiddenSessionsUndo) {
         const ids = new Set(body.session_ids || []);
         hiddenSessionsUndo.sessionIds = hiddenSessionsUndo.sessionIds.filter((id) => !ids.has(id));
@@ -1771,6 +1798,21 @@ function finishedHiddenCounts(sessions, groups) {
   };
 }
 
+function hidesFinished() {
+  return displayPreferences.hideFinished && !showFinishedTemporarily;
+}
+
+function finishedToggle(location, label) {
+  const button = element('button', location === 'kind' ? 'ended-toggle' : 'link-btn', label);
+  button.type = 'button';
+  button.dataset.showFinished = location;
+  button.addEventListener('click', () => {
+    showFinishedTemporarily = !showFinishedTemporarily;
+    if (lastState) render(lastState);
+  });
+  return button;
+}
+
 function renderFinishedNote(counts, targets) {
   const note = document.getElementById('finished-note');
   const parts = [
@@ -1782,14 +1824,9 @@ function renderFinishedNote(counts, targets) {
     note.replaceChildren();
     return;
   }
-  const show = element('button', 'link-btn', '表示する');
-  show.type = 'button';
-  show.dataset.showFinished = 'true';
-  show.addEventListener('click', () => {
-    hideFinishedInput.checked = false;
-    void changeDisplaySetting('hideFinished', hideFinishedInput);
-  });
-  note.replaceChildren(element('span', '', `終わったものを隠しています (${parts.join('、')})`), show);
+  const show = finishedToggle('note', hidesFinished() ? '表示する' : '隠す');
+  const message = hidesFinished() ? '終わったものを隠しています' : '終わったものを表示しています';
+  note.replaceChildren(element('span', '', `${message} (${parts.join('、')})`), show);
   appendRecordDeletion(note, 'finished', targets, counts.sessions + counts.pullRequests);
 }
 
@@ -1806,7 +1843,7 @@ function isIdleHiddenSession(session, now = Date.now()) {
 }
 
 function idleHiddenSessions(sessions, now = Date.now()) {
-  return sessions.filter((session) => !(session.hidden !== true && displayPreferences.hideFinished && isFinishedSession(session))
+  return sessions.filter((session) => !(session.hidden !== true && hidesFinished() && isFinishedSession(session))
     && isIdleHiddenSession(session, now));
 }
 
@@ -1842,6 +1879,7 @@ function isFilterShown(key) {
 }
 
 function toggleFilter(key) {
+  hiddenKindsUndo = null;
   const hidden = isFilterShown(key)
     ? [...displayPreferences.hidden, key]
     : displayPreferences.hidden.filter((item) => item !== key);
@@ -1956,7 +1994,7 @@ function pullRequestGroupHasVisibleContent(group) {
 }
 
 function visiblePullRequestGroups(groups) {
-  if (!displayPreferences.hideFinished) return groups;
+  if (!hidesFinished()) return groups;
   return groups.filter(pullRequestGroupHasVisibleContent);
 }
 
@@ -2621,9 +2659,9 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
     content.append(stack);
   }
   const appendFoldedPrLine = (kind, heading, label, items, appendItem) => {
-    const visibleItems = displayPreferences.hideFinished && kind === 'merged'
+    const visibleItems = hidesFinished() && kind === 'merged'
       ? items.filter((item) => item.headMismatch === true)
-      : displayPreferences.hideFinished ? [] : items;
+      : hidesFinished() ? [] : items;
     if (!visibleItems.length) return;
     const line = element('div', 'merged-list');
     line.append(document.createTextNode(`${heading}: `));
@@ -2797,7 +2835,7 @@ function sessionActivityTime(session) {
 
 function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
   const idleFilteredSessions = sessionsAfterIdleFilter(sessions);
-  const visibleSessions = displayPreferences.hideFinished
+  const visibleSessions = hidesFinished()
     ? idleFilteredSessions.filter((session) => session.hidden === true || !isFinishedSession(session))
     : idleFilteredSessions;
   const grouped = productGroups(visibleSessions, pullRequestGroups);
@@ -2903,8 +2941,8 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
   }
   const agents = newestFirst(session.agents);
   const runningAgents = agents.filter((agent) => !isEndedAgent(agent) && (!agent.active || isFilterShown('agents')));
-  const endedAgents = displayPreferences.hideFinished ? [] : agents.filter(isEndedAgent);
-  const visibleAgents = showEnded && !displayPreferences.hideFinished ? [...runningAgents, ...endedAgents] : runningAgents;
+  const endedAgents = hidesFinished() ? [] : agents.filter(isEndedAgent);
+  const visibleAgents = showEnded && !hidesFinished() ? [...runningAgents, ...endedAgents] : runningAgents;
   const hiddenRunningAgents = agents.some((agent) => agent.active && !isFilterShown('agents'));
   if (!visibleAgents.length && !endedAgents.length && !isFilterShown('agents')) return;
   body.append(element('h3', 'sub', 'サブエージェント'));
@@ -3457,8 +3495,8 @@ function appendKindToggle(body, sectionKey, expanded, count, label) {
 function appendDecisions(body, session, product, withTags = false, multipleSessions = false) {
   const decisions = newestFirst(session.decisions);
   const active = newestFirst(shownActiveDecisions(session));
-  const ended = displayPreferences.hideFinished ? [] : decisions.filter(isEndedDecision);
-  const expanded = !displayPreferences.hideFinished && expandedEndedDecisions.has(session.session_id);
+  const ended = hidesFinished() ? [] : decisions.filter(isEndedDecision);
+  const expanded = !hidesFinished() && expandedEndedDecisions.has(session.session_id);
   const visible = expanded ? newestFirst([...active, ...ended]) : active;
   if (visible.length) {
     const list = element('div', 'decision-list');
@@ -3646,7 +3684,7 @@ function sessionBlock(product, session, multipleSessions, showOriginBands = true
     } else body.append(context);
   }
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
-  const hasEndedDecisions = !displayPreferences.hideFinished && session.decisions.some(isEndedDecision);
+  const hasEndedDecisions = !hidesFinished() && session.decisions.some(isEndedDecision);
   const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
   const sections = { judgment: [], tasks: [], now: [] };
   if (showJudgment) {
@@ -3861,7 +3899,7 @@ function sessionReferences(products) {
 }
 
 function kindEndedDecisionEntries(references) {
-  if (displayPreferences.hideFinished) return [];
+  if (hidesFinished()) return [];
   const entries = references.flatMap((reference) => reference.session.decisions
     .filter(isEndedDecision)
     .map((decision) => ({ ...reference, decision })));
@@ -3924,11 +3962,11 @@ function compareKindJudgmentItems(left, right) {
 }
 
 function kindEndedAgentCount(references) {
-  if (displayPreferences.hideFinished) return 0;
+  if (hidesFinished()) return 0;
   return references.reduce((count, reference) => count + reference.session.agents.filter(isEndedAgent).length, 0);
 }
 
-function renderKindSections(products, showOriginBands = true) {
+function renderKindSections(products, showOriginBands = true, finishedPrCount = 0) {
   const references = sessionReferences(products);
   const waitingItems = [];
   const endedDecisions = element('div', 'kind-ended');
@@ -4021,7 +4059,11 @@ function renderKindSections(products, showOriginBands = true) {
   if (isFilterShown('prs')) {
     const pullRequests = element('div', 'body');
     for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true, showOriginBands);
-    sections.prs = kindSection('プルリクエスト', pullRequests, null, pullRequestGroups.length);
+    const controls = element('div', 'kind-section-controls');
+    if (displayPreferences.hideFinished && finishedPrCount) {
+      controls.append(finishedToggle('kind', hidesFinished() ? `終わったものを表示 (PR ${finishedPrCount} 件)` : '終わったものを隠す'));
+    }
+    sections.prs = kindSection('プルリクエスト', pullRequests, controls.children.length ? controls : null, pullRequestGroups.length);
   }
   return orderedSectionKeys(DEFAULT_SECTION_ORDER).map((key) => sections[key]).filter(Boolean);
 }
@@ -4059,7 +4101,7 @@ function render(state) {
         : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
-         : active?.dataset?.showFinished ? { kind: 'show-finished' }
+         : active?.dataset?.showFinished ? { kind: 'show-finished', location: active.dataset.showFinished }
          : active?.dataset?.showIdle ? { kind: 'show-idle' }
            : active?.dataset?.closeMergeResult ? { kind: 'merge-result-close', id: active.dataset.closeMergeResult }
              : active?.dataset?.repoUnregister ? { kind: 'repo-unregister', key: active.dataset.repoUnregister, action: active.dataset.repoUnregisterAction }
@@ -4068,6 +4110,7 @@ function render(state) {
                  : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
               : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
               : active?.dataset?.worktreeAction ? { kind: 'worktree', key: active.dataset.worktreeKey, action: active.dataset.worktreeAction, index: active.dataset.worktreeIndex }
+        : active?.dataset?.undoRestoredSessions ? { kind: 'undo-restored' }
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
           : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' }
             : active?.hasAttribute('data-undo-hidden-sessions') ? { kind: 'undo-hidden' } : null;
@@ -4084,19 +4127,21 @@ function render(state) {
   const sinceSeen = visibleSinceSeen(state);
   const products = orderedProducts(displayedSessions, pullRequestGroups, sinceSeen);
   if (!products.length) {
-    const emptyText = hiddenFinished.sessions || hiddenFinished.pullRequests
+    const emptyText = hidesFinished() && (hiddenFinished.sessions || hiddenFinished.pullRequests)
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
       : idleHiddenCount
         ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
       : '表示するセッションがありません。Claude Code か Codex でセッションを開始すると、ここに表示されます。';
     root.replaceChildren(element('section', 'section empty', emptyText));
-    const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
+    const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions', 'undo-restored': 'data-undo-restored-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
     else if (focusData?.kind === 'filter') {
       const chips = [...summary.querySelectorAll('button')];
       (chips.find((item) => item.dataset.filter === focusData.key) || filterFocusFallback(chips, focusData.key)
         || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]'))?.focus({ preventScroll: true });
-    } else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
+    } else if (focusData?.kind === 'show-finished') {
+      (document.querySelector('[data-show-finished="note"]') || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]'))?.focus({ preventScroll: true });
+    } else if (['show-idle', 'merge-result-close'].includes(focusData?.kind)) {
       document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
     }
     return;
@@ -4110,7 +4155,7 @@ function render(state) {
       : null;
     root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount, showOriginBands, markAllSeenProductKey)));
   } else {
-    root.replaceChildren(...renderKindSections(products, showOriginBands));
+    root.replaceChildren(...renderKindSections(products, showOriginBands, hiddenFinished.pullRequests));
   }
 
   if (focusData?.kind?.startsWith('merge-')) {
@@ -4179,8 +4224,9 @@ function render(state) {
       if (focusData.kind === 'filter') return item.dataset.filter === focusData.key;
       if (focusData.kind === 'show-all') return item.hasAttribute('data-show-all');
       if (focusData.kind === 'clear-hidden') return item.hasAttribute('data-clear-hidden-sessions');
+      if (focusData.kind === 'undo-restored') return item.hasAttribute('data-undo-restored-sessions');
       if (focusData.kind === 'undo-hidden') return item.hasAttribute('data-undo-hidden-sessions');
-      if (focusData.kind === 'show-finished') return item.hasAttribute('data-show-finished');
+      if (focusData.kind === 'show-finished') return item.dataset.showFinished === focusData.location;
       if (focusData.kind === 'show-idle') return item.hasAttribute('data-show-idle');
       if (focusData.kind === 'merge-result-close') return item.dataset.closeMergeResult === focusData.id;
       if (focusData.kind === 'review-skip') return item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip === focusData.action;
@@ -4767,6 +4813,10 @@ async function runPullRequestConflictRequest(button) {
 
 async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false, undoInfo = null) {
   button.disabled = true;
+  // 更新が無くて隠れているセッションは外し直すと外した時刻が今になり、外したセッションの件数に混ざるので、取り消しの対象にしない。
+  const restoredIds = body.action === 'clear'
+    ? lastState.sessions.filter((session) => session.hidden === true && !isIdleHiddenSession(session)).map((session) => session.session_id) : null;
+  const undoRestored = Boolean(button.dataset.undoRestoredSessions);
   try {
     const requests = ['hide', 'unhide'].includes(body.action) && Array.isArray(body.session_ids)
       ? Array.from({ length: Math.ceil(body.session_ids.length / 50) }, (_, index) => ({
@@ -4783,9 +4833,13 @@ async function runSessionAction(button, url, body, errorMessage, focusExcludedNo
     }
     if (actionSucceeded && body.action === 'hide') hiddenSessionsUndo = undoInfo;
     if (actionSucceeded && ['clear', 'unhide'].includes(body.action)) hiddenSessionsUndo = null;
+    if (actionSucceeded && body.action === 'hide') restoredHiddenSessionsUndo = null;
+    if (actionSucceeded && body.action === 'clear') restoredHiddenSessionsUndo = restoredIds.length ? restoredIds : null;
     await refresh();
     if (!actionSucceeded) return;
-    if (focusExcludedNote) {
+    if (undoRestored) {
+      (document.querySelector('[data-clear-hidden-sessions]') || root.querySelector('.section h2'))?.focus({ preventScroll: true });
+    } else if (focusExcludedNote) {
       (document.querySelector('[data-undo-hidden-sessions]') || document.querySelector('[data-clear-hidden-sessions]'))
         ?.focus({ preventScroll: true });
     }
@@ -4794,7 +4848,7 @@ async function runSessionAction(button, url, body, errorMessage, focusExcludedNo
         .find((item) => item.dataset.estimateSession === button.dataset.estimateSession)
         ?.focus({ preventScroll: true });
     } else if (body.action === 'clear') {
-      (root.querySelector('[data-estimate-session]') || root.querySelector('button'))?.focus({ preventScroll: true });
+      (document.querySelector('[data-undo-restored-sessions]') || root.querySelector('[data-estimate-session]') || root.querySelector('button'))?.focus({ preventScroll: true });
     } else if (body.action === 'unhide') {
       (document.querySelector('[data-clear-hidden-sessions]') || root.querySelector('.section h2'))
         ?.focus({ preventScroll: true });
@@ -4921,6 +4975,11 @@ document.addEventListener('click', (event) => {
       { action: 'clear' },
       '外したセッションを表示できませんでした',
     );
+    return;
+  }
+  if (button.dataset.undoRestoredSessions) {
+    if (!restoredHiddenSessionsUndo) return;
+    void runSessionAction(button, '/api/hidden-sessions', { action: 'hide', session_ids: restoredHiddenSessionsUndo }, 'セッションを一覧から外せませんでした');
     return;
   }
   if (button.dataset.undoHiddenSessions) {

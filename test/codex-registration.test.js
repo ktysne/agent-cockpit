@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const { runHook } = require('../src/hooks/event');
 const { handleRequest } = require('../src/mcp/server');
 const { hookHeaders, jsonBody, request, startTestServer } = require('./support/server');
-const { functionSource, pageContext } = require('./support/page-context');
+const { functionSource, displayPageContext: pageContext } = require('./support/page-context');
 
 async function cockpit(t, options = {}) {
   const server = await startTestServer(t, options);
