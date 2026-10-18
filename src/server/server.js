@@ -222,7 +222,7 @@ function createRequestHandler(options) {
   const { handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
   const {
     handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks,
-    handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
+    handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer, handleLaunchRequest, handleWorktreeTerminal,
   } = createUiSessionRoutes(ctx);
   const { handleAwayState, handleAway, handleRouting, handleOpenUrl, handleUpdateCheck, handlePersistenceRetry } = createSettingsRoutes(ctx);
 
@@ -283,6 +283,8 @@ function createRequestHandler(options) {
     { method: 'POST', path: '/api/hooks/answers', auth: 'hook', body: 'json', handler: handleHookAnswers },
     // decision id の復号の失敗は、本文を読んだ後にハンドラーで 400 にする。
     { method: 'POST', path: /^\/api\/decisions\/([^/]+)\/answer$/, auth: 'ui', body: 'json', handler: handleDecisionAnswer },
+    { method: 'POST', path: '/api/verify/launch', auth: 'ui', body: 'json', handler: handleLaunchRequest },
+    { method: 'POST', path: '/api/worktree/terminal', auth: 'ui', body: 'json', handler: handleWorktreeTerminal },
     { method: 'POST', path: '/api/pull-requests/review-skip', auth: 'ui', body: 'json', handler: handleReviewSkip },
     { method: 'POST', path: /^\/api\/pull-requests\/(merge|reserve|cancel-reservation|conflict-request)$/, auth: 'ui', body: 'json', handler: handlePullRequestAction },
     { method: 'GET', path: '/', auth: 'none', body: 'none', handler: handleIndex },
@@ -451,7 +453,7 @@ async function startServer(options = {}) {
     onFailure: (fileName) => logLine(homeDir, `${fileName} write failed`),
   });
   const perf = new PerfMetrics();
-  const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter, perf });
+  const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter, perf, worktreeOptions: options.worktreeOptions });
   const diagnostics = new Diagnostics({ ...options.diagnosticsOptions, homeDir, userHome: options.userHome,
     getLevel: () => state.getDisplayPreferences?.()?.diagnosticsLevel || 'info' });
   state.diagnostics = diagnostics;

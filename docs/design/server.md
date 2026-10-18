@@ -537,6 +537,29 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 
 ## タスクと判断事項
 
+確認依頼は `cockpit_add_decision` の `waiting` と `verify.steps` で登録する。
+`source: "mcp"` の waiting はダイアログを持たないため、画面から回答できる。
+ask 由来の質問と離席時の扱いは変えない。
+`verify`、`launchRequestedAt`、選択肢の省略可能な `next` は既存の `plans.decisions` に保存し、旧形式では省略されたまま読む。
+
+画面の `POST /api/verify/launch` はセッションと判断事項の ID だけを受け、未解決の確認依頼を照合してから `answerDelivery.notifySessions` で ID を含む固定文を通知する。
+未配達の同じ通知があれば 409 にし、回答欄は使わない。
+セッション自身が起動し、MCP の `cockpit_report_launch` から `verify.launched = { url | process, at }` を書く。
+この書き込みも既存の MCP の秘密値とセッション照合を通し、URL は http と https のみ受け、判断事項の状態は変えない。
+
+セッションの cwd から linked worktree を探し、snapshot に `worktree` を載せる。
+未解決の確認依頼がある間だけ git でブランチ、base、先行数と未コミット数を読み、root ごとのキャッシュと実行中の Promise を共有する。
+同期 snapshot はキャッシュを返し、5 秒以上古ければ背景で更新して `state.touch()` で知らせる。
+失敗とタイムアウトでは前回値を保ち、未取得の行は画面で「読み取り中」とする。
+
+`POST /api/worktree/terminal` は判断事項かセッションの ID だけを受け、サーバーが cwd から root を引く。
+両方の画面の口で起動ごとの UI 秘密値と Origin を照合し、パスやコマンドは受けない。
+Windows では LOCALAPPDATA 配下の絶対パスの wt.exe に `-w new -d <root>` を shell なしで渡し、短時間の同じ root の起動を間引く。
+wt.exe が無ければ、SystemRoot 配下の cmd.exe の `start` で PowerShell 7(無ければ Windows PowerShell)の新しいコンソールを開き、root は作業ディレクトリとしてだけ渡す。
+常駐サーバーから PowerShell を直接起動すると標準入力が空ですぐ終わるため、start を挟む。
+端末が無い場合、worktree 削除済みの場合、Windows 以外の場合は理由付きの 4xx を返す。
+パスと確認手順のコピーはブラウザーだけで行う。
+
 判断事項は次の形で保持する。
 
 ```json

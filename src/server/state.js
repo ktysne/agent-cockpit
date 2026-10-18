@@ -1,5 +1,7 @@
 const crypto = require('node:crypto');
 const { PlanUpdates } = require('./plan-updates');
+const { WorktreeInfo } = require('./worktree-info');
+const { validVerify, validText } = require('./request-validation');
 const assert = require('node:assert/strict');
 const { SessionEntries } = require('./session-entries');
 const fs = require('node:fs/promises');
@@ -142,7 +144,10 @@ function validStoredPlan(plan) {
       (task.completedAt === undefined || validTimestamp(task.completedAt))) &&
     Array.isArray(plan.decisions) && plan.decisions.every((decision) => isRecord(decision) &&
       typeof decision.id === 'string' && typeof decision.title === 'string' && typeof decision.state === 'string' &&
-      Array.isArray(decision.questions) && decision.questions.every((question) => isRecord(question) && Array.isArray(question.options)) &&
+      Array.isArray(decision.questions) && decision.questions.every((question) => isRecord(question) && Array.isArray(question.options) &&
+        question.options.every(option => option.next === undefined || validText(option.next, 2000, true))) &&
+      (decision.verify === undefined || validVerify(decision.verify, true)) &&
+      (decision.launchRequestedAt === undefined || validTimestamp(decision.launchRequestedAt)) &&
       validTimestamp(decision.createdAt) && validTimestamp(decision.updatedAt) &&
       (decision.provisionalAt === undefined || validTimestamp(decision.provisionalAt)) &&
       (decision.finishedByToolUseId === undefined || typeof decision.finishedByToolUseId === 'string') &&
@@ -1600,6 +1605,7 @@ class DashboardState {
     this.verifyEntries = options.verifyEntries ?? process.env.AGENT_COCKPIT_VERIFY_ENTRIES === '1';
     this.entries = new SessionEntries(this.verifyEntries);
     this.hookCwds = new Map();
+    this.worktreeInfo = new WorktreeInfo({ ...options.worktreeOptions, onChange: () => this.touch() });
     this.sequence = 0;
     this.version = 0;
     this.generatedAt = new Date().toISOString();
@@ -3307,6 +3313,7 @@ class DashboardState {
       state: input.state,
       title: input.title,
       context: input.context,
+      ...(input.verify ? { verify: { steps: input.verify.steps.map(step => ({ ...step })) } } : {}),
       questions: [{
         question: input.title,
         header: '',
@@ -3326,6 +3333,27 @@ class DashboardState {
     this.touch();
     this.requestStoreWrite();
     return cloneDecision(decision);
+  }
+
+  reportLaunch(sessionId, id, target, now = Date.now()) {
+    const decision = this.plans.get(sessionId)?.decisions.find(item => item.id === id);
+    if (!decision?.verify || !['waiting', 'provisional'].includes(this.decisionFor(sessionId, id)?.state)) return null;
+    const timestamp = isoTime(now);
+    decision.verify.launched = { ...target, at: timestamp };
+    decision.updatedAt = timestamp;
+    this.touch();
+    this.requestStoreWrite(true);
+    return this.decisionFor(sessionId, id);
+  }
+
+  requestLaunch(sessionId, id, now = Date.now()) {
+    const decision = this.plans.get(sessionId)?.decisions.find(item => item.id === id);
+    if (!decision?.verify || !['waiting', 'provisional'].includes(this.decisionFor(sessionId, id)?.state)) return null;
+    decision.launchRequestedAt = isoTime(now);
+    decision.updatedAt = decision.launchRequestedAt;
+    this.touch();
+    this.requestStoreWrite(true);
+    return this.decisionFor(sessionId, id);
   }
 
   updateDecision(sessionId, id, state, chosen, note, now = Date.now()) {
@@ -3593,6 +3621,9 @@ class DashboardState {
       tasksUpdatedAt: plan?.tasksUpdatedAt || null,
       ...(isNonInteractiveSessionFile(file) ? { nonInteractive: true } : {}),
     };
+    const worktree = this.worktreeInfo.snapshot(this.transcriptCwdFor(sessionId),
+      decisions.some(decision => decision.verify && ['waiting', 'provisional'].includes(decision.state)));
+    if (worktree) current.worktree = worktree;
     if (current.status === '不明' && fileStatusDecidesState(file)) {
       if (file.status === 'busy') {
         current.status = '作業中';
@@ -4004,6 +4035,8 @@ function cloneResolution(resolution) {
 function cloneDecision(decision) {
   return {
     ...decision,
+    ...(decision.verify ? { verify: { ...decision.verify, steps: decision.verify.steps.map(step => ({ ...step })),
+      ...(decision.verify.launched ? { launched: { ...decision.verify.launched } } : {}) } } : {}),
     questions: decision.questions.map((question) => ({
       ...question,
       options: question.options.map((option) => ({ ...option })),

@@ -245,7 +245,7 @@ function createHookRoutes(ctx) {
       if (['SessionStart', 'SessionEnd'].includes(event.hook_event_name)) ctx.diagnostics?.record('info', 'server', 'event.lifecycle', data);
     }
 
-    if (event && !event.agent_id && event.provider !== 'codex') state.noteHookCwd(event.session_id, body.cwd);
+    if (event && !event.agent_id) state.noteHookCwd(event.session_id, body.cwd);
     // 終了通知はメインの記録に書かれるので、サブエージェントのイベントのたびには読まない。
     if (event && !event.agent_id) scheduleTaskNotifications(event.session_id);
     if (event) scheduleSessionModel(event);
@@ -331,22 +331,26 @@ function createHookRoutes(ctx) {
         title: body.title,
         context: body.context,
         state: body.state,
+        ...(body.verify ? { verify: body.verify } : {}),
         options: body.options.map((option) => ({
           label: option.label,
           description: option.description,
           recommended: option.recommended === true,
+          ...(option.next !== undefined ? { next: option.next } : {}),
         })),
       });
       const decisions = decisionSummaries(state, sessionId);
       jsonResponse(response, 200, { decision: { id: decision.id, title: decision.title, state: decision.state }, decisions });
       return;
     }
-    const decision = state.updateDecision(sessionId, body.id, body.state, body.chosen, body.note);
+    const decision = body.kind === 'report_launch'
+      ? state.reportLaunch(sessionId, body.id, body.url !== undefined ? { url: body.url } : { process: body.process })
+      : state.updateDecision(sessionId, body.id, body.state, body.chosen, body.note);
     if (!decision) {
       jsonResponse(response, 404, { error: 'Decision not found or already resolved' });
       return;
     }
-    answerDelivery.afterDecisionUpdate(sessionId, decision.id);
+    if (body.kind !== 'report_launch') answerDelivery.afterDecisionUpdate(sessionId, decision.id);
     await state.waitForPersistence();
     const decisions = decisionSummaries(state, sessionId);
     jsonResponse(response, 200, { decision: { id: decision.id, title: decision.title, state: decision.state }, decisions });

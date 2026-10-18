@@ -75,6 +75,7 @@ const BROWSER_GLOBALS = new Set([
   'HTMLTextAreaElement',
   'localStorage',
   'location',
+  'navigator',
   'ResizeObserver',
   'setInterval',
   'setTimeout',

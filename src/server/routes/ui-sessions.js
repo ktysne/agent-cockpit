@@ -219,7 +219,49 @@ function createUiSessionRoutes(ctx) {
     jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer }, persistence: state.persistenceStatus?.() });
   }
 
-  return { handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks, handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer };
+  async function handleLaunchRequest({ response, body }) {
+    if (!body || Object.keys(body).sort().join(',') !== 'decision_id,session_id' ||
+      !validSessionId(body.session_id) || !validText(body.decision_id, 256)) {
+      jsonResponse(response, 400, { error: 'Invalid request' });
+      return;
+    }
+    const decision = state.decisionFor(body.session_id, body.decision_id);
+    if (!decision?.verify || decision.source !== 'mcp' || !['waiting', 'provisional'].includes(decision.state)) {
+      jsonResponse(response, 404, { error: '未解決の確認依頼が見つかりません' });
+      return;
+    }
+    const message = `確認用にアプリを起動してください。起動したら cockpit_report_launch で判断事項 ${decision.id} に起動先(URL かプロセス名)を書いてください。`;
+    if ((state.pendingSessionNotifications.get(body.session_id) || []).some(record => record.message === message)) {
+      jsonResponse(response, 409, { error: '起動の依頼はまだセッションに届いていません' });
+      return;
+    }
+    if (!answerDelivery.notifySessions([body.session_id], message)) {
+      jsonResponse(response, 409, { error: '未配達の通知が多いため、起動を依頼できません' });
+      return;
+    }
+    const saved = state.requestLaunch(body.session_id, decision.id);
+    await state.waitForPersistence();
+    jsonResponse(response, 200, { launchRequestedAt: saved.launchRequestedAt });
+  }
+
+  async function handleWorktreeTerminal({ response, body }) {
+    if (!body || !['session_id', 'decision_id'].includes(Object.keys(body)[0]) || Object.keys(body).length !== 1 ||
+      (body.session_id !== undefined ? !validSessionId(body.session_id) : !validText(body.decision_id, 256))) {
+      jsonResponse(response, 400, { error: 'Invalid request' });
+      return;
+    }
+    const session = state.snapshot().sessions.find(item => body.session_id !== undefined
+      ? item.session_id === body.session_id : item.decisions.some(decision => decision.id === body.decision_id));
+    if (!session) {
+      jsonResponse(response, 404, { error: 'セッションが見つかりません' });
+      return;
+    }
+    const result = await state.worktreeInfo.openTerminal(state.transcriptCwdFor(session.session_id));
+    jsonResponse(response, result.status, result);
+  }
+
+  return { handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks, handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
+    handleLaunchRequest, handleWorktreeTerminal };
 }
 
 module.exports = { createUiSessionRoutes };

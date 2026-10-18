@@ -30,6 +30,17 @@ description: Codex のメインセッションのタスク、完了条件、判�
 - 離席中に質問ツールが止められた場合は、示された id を `cockpit_update_decision` に渡し、state を `provisional` にして選んだ選択肢を書く。推奨の無い質問で仮定を置いて進めたときは、その仮定を note に書く。
 - 判断が完了したら `cockpit_update_decision` で state を `resolved` にする。
 
+## 確認依頼
+
+- worktree で動作確認を頼むときは、質問ツール(`request_user_input_async` / `request_user_input`)や `AskUserQuestion` ではなく、`cockpit_add_decision` に `state: "waiting"` と `verify: { steps: [{ cmd, note }] }` を付けて登録する。
+- 選択肢は「確認した。コミットして PR を作る」(`recommended: true`)と「直してほしい点がある」にする。
+- 各選択肢の `next` に、前者は「セッションがコミットして PR を作ると、PR の欄にクロスレビューとマージの段が出ます。」、後者は「セッションが直したあと、このカードがもう一度届きます。」を書く。
+- チャットにも確認を頼む文を書き、ターンを終える。
+- 通知で起動を頼まれたら、自分のツールでアプリを起動し(内部ブラウザなら `preview_start`)、`cockpit_report_launch` に判断事項の `id` と `url` または `process` のどちらかを渡す。
+- 起動先の URL は `http:` または `https:` にする。起動報告では判断事項を解決しない。
+- 回答を受けたら `cockpit_update_decision` で `resolved` にする。チャットで回答を受けたときも同じように更新する。
+- Codex は席にいる間は Stop で待たないため、画面の回答と起動依頼は次のツール実行かプロンプト送信で受け取る。
+
 ## サブエージェント
 
 - サブエージェントは Agent Cockpit の MCP ツールを呼ばない。

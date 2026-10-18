@@ -725,7 +725,7 @@ const DATA = {
           decisions: [{ id: 'rs-5', waitMin: 2, awaitingMin: 3, title: '負のオフセットを許可するか', kind: 'waiting',
             ctx: '既存データとの互換性を確認している。', options: [{ t: '負の値も許可する', why: '先行するカウントを保持できる', rec: true }] },
           // verify は確認依頼。場所とコミットの状態は常駐サーバーが worktree から読み、確かめ方だけをセッションが書く。
-          { id: 'rs-6', waitMin: 1, awaitingMin: 3, isNew: true, title: '小数 BPM の入力欄を確認してください', kind: 'waiting',
+          { id: 'rs-6', waitMin: 1, isNew: true, title: '小数 BPM の入力欄を確認してください', kind: 'waiting',
             ctx: '入力欄で 120.5 のような小数を受け付け、小節線の位置に反映するようにした。',
             verify: {
               path: 'D:/Develop/rec-studio/.claude/worktrees/tempo-map-test-3f9a1c', branch: 'feat/tempo-map-test', base: 'main', ahead: 2, uncommitted: 3,
@@ -2166,7 +2166,8 @@ function decisionCard(p, session, d, withTag) {
     : `<span class="chip ${stateTone}">${stateLabel}</span>`;
   // ダイアログを出している質問は外から答えられないので、回答欄の代わりに案内を出す。
   // awaitingMin は、離席中に出た質問でフックが回答を待っているときの、推奨に進むまでの残り分。
-  const viaDialog = state === 'waiting' && !Number.isFinite(d.awaitingMin);
+  // 確認依頼は MCP で登録しダイアログを出さないので、フックの待ちが無くても画面から答えられる。
+  const viaDialog = state === 'waiting' && !Number.isFinite(d.awaitingMin) && !d.verify;
   const picked = picksOf(draft).map(i => d.options[i].t);
   const answerMeta = picked.length ? `送る答え: ${esc(picked.join('、'))}` : '';
   const sentKind = s => s.choice === 'ok' ? '推奨案で OK' : s.choice === 'pick' ? `「${picksOf(s).map(i => d.options[i].t).join('」「')}」を選択` : '指示のみ';
@@ -2184,7 +2185,7 @@ function decisionCard(p, session, d, withTag) {
     d.resolution?.note ? `<span class="meta">${esc(d.resolution.note)}</span>` : '',
     !active && !viaDialog ? sentLine : '',
   ].filter(Boolean).join('');
-  const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${viaDialog ? '' : `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>`}` : state === 'provisional' ? `<span class="wait">仮適用から ${durationLabel(Date.now() - d.waitMin * 60_000)}</span>` : '';
+  const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${Number.isFinite(d.awaitingMin) ? `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>` : ''}` : state === 'provisional' ? `<span class="wait">仮適用から ${durationLabel(Date.now() - d.waitMin * 60_000)}</span>` : '';
   return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''} ${session.provider === 'codex' ? 'origin-codex' : ''}" data-id="${d.id}" data-session-id="${esc(session.id)}">
     <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
     <div class="ctx">${esc(d.ctx)}</div>
