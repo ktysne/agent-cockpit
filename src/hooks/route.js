@@ -50,36 +50,40 @@ function segmentStartsWithEnv(segment) {
   return commandName(firstCommand) === 'env';
 }
 
-function commandInvokesCodexAgent(command, depth = 0) {
-  if (typeof command !== 'string') return false;
-  if (depth >= 8) return false;
-  return commandSegments(command).some((segment) => {
+/** 前置きとシェルの起動をたどり、isScript に合う語で始まる起動ごとに、その後ろの語の列を返す。 */
+function codexAgentInvocations(command, isScript, depth = 0) {
+  if (typeof command !== 'string') return [];
+  if (depth >= 8) return [];
+  return commandSegments(command).flatMap((segment) => {
     let ungrouped = segment.trim();
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
     const words = withoutCommandPrefixes(commandWords(ungrouped), segmentStartsWithEnv(ungrouped));
-    const isScript = (word) => CODEX_AGENT_SCRIPT.test(word);
-    if (isScript(words[0] || '')) return true;
-    if (['source', '.'].includes(words[0])) return isScript(words[1] || '');
+    if (isScript(words[0] || '')) return [words.slice(1)];
+    if (['source', '.'].includes(words[0])) return isScript(words[1] || '') ? [words.slice(2)] : [];
     const shell = commandName(words[0]);
-    if (!['bash', 'sh', 'dash', 'zsh'].includes(shell)) return false;
+    if (!['bash', 'sh', 'dash', 'zsh'].includes(shell)) return [];
     for (let index = 1; index < words.length;) {
       const option = words[index];
       if (option === '-c' || option === '--command' || /^-[^-]*c[^-]*$/.test(option)) {
-        return commandInvokesCodexAgent(words[index + 1] || '', depth + 1);
+        return codexAgentInvocations(words[index + 1] || '', isScript, depth + 1);
       }
-      if (option === '--help' || option === '--version' || option === '-help' || option === '-version') return false;
-      if (option === '--') return isScript(words[index + 1] || '');
+      if (option === '--help' || option === '--version' || option === '-help' || option === '-version') return [];
+      if (option === '--') return isScript(words[index + 1] || '') ? [words.slice(index + 2)] : [];
       if (option === '-o' || option === '-O' || option === '--rcfile' || option === '--init-file') {
         index += 2;
       } else if (option.startsWith('-') && option !== '-') {
         index += 1;
       } else {
-        return isScript(option);
+        return isScript(option) ? [words.slice(index + 1)] : [];
       }
     }
-    return false;
+    return [];
   });
+}
+
+function commandInvokesCodexAgent(command) {
+  return codexAgentInvocations(command, (word) => CODEX_AGENT_SCRIPT.test(word)).length > 0;
 }
 
 function routeRecordPath(input, homeDir) {
@@ -219,4 +223,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, commandInvokesCodexAgent, effectiveRouteForSubagentStart, outputForInputText, outputForRoute, readRouting };
+module.exports = { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, codexAgentInvocations, commandInvokesCodexAgent, effectiveRouteForSubagentStart, outputForInputText, outputForRoute, readRouting };

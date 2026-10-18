@@ -735,17 +735,10 @@ function sameGitHubRepository(left, right) {
   return left.owner.toLowerCase() === right.owner.toLowerCase() && left.repo.toLowerCase() === right.repo.toLowerCase();
 }
 
-// 道具の有無はコミットの木で決まるので、確かめられた結果は SHA で引き、取得をまたいで使う。
-// 確かめられない結果は、worktree にコミットが届いていないなど一時的なことがあるので、1 回の取得の間だけ使う。
-async function crossReviewToolAtHead(root, headSha, execFileImpl, cache) {
-  if (!isCompleteCommitSha(headSha)) return 'unknown';
-  const sha = headSha.toLowerCase();
-  const unknownKey = JSON.stringify([process.platform === 'win32' ? root.toLowerCase() : root, sha]);
-  if (cache?.known.has(sha)) return cache.known.get(sha);
-  if (cache?.unknown.has(unknownKey)) return 'unknown';
-  const result = await new Promise((resolve) => {
+function crossReviewToolAt(root, treeish, execFileImpl) {
+  return new Promise((resolve) => {
     try {
-      execFileImpl('git', ['-C', root, 'ls-tree', '--full-tree', headSha, '--', 'tools/cross-review.js'], {
+      execFileImpl('git', ['-C', root, 'ls-tree', '--full-tree', treeish, '--', 'tools/cross-review.js'], {
         encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
       }, (error, stdout) => {
         if (error || typeof stdout !== 'string') return resolve('unknown');
@@ -756,12 +749,32 @@ async function crossReviewToolAtHead(root, headSha, execFileImpl, cache) {
       resolve('unknown');
     }
   });
+}
+
+// 道具の有無はコミットの木で決まるので、確かめられた結果は SHA で引き、取得をまたいで使う。
+// 確かめられない結果は、worktree にコミットが届いていないなど一時的なことがあるので、1 回の取得の間だけ使う。
+async function crossReviewToolAtHead(root, headSha, execFileImpl, cache) {
+  if (!isCompleteCommitSha(headSha)) return 'unknown';
+  const sha = headSha.toLowerCase();
+  const unknownKey = JSON.stringify([process.platform === 'win32' ? root.toLowerCase() : root, sha]);
+  if (cache?.known.has(sha)) return cache.known.get(sha);
+  if (cache?.unknown.has(unknownKey)) return 'unknown';
+  const result = await crossReviewToolAt(root, sha, execFileImpl);
   if (result === 'unknown') cache?.unknown.add(unknownKey);
   else if (cache) {
     if (cache.known.size >= HEAD_TOOL_RESULT_LIMIT) cache.known.clear();
     cache.known.set(sha, result);
   }
   return result;
+}
+
+async function crossReviewToolAtBase(root, baseRefName, execFileImpl) {
+  if (!validBranchName(baseRefName)) return 'unknown';
+  for (const ref of [`refs/remotes/origin/${baseRefName}`, `refs/heads/${baseRefName}`]) {
+    const result = await crossReviewToolAt(root, ref, execFileImpl);
+    if (result !== 'unknown') return result;
+  }
+  return 'unknown';
 }
 
 async function readCrossReviewState(registration, pullRequest, options = {}) {
@@ -786,8 +799,11 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
       return { unavailable: true, reason: 'repository-mismatch' };
     }
   }
-  const headTool = tool.status === 'present' ? 'present'
+  let headTool = tool.status === 'present' ? 'present'
     : await crossReviewToolAtHead(root, pullRequest?.headRefOid, execFileImpl, headToolCache);
+  // head のコミットが手元に無いなどで確かめられないときは、base ブランチの道具の有無で、道具を使うリポジトリかを判断する。
+  // head を取り込んでいないだけで、道具を使わないリポジトリの PR を「確認できない」にせず、使うリポジトリの PR を「不要」にしないため。
+  if (headTool === 'unknown') headTool = await crossReviewToolAtBase(root, pullRequest?.baseRefName, execFileImpl);
   if (tool.status === 'missing') {
     if (headTool === 'absent') {
       report('unknown', 'missing', 'tool-absent');

@@ -2,7 +2,7 @@ const { planUpdateForTool } = require('../server/plan-updates');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
 const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
-const { effectiveRouteForSubagentStart } = require('./route');
+const { codexAgentInvocations, effectiveRouteForSubagentStart } = require('./route');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, persistedOutputPath, readTaskOutputFile } = require('../shared/task-output');
@@ -136,9 +136,14 @@ function commandPositionText(command) {
   return characters.join('');
 }
 
+// 経路の判定(route.js)と同じ規則で起動を探す。ヒアドキュメントの本文は依頼文なので見ない。
 function extractCodexLaunchDefinition(command) {
-  const match = commandPositionText(command).match(/(?:^|&&|\|\||[;|(\r\n])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:"(?:[^"\r\n]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?"|'(?:[^'\r\n]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?'|(?:[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?)[ \t]+["']?([A-Za-z0-9_][A-Za-z0-9_.-]*)(?=["']?(?:$|[\s;&|<>)]))/im);
-  return match ? match[1] : '';
+  const text = pickString(command).split('<<')[0].replace(/\\\r?\n/g, ' ');
+  for (const [argument = ''] of codexAgentInvocations(text, (word) => /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word))) {
+    const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
+    if (definition) return definition;
+  }
+  return '';
 }
 
 function extractCodexWaitRunId(command) {

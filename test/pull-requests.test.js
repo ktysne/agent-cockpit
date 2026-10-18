@@ -3276,7 +3276,7 @@ for (const scenario of [
   { name: 'タイムアウトする', error: Object.assign(new Error('timeout'), { killed: true }) },
   { name: '同期の起動失敗になる', throws: true },
 ]) {
-  test(`消えた cwd で head の確認が「${scenario.name}」なら確認不能を保つ`, async (t) => {
+  test(`消えた cwd で head と base の確認が「${scenario.name}」なら確認不能を保つ`, async (t) => {
     const f = await headToolFixture(t, { missing: true });
     const original = f.options.execFileImpl;
     f.options.execFileImpl = (file, args, options, callback) => {
@@ -3286,6 +3286,44 @@ for (const scenario of [
       callback(scenario.error, scenario.stdout);
     };
     assert.deepEqual(await readCrossReviewStateAcrossWorktrees(f.registration, f.pr, f.options), { unavailable: true });
+  });
+}
+
+const TOOL_ENTRY = `100644 blob ${'b'.repeat(40)}\ttools/cross-review.js\n`;
+const ROUND_TWO_STATE = JSON.stringify({ branches: { 'feat/open': { round: 2, dismissed: [] } } });
+
+// head の確認だけを失敗させ、base の確認には baseStdout を返す。undefined なら base の確認も失敗させる。
+function failHeadLsTree(f, baseStdout) {
+  const original = f.options.execFileImpl;
+  f.options.execFileImpl = (file, args, options, callback) => {
+    if (args[2] === 'worktree') return callback(null, `worktree ${f.root}\nbranch refs/heads/main\n`);
+    if (args[2] !== 'ls-tree') return original(file, args, options, callback);
+    if (args[4] === f.pr.headRefOid || baseStdout === undefined) return callback(Object.assign(new Error('missing'), { code: 128 }), '');
+    callback(null, baseStdout);
+  };
+}
+
+for (const [base, expected] of [['', { notRequired: true, source: 'tool-absent' }], [TOOL_ENTRY, { unavailable: true }]]) {
+  test(`消えた cwd で head を確かめられないときは base の道具の有無で判断する (${base ? 'あり' : 'なし'})`, async (t) => {
+    const f = await headToolFixture(t, { missing: true });
+    failHeadLsTree(f, base);
+    assert.deepEqual(await readCrossReviewStateAcrossWorktrees(f.registration, f.pr, f.options), expected);
+  });
+}
+
+for (const scenario of [
+  { name: 'base に道具があり状態ファイルが未作成', base: TOOL_ENTRY, contents: undefined, expected: null },
+  { name: 'base に道具があり状態ファイルが破損', base: TOOL_ENTRY, contents: '{broken', expected: { unavailable: true } },
+  { name: 'base に道具があり記録がある', base: TOOL_ENTRY, contents: ROUND_TWO_STATE, round: 2 },
+  { name: 'base に道具が無い', base: '', contents: ROUND_TWO_STATE, expected: { notRequired: true, source: 'tool-absent' } },
+  { name: 'base も確かめられない', base: undefined, contents: ROUND_TWO_STATE, expected: { notRequired: true, source: 'tool-absent' } },
+]) {
+  test(`道具の無い worktree で head を確かめられないときは base で判断する (${scenario.name})`, async (t) => {
+    const f = await headToolFixture(t, { contents: scenario.contents });
+    failHeadLsTree(f, scenario.base);
+    const result = await readCrossReviewStateAcrossWorktrees(f.registration, f.pr, f.options);
+    if (scenario.round) assert.equal(result.round, scenario.round);
+    else assert.deepEqual(result, scenario.expected);
   });
 }
 
@@ -3388,10 +3426,10 @@ test('確かめられなかった head の道具の有無は次の取り直し�
   const { tracker, github } = await trackerFixture(t, [31], f.registration.cwd);
   github.openPullRequests = [f.pr];
   let lsTreeError = Object.assign(new Error('missing commit'), { code: 128 });
-  let lsTreeCalls = 0;
+  let headLsTreeCalls = 0;
   tracker.gitExecFileImpl = (file, args, options, callback) => {
     if (args[2] !== 'ls-tree') return f.options.execFileImpl(file, args, options, callback);
-    lsTreeCalls += 1;
+    if (args[4] === f.pr.headRefOid) headLsTreeCalls += 1;
     callback(lsTreeError, '');
   };
   await tracker.refreshRepo('example', 'project');
@@ -3399,7 +3437,7 @@ test('確かめられなかった head の道具の有無は次の取り直し�
   lsTreeError = null;
   await tracker.refreshRepo('example', 'project');
   assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { notRequired: true, source: 'tool-absent' });
-  assert.equal(lsTreeCalls, 2);
+  assert.equal(headLsTreeCalls, 2);
 });
 
 for (const timer of [false, true]) {

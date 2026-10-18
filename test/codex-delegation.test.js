@@ -8,14 +8,20 @@ const { hookHeaders, jsonBody, request, startTestServer } = require('./support/s
 const parentId = 'claude-parent';
 const command = 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md';
 
-test('コマンド位置の起動は引用符や長いパスを含んでも全文の定義名で行を作る', () => {
+test('コマンド位置の起動は前置きや引用符、長いパスを含んでも全文の定義名で行を作る', () => {
   for (const command of [
     'bash "$HOME/.claude/tools/codex-agent.sh" impl-hard < "C:/tmp/p.md"',
     "bash '/c/Users/me/.claude/tools/codex-agent.sh' impl-hard < p.md",
     'bash "C:/User Data/tools/codex-agent.sh" impl-hard',
     `cd ${'long-directory/'.repeat(12)} && bash /tools/codex-agent.sh impl-hard < p.md`,
-    ...['\n', '&&', '||', ';', '|', '('].map(separator => `true ${separator} sh codex-agent.cmd impl-hard`),
+    ...['\n', '&&', '||', ';', '|'].map(separator => `true ${separator} sh codex-agent.cmd impl-hard`),
+    '(sh codex-agent.cmd impl-hard)',
+    'out=$(bash codex-agent.sh impl-hard<p.md)',
     'codex-agent.ps1 impl-hard',
+    'timeout 600 bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'CODEX_HOME=x env A=1 nohup bash ~/.claude/tools/codex-agent.sh impl-hard < p.md',
+    'bash -lc "cd D:/repo; bash ~/.claude/tools/codex-agent.sh impl-hard"',
+    'bash ~/.claude/tools/codex-agent.sh impl-hard <<\'EOF\'\n依頼文\nEOF',
   ]) {
     const state = new DashboardState();
     const event = claudeEvent('PreToolUse', { tool_input: { command } });
@@ -35,6 +41,8 @@ test('引数や文字列中のラッパー名とオプション呼び出しは C
     '"codex-agent.sh impl-hard"',
     'bash codex-agent.sh --header-of impl-hard',
     'bash codex-agent.sh --wait impl-hard-20261019-110000-7',
+    'timeout 600 grep codex-agent.sh impl-hard',
+    "cat > p.md <<'EOF'\nbash ~/.claude/tools/codex-agent.sh impl-hard\nEOF",
   ]) {
     const state = new DashboardState();
     state.addEvent(claudeEvent('PreToolUse', { tool_input: { command } }));
