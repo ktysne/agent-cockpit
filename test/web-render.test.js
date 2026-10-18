@@ -4820,7 +4820,7 @@ test('起点帯の判定は非表示セッション、PR の履歴、新着ま�
   assert.doesNotMatch(markedMockSession, /session-context" data-origin=/);
 });
 
-function renderedKindOriginRows(provider, showOriginBands, permissionWaits = []) {
+function renderedKindOriginRows(provider, showOriginBands, permissionWaits = [], ended = false) {
   class FakeElement {
     constructor(tagName, className = '', textContent = '') {
       this.tagName = tagName;
@@ -4845,27 +4845,26 @@ function renderedKindOriginRows(provider, showOriginBands, permissionWaits = [])
     appendSessionModelLine() {},
     appendModelLine() {},
     badge: (text, tone) => element('span', `badge ${tone}`, text),
-    displayPreferences: { hideFinished: true },
+    displayPreferences: { hideFinished: !ended },
     isFilterShown: () => true,
-    isEndedAgent: () => false,
     taskVisibility: () => ({ visible: [], todoCount: 0, doneCount: 0 }),
   });
-  const functions = ['sessionOrigin', 'mainRow', 'appendAgents', 'appendKindTaskSession']
+  const functions = ['sessionOrigin', 'mainRow', 'isEndedAgent', 'appendAgents', 'appendKindTaskSession']
     .map(name => functionSource(pageHtml, name));
   vm.runInContext(functions.join('\n'), context);
   const session = {
-    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], permissionWaits, agents: [{ agent_id: 'worker', active: true, agent_type: 'worker' }],
+    provider, session_id: 'session', status: '待機中', tasks: [], tools: [], permissionWaits, agents: [{ agent_id: 'worker', active: !ended, agent_type: 'worker' }],
   };
   const activity = context.mainRow(session, {}, true, false, showOriginBands);
   const agentBody = element('div');
-  context.appendAgents(agentBody, session, {}, false, false, false, false, showOriginBands);
+  context.appendAgents(agentBody, session, {}, false, false, ended, false, showOriginBands);
   const agent = agentBody.children.find(node => node.className === 'agent-list').children[0];
   const taskBody = element('div');
   context.appendKindTaskSession(taskBody, { product: {}, session, multipleSessions: false }, false, false, showOriginBands);
   return [activity, agent, taskBody.children[0]];
 }
 
-function renderedMockKindOriginRows(provider, showOriginBands, perms = []) {
+function renderedMockKindOriginRows(provider, showOriginBands, perms = [], ended = false) {
   const context = pageContext(mockHtml, {
     ui: { estimatedSessions: [], closedAgents: [], expandedKindTodoTasks: false },
     taskState: (_session, task) => task.state,
@@ -4877,7 +4876,7 @@ function renderedMockKindOriginRows(provider, showOriginBands, perms = []) {
     modelLine: () => '',
     routeTag: () => '',
     unknownSessionControls: () => '',
-    isClosedByUser: () => false,
+    isClosedByUser: () => ended,
     isBusyAgent: () => true,
     isUnconfirmed: () => false,
     isClosable: () => false,
@@ -4893,18 +4892,20 @@ function renderedMockKindOriginRows(provider, showOriginBands, perms = []) {
   ];
 }
 
-test('並列ツールの確認中に許可画面の通知が届いたサブエージェントは許可待ちを優先する', () => {
+test('サブエージェントの札は終了状態を優先し、稼働中は確認中より許可待ちを優先する', () => {
   const waits = [
     { agent_id: 'worker', phase: 'checking', target_tool_use_id: 'first' },
     { agent_id: 'worker', phase: 'checking', target_tool_use_id: 'second' },
     { agent_id: 'worker', phase: 'prompted', target_tool_use_id: null },
   ];
-  const [, agent] = renderedKindOriginRows('claude', true, waits);
-  const badge = agent.children[0].children.find(node => node.className === 'agent-name').children[0];
-  assert.equal(badge.textContent, '許可待ち');
-  assert.equal(badge.className, 'badge wait');
-  const [, mockAgent] = renderedMockKindOriginRows('claude', true, waits.map(wait => ({ ...wait, who: 'worker' })));
-  assert.match(mockAgent, /class="badge wait">許可待ち<\/span>/);
+  for (const [ended, label, tone] of [[false, '許可待ち', 'wait'], [true, '終了', 'done']]) {
+    const [, agent] = renderedKindOriginRows('claude', true, waits, ended);
+    const badge = agent.children[0].children.find(node => node.className === 'agent-name').children[0];
+    assert.equal(badge.textContent, label);
+    assert.equal(badge.className, `badge ${tone}`);
+    const [, mockAgent] = renderedMockKindOriginRows('claude', true, waits.map(wait => ({ ...wait, who: 'worker' })), ended);
+    assert.match(mockAgent, new RegExp(`class="badge ${tone}">${label}</span>`));
+  }
 });
 
 test('種類別のタスクと作業行はセッションの起点色で帯を表示する', () => {
