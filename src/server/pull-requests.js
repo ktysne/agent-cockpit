@@ -22,6 +22,7 @@ const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 const EMPTY_GIT_OBJECT_ID = '0000000000000000000000000000000000000000';
+const HEAD_TOOL_RESULT_LIMIT = 1024;
 const REPOSITORY_NODE_ID_QUERY = `query($owner: String!, $repository: String!) {
   repository(owner: $owner, name: $repository) {
     id
@@ -734,10 +735,14 @@ function sameGitHubRepository(left, right) {
   return left.owner.toLowerCase() === right.owner.toLowerCase() && left.repo.toLowerCase() === right.repo.toLowerCase();
 }
 
+// 道具の有無はコミットの木で決まるので、確かめられた結果は SHA で引き、取得をまたいで使う。
+// 確かめられない結果は、worktree にコミットが届いていないなど一時的なことがあるので、1 回の取得の間だけ使う。
 async function crossReviewToolAtHead(root, headSha, execFileImpl, cache) {
   if (!isCompleteCommitSha(headSha)) return 'unknown';
-  const key = JSON.stringify([process.platform === 'win32' ? root.toLowerCase() : root, headSha.toLowerCase()]);
-  if (cache?.has(key)) return cache.get(key);
+  const sha = headSha.toLowerCase();
+  const unknownKey = JSON.stringify([process.platform === 'win32' ? root.toLowerCase() : root, sha]);
+  if (cache?.known.has(sha)) return cache.known.get(sha);
+  if (cache?.unknown.has(unknownKey)) return 'unknown';
   const result = await new Promise((resolve) => {
     try {
       execFileImpl('git', ['-C', root, 'ls-tree', '--full-tree', headSha, '--', 'tools/cross-review.js'], {
@@ -751,7 +756,11 @@ async function crossReviewToolAtHead(root, headSha, execFileImpl, cache) {
       resolve('unknown');
     }
   });
-  cache?.set(key, result);
+  if (result === 'unknown') cache?.unknown.add(unknownKey);
+  else if (cache) {
+    if (cache.known.size >= HEAD_TOOL_RESULT_LIMIT) cache.known.clear();
+    cache.known.set(sha, result);
+  }
   return result;
 }
 
@@ -1108,6 +1117,7 @@ class PullRequestTracker {
     this.repositories = new Map();
     this.productViews = new Map();
     this.crossReviewByRepository = new Map();
+    this.headToolResults = new Map();
     this.inFlight = new Map();
     this.lastFetchStartedAt = new Map();
     this.activeGhCount = 0;
@@ -1762,7 +1772,7 @@ class PullRequestTracker {
     const productGroups = productGroupsFor(owner, repo, registrations);
     const createdIdentities = new Set();
     const remoteRepositoryCache = new Map();
-    const headToolCache = new Map();
+    const headToolCache = { known: this.headToolResults, unknown: new Set() };
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
     this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);

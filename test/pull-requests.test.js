@@ -3372,6 +3372,36 @@ test('同じ根と head の道具確認を一度の取り直しで使い回す',
   assert.equal(f.calls.filter(({ args }) => args[2] === 'ls-tree').length, 1);
 });
 
+test('確かめた head の道具の有無を次の取り直しでも使う', async (t) => {
+  const f = await headToolFixture(t, { missing: true });
+  const { tracker, github } = await trackerFixture(t, [31], f.registration.cwd);
+  github.openPullRequests = [f.pr];
+  tracker.gitExecFileImpl = f.options.execFileImpl;
+  await tracker.refreshRepo('example', 'project');
+  await tracker.refreshRepo('example', 'project');
+  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { notRequired: true, source: 'tool-absent' });
+  assert.equal(f.calls.filter(({ args }) => args[2] === 'ls-tree').length, 1);
+});
+
+test('確かめられなかった head の道具の有無は次の取り直しで確かめ直す', async (t) => {
+  const f = await headToolFixture(t, { missing: true });
+  const { tracker, github } = await trackerFixture(t, [31], f.registration.cwd);
+  github.openPullRequests = [f.pr];
+  let lsTreeError = Object.assign(new Error('missing commit'), { code: 128 });
+  let lsTreeCalls = 0;
+  tracker.gitExecFileImpl = (file, args, options, callback) => {
+    if (args[2] !== 'ls-tree') return f.options.execFileImpl(file, args, options, callback);
+    lsTreeCalls += 1;
+    callback(lsTreeError, '');
+  };
+  await tracker.refreshRepo('example', 'project');
+  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { unavailable: true });
+  lsTreeError = null;
+  await tracker.refreshRepo('example', 'project');
+  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { notRequired: true, source: 'tool-absent' });
+  assert.equal(lsTreeCalls, 2);
+});
+
 for (const timer of [false, true]) {
   test(`${timer ? '定期' : '初回'}の PR 取り直しが reject しても例外名だけを診断に残す`, async (t) => {
     const root = await temporaryDirectory(t);
