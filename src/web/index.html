@@ -1106,7 +1106,7 @@ for (const input of mergeableConditionInputs) {
 }
 function changeTerminalPreference() {
   if (!Object.hasOwn(TERMINAL_LABELS, terminalSelect.value)) return;
-  void saveDisplayPreferences({ terminal: terminalSelect.value });
+  void saveDisplayPreferences({ terminal: terminalSelect.value }, { key: 'terminal', input: terminalSelect });
   if (lastState) render(lastState);
 }
 terminalSelect.addEventListener('change', changeTerminalPreference);
