@@ -455,7 +455,7 @@ async function startServer(options = {}) {
     onFailure: (fileName) => logLine(homeDir, `${fileName} write failed`),
   });
   const perf = new PerfMetrics();
-  const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter, perf, worktreeOptions: options.worktreeOptions });
+  const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter, perf, worktreeOptions: options.worktreeOptions, codexHome });
   const diagnostics = new Diagnostics({ ...options.diagnosticsOptions, homeDir, userHome: options.userHome,
     getLevel: () => state.getDisplayPreferences?.()?.diagnosticsLevel || 'info' });
   state.diagnostics = diagnostics;

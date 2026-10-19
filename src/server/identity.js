@@ -133,6 +133,20 @@ function codexWorktreeRepositoryRoot(cwd, options, paths, fileSystem) {
   return repositoryRoot;
 }
 
+function productForRoot(root, paths) {
+  const key = paths === path.win32 ? root.toLowerCase() : root;
+  return { key, name: paths.basename(root) || root };
+}
+
+// Codex の worktree の cwd だけを元のリポジトリの製品に畳む。畳めないときは null を返す。
+function codexWorktreeProduct(cwd, options = {}) {
+  if (typeof cwd !== 'string' || cwd.length === 0) return null;
+
+  const paths = pathApiFor(cwd);
+  const root = codexWorktreeRepositoryRoot(paths.resolve(cwd), options, paths, options.fileSystem || fs);
+  return root ? productForRoot(root, paths) : null;
+}
+
 function productFromCwd(cwd, options = {}) {
   if (typeof cwd !== 'string' || cwd.length === 0) return null;
 
@@ -155,8 +169,7 @@ function productFromCwd(cwd, options = {}) {
   if (root === absoluteCwd) {
     root = codexWorktreeRepositoryRoot(absoluteCwd, options, paths, options.fileSystem || fs) || root;
   }
-  const key = paths === path.win32 ? root.toLowerCase() : root;
-  return { key, name: paths.basename(root) || root, branch: branchFromCwd(cwd, options) };
+  return { ...productForRoot(root, paths), branch: branchFromCwd(cwd, options) };
 }
 
 function claudeHomeFromOptions(options = {}) {
@@ -187,4 +200,4 @@ function cockpitHomeFromOptions(options = {}) {
   return path.join(options.userHome || require('node:os').homedir(), '.agent-cockpit');
 }
 
-module.exports = { productFromCwd, branchFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, codexAgentDefinitionPaths, cockpitHomeFromOptions };
+module.exports = { productFromCwd, codexWorktreeProduct, branchFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, codexAgentDefinitionPaths, cockpitHomeFromOptions };

@@ -10,6 +10,7 @@ const { recommendedOptionFor, sanitizeEvent } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, pullRequestKey, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { cloneDisplay, defaultDisplay, normalizeDisplay } = require('./display-preferences');
+const { codexWorktreeProduct } = require('./identity');
 const {
   isoTime,
   isNonInteractiveSessionFile,
@@ -726,6 +727,7 @@ class DashboardState {
       const before = stableStringify(parsed);
       const normalized = normalizeStore(parsed);
       state.restoreStore(normalized, options.now ?? Date.now());
+      state.repairCodexWorktreePullRequestProducts(options.codexHome);
       state.restoreSessionCleanupPending = true;
       if (stableStringify(state.serializeStore()) !== before) state.requestStoreWrite();
     } catch {
@@ -1079,6 +1081,20 @@ class DashboardState {
 
   invalidatePullRequestRegistrationCache() {
     this.pullRequestRegistrationCache = null;
+  }
+
+  // 保存済みの PR 登録の製品を、登録自身の cwd で Codex の worktree として畳み直す。
+  // セッションの cwd で一括に置き換えると、別のリポジトリから登録した PR の場所を失うため。
+  repairCodexWorktreePullRequestProducts(codexHome) {
+    for (const records of this.pullRequests.values()) {
+      for (const [key, record] of records) {
+        if (!record.cwd || !record.product) continue;
+        const product = codexWorktreeProduct(record.cwd, { codexHome });
+        if (!product || product.key === record.product.key) continue;
+        records.set(key, { ...record, product });
+      }
+    }
+    this.invalidatePullRequestRegistrationCache();
   }
 
   pullRequestRegistrationForSession(sessionId, owner, repo, number) {
