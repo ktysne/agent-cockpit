@@ -146,8 +146,10 @@ function shellTokens(segment) {
     .map((token) => token.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_match, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted));
 }
 
-function commandSegments(command) {
+function commandSegments(command, toolName = 'Bash') {
   if (typeof command !== 'string') return [];
+  // PowerShell は \ ではなく逆引用符でエスケープするので、"D:\repo\" の末尾の \ で引用符を閉じ損ねないようにする。
+  const escapeCharacter = toolName === 'PowerShell' ? '`' : '\\';
   const segments = [];
   let segment = '';
   let quote = '';
@@ -156,7 +158,7 @@ function commandSegments(command) {
     if (escaped) {
       segment += character;
       escaped = false;
-    } else if (character === '\\' && quote !== "'") {
+    } else if (character === escapeCharacter && quote !== "'") {
       segment += character;
       escaped = true;
     } else if (quote) {
@@ -200,16 +202,16 @@ function subcommandIndex(words, command) {
   return index;
 }
 
-function isGhPrCreateCommand(command) {
-  return commandSegments(command).some((segment) => {
+function isGhPrCreateCommand(command, toolName = 'Bash') {
+  return commandSegments(command, toolName).some((segment) => {
     const words = commandWords(segment);
     const subcommand = subcommandIndex(words, 'gh');
     return words[0] === 'gh' && words[subcommand] === 'pr' && words[subcommand + 1] === 'create';
   });
 }
 
-function shouldRefreshPullRequests(command) {
-  return commandSegments(command).some((segment) => {
+function shouldRefreshPullRequests(command, toolName = 'Bash') {
+  return commandSegments(command, toolName).some((segment) => {
     const words = commandWords(segment);
     if (words[0] === 'git') return words[subcommandIndex(words, 'git')] === 'push';
     if (words[0] === 'gh') return words[subcommandIndex(words, 'gh')] === 'pr';

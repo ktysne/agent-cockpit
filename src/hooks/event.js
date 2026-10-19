@@ -471,8 +471,8 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     }
     if (isPullRequestShellTool(event.tool_name)) {
       const command = pickString(input.tool_input?.command);
-      if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
-      if (shouldRefreshPullRequests(command)) {
+      if (isGhPrCreateCommand(command, event.tool_name)) event.ghPrCreateCommand = true;
+      if (shouldRefreshPullRequests(command, event.tool_name)) {
         event.refreshPullRequestsCommand = true;
         addPullRequestRefreshScope(event, command, input.cwd, event.tool_name);
       }
@@ -487,8 +487,8 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     if (eventName === 'PostToolUseFailure' && input.is_interrupt === true) event.isInterrupt = true;
     if (isPullRequestShellTool(event.tool_name)) {
       const command = pickString(input.tool_input?.command);
-      if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
-      if (shouldRefreshPullRequests(command)) {
+      if (isGhPrCreateCommand(command, event.tool_name)) event.ghPrCreateCommand = true;
+      if (shouldRefreshPullRequests(command, event.tool_name)) {
         event.refreshPullRequests = true;
         addPullRequestRefreshScope(event, command, input.cwd, event.tool_name);
       }

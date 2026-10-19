@@ -491,6 +491,13 @@ test('PR 作成と取り直しの対象は Bash と PowerShell に限る', () =>
   assert.equal(isPullRequestShellTool('Read'), false);
 });
 
+test('PowerShell のコマンドは \\ をエスケープとせず、末尾が \\ の引用の後の gh pr create と git push を検出する', () => {
+  assert.equal(isGhPrCreateCommand('cd "D:\\repo\\"; gh pr create --fill', 'PowerShell'), true);
+  assert.equal(shouldRefreshPullRequests('Set-Location "D:\\repo\\"; git push', 'PowerShell'), true);
+  assert.equal(isGhPrCreateCommand('Write-Output "a`"; gh pr create"', 'PowerShell'), false);
+  assert.equal(isGhPrCreateCommand('cd "D:\\repo\\"; gh pr create --fill'), false);
+});
+
 test('gh 呼び出しは引数配列とトークンを除いた環境を使う', async () => {
   let captured;
   const output = await runGh(['pr', 'list'], {
