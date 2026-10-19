@@ -16,6 +16,54 @@ const {
 const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
 
+test('レビュー起動は heredoc 後と前置きとシェル内部でも検出する', () => {
+  for (const [tool_name, command, expected] of [
+    ['Bash', "cat > req.md <<'EOF'\nDo work.\nEOF\nnpm run review:codex", 'codex-review'],
+    ['Bash', 'CROSS_REVIEW_NO_FETCH=1 npm run review:codex', 'codex-review'],
+    ['Bash', "bash -lc 'npm run review:codex'", 'codex-review'],
+    ['Bash', "echo \"$(cat <<'EOF'\nit's (done\nEOF\n)\" && npm run review:codex", 'codex-review'],
+    ['Bash', 'env -u DEBUG command npm run review:codex:fix', 'codex-subagent'],
+    ['Bash', '/usr/bin/node ./tools/cross-review.js codex --fix', 'codex-subagent'],
+    ['PowerShell', 'npm.cmd run review:codex', 'codex-review'],
+    ['PowerShell', 'Write-Output a#b; npm.cmd run review:codex', 'codex-review'],
+    ['PowerShell', '& "C:\\tools\\npm.exe" run review:codex -- --fix', 'codex-subagent'],
+    ['PowerShell', 'node.exe .\\tools\\cross-review.js codex', 'codex-review'],
+    ['PowerShell', "bash -lc 'CROSS_REVIEW_NO_FETCH=1 npm run review:codex'", 'codex-review'],
+    ['PowerShell', "$request = @'\nDo work.\n'@\nnpm.cmd run review:codex", 'codex-review'],
+  ]) {
+    const event = makeHookEvent({ hook_event_name: 'PreToolUse', tool_name, tool_input: { command } });
+    assert.equal(event.codexReviewDefinition, expected, command);
+  }
+});
+
+test('レビューの説明文とコメントとヘルプだけの起動は検出しない', () => {
+  for (const [tool_name, command] of [
+    ['Bash', "cat <<'EOF'\nnpm run review:codex\nEOF"],
+    ['Bash', 'echo ok # ; npm run review:codex'],
+    ['Bash', 'echo "npm run review:codex"'],
+    ['Bash', "bash -lc 'npm run review:codex -- --help'"],
+    ['Bash', 'env DEBUG=1 npm run review:codex -- -h'],
+    ['Bash', 'node run review:codex'],
+    ['Bash', 'npm tools/cross-review.js codex'],
+    ['PowerShell', "$request = @'\nnpm.cmd run review:codex\n'@"],
+    ['PowerShell', 'Write-Output ok # ; npm.cmd run review:codex'],
+    ['PowerShell', '<# ; npm.cmd run review:codex\n#>'],
+    ['PowerShell', 'Write-Output "npm.cmd run review:codex"'],
+    ['PowerShell', 'npm.cmd run review:codex -- --help'],
+    ['PowerShell', "bash -c 'node tools/cross-review.js codex -h'"],
+  ]) {
+    const event = makeHookEvent({ hook_event_name: 'PreToolUse', tool_name, tool_input: { command } });
+    assert.equal(event.codexReviewDefinition, undefined, command);
+  }
+});
+
+test('heredoc 後の待機呼び出しは開始イベントに実行 ID を残す', () => {
+  const runId = 'impl-light-20261020-123456-1';
+  const event = makeHookEvent({ hook_event_name: 'PreToolUse', tool_name: 'Bash',
+    tool_input: { command: `cat <<'EOF'\nDo work.\nEOF\nbash ~/.claude/tools/codex-agent.sh --wait ${runId}` } });
+  assert.equal(event.codexWaitRunId, runId);
+});
+
 test('メインのバックグラウンドシェルは説明とコマンドを上限付きで送る', () => {
   for (const tool_name of ['Bash', 'PowerShell']) {
     const event = makeHookEvent({ session_id: 'background', hook_event_name: 'PostToolUse', tool_name,
@@ -50,6 +98,8 @@ test('Codex ラッパーの -C と --effort の値を除いて定義名を検出
     ['bash ~/.claude/tools/codex-agent.sh -C "D:/work" impl-light < "req.md"', 'impl-light'],
     ['bash ~/.claude/tools/codex-agent.sh --effort high impl-hard', 'impl-hard'],
     ['bash ~/.claude/tools/codex-agent.sh --effort=high impl-standard', 'impl-standard'],
+    ['X="$(bash ~/.claude/tools/codex-agent.sh impl-hard)"', 'impl-hard'],
+    ["X=\"$(cat <<'EOF'\nit's (done)\nEOF\nbash ~/.claude/tools/codex-agent.sh impl-hard\n)\"", 'impl-hard'],
     ['bash ~/.claude/tools/codex-agent.sh -C "D:/work" --effort max impl-hard', 'impl-hard'],
     ['bash ~/.claude/tools/codex-agent.sh -C D:/work\\ tree\\ dir impl-hard', 'impl-hard'],
     ['bash ~/.claude/tools/codex-agent.sh -C D:/work\\\\ impl-light', 'impl-light'],

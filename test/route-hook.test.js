@@ -6,6 +6,48 @@ const os = require('node:os');
 const path = require('node:path');
 const { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, commandInvokesCodexAgent, effectiveRouteForSubagentStart, outputForInputText, outputForRoute } = require('../src/hooks/route');
 const { temporaryDirectory } = require('./support/temp');
+const { makeHookEvent } = require('../src/hooks/event');
+
+test('Bash と PowerShell の実行部分は起動の検出と Claude 経路の拒否で一致する', async (t) => {
+  const homeDir = await temporaryHome(t, { agents: 'claude', review: 'default' });
+  const start = { hook_event_name: 'SubagentStart', session_id: 'shell-parts', agent_id: 'agent-1', agent_type: 'impl-light' };
+  outputForRoute(start, { homeDir });
+  const launch = 'bash ~/.claude/tools/codex-agent.sh impl-light';
+  for (const [tool_name, command, expected] of [
+    ['Bash', `cat > req.md <<'EOF'\nDo work.\nEOF\n${launch} < req.md`, true],
+    ['Bash', `cat <<'EOF'\n${launch}\nEOF`, false],
+    ['Bash', `echo ok # ; ${launch}`, false],
+    ['Bash', `echo "${launch}"`, false],
+    ['Bash', `echo ok#word; ${launch}`, true],
+    ['Bash', `echo ok\\; ${launch}`, false],
+    ['Bash', `echo ok # \\\n${launch}`, true],
+    ['Bash', `bash \\\n~/.claude/tools/codex-agent.sh impl-light`, true],
+    ['Bash', `echo "$( ${launch} )"`, true],
+    ['Bash', `X="$(cat <<'EOF'\nit's\nEOF\n)"; ${launch}`, true],
+    ['Bash', `X="$(cat <<'EOF'\nbody )\nEOF\n)"; ${launch}`, true],
+    ['Bash', `X="$(cat <<-'EOF'\n\tit's (a\n\tEOF\n)"; ${launch}`, true],
+    ['Bash', `X="$(echo $(cat <<'EOF'\nit's\nEOF\n))"; ${launch}`, true],
+    ['Bash', `X="$(cat <<'EOF'\n${launch}\nEOF\n)"`, false],
+    ['Bash', `X="$(echo ok # it's\n)"; ${launch}`, true],
+    ['Bash', `bash -lc '${launch}'`, true],
+    ['PowerShell', `$request = @'\nDo work.\n'@\n${launch}`, true],
+    ['PowerShell', `$request = @'\n${launch}\n'@`, false],
+    ['PowerShell', `Write-Output ok # ; ${launch}`, false],
+    ['PowerShell', `Write-Output a#b; ${launch}`, true],
+    ['PowerShell', `Write-Output ok\\; ${launch}`, true],
+    ['PowerShell', `Write-Output ok\`; ${launch}`, false],
+    ['PowerShell', `bash \`\n~/.claude/tools/codex-agent.sh impl-light`, true],
+    ['PowerShell', `Write-Output "${launch}"`, false],
+    ['PowerShell', `Write-Output "$( ${launch} )"`, true],
+    ['PowerShell', `bash -lc '${launch}'`, true],
+    ['PowerShell', `<# ; ${launch}\n#>\n${launch}`, true],
+    ['PowerShell', `<# ; ${launch}\n#>`, false],
+  ]) {
+    const input = { ...start, hook_event_name: 'PreToolUse', tool_name, tool_input: { command } };
+    assert.equal(makeHookEvent(input).codexLaunchDefinition || '', expected ? 'impl-light' : '', command);
+    assert.equal(outputForRoute(input, { homeDir })?.hookSpecificOutput?.permissionDecision || '', expected ? 'deny' : '', command);
+  }
+});
 
 async function temporaryHome(t, routing = { agents: 'default', review: 'default' }, withCodexAgent = true) {
   const homeDir = temporaryDirectory(t, 'agent-cockpit-route-hook-', {

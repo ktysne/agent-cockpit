@@ -1,3 +1,4 @@
+const { commandName } = require('../shared/shell-commands');
 const { planUpdateForTool } = require('../server/plan-updates');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
@@ -100,105 +101,6 @@ function inputSummary(toolName, toolInput) {
   return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 79)}…` : normalizedValue;
 }
 
-// 依頼文や文字列に書かれた手順を拾わないため、ヒアドキュメントより前のコマンド位置を残す。
-function commandPositionText(command) {
-  const beforeHeredoc = pickString(command).split('<<')[0].replace(/\\\r?\n/g, ' ');
-  const characters = [...beforeHeredoc];
-  const separator = /[;|&()\r\n]/;
-  // 引用符の中の区切りは消し、二重引用符の中の $( ) はコマンドとして扱う。
-  const contexts = ['code'];
-  for (let index = 0; index < characters.length; index += 1) {
-    const character = characters[index];
-    const context = contexts.at(-1);
-    if (context === 'single') {
-      if (character === "'") contexts.pop();
-      else if (separator.test(character)) characters[index] = '_';
-      continue;
-    }
-    if (character === '\\') {
-      if (context === 'double' && separator.test(characters[index + 1] || '')) characters[index + 1] = '_';
-      index += 1;
-      continue;
-    }
-    if (context === 'double') {
-      if (character === '"') contexts.pop();
-      else if (character === '$' && characters[index + 1] === '(') {
-        contexts.push('substitution');
-        index += 1;
-      } else if (separator.test(character)) characters[index] = '_';
-      continue;
-    }
-    if (character === '#' && (index === 0 || /\s/.test(characters[index - 1]))) {
-      while (index + 1 < characters.length && !/[\r\n]/.test(characters[index + 1])) {
-        index += 1;
-        characters[index] = '_';
-      }
-    } else if (character === "'") contexts.push('single');
-    else if (character === '"') contexts.push('double');
-    else if (context === 'substitution' && character === '(') contexts.push('substitution');
-    else if (context === 'substitution' && character === ')') contexts.pop();
-  }
-  return characters.join('');
-}
-
-function substitutionEnd(text, start) {
-  let depth = 1;
-  let quote = '';
-  for (let index = start; index < text.length; index += 1) {
-    const character = text[index];
-    if (quote === "'") {
-      if (character === "'") quote = '';
-    } else if (character === '\\') {
-      index += 1;
-    } else if (quote === '"') {
-      if (character === '"') quote = '';
-    } else if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === '(') {
-      depth += 1;
-    } else if (character === ')' && --depth === 0) {
-      return index;
-    }
-  }
-  return text.length;
-}
-
-// 起動を探すコマンドの文字列を返す。ヒアドキュメントの本文と引用符の外のコメントは、依頼文や説明なので外す。
-// コマンド置換 $( ) の中身は、二重引用符の中にあっても別のコマンドとして返す。
-function launchCommandTexts(text, depth = 0) {
-  let code = '';
-  const substitutions = [];
-  let quote = '';
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (quote === "'") {
-      if (character === "'") quote = '';
-      code += character;
-    } else if (character === '\\') {
-      code += text.slice(index, index + 2);
-      index += 1;
-    } else if (character === '$' && text[index + 1] === '(') {
-      const end = substitutionEnd(text, index + 2);
-      if (depth < 8) substitutions.push(...launchCommandTexts(text.slice(index + 2, end), depth + 1));
-      code += '_';
-      index = end;
-    } else if (quote === '"') {
-      if (character === '"') quote = '';
-      code += character;
-    } else if (character === '"' || character === "'") {
-      quote = character;
-      code += character;
-    } else if (character === '<' && text[index + 1] === '<') {
-      break;
-    } else if (character === '#' && (index === 0 || /\s/.test(text[index - 1]))) {
-      while (index + 1 < text.length && !/[\r\n]/.test(text[index + 1])) index += 1;
-    } else {
-      code += character;
-    }
-  }
-  return [code, ...substitutions];
-}
-
 function isCodexAgent(word) {
   return /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word);
 }
@@ -224,11 +126,11 @@ function withoutCodexAgentOptions(argumentsList, commandText = '') {
   return remaining;
 }
 
-// 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
+// 経路の判定と同じ規則で起動を探す。
 // 末尾の \ を空白のエスケープと読むのは、その起動の語を Bash の規則で分けたとき(PowerShell の中の bash -c を含む)に限る。
 function codexAgentArgumentLists(command, toolName) {
-  const commandText = pickString(command).replace(/\\\r?\n/g, ' ');
-  return codexAgentInvocationDetails(commandText, isCodexAgent, launchCommandTexts, 0, toolName).map((invocation) => (
+  const commandText = pickString(command);
+  return codexAgentInvocationDetails(commandText, isCodexAgent, undefined, 0, toolName).map((invocation) => (
     withoutCodexAgentOptions(invocation.argumentsList, invocation.toolName === 'PowerShell' ? '' : commandText)
   ));
 }
@@ -248,69 +150,15 @@ function extractCodexWaitRunId(command, toolName = 'Bash') {
   return '';
 }
 
-// コマンドの区切りまでの引数を返す。`2>&1` や `> "out file"` のリダイレクトは出力先ごと除く。
-function shellArguments(value) {
-  const tokens = [];
-  let token = { text: '', quoted: false, started: false };
-  let quote = '';
-  const pushToken = () => {
-    if (token.started) tokens.push(token);
-    token = { text: '', quoted: false, started: false };
-  };
-
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (quote === "'") {
-      if (character === "'") quote = '';
-      else token.text += character;
-    } else if (character === '\\') {
-      token.text += value[index + 1] || '';
-      index += 1;
-      token.started = true;
-    } else if (quote === '"') {
-      if (character === '"') quote = '';
-      else token.text += character;
-    } else if (character === '"' || character === "'") {
-      quote = character;
-      token.quoted = true;
-      token.started = true;
-    } else if (/[\r\n]/.test(character)) break;
-    else if (/\s/.test(character)) pushToken();
-    else if (character === '&' && (token.text.endsWith('>') || value[index + 1] === '>')) {
-      token.text += character;
-      token.started = true;
-    } else if (/[;&|()\r\n]/.test(character)) break;
-    else {
-      token.text += character;
-      token.started = true;
-    }
-  }
-  pushToken();
-
-  const argumentsList = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    const { text, quoted } = tokens[index];
-    if (!quoted && /^(?:\d*>&\d*-?|\d*[<>]>?|&>>?)$/.test(text)) {
-      if (!/&\d*-?$/.test(text) || /^&>/.test(text)) index += 1;
-      continue;
-    }
-    if (!quoted && /^(?:\d*[<>]>?|&>>?)./.test(text)) continue;
-    argumentsList.push(text);
-  }
-  return argumentsList;
-}
-
-function extractCodexReviewDefinition(command) {
-  const commandText = commandPositionText(command);
-  const pattern = /(?:^|&&|\|\||[;&|(\r\n])[ \t]*(npm[ \t]+run[ \t]+review:codex:fix|npm[ \t]+run[ \t]+review:codex|node[ \t]+(?:\.[\\/])?tools[\\/]cross-review\.js[ \t]+codex)(?=$|[\s;&|)])/gim;
-  for (const match of commandText.matchAll(pattern)) {
-    const commandStart = match.index + match[0].lastIndexOf(match[1]);
-    const argumentsList = shellArguments(commandText.slice(commandStart + match[1].length));
-    // ヘルプを出すだけの起動は Codex を動かさない。--no-codex-agent は Codex を直接起動する。
+function extractCodexReviewDefinition(command, toolName = 'Bash') {
+  const invocations = codexAgentInvocationDetails(command, (word) => ['npm', 'node'].includes(commandName(word)), undefined, 0, toolName, true);
+  for (const { argumentsList: words, executable } of invocations) {
+    const [first, second, ...argumentsList] = words;
+    const npmReview = executable === 'npm' && first === 'run' && ['review:codex', 'review:codex:fix'].includes(second);
+    const nodeReview = executable === 'node' && /^(?:\.[\\/])?tools[\\/]cross-review\.js$/i.test(first || '') && second === 'codex';
+    if (!npmReview && !nodeReview) continue;
     if (['--help', '-h'].some((option) => argumentsList.includes(option))) continue;
-
-    const fix = /review:codex:fix$/i.test(match[1]) || argumentsList.includes('--fix');
-    return fix ? 'codex-subagent' : 'codex-review';
+    return second === 'review:codex:fix' || argumentsList.includes('--fix') ? 'codex-subagent' : 'codex-review';
   }
   return '';
 }
@@ -519,7 +367,7 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
       if (codexLaunchDefinition) event.codexLaunchDefinition = codexLaunchDefinition;
       const codexWaitRunId = extractCodexWaitRunId(command, event.tool_name);
       if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
-      const codexReviewDefinition = extractCodexReviewDefinition(command);
+      const codexReviewDefinition = extractCodexReviewDefinition(command, event.tool_name);
       if (codexReviewDefinition) event.codexReviewDefinition = codexReviewDefinition;
     }
     if (isPullRequestShellTool(event.tool_name)) {
@@ -588,7 +436,7 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     if (isPullRequestShellTool(event.tool_name)) {
       const command = pickString(input.tool_input?.command);
       const outputPath = persistedOutputPath(input.tool_response?.persistedOutputPath);
-      if (outputPath && (extractCodexLaunchDefinition(command, event.tool_name) || extractCodexReviewDefinition(command) ||
+      if (outputPath && (extractCodexLaunchDefinition(command, event.tool_name) || extractCodexReviewDefinition(command, event.tool_name) ||
         extractCodexWaitRunId(command, event.tool_name))) {
         let output = null;
         try { output = (options.readTaskOutput || readTaskOutputFile)(outputPath); } catch {}
