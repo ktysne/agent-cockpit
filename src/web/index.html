@@ -4804,6 +4804,30 @@ async function runCrossReviewSkipAction(button) {
   }
 }
 
+// 確認欄は開いたときの前提に対する確認なので、前提が一度消えたら記録も消し、再び前提がそろっても閉じた状態で出す。
+function pruneStaleConfirmations(groups) {
+  const conflicted = new Set();
+  const collect = (group, items) => {
+    for (const pullRequest of items || []) {
+      if (pullRequest.conflict) conflicted.add(pullRequestConflictUiKey(group, pullRequest));
+      collect(group, pullRequest.children);
+    }
+  };
+  const unregisterable = new Set();
+  for (const group of groups) {
+    collect(group, group.trees);
+    if (group.error && group.unregisterableCount > 0) unregisterable.add(`${group.owner}/${group.repo}`.toLowerCase());
+  }
+  for (const key of [...pullRequestConflictConfirmations, ...pullRequestConflictMessages.keys()]) {
+    if (conflicted.has(key) || pullRequestConflictInFlight.has(key)) continue;
+    pullRequestConflictConfirmations.delete(key);
+    pullRequestConflictMessages.delete(key);
+  }
+  for (const [key, confirmation] of repositoryUnregisterConfirmations) {
+    if (!unregisterable.has(key) && confirmation.pending !== true) repositoryUnregisterConfirmations.delete(key);
+  }
+}
+
 function findPullRequestConflictTarget(key) {
   const find = (group, items) => {
     for (const pullRequest of items || []) {
@@ -5426,6 +5450,7 @@ async function refresh() {
     connectionLost = false;
     updateConnectionNote();
     lastState = state;
+    pruneStaleConfirmations(state.pullRequests || []);
     const stateEtag = unchanged ? lastStateEtag : response.headers.get('etag');
     const stateBodyChanged = !unchanged && stateEtag !== lastStateEtag;
     lastStateEtag = stateEtag;
