@@ -1065,7 +1065,7 @@ test('終了ボタンは状態と名前を含む flex 行の右端に置く', ()
   for (const selector of ['.now-row', '.agent-row']) {
     assert.equal(Object.fromEntries(cssDeclarations(mobileHtml, selector))['grid-template-columns'], undefined);
   }
-  assert.match(mock, /const isClosable = \(session, agent\) => \(!!agent\.unconfirmed \|\| isMainBackgroundCodex\(agent\)\)/);
+  assert.match(mock, /const isClosable = \(session, agent\) => \(\(agent\.state !== 'busy' && !!agent\.unconfirmed\) \|\| isMainBackgroundCodex\(agent\) \|\| \(!agent\.isCodex && agent\.backgrounded === true && agent\.state === 'busy'\)\)/);
   assert.match(mock, /<span class="agent-name"><span class="badge \$\{state\[1\]\}">[\s\S]*?\$\{close\}<\/span>/);
   assert.equal(Object.fromEntries(cssDeclarations(mock, '.agent-name'))['flex-wrap'], 'wrap');
   assert.equal(Object.fromEntries(cssDeclarations(mock, '.close-agent'))['margin-left'], 'auto');

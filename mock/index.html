@@ -863,7 +863,7 @@ const DATA = {
           codex: { model: 'gpt-6.1-sol', resumes: 2 },
           perms: [],
           subagents: [
-            { type: 'default', text: 'collaborationwait_agent', since: '2 分前', state: 'busy', codexModel: 'gpt-6.1-sol' },
+            { type: 'default', text: 'collaborationwait_agent', since: '2 分前', state: 'busy', backgrounded: true, codexModel: 'gpt-6.1-sol' },
           ],
           tasks: [{ title: '会話の表示の単位を調べる', state: 'doing', updatedMin: 8, criteria: [{ t: 'resume の前後で同じ行に出る', met: false }] }],
           tasksUpdatedMin: 8, decisions: [{
@@ -1978,7 +1978,7 @@ const closedAgentKey = (session, agent) => `${session.id}::${agent.id || agent.t
 const isMainBackgroundCodex = agent => agent.isCodex === true && agent.backgrounded === true && !agent.parent_agent_id && agent.state === 'busy';
 const isClosedByUser = (session, agent) => ui.closedAgents.includes(closedAgentKey(session, agent));
 const isBusyAgent = (session, agent) => agent.state === 'busy' && !isClosedByUser(session, agent);
-const isClosable = (session, agent) => (!!agent.unconfirmed || isMainBackgroundCodex(agent)) && !isClosedByUser(session, agent);
+const isClosable = (session, agent) => ((agent.state !== 'busy' && !!agent.unconfirmed) || isMainBackgroundCodex(agent) || (!agent.isCodex && agent.backgrounded === true && agent.state === 'busy')) && !isClosedByUser(session, agent);
 const isUnconfirmed = (session, agent) => !!agent.unconfirmed && !isClosedByUser(session, agent);
 const isEndedAgent = (session, agent) => (agent.state === 'done' || isClosedByUser(session, agent)) && !isClosable(session, agent);
 

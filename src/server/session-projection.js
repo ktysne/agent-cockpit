@@ -145,12 +145,12 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
 }
 
 // 前面のツールは呼び出し元のターンより長く続かないので、PostToolUse を受けないまま呼び出し元が止まった起動は終了未確認にする。
-// 背景へ移った知らせを受けていないので、--wait の候補にはしない。記録は遅れた PostToolUse の判定のために残す。
+// 記録は遅れた PostToolUse の判定のために残す。
 function deactivatePendingCodex(session, parentAgentId) {
   for (const [toolUseId, agentId] of Object.entries(session.pendingCodex)) {
     if (session.pendingCodexWait[toolUseId]) continue;
     const agent = agentFor(session, agentId);
-    if (agent?.active && sameAgent(agent.parent_agent_id, parentAgentId)) {
+    if (agent?.active && !agent.backgrounded && sameAgent(agent.parent_agent_id, parentAgentId)) {
       agent.active = false;
       agent.unconfirmed = true;
     }
@@ -232,6 +232,14 @@ function latestWaitableCodex(session, parentAgentId, definition, runId) {
       sameAgent(agent.parent_agent_id, parentAgentId) && (!agent.runId || agent.runId === runId)
     ))
     .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0] || null;
+}
+
+function pendingCodexLaunches(session, definition) {
+  const agentIds = new Set(Object.entries(session.pendingCodex)
+    .filter(([toolUseId]) => !session.pendingCodexWait[toolUseId])
+    .map(([, agentId]) => agentId));
+  return session.agents.filter((agent) => agentIds.has(agent.agent_id) && agent.isCodex &&
+    !agent.resultReceived && !agent.runId && agent.agent_type === definition);
 }
 
 function isFinishedAskDecision(decision) {
@@ -474,6 +482,7 @@ function applyCodexLaunchCompletion(session, event) {
     } else if (placeholder && eventName === 'PostToolUseFailure') {
       applyCodexAudit(placeholder, event);
       placeholder.active = false;
+      if (event.isInterrupt) placeholder.unconfirmed = true;
     } else if (placeholder && session.codexReviewAgentIds.has(placeholder.agent_id) && !event.backgroundTaskId) {
       // クロスレビューの CLI はレビュアーの終了まで戻らず、差分が無いときと直接起動では結果行を出さない。
       applyCodexAudit(placeholder, event);
@@ -496,7 +505,7 @@ function applyCodexLaunchCompletion(session, event) {
 }
 
 /**
- * @param {Pick<SessionCodex, 'codexLaunchToolIds'|'codexReviewAgentIds'> & Pick<SessionAgents, 'agents'>} session
+ * @param {SessionCodex & Pick<SessionAgents, 'agents'>} session
  */
 function applyCodexResult(session, event) {
   const agentId = event.agent_id || null;
@@ -510,6 +519,22 @@ function applyCodexResult(session, event) {
     ? session.agents.find((agent) => agent.isCodex && agent.backgroundTaskId === event.backgroundOutputTaskId)
     : null;
   if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
+  // 起動の PostToolUse が欠けた行は、後の出力の run 行で引き取る。実行 ID の付いていない背景の行の run 行を
+  // 吸い込まないよう、背景の行も候補に数え、一意のときだけにする。
+  if (!outputCodex && event.codexRunId && event.codexRunStartedAt &&
+    !session.agents.some((agent) => agent.runId === event.codexRunId)) {
+    const definition = event.codexRunId.replace(/-\d{8}-\d{6}-\d+$/, '');
+    const pending = pendingCodexLaunches(session, definition);
+    const candidates = session.agents.filter((agent) => agent.isCodex && !agent.resultReceived && !agent.runId &&
+      agent.agent_type === definition && (pending.includes(agent) || agent.backgrounded) &&
+      Date.parse(event.codexRunStartedAt) >= Date.parse(agent.startedAt) - 1000);
+    if (candidates.length === 1 && pending.includes(candidates[0])) {
+      const agent = candidates[0];
+      agent.runId = event.codexRunId;
+      agent.backgrounded = true;
+      if (event.backgroundOutputTaskId && !agent.backgroundTaskId) agent.backgroundTaskId = event.backgroundOutputTaskId;
+    }
+  }
 
   // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
   if (event.codexResult && !isCodexLaunch && event.tool_name !== 'Agent') {
@@ -579,7 +604,7 @@ function applyAskQuestionCompletion(session, event) {
 }
 
 /**
- * @param {SessionAgents & Pick<SessionIdentity, 'product'|'title'|'lastActivityAt'>} session
+ * @param {SessionAgents & Pick<SessionIdentity, 'provider'|'product'|'title'|'lastActivityAt'>} session
  */
 function applyCommonEventStart(session, event) {
   const eventName = event.hook_event_name;
@@ -599,6 +624,7 @@ function applyCommonEventStart(session, event) {
     const agent = agentModelFromDefinition(event.agent_type, event.agentDefinition || {});
     agent.agent_id = agentId;
     agent.startedAt = isoTime(event.hookAt);
+    if (session.provider === 'codex') agent.backgrounded = true;
     session.agents.push(agent);
   }
 }
@@ -649,7 +675,7 @@ function applyToolStart(session, event) {
 }
 
 /**
- * @param {SessionAgents & Pick<SessionTools, 'tools'|'agentToolBindings'>} session
+ * @param {SessionAgents & Pick<SessionIdentity, 'provider'> & Pick<SessionTools, 'tools'|'agentToolBindings'>} session
  */
 function applySubagentStart(session, event) {
   const eventName = event.hook_event_name;
@@ -671,6 +697,7 @@ function applySubagentStart(session, event) {
       if (event.route) agent.route = event.route;
       session.agents.push(agent);
     }
+    if (session.provider === 'codex') agent.backgrounded = true;
     const unboundAgentCalls = unboundAgentCallsOf(session);
     if (unboundAgentCalls.length === 1) {
       const tool = unboundAgentCalls[0];
@@ -888,7 +915,15 @@ function applyCodexWaitStart(session, event) {
     // 取り出し直しの出力の結果行を、背景で動いている別の行へ流さないため、終わった行に結び付けておく。
     session.pendingCodex[toolUseId] = codexForRun.agent_id;
   } else {
-    const agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition, event.codexWaitRunId);
+    let agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition, event.codexWaitRunId);
+    if (!agent) {
+      const pending = pendingCodexLaunches(session, event.codexWaitDefinition)
+        .filter((candidate) => sameAgent(candidate.parent_agent_id, agentId));
+      if (pending.length === 1) {
+        agent = pending[0];
+        agent.backgrounded = true;
+      }
+    }
     if (agent) {
       agent.parent_agent_id = agentId;
       agent.active = true;

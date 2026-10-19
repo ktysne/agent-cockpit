@@ -397,6 +397,21 @@ test('Codex の --wait は実行 ID の形だけを受け、同じコマンド�
   assert.equal(Object.hasOwn(launchAndWait, 'codexWaitDefinition'), false);
 });
 
+test('前置きとシェルの文字列内の --wait を起動と同じ規則で検出する', () => {
+  const runId = 'impl-hard-20261019-031058-1234';
+  for (const command of [
+    `timeout 600 bash ~/.claude/tools/codex-agent.sh --wait ${runId}`,
+    `env A=1 bash ~/.claude/tools/codex-agent.sh --wait ${runId}`,
+    `A=1 bash ~/.claude/tools/codex-agent.sh --wait ${runId}`,
+    `bash -lc 'bash ~/.claude/tools/codex-agent.sh --wait ${runId}'`,
+  ]) {
+    const event = makeHookEvent({ session_id: 'wait-prefix', hook_event_name: 'PreToolUse',
+      tool_name: 'Bash', tool_use_id: 'wait', tool_input: { command } }, 1, { environment: {} });
+    assert.equal(event.codexWaitRunId, runId, command);
+  }
+  assert.equal(extractCodexWaitRunId(`bash -lc 'cat <<EOF\nbash codex-agent.sh --wait ${runId}\nEOF'`), '');
+});
+
 test('文字列やヒアドキュメントに書かれた Codex の --wait は拾わない', () => {
   const runId = 'impl-hard-20261003-123456-7';
   assert.equal(extractCodexWaitRunId(`cat > notes.md <<'EOF'\nbash ~/.claude/tools/codex-agent.sh --wait ${runId}\nEOF`), '');

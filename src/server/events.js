@@ -262,6 +262,7 @@ function sanitizeEvent(input, metadata = {}) {
   }
 
   if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
+    if (eventName === 'PostToolUseFailure' && input.isInterrupt === true) event.isInterrupt = true;
     if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;
     if (input.refreshPullRequests === true) event.refreshPullRequests = true;
     for (const key of ['backgroundTaskId', 'backgroundOutputTaskId']) {

@@ -1746,7 +1746,9 @@ test('Agent の出力に含まれる run= は Codex 行の runId にしない', 
   const backgroundRunId = 'impl-hard-20261003-123456-7';
   const agentOutputRunId = 'impl-hard-20261003-123457-8';
   state.addEvent({ session_id: 'agent-run-line', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  // 欠けた起動が一意だと --wait が引き取るので、二つ置いて Agent の出力の run= だけが結び付けの手掛かりになるようにする。
   launchCodex(state, 'agent-run-line', 'bash-pending', 2, 'sub-1', { model: 'gpt-pending', effort: 'low' });
+  launchCodex(state, 'agent-run-line', 'bash-pending-2', 2, 'sub-1', { model: 'gpt-pending', effort: 'low' });
   launchCodex(state, 'agent-run-line', 'bash-codex', 3, 'sub-1', { model: 'gpt-background', effort: 'high' });
   state.addEvent({
     session_id: 'agent-run-line', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub-1',
