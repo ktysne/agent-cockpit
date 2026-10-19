@@ -15,7 +15,7 @@ const UNRECORDED_DELIVERY = Symbol('unrecorded delivery');
 const DELEGATED_CODEX_PROMPT_CONTEXT ='Agent Cockpit: タスク、判断事項、PR は委譲元の Claude のセッションが記録する。この実行は Claude のセッションから委譲された Codex なので、Agent Cockpit の MCP ツール(cockpit_*)を呼ばない。';
 
 function createHookRoutes(ctx) {
-  const { state, answerDelivery, claudeHome, userHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
+  const { state, answerDelivery, claudeHome, codexHome, userHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
 
   function refreshPullRequestsAfterCommand(event) {
     const registrations = state.readOnlyPullRequestRegistrations();
@@ -27,7 +27,7 @@ function createHookRoutes(ctx) {
       const key = repositoryKey(owner, repo);
       scopedRegistrations = registrations.filter((record) => repositoryKey(record.owner, record.repo) === key);
     } else {
-      const product = event.commandCwd ? productFromCwd(event.commandCwd) : event.product || productFromCwd(event.cwd);
+      const product = event.commandCwd ? productFromCwd(event.commandCwd, { codexHome }) : event.product || productFromCwd(event.cwd, { codexHome });
       if (product) scopedRegistrations = registrations.filter((record) => record.product?.key === product.key);
     }
 
@@ -218,7 +218,7 @@ function createHookRoutes(ctx) {
     recordClientEntries(ctx.diagnostics, body?.diagnostics, 'hook');
     const receivedAt = Date.now();
     state.captureFieldNames(body);
-    const product = productFromCwd(body.cwd);
+    const product = productFromCwd(body.cwd, { codexHome });
     const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
     const eventName = body.hook_event_name;
     const sessionName = sessionId ? state.sessionNameFor(sessionId) : null;
@@ -281,7 +281,7 @@ function createHookRoutes(ctx) {
     )) {
       const registerPullRequest = (pullRequest, commandCwd) => {
         const registrationCwd = commandCwd || body.cwd;
-        const registrationProduct = commandCwd ? productFromCwd(commandCwd) : product;
+        const registrationProduct = commandCwd ? productFromCwd(commandCwd, { codexHome }) : product;
         const registered = state.registerPullRequest(event.session_id, pullRequest, {
           cwd: registrationCwd, product: registrationProduct,
         }, event.hookAt);
@@ -426,7 +426,7 @@ function createHookRoutes(ctx) {
       }
       return;
     }
-    const product = productFromCwd(body.cwd);
+    const product = productFromCwd(body.cwd, { codexHome });
     const alreadyRegistered = Boolean(state.pullRequestRegistrationForSession(sessionId, pullRequest.owner, pullRequest.repo, pullRequest.number));
     const registered = state.registerPullRequest(sessionId, pullRequest, { cwd: body.cwd, product, preserveLocation: true });
     if (!registered) {
