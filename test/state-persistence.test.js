@@ -196,7 +196,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
     mode: 'kind', order: ['C:\\project'], pinned: ['C:\\project'],
     collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
     sectionOrder: ['now', 'judgment', 'tasks', 'prs', 'sinceSeen'],
-    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, ghConcurrencyLimit: 12, hideFinished: true, importAppTasks: true, mergeableCondition: 'ci', terminal: 'pwsh',
+    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, ghConcurrencyLimit: 12, hideFinished: true, pullDefaultBranchAfterMerge: true, importAppTasks: true, mergeableCondition: 'ci', terminal: 'pwsh',
   };
   state.patchDisplayPreferences(display);
   state.registerPullRequest('restored-session', { url: 'https://github.com/example/project/pull/47' }, {
@@ -309,6 +309,7 @@ test('保存時刻の欠落や範囲外の値は表示設定の既定値で補�
   const cases = [
     ['値がない', {}, 15, 3, 10, 8, true],
     ['終わったものの設定が偽', { hideFinished: false }, 15, 3, 10, 8, false],
+    ['マージ後更新の保存値が真偽値でない', { pullDefaultBranchAfterMerge: 'true' }, 15, 3, 10, 8, true],
     ['終わったものの設定が真偽値でない', { hideFinished: 'false' }, 15, 3, 10, 8, true],
     ['長い待ち時間が範囲外', { longWaitMinutes: 121, awayAnswerWaitMinutes: 12 }, 15, 12, 10, 8, true],
     ['回答待ち時間が整数でない', { longWaitMinutes: 30, awayAnswerWaitMinutes: 2.5 }, 30, 3, 10, 8, true],
@@ -337,6 +338,7 @@ test('保存時刻の欠落や範囲外の値は表示設定の既定値で補�
     assert.equal(restored.display.idleHideMinutes, expectedIdleHide, name);
     assert.equal(restored.display.ghConcurrencyLimit, expectedGhLimit, name);
     assert.equal(restored.display.hideFinished, expectedHideFinished, name);
+    assert.equal(restored.display.pullDefaultBranchAfterMerge, false, name);
     assert.equal((await fs.readdir(homeDir)).some((file) => file.startsWith('store.json.broken-')), false, name);
     await restored.flushPersistence();
     const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));

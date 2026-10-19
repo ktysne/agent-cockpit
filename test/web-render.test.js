@@ -1951,6 +1951,7 @@ test('終わったもののチェックは表示設定として保存し、失�
     displayPreferenceSaveStates: new Map(),
     renderSectionOrder() {},
     render() {},
+    pullDefaultBranchInput: { type: 'checkbox', checked: false },
     hideFinishedInput,
     importAppTasksInput,
     longWaitMinutesInput,
@@ -1973,6 +1974,8 @@ test('終わったもののチェックは表示設定として保存し、失�
   });
   vm.runInContext(`${settings}\n${functions.join('\n')}\n${saveFunctions.join('\n')}`, context);
 
+  assert.equal(context.normalizeDisplayPreferences(null).pullDefaultBranchAfterMerge, false);
+  assert.equal(context.normalizeDisplayPreferences({ pullDefaultBranchAfterMerge: true }).pullDefaultBranchAfterMerge, true);
   assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
   assert.equal(context.normalizeDisplayPreferences(null).importAppTasks, false);
   assert.equal(context.normalizeDisplayPreferences(null).idleHideMinutes, 10);

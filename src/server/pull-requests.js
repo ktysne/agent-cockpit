@@ -2163,6 +2163,8 @@ module.exports = {
   readCrossReviewState,
   readCrossReviewStateAcrossWorktrees,
   matchingRepositoryCheckout,
+  listWorktrees,
+  gitRemotes,
   crossReviewConvergedAtHead,
   crossReviewWaitReason,
   runGh,

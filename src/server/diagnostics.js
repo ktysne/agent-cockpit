@@ -33,6 +33,7 @@ const ALLOWED_DATA = Object.freeze({
   'merge.reserved': ['repository', 'number'],
   'merge.cancelled': ['repository', 'number'],
   'merge.result': ['repository', 'number', 'result'],
+  'merge.local-update': ['repository', 'result'],
   'session.ended': ['session', 'provider', 'reason'],
   'review.reminder': ['repository', 'number', 'session'],
   'review.state': ['repository', 'number', 'session', 'file', 'head', 'failure', 'round', 'outcome', 'triageHead'],

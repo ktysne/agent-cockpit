@@ -1,7 +1,9 @@
 'use strict';
 
+const { execFile } = require('node:child_process');
+const path = require('node:path');
 const { isCompleteCommitSha, pullRequestKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
-const { safeRepo, crossReviewConvergedAtHead, ghFailureKind } = require('./pull-requests');
+const { safeRepo, crossReviewConvergedAtHead, ghFailureKind, matchingRepositoryCheckout, listWorktrees, gitRemotes } = require('./pull-requests');
 
 const METHODS = new Set(['merge', 'squash', 'rebase']);
 const METHOD_LABELS = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
@@ -53,12 +55,15 @@ function errorText(error) {
 }
 
 class PullRequestMergeManager {
-  constructor({ state, tracker, answerDelivery, diagnostics, now = Date.now } = {}) {
+  constructor({ state, tracker, answerDelivery, diagnostics, now = Date.now, gitExecFileImpl = execFile } = {}) {
     this.state = state;
     this.diagnostics = diagnostics;
     this.tracker = tracker;
     this.answerDelivery = answerDelivery;
     this.now = now;
+    this.gitExecFileImpl = gitExecFileImpl;
+    this.localUpdates = new Set();
+    this.worktreeUpdates = new Map();
     this.inFlight = new Map();
     this.repositoryInFlight = new Set();
     this.repositoryLockWaiters = new Map();
@@ -770,7 +775,83 @@ class PullRequestMergeManager {
     const childSessions = stackedPullRequests.flatMap((stacked) => (
       this.state.pullRequestRegistrationsForRepo(owner, repo).filter((record) => record.number === stacked.number).map((record) => record.session_id)
     ));
-    this.answerDelivery?.notifySessions(unique([...sessionIds, ...childSessions]), lines.join('\n'));
+    const recipients = unique([...sessionIds, ...childSessions]);
+    this.answerDelivery?.notifySessions(recipients, lines.join('\n'));
+    return recipients;
+  }
+
+  runLocalGit(root, args) {
+    return new Promise((resolve, reject) => {
+      this.gitExecFileImpl('git', ['-C', root, ...args], {
+        encoding: 'utf8', timeout: 60_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      }, (error, stdout) => error ? reject(error) : resolve(stdout));
+    });
+  }
+
+  scheduleDefaultBranchUpdate(owner, repo, defaultBranch, sessionIds, registrations) {
+    // マージの応答とロックの解放を git の実行時間で遅らせない。
+    const pending = new Promise((resolve) => setImmediate(resolve))
+      .then(() => this.updateDefaultBranchWorktrees(owner, repo, defaultBranch, sessionIds, registrations))
+      .catch(() => {})
+      .finally(() => this.localUpdates.delete(pending));
+    this.localUpdates.add(pending);
+  }
+
+  async updateDefaultBranchWorktrees(owner, repo, defaultBranch, sessionIds, registrations) {
+    const worktrees = new Map();
+    const roots = new Set();
+    const pathKey = (value) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+    const execFileImpl = (file, args, options, callback) => this.gitExecFileImpl(file, args, {
+      ...options, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }, callback);
+    for (const record of registrations) {
+      const root = await matchingRepositoryCheckout(record.cwd, { owner, repo }, { execFileImpl });
+      if (!root || roots.has(pathKey(root))) continue;
+      roots.add(pathKey(root));
+      for (const worktree of await listWorktrees(root, execFileImpl)) {
+        if (worktree.branch === defaultBranch && !worktree.prunable) worktrees.set(pathKey(worktree.path), worktree.path);
+      }
+    }
+    const lines = [];
+    for (const [key, root] of worktrees) {
+      const pending = (this.worktreeUpdates.get(key) || Promise.resolve())
+        .then(() => this.updateDefaultBranchWorktree(root, owner, repo, defaultBranch));
+      this.worktreeUpdates.set(key, pending);
+      let result;
+      try {
+        result = await pending;
+      } finally {
+        if (this.worktreeUpdates.get(key) === pending) this.worktreeUpdates.delete(key);
+      }
+      if (result === 'switched') continue;
+      this.diagnostics?.record(result === 'updated' ? 'info' : 'warn', 'merge', 'merge.local-update',
+        { repository: safeRepo(owner, repo), result });
+      if (result === 'updated') lines.push(`ローカルの ${defaultBranch} を最新にしました: ${root}`);
+      else if (result === 'dirty') lines.push(`${root} は未コミットの変更があるため ${defaultBranch} を更新しませんでした`);
+      else if (result === 'no-remote') lines.push(`${root} はリポジトリに一致する remote がないため ${defaultBranch} を更新しませんでした`);
+      else lines.push(`${root} の ${defaultBranch} を更新できませんでした(fast-forward できないか、取得に失敗しました)`);
+    }
+    if (lines.length) this.answerDelivery?.notifySessions(sessionIds, lines.join('\n'));
+  }
+
+  async updateDefaultBranchWorktree(root, owner, repo, defaultBranch) {
+    try {
+      // 探索後に開発者が別のブランチへ切り替えた場合は、そのブランチを更新しない。
+      const branch = await this.runLocalGit(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+      if (branch.trim() !== defaultBranch) return 'switched';
+      const status = await this.runLocalGit(root, ['status', '--porcelain', '--untracked-files=no']);
+      if (status.trim()) return 'dirty';
+      const remoteUrls = await this.runLocalGit(root, ['config', '--get-regexp', '^remote\\..*\\.url$'])
+        .catch((error) => { if (error.code === 1) return ''; throw error; });
+      const remotes = gitRemotes(remoteUrls);
+      const remote = remotes.find((item) => item.owner?.toLowerCase() === owner.toLowerCase() && item.repo?.toLowerCase() === repo.toLowerCase());
+      if (!remote || !remote.name || remote.name.startsWith('-')) return 'no-remote';
+      await this.runLocalGit(root, ['pull', '--ff-only', '--', remote.name, defaultBranch]);
+      return 'updated';
+    } catch {
+      return 'failed';
+    }
   }
 
   async handleDetectedMerge(event) {
@@ -861,10 +942,14 @@ class PullRequestMergeManager {
       reservation?.session_id,
       mergeIntent?.session_id,
     ].filter(Boolean);
-    this.notifyMerge(owner, repo, pullRequest, targetBranch || '既定ブランチ', method, stackedPullRequests, sessionIds, warning, headMismatch, branchKept, retargetedChildren);
+    const recipients = this.notifyMerge(owner, repo, pullRequest, targetBranch || '既定ブランチ', method, stackedPullRequests, sessionIds, warning, headMismatch, branchKept, retargetedChildren);
     await this.state.waitForPersistence?.();
     const outcome = { branchDeleted, warning };
     this.mergeOutcomes.set(mergeKey, outcome);
+    if (this.state.getDisplayPreferences().pullDefaultBranchAfterMerge === true && validBranchName(defaultBranch) && pullRequest.baseRefName === defaultBranch) {
+      this.scheduleDefaultBranchUpdate(owner, repo, defaultBranch, recipients,
+        [...this.state.pullRequestRegistrationsForRepo(owner, repo), ...registrations]);
+    }
     return outcome;
   }
 

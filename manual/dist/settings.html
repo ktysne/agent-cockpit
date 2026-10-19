@@ -127,6 +127,7 @@
         <li class="level-3"><a href="#settings-away-wait">離席中に質問の回答を待つ時間</a></li>
         <li class="level-3"><a href="#settings-gh-concurrency">GitHub CLI の同時起動上限数</a></li>
         <li class="level-3"><a href="#settings-terminal">「ターミナルで開く」で使う端末</a></li>
+        <li class="level-3"><a href="#settings-pull-default-branch">マージ後に既定ブランチの作業ツリーを更新する</a></li>
         <li class="level-3"><a href="#settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</a></li>
         <li class="level-3"><a href="#settings-order">セクションの並び順</a></li>
         <li><a href="#settings-operations">一覧の表示の操作</a></li>
@@ -241,6 +242,14 @@
   <p>開けると、実際に使った端末名に応じて、たとえば「Windows Terminal で開きました」と操作欄に出ます。
   変えた設定は、次に <span class="ui">ターミナルで開く</span> を押したときから使われます。
   この操作は Windows で使えます(<a href="decisions.html#decisions-verify">worktree の確認依頼</a>)。</p>
+
+  <h3 id="settings-pull-default-branch">マージ後に既定ブランチの作業ツリーを更新する</h3>
+  <p><span class="ui">既定ブランチへのマージ後、既定ブランチの作業ツリーを最新にする</span> は、main などの既定ブランチへのマージを検出したとき、そのブランチをチェックアウトしているローカルの作業ツリーを更新します。
+  オフが最初の設定です。
+  ダッシュボードからのマージ、予約によるマージ、GitHub 上でのマージが対象です。</p>
+  <p>更新には <code>git pull --ff-only</code> を使います。
+  未コミットの変更がある場合や fast-forward できない場合は更新せず、結果をマージ通知と同じセッションへ知らせます。
+  既定ブランチ以外へのマージや、既定ブランチをチェックアウトしている作業ツリーが無い場合は何もしません。</p>
 
   <h3 id="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</h3>
   <p><span class="ui">デスクトップアプリのタスク一覧を取り込む</span> は、Claude Code デスクトップアプリのタスク一覧を 1 つのタスクの完了条件として取り込むか選びます。
@@ -362,6 +371,7 @@
         <li class="level-3"><a href="#settings-away-wait">離席中に質問の回答を待つ時間</a></li>
         <li class="level-3"><a href="#settings-gh-concurrency">GitHub CLI の同時起動上限数</a></li>
         <li class="level-3"><a href="#settings-terminal">「ターミナルで開く」で使う端末</a></li>
+        <li class="level-3"><a href="#settings-pull-default-branch">マージ後に既定ブランチの作業ツリーを更新する</a></li>
         <li class="level-3"><a href="#settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</a></li>
         <li class="level-3"><a href="#settings-order">セクションの並び順</a></li>
         <li><a href="#settings-operations">一覧の表示の操作</a></li>
