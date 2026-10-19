@@ -27,6 +27,9 @@ const MCP_GITHUB_TIMEOUT_MS = 60000;
 const UNREACHABLE_MESSAGE = 'ダッシュボードに書けなかった。作業は続けてよい';
 const TIMEOUT_MESSAGE = '常駐サーバーの応答が時間内に返らず、記録できたかを確かめられなかった。処理が続いている可能性があるため、ダッシュボードで確かめてほしい';
 const UNKNOWN_OUTCOME_MESSAGE = '常駐サーバーの応答を受け取れず、記録できたかを確かめられなかった。処理が済んでいる可能性があるため、ダッシュボードで確かめてほしい';
+// 常駐サーバーは書き込みの口の例外を 500 で返し、例外の前に書き換えた状態は残るため、結果不明として扱う。
+const SERVER_FAILURE_MESSAGE = '常駐サーバーが処理の途中で失敗した(HTTP 500)。記録できたかを確かめられなかったため、ダッシュボードで確かめてほしい';
+const rejectedMessage = (status) => `常駐サーバーが書き込みを受け付けなかった(HTTP ${status})。作業は続けてよい`;
 const MAX_RESULT_ITEMS = 10;
 let codexClient = false;
 const CODEX_UNREGISTERED_MESSAGE = 'Codex のフックが届いていないため記録できなかった。未登録または終了済みのセッションです。';
@@ -281,6 +284,13 @@ function codexUnregisteredResult(result) {
     : { errorMessage: CODEX_UNREGISTERED_MESSAGE, isError: true };
 }
 
+function writeFailureResult(result, errorMessages) {
+  const errorMessage = errorMessages.get(result.status);
+  if (errorMessage) return { errorMessage };
+  if (typeof result.status !== 'number') return null;
+  return { errorMessage: result.status === 500 ? SERVER_FAILURE_MESSAGE : rejectedMessage(result.status), isError: true };
+}
+
 async function postPlan(toolName, args, options = {}) {
   const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
   const identity = writerIdentity(options);
@@ -294,8 +304,7 @@ async function postPlan(toolName, args, options = {}) {
   if (result.timedOut) return { timedOut: true };
   if (result.outcomeUnknown) return { outcomeUnknown: true };
   if (result.codexUnregistered) return codexUnregisteredResult(result);
-  const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
-  return errorMessage ? { errorMessage } : null;
+  return writeFailureResult(result, PLAN_ERROR_MESSAGES);
 }
 
 async function postPullRequest(args, options = {}) {
@@ -315,8 +324,7 @@ async function postPullRequest(args, options = {}) {
   if (result.timedOut) return { timedOut: true };
   if (result.outcomeUnknown) return { outcomeUnknown: true };
   if (result.codexUnregistered) return codexUnregisteredResult(result);
-  const errorMessage = PR_ERROR_MESSAGES.get(result.status);
-  return errorMessage ? { errorMessage } : null;
+  return writeFailureResult(result, PR_ERROR_MESSAGES);
 }
 
 async function postCrossReviewSkip(args, options = {}) {
@@ -347,8 +355,7 @@ async function postCrossReviewSkip(args, options = {}) {
   if (result.timedOut) return { timedOut: true };
   if (result.outcomeUnknown) return { outcomeUnknown: true };
   if (result.codexUnregistered) return codexUnregisteredResult(result);
-  const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
-  return errorMessage ? { errorMessage } : null;
+  return writeFailureResult(result, REVIEW_SKIP_ERROR_MESSAGES);
 }
 
 async function callTool(name, args, options = {}) {
