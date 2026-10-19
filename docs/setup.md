@@ -304,7 +304,7 @@ bridge は `CLAUDE_CONFIG_DIR` にかかわらず `~/.claude/tools/` に置く�
 
 ### agent-cockpit 側の設定
 
-画面の「経路の設定」で選んだ経路(既定、Codex、Claude)を、起動するサブエージェントへ伝えるフック `route.js` を登録します。
+画面の「経路の設定」で選んだ経路を、bridge の窓口と `codex-review` へ伝えるフック `route.js` を登録します。
 次の内容を `~/.claude/settings.json` の `hooks` に統合します。パターン A で登録した `SubagentStart` と `PreToolUse` の配列へ、要素を足してください。
 
 ```json
@@ -320,16 +320,21 @@ bridge は `CLAUDE_CONFIG_DIR` にかかわらず `~/.claude/tools/` に置く�
 }
 ```
 
-`route.js` は同期フックです。`SubagentStart` で、その時点の経路を `AGENT_COCKPIT_HOME` の `route-agents/` に記録し、Codex か Claude を選んでいればサブエージェントへ伝えます。Claude を選んだサブエージェントが `codex-agent.sh` を呼ぶと、`PreToolUse` で止めます。
+`route.js` は同期フックです。`impl-hard`、`impl-standard`、`impl-light`、`codex-subagent` の開始時は「サブエージェント」の経路を、`codex-review` の開始時は「クロスレビュー」の経路を `AGENT_COCKPIT_HOME` の `route-agents/` に記録します。
+Codex か Claude を選んでいれば、対象の窓口へその経路を伝えます。
+`codex-review` でクロスレビューの経路が「既定」のときは記録も差し込みもしません。
+Claude の経路を記録した窓口が `codex-agent.sh` を呼ぶと、`PreToolUse` で止めます。
 経路は起動時に決まり、稼働中のサブエージェントは設定を変えても切り替わりません。
-経路の設定が効くのは、Claude のセッションが起動するサブエージェントだけです。Codex のセッション(パターン E)のサブエージェントには効かないので、Codex のフックに `route.js` は登録しません。
-経路を Claude にしたとき、bridge の窓口(`impl-hard`、`impl-light`、`impl-standard`)は自分では実装しないので、`codex-agent.sh` の実行を拒否されると `再委譲: impl-*-claude` を報告します。メインセッションは bridge の手順に従って、報告された `impl-*-claude` へ委譲し直します。`codex-review` と `codex-subagent` は、拒否の文言を報告して止まります。定義側での明文化と実機での確認は [ktysne/claude-codex-bridge#129](https://github.com/ktysne/claude-codex-bridge/issues/129) で進めています。
+経路の設定が効くのは、Claude のセッションが起動する bridge の窓口だけです。`codex-review` はクロスレビューの経路に従います。Codex のセッション(パターン E)のサブエージェントには効かないので、Codex のフックに `route.js` は登録しません。
+サブエージェントの経路を Claude にしたとき、bridge の実装窓口は `codex-agent.sh` の実行を拒否されると `再委譲: impl-*-claude` を報告します。メインセッションは bridge の手順に従って、報告された `impl-*-claude` へ委譲し直します。
+`codex-review` はクロスレビューの経路を Claude にしたときだけ拒否の文言を受けます。Codex を選んでいれば Codex の起動は拒否されません。
+定義側での明文化と実機での確認は [ktysne/claude-codex-bridge#129](https://github.com/ktysne/claude-codex-bridge/issues/129) で進めています。
 bridge を外したときは、`codex-agent.sh` が無いので `route.js` は何も差し込みません。登録は残したままで構いません。
 
 ### 確認
 
 1. 新しいセッションを開き、ダッシュボードを再読み込みします。上部の「経路の設定」に、サブエージェントの段(既定、Codex、Claude)が出れば、bridge が検出されています。出ないときは、`codex-agent.sh` が `~/.claude/tools/` か `CLAUDE_CONFIG_DIR` の `tools/` にあるかを確かめます。
-2. 経路を「Claude」にしてから、セッションでサブエージェントを起動させます。サブエージェントが動いている間に、その行に「経路: Claude」の札が出て、`AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `route-agents/` に記録のファイルができれば成功です。bridge の窓口(`impl-light` など)を起動したときは、窓口が `再委譲: impl-light-claude` と、`開発者の指定(agent-cockpit の経路設定):` で始まる拒否の文言を報告するのが期待される動きです。違う報告になったときは [ktysne/claude-codex-bridge#129](https://github.com/ktysne/claude-codex-bridge/issues/129) を見てください。
+2. 「サブエージェント」の経路を「Claude」にしてから、セッションで bridge の窓口を起動させます。窓口が動いている間に、その行に「経路: Claude」の札が出て、`AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `route-agents/` に記録のファイルができれば成功です。窓口(`impl-light` など)は `再委譲: impl-light-claude` と、`開発者の指定(agent-cockpit の経路設定):` で始まる拒否の文言を報告します。`codex-review` は「クロスレビュー」の経路に従います。違う報告になったときは [ktysne/claude-codex-bridge#129](https://github.com/ktysne/claude-codex-bridge/issues/129) を見てください。
 3. 確かめ終わったら、経路を元の値に戻します。
 
 ## パターン D: + ai-cross-review
