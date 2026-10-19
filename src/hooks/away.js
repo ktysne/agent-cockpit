@@ -22,14 +22,17 @@ function sessionSummary(snapshot) {
   return lines.join('\n');
 }
 
-function outputForAway(input, away, snapshot = null, provider = 'claude', noninteractive = false) {
+function outputForAway(input, away, snapshot = null, provider = 'claude', noninteractive = false, launchedFromClaude = false) {
   const hookEventName = input.hook_event_name;
   if (hookEventName === 'PreToolUse') return null;
   const context = [];
   if (snapshot && hookEventName === 'SessionStart' && ['compact', 'resume'].includes(input.source)) {
     context.push(sessionSummary(snapshot));
   }
-  const shouldAddTaskContext = !input.agent_id && snapshot?.delegated !== true && !noninteractive &&
+  // Claude から起動した Codex の委譲の分類は、親の非同期の起動イベントが届くまで決まらないので、委譲でないと分かるまで案内しない。
+  const delegationPending = provider === 'codex' && launchedFromClaude &&
+    (hookEventName === 'SessionStart' || snapshot?.delegated !== false);
+  const shouldAddTaskContext = !input.agent_id && snapshot?.delegated !== true && !noninteractive && !delegationPending &&
     ['SessionStart', 'UserPromptSubmit'].includes(hookEventName);
   if (shouldAddTaskContext) {
     const importAppTasks = typeof away.importAppTasks === 'boolean' ? away.importAppTasks
@@ -54,12 +57,14 @@ async function runAwayHook(input, options = {}) {
   if (!['PreToolUse', 'UserPromptSubmit', 'SessionStart'].includes(hookEventName)) return null;
   const provider = options.provider === 'codex' ? 'codex' : 'claude';
   const noninteractive = options.noninteractive === true;
+  const launchedFromClaude = provider === 'codex' && isHookSessionId(options.claudeParentSessionId);
+  const output = (response, snapshot = null) => outputForAway(input, response, snapshot, provider, noninteractive, launchedFromClaude);
   if (hookEventName === 'PreToolUse' && !isQuestionTool(provider, input.tool_name)) return null;
   if (hookEventName === 'PreToolUse') return runAskQuestion(input, { ...options, provider, toolName: input.tool_name });
 
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const info = await readServerInfo(homeDir);
-  if (!info || info.port < 1 || info.port > 65535) return outputForAway(input, { enabled: false }, null, provider, noninteractive);
+  if (!info || info.port < 1 || info.port > 65535) return output({ enabled: false });
 
   const fetchImpl = options.fetchImpl || fetch;
   const wantsSummary = hookEventName === 'SessionStart' && ['compact', 'resume'].includes(input.source) &&
@@ -75,13 +80,13 @@ async function runAwayHook(input, options = {}) {
       attemptTimeoutMs: HOOK_TIMEOUT_MS,
     });
     const response = result.ok ? result.json : null;
-    if (!response || typeof response !== 'object') return outputForAway(input, { enabled: false }, null, provider, noninteractive);
+    if (!response || typeof response !== 'object') return output({ enabled: false });
     if (response.enabled === true && (!Number.isFinite(response.since) || !Number.isFinite(new Date(response.since).getTime()))) {
-      return outputForAway(input, { enabled: false }, null, provider, noninteractive);
+      return output({ enabled: false });
     }
-    return outputForAway(input, response, wantsSessionContext ? response : null, provider, noninteractive);
+    return output(response, wantsSessionContext ? response : null);
   } catch {
-    return outputForAway(input, { enabled: false }, null, provider, noninteractive);
+    return output({ enabled: false });
   }
 }
 
@@ -97,6 +102,7 @@ async function main() {
     const output = await runAwayHook(input, {
       provider: process.argv[2] === 'codex' ? 'codex' : 'claude',
       noninteractive: process.env.AGENT_COCKPIT_NONINTERACTIVE === '1',
+      claudeParentSessionId: process.env.CLAUDE_CODE_SESSION_ID,
     });
     if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
   } catch {
