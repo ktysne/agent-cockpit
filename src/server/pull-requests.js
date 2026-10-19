@@ -762,6 +762,18 @@ function sameGitHubRepository(left, right) {
   return left.owner.toLowerCase() === right.owner.toLowerCase() && left.repo.toLowerCase() === right.repo.toLowerCase();
 }
 
+async function matchingRepositoryCheckout(cwd, repository, options = {}) {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
+  const fileSystem = options.fileSystem || fs;
+  try {
+    if (!(await fileSystem.stat(cwd)).isDirectory()) return null;
+  } catch { return null; }
+  const { root } = await findWorktreeRoot(cwd, fileSystem);
+  if (!root) return null;
+  const remotes = await gitRemotesOf(root, options.execFileImpl || execFile, options.remoteRepositoryCache);
+  return remotes.some(remote => remote.owner && sameGitHubRepository(remote, repository)) ? root : null;
+}
+
 function crossReviewToolAt(root, treeish, execFileImpl) {
   return new Promise((resolve) => {
     try {
@@ -969,6 +981,22 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   let selected = await readCrossReviewState(registration, pullRequest, options);
   const branch = pullRequest?.headRefName;
   if (selected === undefined || !branch) return selected;
+  if (selected?.reason === 'repository-mismatch') {
+    const checkedRoots = new Set();
+    let matchingReview;
+    for (const record of options.registrations || []) {
+      if (!sameGitHubRepository(record, registration)) continue;
+      const root = await matchingRepositoryCheckout(record.cwd, registration, options);
+      if (!root || checkedRoots.has(root)) continue;
+      checkedRoots.add(root);
+      const candidate = await readCrossReviewStateAcrossWorktrees({ ...registration, cwd: root }, pullRequest, {
+        ...options, registrations: [], requireMatchingRepository: true,
+      });
+      if (candidate?.reason === 'repository-mismatch') continue;
+      if (shouldReplaceCrossReview(matchingReview, candidate, pullRequest.headRefOid)) matchingReview = candidate;
+    }
+    return matchingReview === undefined ? selected : matchingReview;
+  }
   const { root } = await findWorktreeRoot(registration.cwd, fileSystem);
   if (!root) return selected;
   const sameRoot = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
@@ -980,6 +1008,7 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   }
   for (const worktree of await listWorktrees(root, options.execFileImpl)) {
     if (worktree.prunable || (!cwdMissing && sameRoot(worktree.path, root))) continue;
+    if (options.requireMatchingRepository && !await matchingRepositoryCheckout(worktree.path, registration, options)) continue;
     const candidate = await readCrossReviewState({ ...registration, cwd: worktree.path }, pullRequest, options);
     if (candidate?.reason === 'repository-mismatch') continue;
     const hasRecord = Number.isSafeInteger(candidate?.round);
@@ -1933,6 +1962,7 @@ class PullRequestTracker {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
       if (!pullRequest) continue;
       const review = await this.readCrossReviewState(registration, pullRequest, {
+        registrations,
         fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache,
         observeReview: (record, result) => {
           const key = `${repositoryKey(owner, repo)}:${record.number}:${record.cwd}`;
@@ -2132,6 +2162,7 @@ module.exports = {
   crossReviewToolExists,
   readCrossReviewState,
   readCrossReviewStateAcrossWorktrees,
+  matchingRepositoryCheckout,
   crossReviewConvergedAtHead,
   crossReviewWaitReason,
   runGh,

@@ -457,8 +457,16 @@ base と head の対応から関連するオープン PR を積み上げる。�
 状態ファイルは、登録の `cwd` の worktree に加えて、同じリポジトリのほかの worktree からも探す。PR の head のブランチをチェックアウトしている worktree は記録の有無を問わず候補にし、それ以外の worktree はそのブランチの記録を持つときだけ候補にする。スタックを 1 つの worktree で積むと、下の段のブランチはどこにもチェックアウトされないためである。
 登録の `cwd` が消えたときは、親へ上って見つかる worktree の根で下の remote の照合をしてから、PR の head のコミットに `tools/cross-review.js` があるかを確かめる。head のコミットを確かめられなければ、上と同じく base ブランチのコミットで確かめる。無ければ「レビュー不要」とし、あるか、どちらも確かめられなければ「確認できない」とする。消えた worktree の状態ファイルは読めないためである。このとき見つけた根も、ほかの worktree と同じ規則の候補にする。`git worktree list` で `prunable` の worktree(フォルダーが無い)は候補にしない。
 登録や worktree の候補が複数あるときは、往復の記録、記録なし(レビュー未実施)、確認できない、道具なし(レビュー不要)の順に選び、同じ順位なら今の head で収束した記録、次に今の head をレビューした記録を選ぶ。確認できない値で、確かめられた「レビュー未実施」を隠さない(催促は未実施の PR だけを対象にするため)。確認できない値を道具なしより上に置くのは、確かめられない worktree の PR をレビュー不要と扱わないためである。不要の記録は、選んだ値に下の規則で重ねる。
-登録の `cwd` と製品は、`commandCwd` があればそこから決める。`cockpit_add_pr` で登録し直しても、登録済みの `cwd` と製品は変えない。
+登録の `cwd` と製品は、`commandCwd` があればそこから決める。
+`cockpit_add_pr` は任意の `cwd` に checkout の絶対パスを受け取り、常駐サーバーへセッションの `cwd` と分けて `prCwd` として送る。
+常駐サーバーは指定されたフォルダーを読めて、その remote が PR のリポジトリと一致するときだけ、登録の `cwd` と製品をそこから決める。
+同じセッションで同じ PR を登録し直した場合も、この照合に通れば `cwd` と製品を付け直し、登録時刻などの既存の情報は保持する。
+指定が無いか、読めないか、remote が一致しないときは、登録済みの場所を保持し、新規ならセッションの `cwd` を使う。
 cwd の worktree の GitHub の remote のどれも PR のリポジトリと一致しないときは、クロスレビューを「確認できない」とし、その worktree をほかの worktree の候補からも外す。remote が読めないときや GitHub の remote が無いときは、この照合をしない。
+登録の `cwd` の remote が不一致のときは、同じリポジトリ(owner/repo)の PR のほかの登録から、remote が一致する checkout を探す。
+その checkout と `git worktree list` にある worktree を候補にし、それぞれの remote が PR のリポジトリと一致することを照合してから、状態ファイルを読む。
+head と base の道具の有無も、見つけた checkout で確かめる。
+兄弟のフォルダーなどのファイルシステムの走査は行わず、候補が見つからなければ「確認できない」のままにする。
 表示設定 `display.mergeableCondition` は「マージ操作が可能」「CI が成功」「現在の head のクロスレビューが収束または不要」の各条件を選ぶ。既定は最後の条件まで求める。収束は `lastTriage.round` と現在の round が一致し、`lastTriage.sha` と現在の head が一致する場合だけ有効とする。操作可否は CI とクロスレビューを含めずに判定し、選択条件を満たすかどうかでカードの緑表示、待ち条件と件数を決める。操作可だが条件が残る場合も、確認欄に警告を出して開発者が実行できる。
 クロスレビュー不要記録は PR の owner/repo/番号、head SHA、理由を `store.json` の `crossReviewSkips` に保存する。MCP の `cockpit_skip_review` は登録元セッションからのみ記録でき、ダッシュボードの操作は起動時の秘密値と必須 Origin を照合して記録または取り消す。どちらもサーバーが最新の PR head を取り直して照合し、別の head には適用しない。head が変われば記録を無効にし、PR 登録の保持期限に合わせて削除する。
 不要の記録がある PR でも状態ファイルを読み、今の head で収束した記録があれば、不要の記録より収束を優先する。収束後マージの予約は不要の記録だけでは実行しないので、記録の後の収束を隠さないためである。
@@ -768,6 +776,7 @@ items は 12 件、content は 200 文字までとし、不正な形や content 
 
 MCP サーバーは `src/mcp/server.js` で、JSON-RPC を stdio の行単位で扱う。
 ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision`、`cockpit_add_pr`、`cockpit_skip_review` の 5 つである。
+`cockpit_add_pr` は PR の `url` に加え、任意の `cwd`(絶対パスの文字列、4096 文字まで)を受け取る。
 計画の変更は `ensureServerRunning` で常駐サーバーを確かめ、`secret` 付きで `/plan` に送る。PR の登録とクロスレビュー不要の記録は `/prs` に送る。
 MCP が渡す `ppid` と `CLAUDE_CODE_SESSION_ID` のうち、常駐サーバーはまず `ppid` から `~/.claude/sessions/*.json` に対応する session ID を探し、見つからない場合に環境変数の ID を使う。どちらも無ければ書き込みを拒否する。
 委譲した Codex の thread への書き込みは、403 の `error: "Codex session delegated"` で拒否し、MCP は委譲元の Claude のセッションが記録するので呼ばなくてよいと、エラーにせずに返す(詳細は [委譲した Codex の表示](codex-delegation.md))。
