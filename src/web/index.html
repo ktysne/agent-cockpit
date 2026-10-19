@@ -201,7 +201,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .decision-summary { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .answer-foot .primary { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); font: inherit; cursor: pointer; }
-.answer-foot .primary:disabled { opacity: .45; cursor: default; }
+.answer-foot .primary:disabled, .answer-foot .primary[aria-disabled="true"] { opacity: .45; cursor: default; }
 .answer-status { color: var(--text-2); font-size: 12px; }
 .answer-error { color: var(--danger); font-size: 12px; }
 .merge-result { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 0; color: var(--text-2); font-size: 12px; }
@@ -251,6 +251,7 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; background: var(--surface); color: var(--text-2); font-size: 12px; }
 .filter-note[hidden], .body[hidden] { display: none; }
 .link-btn { min-height: 32px; padding: 4px 0; border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; }
+.link-btn:disabled, .link-btn[aria-disabled="true"], .ghost:disabled, .ghost[aria-disabled="true"] { opacity: .55; cursor: default; }
 .close-agent:hover { color: var(--text); }
 .close-agent { margin-left: auto; color: var(--text-2); font-size: 12px; }
 .section { overflow: visible; }
@@ -340,14 +341,14 @@ h3.sub .count { font-weight: normal; }
 .pr.merge-pending { margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; background: var(--surface-2); }
 .merge-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 0; border-radius: 8px; background: var(--ok); color: var(--on-ok); cursor: pointer; }
 .merge-btn.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
-.merge-btn:disabled { cursor: default; opacity: .55; }
+.merge-btn:disabled, .merge-btn[aria-disabled="true"] { cursor: default; opacity: .55; }
 .reservation-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: var(--text-2); font-size: 12px; cursor: pointer; white-space: nowrap; }
 .reservation-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .reservation-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .reservation-toggle.disabled { cursor: wait; opacity: .65; }
 .merge-confirm { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--ok); border-radius: 8px; background: var(--surface); font-size: 13px; }
 .conflict-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 1px solid var(--danger); border-radius: 8px; background: transparent; color: var(--danger); cursor: pointer; }
-.conflict-btn:disabled { cursor: default; opacity: .55; }
+.conflict-btn:disabled, .conflict-btn[aria-disabled="true"] { cursor: default; opacity: .55; }
 .merge-confirm.conflict { border-color: var(--danger); }
 .merge-confirm.conflict .conflict-go { background: var(--danger); color: var(--on-danger); }
 .merge-confirm .methods { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -361,7 +362,7 @@ h3.sub .count { font-weight: normal; }
 .merge-confirm .merge-go.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
 .merge-confirm .ghost { min-height: 40px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
 .merge-confirm button:focus-visible, .merge-confirm input:focus-visible, .merge-btn:focus-visible, .conflict-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.merge-confirm button:disabled { cursor: wait; opacity: .65; }
+.merge-confirm button:disabled, .merge-confirm button[aria-disabled="true"] { cursor: wait; opacity: .65; }
 .pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .pr.origin-claude, .pr.origin-codex, .pr.origin-both { padding-left: 10px; }
 .merge-error { color: var(--danger); font-size: 12px; }
@@ -2352,7 +2353,8 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   go.type = 'button';
   go.dataset.mergeGo = key;
   go.dataset.mergeKey = key;
-  go.disabled = pullRequestMergeInFlight.has(key) || !options.method;
+  go.disabled = !options.method;
+  go.setAttribute('aria-disabled', String(pullRequestMergeInFlight.has(key)));
   const cancel = element('button', 'ghost', 'やめる');
   cancel.type = 'button';
   cancel.disabled = merging;
@@ -2416,7 +2418,8 @@ function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey
   const go = element('button', 'merge-go conflict-go', '依頼を送る');
   go.type = 'button';
   go.dataset.conflictGo = uiKey;
-  go.disabled = !labels.length || !pullRequest.conflictRequestKey || pullRequestConflictInFlight.has(uiKey);
+  go.disabled = !labels.length || !pullRequest.conflictRequestKey;
+  go.setAttribute('aria-disabled', String(pullRequestConflictInFlight.has(uiKey)));
   const cancel = element('button', 'ghost', 'やめる');
   cancel.type = 'button';
   cancel.dataset.conflictCancel = uiKey;
@@ -2520,6 +2523,7 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   link.href = pullRequest.url;
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
+  link.dataset.pullRequestLink = mergeKey || `${group.owner}/${group.repo}#${pullRequest.number}`.toLowerCase();
   link.setAttribute('aria-label', `GitHub で PR #${pullRequest.number} を開く`);
   line.append(link, element('span', 'ptitle', pullRequest.title));
   const body = element('div', 'pr-body');
@@ -2545,14 +2549,16 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
     // 予約は収束の記録が無いと実行されないので、道具が無い PR には予約が残っているときだけ出す。
     if (reservation || !(pullRequest.crossReview?.notRequired === true && pullRequest.crossReview.source === 'tool-absent')) {
       // 方式が取れないときに塞ぐのは新しい予約だけにする。既存の予約は方式が分からなくても取り消せる必要がある。
-      const reservationDisabled = pullRequestMergeInFlight.has(mergeKey) || (!reservation && !(group.mergeMethods || []).length);
+      const mergeInFlight = pullRequestMergeInFlight.has(mergeKey);
+      const reservationDisabled = mergeInFlight || (!reservation && !(group.mergeMethods || []).length);
       const reservationChoice = element('label', `reservation-toggle ${reservationDisabled ? 'disabled' : ''}`.trim());
       const reservationToggle = element('input');
       reservationToggle.type = 'checkbox';
       reservationToggle.checked = pullRequestReservationPending.has(mergeKey)
         ? pullRequestReservationPending.get(mergeKey)
         : Boolean(reservation);
-      reservationToggle.disabled = reservationDisabled;
+      reservationToggle.disabled = !mergeInFlight && reservationDisabled;
+      reservationToggle.setAttribute('aria-disabled', String(mergeInFlight));
       reservationToggle.dataset.reservationToggle = mergeKey;
       reservationToggle.dataset.mergeKey = mergeKey;
       reservationToggle.setAttribute('aria-label', `PR #${pullRequest.number} のレビュー収束後マージを予約`);
@@ -2671,6 +2677,7 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
     link.href = notice.url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
+    link.dataset.pullRequestLink = `${group.owner}/${group.repo}#${notice.number}`.toLowerCase();
     row.append(link, document.createTextNode(`: ${notice.message}`));
     content.append(row);
   }
@@ -2740,6 +2747,7 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
     link.href = pullRequest.url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
+    link.dataset.pullRequestLink = `${group.owner}/${group.repo}#${pullRequest.number}`.toLowerCase();
     link.setAttribute('aria-label', `GitHub で PR #${pullRequest.number} を開く`);
     link.title = pullRequest.title;
     line.append(link);
@@ -3249,7 +3257,8 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   send.type = 'button';
   send.dataset.sendAnswer = decision.id;
   send.dataset.sessionId = session.session_id;
-  send.disabled = decisionAnswerInFlight.has(key) || !canSendDecisionAnswer(decision, draft) || !dirty;
+  send.disabled = !decisionAnswerInFlight.has(key) && (!canSendDecisionAnswer(decision, draft) || !dirty);
+  send.setAttribute?.('aria-disabled', String(decisionAnswerInFlight.has(key)));
   foot.append(send, element('span', 'answer-status', dirty && answer?.sentAt ? '変更は未送信' : answerStatusText(answer, decision)));
   const error = element('div', 'answer-error', savedError);
   error.setAttribute('role', 'alert');
@@ -3270,10 +3279,12 @@ function worktreeButton(label, action, session, decision, text, compact = false,
   const key = decision?.id || `session:${session.session_id}`;
   const button = element('button', compact ? 'link-btn' : 'ghost', label);
   button.type = 'button';
-  // 定期の描き直しでボタンが作り直されてもフォーカスを戻せるように、操作を識別する印を付ける。
   Object.assign(button.dataset, { worktreeKey: key, worktreeAction: action, worktreeIndex: String(index) });
-  button.disabled = worktreeActionInFlight.has(`${key}:${action}`);
-  button.addEventListener('click', () => { void runWorktreeAction(action, session, decision, text); });
+  button.setAttribute('aria-disabled', String(worktreeActionInFlight.has(`${key}:${action}`)));
+  button.addEventListener('click', () => {
+    if (button.getAttribute?.('aria-disabled') === 'true') return;
+    void runWorktreeAction(action, session, decision, text, button);
+  });
   return button;
 }
 
@@ -3363,10 +3374,11 @@ function appendWorktreeLinks(target, session) {
   target.append(links);
 }
 
-async function runWorktreeAction(action, session, decision, text) {
+async function runWorktreeAction(action, session, decision, text, button) {
   const key = decision?.id || `session:${session.session_id}`;
   const flightKey = `${key}:${action}`;
-  if (worktreeActionInFlight.has(flightKey)) return;
+  if (button?.getAttribute?.('aria-disabled') === 'true' || worktreeActionInFlight.has(flightKey)) return;
+  if (button) rememberActionFocus(flightKey, button);
   worktreeActionInFlight.add(flightKey);
   worktreeActionStatus.delete(key);
   if (lastState) render(lastState);
@@ -3394,6 +3406,7 @@ async function runWorktreeAction(action, session, decision, text) {
   } finally {
     worktreeActionInFlight.delete(flightKey);
     if (lastState) render(lastState);
+    actionFocusRestores.delete(flightKey);
   }
 }
 
@@ -3550,9 +3563,9 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
     const sending = taskCloseActionsInFlight.has(closeKey);
     const close = element('button', 'link-btn close-task', pending ? '取り消す' : sending ? '送信中…' : '完了にする');
     close.type = 'button';
-    close.disabled = sending;
+    close.setAttribute('aria-disabled', String(sending));
     if (pending) close.dataset.cancelCloseTask = closeKey;
-    else if (!sending) close.dataset.closeTask = closeKey;
+    else close.dataset.closeTask = closeKey;
     actions.append(close);
     if (pending) {
       // 右の列の幅では文の途中で折れるため、区切りの良い位置で 2 行に分け、読み上げは 1 文にする。
@@ -4093,6 +4106,50 @@ function renderKindSections(products, showOriginBands = true, finishedPrCount = 
   return orderedSectionKeys(DEFAULT_SECTION_ORDER).map((key) => sections[key]).filter(Boolean);
 }
 
+function focusDataFor(active) {
+  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute?.(attribute));
+  return active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
+    : toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
+    : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
+    : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
+      : active?.dataset?.mergeMethod ? { kind: 'merge-method', key: active.dataset.mergeKey, method: active.dataset.mergeMethod }
+        : active?.dataset?.reservationToggle ? { kind: 'merge-reservation-toggle', key: active.dataset.mergeKey }
+          : active?.dataset?.mergeDelete ? { kind: 'merge-delete', key: active.dataset.mergeKey }
+            : active?.dataset?.mergeCancel ? { kind: 'merge-cancel', key: active.dataset.mergeCancel }
+              : active?.dataset?.openMerge ? { kind: 'merge-open', key: active.dataset.openMerge }
+                : active?.dataset?.conflictOpen ? { kind: 'merge-conflict-open', key: active.dataset.conflictOpen }
+                  : active?.dataset?.conflictGo ? { kind: 'merge-conflict-go', key: active.dataset.conflictGo }
+                    : active?.dataset?.conflictCancel ? { kind: 'merge-conflict-cancel', key: active.dataset.conflictCancel }
+                      : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
+                        : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
+                          : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
+                            : active?.dataset?.showFinished ? { kind: 'show-finished', location: active.dataset.showFinished }
+                              : active?.dataset?.showIdle ? { kind: 'show-idle' }
+                                : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
+                                  : active?.dataset?.repoUnregister ? { kind: 'repo-unregister', key: active.dataset.repoUnregister, action: active.dataset.repoUnregisterAction }
+                                    : active?.dataset?.closeTask ? { kind: 'close-task', key: active.dataset.closeTask }
+                                      : active?.dataset?.cancelCloseTask ? { kind: 'cancel-close-task', key: active.dataset.cancelCloseTask }
+                                          : active?.hasAttribute?.('data-answer-note') ? { kind: 'answer-note', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection }
+                                          : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
+                                            : active?.dataset?.worktreeAction ? { kind: 'worktree', key: active.dataset.worktreeKey, action: active.dataset.worktreeAction, index: active.dataset.worktreeIndex }
+                                              : active?.dataset?.closeAgent ? { kind: 'close-agent', key: active.dataset.closeAgent }
+                                                : active?.dataset?.seen ? { kind: 'seen', key: active.dataset.seen }
+                                                  : active?.dataset?.seenAll ? { kind: 'seen-all' }
+                                                    : active?.dataset?.queueLeft ? { kind: 'queue-left', key: active.dataset.queueLeft }
+                                                      : active?.dataset?.pullRequestLink ? { kind: 'pull-request-link', key: active.dataset.pullRequestLink }
+                                                        : active?.dataset?.undoRestoredSessions ? { kind: 'undo-restored' }
+                                                          : active?.hasAttribute?.('data-show-all') ? { kind: 'show-all' }
+                                                            : active?.hasAttribute?.('data-clear-hidden-sessions') ? { kind: 'clear-hidden' }
+                                                              : active?.hasAttribute?.('data-undo-hidden-sessions') ? { kind: 'undo-hidden' } : null;
+}
+
+const actionFocusRestores = new Map();
+
+function rememberActionFocus(key, button) {
+  const focusData = focusDataFor(button);
+  if (focusData) actionFocusRestores.set(key, focusData);
+}
+
 function render(state) {
   if (answerNoteComposing) {
     deferredRenderPending = true;
@@ -4110,35 +4167,9 @@ function render(state) {
   const pullRequestGroups = Array.isArray(state.pullRequests) ? state.pullRequests : [];
   const active = document.activeElement;
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
-  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
-  const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
-    : toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
-    : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
-    : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
-         : active?.dataset?.mergeMethod ? { kind: 'merge-method', key: active.dataset.mergeKey, method: active.dataset.mergeMethod }
-        : active?.dataset?.reservationToggle ? { kind: 'merge-reservation-toggle', key: active.dataset.mergeKey }
-         : active?.dataset?.mergeDelete ? { kind: 'merge-delete', key: active.dataset.mergeKey }
-          : active?.dataset?.mergeCancel ? { kind: 'merge-cancel', key: active.dataset.mergeCancel }
-            : active?.dataset?.openMerge ? { kind: 'merge-open', key: active.dataset.openMerge }
-              : active?.dataset?.conflictOpen ? { kind: 'merge-conflict-open', key: active.dataset.conflictOpen }
-                  : active?.dataset?.conflictGo ? { kind: 'merge-conflict-go', key: active.dataset.conflictGo }
-                    : active?.dataset?.conflictCancel ? { kind: 'merge-conflict-cancel', key: active.dataset.conflictCancel }
-        : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
-      : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
-        : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
-         : active?.dataset?.showFinished ? { kind: 'show-finished', location: active.dataset.showFinished }
-         : active?.dataset?.showIdle ? { kind: 'show-idle' }
-           : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
-             : active?.dataset?.repoUnregister ? { kind: 'repo-unregister', key: active.dataset.repoUnregister, action: active.dataset.repoUnregisterAction }
-             : active?.dataset?.closeTask ? { kind: 'close-task', key: active.dataset.closeTask }
-               : active?.dataset?.cancelCloseTask ? { kind: 'cancel-close-task', key: active.dataset.cancelCloseTask }
-                 : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
-              : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
-              : active?.dataset?.worktreeAction ? { kind: 'worktree', key: active.dataset.worktreeKey, action: active.dataset.worktreeAction, index: active.dataset.worktreeIndex }
-        : active?.dataset?.undoRestoredSessions ? { kind: 'undo-restored' }
-        : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
-          : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' }
-            : active?.hasAttribute('data-undo-hidden-sessions') ? { kind: 'undo-hidden' } : null;
+  const rememberedFocus = active === document.body && typeof actionFocusRestores !== 'undefined'
+    ? [...actionFocusRestores.values()].at(-1) : null;
+  const focusData = focusDataFor(active) || rememberedFocus;
   renderSummary(displayedSessions, pullRequestGroups);
   renderExcludedNote(allSessions);
   const hiddenFinished = finishedHiddenCounts(sessions, pullRequestGroups);
@@ -4151,6 +4182,73 @@ function render(state) {
   });
   const sinceSeen = visibleSinceSeen(state);
   const products = orderedProducts(displayedSessions, pullRequestGroups, sinceSeen);
+  const focusControls = () => [...new Set([
+    ...document.querySelectorAll('button'), ...document.querySelectorAll('input'),
+    ...document.querySelectorAll('textarea'), ...document.querySelectorAll('a'),
+    ...root.querySelectorAll('button, input, textarea, a'),
+  ])];
+  const findFocusControl = (match) => () => focusControls().find((item) => match(item) && item.disabled !== true);
+  const sameMergeControl = (attribute, value = focusData?.key) => findFocusControl((item) => item.dataset?.[attribute] === value);
+  const currentModeButton = findFocusControl((item) => item.dataset?.action === 'mode' && item.dataset?.mode === displayPreferences.mode);
+  const focusOrders = focusData ? {
+    'merge-conflict-open': [sameMergeControl('conflictGo'), sameMergeControl('conflictOpen')],
+    'merge-conflict-go': [sameMergeControl('conflictGo'), sameMergeControl('conflictOpen')],
+    'merge-conflict-cancel': [sameMergeControl('conflictCancel'), sameMergeControl('conflictOpen')],
+    'merge-open': [sameMergeControl('openMerge'), findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.hasAttribute('data-merge-method'))],
+    'merge-cancel': [sameMergeControl('mergeCancel'), sameMergeControl('openMerge'), findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.hasAttribute('data-merge-method'))],
+    'merge-go': [sameMergeControl('mergeGo'), sameMergeControl('mergeCancel'), sameMergeControl('openMerge'), sameMergeControl('pullRequestLink', focusData?.key), currentModeButton],
+    'merge-method': [findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.dataset?.mergeMethod === focusData.method), sameMergeControl('openMerge'), sameMergeControl('mergeCancel')],
+    'merge-reservation-toggle': [findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.hasAttribute('data-reservation-toggle')), sameMergeControl('openMerge')],
+    'merge-delete': [findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.hasAttribute('data-merge-delete')), sameMergeControl('mergeGo'), sameMergeControl('mergeCancel')],
+    worktree: [findFocusControl((item) => item.dataset?.worktreeKey === focusData.key && item.dataset?.worktreeAction === focusData.action && item.dataset?.worktreeIndex === focusData.index), findFocusControl((item) => item.dataset?.worktreeKey === focusData.key && item.dataset?.worktreeAction === focusData.action), currentModeButton],
+    'answer-pick': [findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.decisionId === focusData.decisionId && item.dataset?.answerQuestion === focusData.questionIndex && item.dataset?.answerOption === focusData.optionIndex), findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.decisionId === focusData.decisionId && item.hasAttribute('data-answer-note')), findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.sendAnswer === focusData.decisionId), currentModeButton],
+    'answer-note': [findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.decisionId === focusData.decisionId && item.hasAttribute('data-answer-note')), findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.sendAnswer === focusData.decisionId), currentModeButton],
+    'answer-submit': [findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.sendAnswer === focusData.decisionId), findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.decisionId === focusData.decisionId && item.hasAttribute('data-answer-note')), currentModeButton],
+    'record-deletion': [findFocusControl((item) => item.dataset?.recordBand === focusData.band && item.dataset?.recordAction === focusData.action)],
+    toggle: [findFocusControl((item) => item.getAttribute(focusData.attribute) === focusData.value), findFocusControl((item) => focusData.attribute === 'data-hide-session' && item.hasAttribute('data-clear-hidden-sessions'))],
+    filter: [findFocusControl((item) => item.dataset?.filter === focusData.key), () => filterFocusFallback(focusControls().filter((item) => item.dataset?.filter), focusData.key), currentModeButton],
+    'show-all': [findFocusControl((item) => item.hasAttribute('data-show-all'))],
+    'clear-hidden': [findFocusControl((item) => item.hasAttribute('data-clear-hidden-sessions'))],
+    'undo-restored': [findFocusControl((item) => item.hasAttribute('data-undo-restored-sessions'))],
+    'undo-hidden': [findFocusControl((item) => item.hasAttribute('data-undo-hidden-sessions'))],
+    'show-finished': [findFocusControl((item) => item.dataset?.showFinished === focusData.location), findFocusControl((item) => item.dataset?.showFinished === 'note'), findFocusControl((item) => Boolean(item.dataset?.closeMergeResult)), currentModeButton],
+    'show-idle': [findFocusControl((item) => item.hasAttribute('data-show-idle')), findFocusControl((item) => Boolean(item.dataset?.closeMergeResult)), currentModeButton],
+    'close-merge-result': [sameMergeControl('closeMergeResult', focusData.id), findFocusControl((item) => Boolean(item.dataset?.closeMergeResult)), currentModeButton],
+    'review-skip': [findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.dataset?.reviewSkip === focusData.action), findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.dataset?.reviewSkip && item.dataset.reviewSkip !== focusData.action)],
+    'repo-unregister': [findFocusControl((item) => item.dataset?.repoUnregister === focusData.key && item.dataset?.repoUnregisterAction === focusData.action), findFocusControl((item) => item.dataset?.repoUnregister === focusData.key)],
+    'close-task': [sameMergeControl('closeTask', focusData.key), sameMergeControl('cancelCloseTask', focusData.key), currentModeButton],
+    'cancel-close-task': [sameMergeControl('cancelCloseTask', focusData.key), sameMergeControl('closeTask', focusData.key), currentModeButton],
+    'close-agent': [findFocusControl((item) => item.dataset?.closeAgent === focusData.key), findFocusControl((item) => item.hasAttribute('data-ended-toggle') && item.getAttribute('data-ended-toggle') === focusData.key.split('::')[0]), currentModeButton],
+    seen: [sameMergeControl('seen', focusData.key), findFocusControl((item) => Boolean(item.dataset?.seen)), findFocusControl((item) => Boolean(item.dataset?.seenAll)), currentModeButton],
+    'seen-all': [findFocusControl((item) => Boolean(item.dataset?.seenAll)), findFocusControl((item) => Boolean(item.dataset?.seen)), currentModeButton],
+    'queue-left': [sameMergeControl('queueLeft', focusData.key), sameMergeControl('openMerge', focusData.key), sameMergeControl('pullRequestLink', focusData.key), currentModeButton],
+    'pull-request-link': [sameMergeControl('pullRequestLink', focusData.key), currentModeButton],
+    product: [findFocusControl((item) => item.dataset?.productAction === focusData.action && item.dataset?.productKey === focusData.key && (item.dataset?.direction || '') === focusData.direction), findFocusControl((item) => focusData.action === 'move' && item.dataset?.productAction === 'move' && item.dataset?.productKey === focusData.key && item.dataset?.direction === String(-Number(focusData.direction)))],
+  } : {};
+  const restoreFocus = () => {
+    let target;
+    for (const find of focusOrders[focusData?.kind] || []) {
+      const candidate = find();
+      if (candidate && candidate.disabled !== true) {
+        target = candidate;
+        break;
+      }
+    }
+    if (!target) return;
+    if (focusData.kind === 'answer-note' && activeAnswerNote && target instanceof HTMLTextAreaElement) {
+      target.replaceWith(activeAnswerNote);
+      const answerDraftKeyValue = answerDraftKey(focusData.sessionId, focusData.decisionId);
+      const decision = findDecision(focusData.sessionId, focusData.decisionId);
+      const answerDraft = answerDraftFor(decision, { session_id: focusData.sessionId });
+      if (answerDraft.note !== activeAnswerNote.value) answerDrafts.set(answerDraftKeyValue, { ...answerDraft, note: activeAnswerNote.value });
+      updateAnswerSubmit(activeAnswerNote.closest('.decision-answer'));
+      activeAnswerNote.focus({ preventScroll: true });
+      activeAnswerNote.setSelectionRange(focusData.start, focusData.end, focusData.direction);
+      return;
+    }
+    target.focus({ preventScroll: true });
+    if (focusData.kind === 'answer-note' && target instanceof HTMLTextAreaElement) target.setSelectionRange(focusData.start, focusData.end);
+  };
   if (!products.length) {
     const emptyText = hidesFinished() && (hiddenFinished.sessions || hiddenFinished.pullRequests)
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
@@ -4158,17 +4256,7 @@ function render(state) {
         ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
       : '表示するセッションがありません。Claude Code か Codex でセッションを開始すると、ここに表示されます。';
     root.replaceChildren(element('section', 'section empty', emptyText));
-    const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions', 'undo-restored': 'data-undo-restored-sessions' }[focusData?.kind];
-    if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
-    else if (focusData?.kind === 'filter') {
-      const chips = [...summary.querySelectorAll('button')];
-      (chips.find((item) => item.dataset.filter === focusData.key) || filterFocusFallback(chips, focusData.key)
-        || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]'))?.focus({ preventScroll: true });
-    } else if (focusData?.kind === 'show-finished') {
-      (document.querySelector('[data-show-finished="note"]') || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]'))?.focus({ preventScroll: true });
-    } else if (['show-idle', 'close-merge-result'].includes(focusData?.kind)) {
-      document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
-    }
+    restoreFocus();
     return;
   }
 
@@ -4183,97 +4271,7 @@ function render(state) {
     root.replaceChildren(...renderKindSections(products, showOriginBands, hiddenFinished.pullRequests));
   }
 
-  if (focusData?.kind?.startsWith('merge-')) {
-    const controls = [...root.querySelectorAll('[data-merge-method], [data-reservation-toggle], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-merge-go], [data-conflict-open], [data-conflict-go], [data-conflict-cancel]')];
-    // 「やめる」から「依頼を送る」へ移ると、取り消すつもりの Enter で依頼が送られるため、同じ操作のボタンへ戻す。
-    const conflictFocusOrder = {
-      'merge-conflict-open': ['conflictGo', 'conflictOpen'],
-      'merge-conflict-go': ['conflictGo', 'conflictOpen'],
-      'merge-conflict-cancel': ['conflictCancel', 'conflictOpen'],
-    }[focusData.kind];
-    let control = conflictFocusOrder
-      ? conflictFocusOrder.map((name) => controls.find((item) => item.dataset[name] === focusData.key)).find(Boolean)
-      : controls.find((item) => item.dataset.mergeKey === focusData.key && (
-      focusData.kind === 'merge-method' ? item.dataset.mergeMethod === focusData.method
-        : focusData.kind === 'merge-reservation-toggle' ? item.hasAttribute('data-reservation-toggle')
-        : focusData.kind === 'merge-delete' ? item.hasAttribute('data-merge-delete')
-          : focusData.kind === 'merge-cancel' ? item.hasAttribute('data-merge-cancel')
-            : focusData.kind === 'merge-go' ? item.dataset.mergeGo === focusData.key
-                  : focusData.kind === 'merge-open' ? item.dataset.openMerge === focusData.key
-                      : false
-    ));
-    if (!control && focusData.kind === 'merge-open') {
-      control = controls.find((item) => item.dataset.mergeKey === focusData.key && item.hasAttribute('data-merge-method'));
-    }
-    control?.focus({ preventScroll: true });
-    return;
-  }
-
-  if (focusData) {
-    if (focusData.kind === 'worktree') {
-      [...root.querySelectorAll('[data-worktree-action]')].find((item) => item.dataset.worktreeKey === focusData.key &&
-        item.dataset.worktreeAction === focusData.action && item.dataset.worktreeIndex === focusData.index)?.focus({ preventScroll: true });
-      return;
-    }
-    if (['answer-pick', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
-      const control = [...root.querySelectorAll('[data-answer-pick], [data-answer-note], [data-send-answer]')].find((item) => (
-        item.dataset.sessionId === focusData.sessionId &&
-        (item.dataset.decisionId || item.dataset.sendAnswer) === focusData.decisionId &&
-        (focusData.kind !== 'answer-pick' || (item.dataset.answerQuestion === focusData.questionIndex && item.dataset.answerOption === focusData.optionIndex)) &&
-        (focusData.kind !== 'answer-note' || item.hasAttribute('data-answer-note')) &&
-        (focusData.kind !== 'answer-submit' || item.hasAttribute('data-send-answer'))
-      ));
-      if (focusData.kind === 'answer-note' && activeAnswerNote && control instanceof HTMLTextAreaElement) {
-        control.replaceWith(activeAnswerNote);
-        const answerDraftKeyValue = answerDraftKey(focusData.sessionId, focusData.decisionId);
-        const decision = findDecision(focusData.sessionId, focusData.decisionId);
-        const answerDraft = answerDraftFor(decision, { session_id: focusData.sessionId });
-        if (answerDraft.note !== activeAnswerNote.value) {
-          answerDrafts.set(answerDraftKeyValue, { ...answerDraft, note: activeAnswerNote.value });
-        }
-        updateAnswerSubmit(activeAnswerNote.closest('.decision-answer'));
-        activeAnswerNote.focus({ preventScroll: true });
-        activeAnswerNote.setSelectionRange(focusData.start, focusData.end, focusData.direction);
-        return;
-      }
-      control?.focus({ preventScroll: true });
-      if (focusData.kind === 'answer-note' && control instanceof HTMLTextAreaElement) {
-        control.setSelectionRange(focusData.start, focusData.end);
-      }
-      return;
-    }
-    const buttons = [...document.querySelectorAll('button')];
-    const button = buttons.find((item) => {
-      if (focusData.kind === 'record-deletion') return item.dataset.recordBand === focusData.band && item.dataset.recordAction === focusData.action;
-      if (focusData.kind === 'toggle') return item.getAttribute(focusData.attribute) === focusData.value;
-      if (focusData.kind === 'filter') return item.dataset.filter === focusData.key;
-      if (focusData.kind === 'show-all') return item.hasAttribute('data-show-all');
-      if (focusData.kind === 'clear-hidden') return item.hasAttribute('data-clear-hidden-sessions');
-      if (focusData.kind === 'undo-restored') return item.hasAttribute('data-undo-restored-sessions');
-      if (focusData.kind === 'undo-hidden') return item.hasAttribute('data-undo-hidden-sessions');
-      if (focusData.kind === 'show-finished') return item.dataset.showFinished === focusData.location;
-      if (focusData.kind === 'show-idle') return item.hasAttribute('data-show-idle');
-      if (focusData.kind === 'close-merge-result') return item.dataset.closeMergeResult === focusData.id;
-      if (focusData.kind === 'review-skip') return item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip === focusData.action;
-      if (focusData.kind === 'repo-unregister') return item.dataset.repoUnregister === focusData.key && item.dataset.repoUnregisterAction === focusData.action;
-      if (['close-task', 'cancel-close-task'].includes(focusData.kind)) {
-        return item.dataset.closeTask === focusData.key || item.dataset.cancelCloseTask === focusData.key;
-      }
-      return item.dataset.productAction === focusData.action && item.dataset.productKey === focusData.key && (item.dataset.direction || '') === focusData.direction;
-    });
-    const fallback = focusData.kind === 'product' && focusData.action === 'move' && button?.disabled
-      ? buttons.find((item) => item.dataset.productAction === 'move' && item.dataset.productKey === focusData.key && item.dataset.direction === String(-Number(focusData.direction)))
-      : ['show-finished', 'show-idle', 'close-merge-result'].includes(focusData.kind) && !button
-        ? document.querySelector('[data-close-merge-result]') || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')
-      : focusData.kind === 'toggle' && focusData.attribute === 'data-hide-session' && !button
-        ? buttons.find((item) => item.hasAttribute('data-clear-hidden-sessions'))
-      : focusData.kind === 'review-skip' && !button
-        ? buttons.find((item) => item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip !== focusData.action)
-      : focusData.kind === 'filter' && !button
-        ? filterFocusFallback(buttons, focusData.key) || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')
-      : button;
-    fallback?.focus({ preventScroll: true });
-  }
+  if (focusData) restoreFocus();
 }
 
 function renderDeferredState() {
@@ -4312,7 +4310,8 @@ function updateAnswerSubmit(card) {
   }
   const status = card.querySelector('.answer-foot .answer-status');
   if (status) status.textContent = answer?.sentAt && changed ? '変更は未送信' : answerStatusText(answer, decision);
-  button.disabled = sending || !canSendDecisionAnswer(decision, draft) || !changed;
+  button.disabled = !sending && (!canSendDecisionAnswer(decision, draft) || !changed);
+  button.setAttribute?.('aria-disabled', String(sending));
 }
 
 function clearSelectedAnswerPick(pick) {
@@ -4358,10 +4357,11 @@ async function sendDecisionAnswer(button) {
   const sessionId = button.dataset.sessionId;
   const decisionId = button.dataset.sendAnswer;
   const key = answerDraftKey(sessionId, decisionId);
-  if (decisionAnswerInFlight.has(key)) return;
+  if (button.getAttribute?.('aria-disabled') === 'true' || decisionAnswerInFlight.has(key)) return;
   const decision = findDecision(sessionId, decisionId);
   if (!decision) return;
   const draft = answerDraftFor(decision, { session_id: sessionId });
+  rememberActionFocus(key, button);
   decisionAnswerInFlight.add(key);
   try {
     updateAnswerSubmit(button.closest('.decision-answer'));
@@ -4396,7 +4396,8 @@ async function sendDecisionAnswer(button) {
         card.dataset.sessionId === sessionId && card.dataset.decisionId === decisionId
       ));
     if (answerCard) updateAnswerSubmit(answerCard);
-    else if (lastState) render(lastState);
+    if (lastState) render(lastState);
+    actionFocusRestores.delete(key);
   }
 }
 
@@ -4460,8 +4461,8 @@ document.addEventListener('compositionend', (event) => {
   renderDeferredState();
 }, true);
 
-async function sendCloseAction(button, url, body, errorMessage, taskCloseKey = null) {
-  button.disabled = true;
+async function sendCloseAction(button, url, body, errorMessage, taskCloseKey = null, focusRestoreKey = null) {
+  button.setAttribute?.('aria-disabled', 'true');
   try {
     const response = await postUiAction(url, body);
     if (response.status === 404 || response.status === 409) {
@@ -4477,13 +4478,16 @@ async function sendCloseAction(button, url, body, errorMessage, taskCloseKey = n
   } finally {
     if (taskCloseKey) {
       taskCloseActionsInFlight.delete(taskCloseKey);
-      if (lastState) render(lastState);
     }
-    if (button.isConnected) button.disabled = false;
+    if (lastState) render(lastState);
+    if (focusRestoreKey) actionFocusRestores.delete(focusRestoreKey);
   }
 }
 
 async function runCloseAction(button, url, body, errorMessage) {
+  if (button.getAttribute?.('aria-disabled') === 'true') return;
+  const focusRestoreKey = `close:${button.dataset.closeTask || button.dataset.closeAgent || ''}`;
+  rememberActionFocus(focusRestoreKey, button);
   if (url === '/api/closed-tasks') {
     const key = button.dataset.closeTask;
     if (!key) return;
@@ -4493,13 +4497,13 @@ async function runCloseAction(button, url, body, errorMessage) {
       pendingTaskCloseActions.delete(key);
       taskCloseActionsInFlight.add(key);
       if (lastState) render(lastState);
-      void sendCloseAction(button, url, body, errorMessage, key);
+      void sendCloseAction(button, url, body, errorMessage, key, focusRestoreKey);
     }, 5_000);
     pendingTaskCloseActions.set(key, pending);
     if (lastState) render(lastState);
     return;
   }
-  await sendCloseAction(button, url, body, errorMessage);
+  await sendCloseAction(button, url, body, errorMessage, null, focusRestoreKey);
 }
 
 function cancelTaskClose(button) {
@@ -4509,6 +4513,7 @@ function cancelTaskClose(button) {
   clearTimeout(pending.timeout);
   pendingTaskCloseActions.delete(key);
   if (lastState) render(lastState);
+  actionFocusRestores.delete(`close:${key}`);
 }
 
 function closeTaskButton(button) {
@@ -4537,6 +4542,7 @@ async function markProductSeen(button) {
   } finally {
     sinceSeenActionInFlight = false;
     setSinceSeenButtonsDisabled(false);
+    if (lastState) render(lastState);
   }
 }
 
@@ -4571,6 +4577,7 @@ async function markAllProductsSeen(button) {
   } finally {
     sinceSeenActionInFlight = false;
     setSinceSeenButtonsDisabled(false);
+    if (lastState) render(lastState);
   }
 }
 
@@ -4602,10 +4609,11 @@ function findPullRequestMergeTarget(key) {
 }
 
 async function runPullRequestAction({ button, key, inFlight, messages, startedMessage, request, onSuccess, successMessage }) {
-  if (inFlight.has(key)) return;
+  if (button.getAttribute?.('aria-disabled') === 'true' || inFlight.has(key)) return;
+  rememberActionFocus(key, button);
   inFlight.add(key);
   messages.delete(key);
-  button.disabled = true;
+  button.setAttribute?.('aria-disabled', 'true');
   liveStatus.textContent = startedMessage;
   if (lastState) render(lastState);
   try {
@@ -4634,6 +4642,7 @@ async function runPullRequestAction({ button, key, inFlight, messages, startedMe
   } finally {
     inFlight.delete(key);
     if (lastState) render(lastState);
+    actionFocusRestores.delete(key);
   }
 }
 
@@ -4684,6 +4693,7 @@ async function runPullRequestMergeAction(button) {
 
 async function runPullRequestReservationAction(input, reserve) {
   const key = input.dataset.reservationToggle;
+  if (input.getAttribute?.('aria-disabled') === 'true' || pullRequestMergeInFlight.has(key)) return;
   const target = findPullRequestMergeTarget(key || '');
   if (!target) return;
   const { group, pullRequest, number } = target;
@@ -4890,6 +4900,7 @@ document.addEventListener('click', (event) => {
   if (event.button === 0 && handleExternalLink(event)) return;
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.getAttribute?.('aria-disabled') === 'true') return;
   if (button.dataset.route) {
     void updateRouting(button);
     return;
@@ -5081,6 +5092,11 @@ document.addEventListener('click', (event) => {
   }
 });
 
+document.addEventListener('keydown', (event) => {
+  if (!['Enter', ' ', 'Space'].includes(event.key) && !['Enter', 'Space'].includes(event.code)) return;
+  if (event.target.closest('[aria-disabled="true"]')) event.preventDefault();
+});
+
 document.addEventListener('click', (event) => {
   const pick = event.target.closest('[data-answer-pick]');
   if (pick?.type === 'radio') clearSelectedAnswerPick(pick);
@@ -5099,6 +5115,10 @@ document.addEventListener('auxclick', (event) => {
 document.addEventListener('change', (event) => {
   const reservationToggle = event.target.closest('[data-reservation-toggle]');
   if (reservationToggle) {
+    if (reservationToggle.getAttribute?.('aria-disabled') === 'true') {
+      if (lastState) render(lastState);
+      return;
+    }
     void runPullRequestReservationAction(reservationToggle, reservationToggle.checked);
     return;
   }
@@ -5226,6 +5246,8 @@ function renderRestartNote(state) {
   // ポーリングのたびに作り直すとボタンのフォーカスが外れるため、表示が変わったときだけ作り直す。
   const view = JSON.stringify([text, buttons.map(([label]) => label), ui.phase === 'sending']);
   if (view === ui.view) return;
+  const focusedButton = [...(note.querySelectorAll?.('button') || [])].find((button) => button === document.activeElement);
+  const focusedLabel = focusedButton?.dataset?.restartAction || focusedButton?.textContent || '';
   ui.view = view;
   note.textContent = text;
   for (const [label, action] of buttons) {
@@ -5233,10 +5255,11 @@ function renderRestartNote(state) {
     button.type = 'button';
     button.className = 'link-btn';
     button.textContent = label;
+    button.dataset.restartAction = label;
     button.disabled = ui.phase === 'sending';
     button.addEventListener('click', action);
     note.append(button);
-    if (label === ui.focus) button.focus?.();
+    if (label === ui.focus || label === focusedLabel) button.focus?.();
   }
   ui.focus = '';
 }

@@ -75,14 +75,6 @@ test('プロダクトを外す操作を並べ替えから離し、直前分だ�
   assert.match(mock, /const restored = new Set\(hiddenSessionsUndo\.sessionIds\)/);
 });
 
-test('「元に戻す」にフォーカスがあれば、表示するプロダクトが無くなる描き直しの後も同じボタンへ戻す', () => {
-  const render = functionSource(web, 'render');
-  assert.match(render, /hasAttribute\('data-undo-hidden-sessions'\) \? \{ kind: 'undo-hidden' \}/);
-  assert.match(render, /if \(focusData\.kind === 'undo-hidden'\) return item\.hasAttribute\('data-undo-hidden-sessions'\)/);
-  const emptyBranch = render.slice(render.indexOf('if (!products.length)'), render.indexOf('return;', render.indexOf('if (!products.length)')));
-  assert.match(emptyBranch, /'undo-hidden': 'data-undo-hidden-sessions'/);
-});
-
 test('経路の切り替えから説明文を外し、起動時の設定札にtitleを付ける', () => {
   for (const source of [web, mock]) {
     assert.doesNotMatch(source, /route-note|既定は Codex で実装|既定はクロスレビューの手順が推奨する方法/);

@@ -38,6 +38,10 @@ function fakeElement(tagName, className = '', text = '') {
   return new FakeElement(tagName, className, text);
 }
 
+function actionFocusSupport() {
+  return { actionFocusRestores: new Map(), rememberActionFocus() {} };
+}
+
 function descendants(node) {
   return [node, ...(node.children || []).flatMap(descendants)];
 }
@@ -672,7 +676,9 @@ test('回答の送信中は選択肢、指示、送信ボタンを無効にし�
     assert.equal(nodes.filter((node) => node.dataset.answerPick === 'true').length, 2);
     assert.ok(nodes.filter((node) => node.dataset.answerPick === 'true').every((node) => node.disabled));
     assert.equal(nodes.find((node) => node.dataset.answerNote === 'true').disabled, true);
-    assert.equal(nodes.find((node) => node.dataset.sendAnswer === 'decision-answer').disabled, true);
+    const sendButton = nodes.find((node) => node.dataset.sendAnswer === 'decision-answer');
+    assert.equal(sendButton.disabled, false);
+    assert.equal(sendButton.attributes['aria-disabled'], 'true');
   }
 });
 
@@ -839,6 +845,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   const actionHelper = functionSource(web, 'runPullRequestAction');
   assert.ok(action && actionHelper);
   const actionContext = pageContext(web, {
+    ...actionFocusSupport(),
     findPullRequestMergeTarget: () => ({ group: {}, pullRequest: {}, number: 1 }),
     pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestMergeOptionsFor: () => ({ method: 'merge', deleteBranch: false }),
@@ -866,6 +873,7 @@ test('マージの成功後に状態を取り直せない間は、古い mergeIn
     .map((name) => functionSource(web, name));
   assert.ok(sources.every(Boolean));
   const context = pageContext(web, {
+    ...actionFocusSupport(),
     element: fakeElement,
     providerOrigin: () => '',
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
@@ -1290,6 +1298,7 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
   };
   const webResults = new Map();
   const webContext = pageContext(web, {
+    ...actionFocusSupport(),
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     lastState: { pullRequests: [group] }, pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestMergeOptionsFor: () => ({ method: 'squash', deleteBranch: false }),
@@ -1474,6 +1483,7 @@ test('完了にする操作は 5 秒間取り消せ、再描画中も同じタ�
   let renders = 0;
   const pending = new Map();
   const context = pageContext(web, {
+    ...actionFocusSupport(),
     pendingTaskCloseActions: pending, lastState: {}, render: () => { renders += 1; },
     sendCloseAction: () => { sent += 1; },
     setTimeout: (callback, delay) => { scheduled = { callback, delay }; return 'timer-1'; },
@@ -1497,7 +1507,7 @@ test('完了にする操作は 5 秒間取り消せ、再描画中も同じタ�
   assert.equal(pending.size, 0);
   assert.equal(sent, 0);
   assert.equal(renders, 2);
-  assert.match(web, /item\.dataset\.closeTask === focusData\.key \|\| item\.dataset\.cancelCloseTask === focusData\.key/);
+  assert.match(web, /'close-task': \[sameMergeControl\('closeTask', focusData\.key\), sameMergeControl\('cancelCloseTask', focusData\.key\)/);
 });
 
 test('完了操作の送信中はボタンを無効化し応答後に状態を解除する', async () => {
@@ -1519,6 +1529,7 @@ test('完了操作の送信中はボタンを無効化し応答後に状態を�
       rejectRequest = reject;
     });
     const context = pageContext(web, {
+      ...actionFocusSupport(),
       pendingTaskCloseActions: pending, taskCloseActionsInFlight: inFlight, lastState: {},
       render: () => { renders += 1; },
       setTimeout: (callback, delay) => { scheduled = { callback, delay }; return 'timer'; },
@@ -1539,7 +1550,8 @@ test('完了操作の送信中はボタンを無効化し応答後に状態を�
     context.appendTask(taskList, { title: 'task-a', state: 'doing', criteria: [] }, { name: 'project' }, { session_id: 'session-a' });
     const sendingButton = descendants(taskList).find((node) => node.className === 'link-btn close-task');
     assert.equal(sendingButton.textContent, '送信中…');
-    assert.equal(sendingButton.disabled, true);
+    assert.notEqual(sendingButton.disabled, true);
+    assert.equal(sendingButton.attributes['aria-disabled'], 'true');
 
     if (shouldFail) rejectRequest(new Error('offline'));
     else resolveRequest({ ok: true, status: 200 });
@@ -1573,7 +1585,8 @@ test('マージの確認欄は実行中のボタンをマージ中に変える',
   }, false);
   const button = descendants(target).find((node) => node.dataset.mergeGo === 'merge-key');
   assert.equal(button.textContent, '処理中…');
-  assert.equal(button.disabled, true);
+  assert.equal(button.disabled, false);
+  assert.equal(button.attributes['aria-disabled'], 'true');
   const cancel = descendants(target).find((node) => node.dataset.mergeCancel === 'merge-key');
   assert.equal(cancel.disabled, true);
   const method = descendants(target).find((node) => node.dataset.mergeMethod === 'merge');
@@ -1581,7 +1594,7 @@ test('マージの確認欄は実行中のボタンをマージ中に変える',
   const deleteBranch = descendants(target).find((node) => node.dataset.mergeDelete === 'true');
   assert.equal(deleteBranch.disabled, true);
   assert.match(mock, /merging \? '処理中…'/);
-  assert.match(mock, /data-merge-cancel \$\{merging \? 'disabled' : ''\}/);
+  assert.match(mock, /data-merge-cancel="\$\{prKey\(p, pr\.number\)\}" \$\{merging \? 'disabled' : ''\}/);
   assert.match(mock, /data-method="\$\{m\}" [^>]*\$\{merging \? 'disabled' : ''\}/);
   assert.match(mock, /data-del [^>]*\$\{merging \? 'disabled' : ''\}/);
 });
@@ -1668,11 +1681,12 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
   const render = functionSource(web, 'render');
   assert.ok(render);
   const modeButton = {
-    dataset: { mode: 'product' },
+    dataset: { action: 'mode', mode: 'product' },
+    hasAttribute() { return false; },
     setAttribute() {},
     focus(options) { this.focusOptions = options; },
   };
-  const root = { replaceChildren(...children) { this.children = children; } };
+  const root = { replaceChildren(...children) { this.children = children; }, querySelectorAll: () => [] };
   class FakeTextArea {}
   const context = pageContext(web, {
     answerNoteComposing: false,
@@ -1688,7 +1702,7 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
     updateTitle() {},
     document: {
       activeElement: { dataset: { showIdle: 'true' }, hasAttribute: () => false },
-      querySelectorAll: () => [modeButton],
+      querySelectorAll: (selector) => selector === 'button' ? [modeButton] : [],
       querySelector: (selector) => selector === '[data-action="mode"][data-mode="product"]' ? modeButton : null,
     },
     HTMLTextAreaElement: FakeTextArea,
@@ -1698,7 +1712,7 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
     root,
     element: (tag, className, textContent) => ({ tag, className, textContent }),
   });
-  vm.runInContext(`${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
+  vm.runInContext(`${functionSource(web, 'focusDataFor')}\n${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
 
   context.render({ sessions: [{}], pullRequests: [] });
 
@@ -1711,7 +1725,7 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
   const filters = web.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
   const exercise = (chipKeys) => {
     const focusable = (dataset) => ({ dataset, setAttribute() {}, focus(options) { this.focusOptions = options; } });
-    const modeButton = focusable({ mode: 'product' });
+    const modeButton = focusable({ action: 'mode', mode: 'product' });
     const chips = chipKeys.map((filter) => focusable({ filter }));
     const context = pageContext(web, {
       answerNoteComposing: false,
@@ -1728,17 +1742,17 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
       summary: { querySelectorAll: () => chips },
       document: {
         activeElement: { dataset: { filter: 'prs' }, hasAttribute: () => false },
-        querySelectorAll: () => [modeButton],
+        querySelectorAll: (selector) => selector === 'button' ? [modeButton, ...chips] : [],
         querySelector: (selector) => selector === '[data-action="mode"][data-mode="product"]' ? modeButton : null,
       },
       HTMLTextAreaElement: class {},
       displayPreferences: { mode: 'product' },
       visibleSinceSeen: () => [],
       orderedProducts: () => [],
-      root: { replaceChildren() {} },
+      root: { replaceChildren() {}, querySelectorAll: () => [] },
       element: (tag, className, textContent) => ({ tag, className, textContent }),
     });
-    vm.runInContext(`${filters}\n${functionSource(web, 'filterFocusFallback')}\n${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
+    vm.runInContext(`${filters}\n${functionSource(web, 'filterFocusFallback')}\n${functionSource(web, 'focusDataFor')}\n${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
     context.render({ sessions: [], pullRequests: [] });
     return { modeButton, chips };
   };
@@ -1753,16 +1767,18 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
 test('一覧が残る再描画で表示設定のボタンが消えたらマージ結果か表示切り替えへフォーカスを戻す', () => {
   const render = functionSource(web, 'render');
   assert.ok(render);
-  assert.match(render, /\['show-finished', 'show-idle', 'close-merge-result'\]\.includes\(focusData\.kind\) && !button/);
+  assert.match(render, /'show-finished': \[findFocusControl\(\(item\) => item\.dataset\?\.showFinished === focusData\.location\)/);
 
   const exercise = (activeElement, hasMergeResult) => {
     const modeButton = {
-      dataset: { mode: 'product' },
+      dataset: { action: 'mode', mode: 'product' },
       setAttribute() {},
       hasAttribute() { return false; },
       focus(options) { this.focusOptions = options; },
     };
     const mergeResultButton = {
+      dataset: { closeMergeResult: 'result-1' },
+      hasAttribute() { return false; },
       focus(options) { this.focusOptions = options; },
     };
     const root = { replaceChildren(...children) { this.children = children; }, querySelectorAll: () => [] };
@@ -1781,7 +1797,7 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
       updateTitle() {},
       document: {
         activeElement,
-        querySelectorAll: () => [modeButton],
+        querySelectorAll: (selector) => selector === 'button' ? [modeButton, ...(hasMergeResult ? [mergeResultButton] : [])] : [],
         querySelector: (selector) => selector === '[data-close-merge-result]'
           ? (hasMergeResult ? mergeResultButton : null)
           : selector === '[data-action="mode"][data-mode="product"]' ? modeButton : null,
@@ -1794,7 +1810,7 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
       root,
       element: fakeElement,
     });
-    vm.runInContext(`${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
+    vm.runInContext(`${functionSource(web, 'focusDataFor')}\n${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
     context.render({ sessions: [{}], pullRequests: [] });
     return { modeButton, mergeResultButton, root };
   };
@@ -2023,7 +2039,7 @@ function visibilityFocusHarness(active, replacements, empty = false) {
     finishedHiddenCounts: () => ({ sessions: 1, pullRequests: 1 }), finishedDeletionTargets: () => ({}),
     visibleSinceSeen: () => [], orderedProducts: () => empty ? [] : [{}], renderKindSections: () => [],
   });
-  vm.runInContext(['hasCodexOrigin', 'finishedToggle', 'render'].map(name => functionSource(web, name)).join('\n'), context);
+  vm.runInContext(['focusDataFor', 'hasCodexOrigin', 'finishedToggle', 'render'].map(name => functionSource(web, name)).join('\n'), context);
   return { context, get focused() { return focused; } };
 }
 

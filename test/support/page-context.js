@@ -68,6 +68,7 @@ const BROWSER_GLOBALS = new Set([
   'alert',
   'clearTimeout',
   'confirm',
+  'CSS',
   'Date',
   'document',
   'fetch',

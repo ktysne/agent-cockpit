@@ -285,16 +285,16 @@ function recordDeletionHarness(sessions, postUiAction = async () => ({ ok: true,
       querySelectorAll: selector => selector === 'button' ? buttons() : selector === '[data-record-band]' ? buttons().filter(button => button.dataset.recordBand) : [],
       querySelector: () => mode,
     },
-    root: { replaceChildren() {} },
+    root: { replaceChildren() {}, querySelectorAll: () => [] },
     renderRouting() {}, renderSummary() {}, updateTitle() {}, visibleSinceSeen: () => [], orderedProducts: () => [],
     isActiveDecision: () => false, isEndedAgent: () => true, isFinishedSession: session => session.finished === true,
     countJudgments: () => ({ permission: 0, blocking: 0 }), liveStatus: { textContent: '' },
     postUiAction, refresh: async () => {},
   });
-  vm.runInContext(['isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
+  vm.runInContext([functionSource(pageHtml, 'focusDataFor'), ...['isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
     'finishedToggle', 'renderExcludedNote', 'renderFinishedNote', 'renderIdleNote', 'finishedHiddenCounts', 'finishedDeletionTargets',
     'recordDeletionTargetKey', 'intersectRecordDeletionTargets', 'countRecordDeletionTargets', 'appendRecordDeletion',
-    'focusRecordDeletion', 'deleteNoteRecords', 'hasCodexOrigin', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+    'focusRecordDeletion', 'deleteNoteRecords', 'hasCodexOrigin', 'render'].map(name => functionSource(pageHtml, name))].join('\n'), context);
   context.render(context.lastState);
   return { context, notes, buttons, nodes: () => Object.values(notes).flatMap(flatten), get activeElement() { return activeElement; } };
 }
@@ -652,11 +652,12 @@ function reloadHarness(initialUiVersion, drafts = []) {
 
 function renderHarness(initialDraftNote = '保存済みの下書き') {
   const html = readWebPage();
+  const focusDataFor = functionSource(html, 'focusDataFor');
   const render = functionSource(html, 'render');
   const renderDeferredState = functionSource(html, 'renderDeferredState');
   const visibleSinceSeen = functionSource(html, 'visibleSinceSeen');
   const hasCodexOrigin = functionSource(html, 'hasCodexOrigin');
-  assert.ok(render && visibleSinceSeen && hasCodexOrigin);
+  assert.ok(focusDataFor && render && visibleSinceSeen && hasCodexOrigin);
   assert.ok(renderDeferredState);
 
   let activeElement;
@@ -758,7 +759,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     },
     productSection: () => ({}),
   });
-  vm.runInContext(`${visibleSinceSeen}\n${hasCodexOrigin}\n${render}\n${renderDeferredState}`, context);
+  vm.runInContext(`${focusDataFor}\n${visibleSinceSeen}\n${hasCodexOrigin}\n${render}\n${renderDeferredState}`, context);
   return {
     context,
     get renderCount() { return renderCount; },
@@ -800,6 +801,8 @@ function taskRenderHarness() {
     document: { createElement: (tagName) => new FakeElement(tagName) },
     expandedTodoTasks: new Set(),
     expandedDoneTasks: new Set(),
+    pendingTaskCloseActions: new Map(),
+    taskCloseActionsInFlight: new Set(),
     lastState: null,
     root: { querySelectorAll: () => [] },
     durationAgoLabel: () => '',
@@ -1477,7 +1480,7 @@ test('マージと予約の確認欄は警告と照合用 SHA を表示する', 
     },
     displayPreferences: {},
     pullRequestMergeOptions: new Map(),
-    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), actionFocusRestores: new Map(), rememberActionFocus() {}, pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
   });
   vm.runInContext(`${helpers}\n${component}`, context);
 
@@ -1817,6 +1820,7 @@ test('すべて既読にするは各プロダクトへ同じ状態版を送り�
       };
     },
     liveStatus,
+    render() {},
     showWriteError: (message) => errors.push(message),
   });
   vm.runInContext(`let sinceSeenActionInFlight = false;\n${visibleSinceSeen}\n${markAllProductsSeen}\nfunction setSinceSeenButtonsDisabled(disabled) { root.querySelectorAll('[data-seen], [data-seen-all]').forEach((button) => { button.disabled = disabled; }); }`, context);
@@ -2509,7 +2513,7 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
     answerQuestion: '1', answerOption: '2',
   };
   const activePick = { dataset: pickData, hasAttribute: () => false };
-  const replacementPick = { dataset: { ...pickData }, focused: false, focus() { this.focused = true; activeElement = this; } };
+  const replacementPick = { dataset: { ...pickData }, hasAttribute: () => false, focused: false, focus() { this.focused = true; activeElement = this; } };
   activeElement = activePick;
   const context = pageContext(pageHtml, {
     answerNoteComposing: false,
@@ -2537,7 +2541,7 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
     orderedProducts: () => [{ key: 'product-ui' }],
     productSection: () => ({}),
   });
-  vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
+  vm.runInContext(`${functionSource(pageHtml, 'focusDataFor')}\n${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
   context.render(context.lastState);
 
   assert.equal(replacementPick.focused, true);
@@ -2611,13 +2615,13 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   assert.equal(error.textContent, '');
 });
 
-function decisionAnswerPickHarness(decision) {
+function decisionAnswerPickHarness(decision, postResponse = async () => ({ ok: true })) {
   const html = readWebPage().replace(/\r\n/g, '\n');
   const functionNames = [
     'answerDraftKey', 'answerDraftFor', 'answerValueFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
     'sameAnswerDraft', 'answerDraftChanged', 'clearAnswerErrorWhenDraftChanges',
     'displayRecommendedLabel', 'recommendedOptionsForQuestions', 'selectedAnswerLabels',
-    'answerMetaText', 'canSendDecisionAnswer', 'answerStatusText', 'updateAnswerSubmit', 'clearSelectedAnswerPick', 'sendDecisionAnswer',
+    'answerMetaText', 'canSendDecisionAnswer', 'answerStatusText', 'focusDataFor', 'rememberActionFocus', 'updateAnswerSubmit', 'clearSelectedAnswerPick', 'sendDecisionAnswer',
   ];
   const functions = functionNames.map((name) => functionSource(html, name));
   const clickHandler = html.match(/document\.addEventListener\('click', \(event\) => \{\n  const pick = event\.target\.closest\('\[data-answer-pick\]'\);[\s\S]*?\n\}\);/)?.[0];
@@ -2630,11 +2634,17 @@ function decisionAnswerPickHarness(decision) {
   const answerDrafts = new Map();
   const answerErrors = new Map();
   const decisionAnswerInFlight = new Set();
-  const button = { disabled: true, dataset: { sessionId: 'session-pick', sendAnswer: decision.id } };
+  let card;
+  const button = {
+    disabled: true, attributes: {}, dataset: { sessionId: 'session-pick', sendAnswer: decision.id }, isConnected: true,
+    setAttribute(name, value) { this.attributes[name] = value; },
+    getAttribute(name) { return this.attributes[name] ?? null; },
+    closest(selector) { return selector === '.decision-answer' ? card : null; },
+  };
   const meta = { textContent: '', hidden: true };
   const status = { textContent: '' };
   const error = { textContent: '' };
-  const card = {
+  card = {
     dataset: { sessionId: 'session-pick', decisionId: decision.id },
     querySelector(selector) {
       if (selector === '[data-send-answer]') return button;
@@ -2652,12 +2662,16 @@ function decisionAnswerPickHarness(decision) {
     answerDrafts,
     answerErrors,
     decisionAnswerInFlight,
+    actionFocusRestores: new Map(),
     findDecision: (sessionId, decisionId) => (sessionId === 'session-pick' && decisionId === decision.id ? decision : null),
     absoluteTimeLabel: () => '保存済みの時刻',
     lastState: { sessions: [] },
     render: () => { renderCount += 1; },
     root: { querySelectorAll: () => [] },
-    postUiAction: async () => { postCount += 1; return { ok: true }; },
+    refresh: async () => {},
+    liveStatus: { textContent: '' },
+    showWriteError() {},
+    postUiAction: async () => { postCount += 1; return postResponse(); },
     document: { addEventListener: (name, handler) => listeners.set(name, handler) },
   });
   vm.runInContext(`${functions.join('\n')}\n${clickHandler}\n${keydownHandler}\n${changeHandler}\n${inputHandler}`, context);
@@ -2674,6 +2688,7 @@ function decisionAnswerPickHarness(decision) {
   const note = {
     value: '',
     dataset: { sessionId: 'session-pick', decisionId: decision.id },
+    hasAttribute: name => name === 'data-answer-note',
     closest(selector) {
       if (selector === '[data-answer-note]') return this;
       if (selector === '.decision-answer') return card;
@@ -2745,6 +2760,23 @@ test('回答の送信中は選択肢、指示、再送信の変更を捨てる',
   assert.deepEqual(JSON.parse(JSON.stringify(harness.answerDrafts.get(key))), submittedDraft);
   assert.equal(harness.postCount, 0);
   assert.equal(harness.renderCount, 3);
+});
+
+test('回答の送信中は aria-disabled のボタンへフォーカスを保ち、二重送信しない', async () => {
+  const decision = { id: 'decision-send', questions: [{ question: '形式', options: [{ label: 'JSON' }] }], answer: null };
+  let resolveResponse;
+  const response = new Promise(resolve => { resolveResponse = resolve; });
+  const harness = decisionAnswerPickHarness(decision, () => response);
+  harness.answerDrafts.set('session-pick\0decision-send', { choice: 'pick', picks: [['JSON']], note: '' });
+  const pending = harness.context.sendDecisionAnswer(harness.button);
+
+  assert.equal(harness.button.disabled, false);
+  assert.equal(harness.button.attributes['aria-disabled'], 'true');
+  await harness.context.sendDecisionAnswer(harness.button);
+  assert.equal(harness.postCount, 1);
+  resolveResponse({ ok: true });
+  await pending;
+  assert.equal(harness.button.attributes['aria-disabled'], 'false');
 });
 
 test('保存済みの choice ok の推奨選択肢は押すと外れ、変更状態に更新される', () => {
@@ -2967,7 +2999,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     pullRequestMergeConfirmations: new Map([[key, 'merge']]),
     pullRequestMergeOptions: new Map([[key, { method: 'rebase', deleteBranch: false }]]),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), actionFocusRestores: new Map(), rememberActionFocus() {}, pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     displayPreferences: {},
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
@@ -3086,7 +3118,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
       createTextNode: (text) => new FakeText(text),
       addEventListener: (name, handler) => { if (name === 'click') documentClickHandler = handler; },
     },
-    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
+    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(), actionFocusRestores: new Map(), rememberActionFocus() {}, pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestConflictConfirmations: conflictConfirmations, pullRequestConflictMessages: conflictMessages, pullRequestConflictInFlight: conflictInFlight,
     lastState: { sessions: [{ session_id: 'session-pr', title: 'Feature session' }, { session_id: 'session-codex', provider: 'codex' }], pullRequests: [group] },
     appendPullRequestBadges() {},
@@ -3118,8 +3150,11 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   conflictInFlight.add(uiKey);
   nodes = renderPullRequest(pullRequest);
   const cancelWhileSending = nodes.find((node) => node.dataset?.conflictCancel === uiKey);
+  const goWhileSending = nodes.find((node) => node.dataset?.conflictGo === uiKey);
   assert.ok(cancelWhileSending);
   assert.equal(cancelWhileSending.disabled, true);
+  assert.equal(goWhileSending.disabled, false);
+  assert.equal(goWhileSending.attributes['aria-disabled'], 'true');
   const cancelButton = { dataset: { conflictCancel: uiKey } };
   documentClickHandler({ button: 1, target: { closest: (selector) => selector === 'button' ? cancelButton : null } });
   assert.equal(conflictConfirmations.has(uiKey), true);
@@ -3235,7 +3270,7 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
     pullRequestMergeOptions: new Map([[key, { method: 'merge', deleteBranch: true }]]),
     pullRequestMergeConfirmations: new Map(),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
+    pullRequestMergeInFlight: new Set(), actionFocusRestores: new Map(), rememberActionFocus() {}, pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(), refreshSequence: 0, pullRequestReservationPending: new Map(),
     pullRequestMergeResults: new Map(),
     nextPullRequestMergeResultId: 0,
     CI_LABELS: { pass: { wait: 'CI 成功' }, unknown: { wait: 'CI 状態不明' } },
@@ -3318,7 +3353,8 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   reservationToggle.checked = true;
   holdReservation = true;
   const failingReservation = context.runPullRequestReservationAction(reservationToggle, true);
-  assert.equal(reservationToggle.disabled, true);
+  assert.equal(reservationToggle.disabled, false);
+  assert.equal(reservationToggle.attributes['aria-disabled'], 'true');
   assert.equal(reservationToggle.checked, true);
   assert.equal(context.pullRequestReservationPending.get(key), true);
   releaseReservation();
@@ -4050,7 +4086,7 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
-    vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
+    vm.runInContext(`${functionSource(pageHtml, 'focusDataFor')}\n${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
     context.render(context.lastState);
 
     const expected = dataAttribute === 'conflictCancel' ? cancel : go;
@@ -4100,12 +4136,188 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
-    vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
+    vm.runInContext(`${functionSource(pageHtml, 'focusDataFor')}\n${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
     context.render(context.lastState);
 
     assert.equal(replacementButton.focused, true, kind);
     assert.equal(activeElement, replacementButton, kind);
   }
+});
+
+function renderFocusHarness() {
+  let activeElement;
+  let controls = [];
+  let modeControls = [];
+  const body = {};
+  const context = pageContext(pageHtml, {
+    answerNoteComposing: false,
+    lastState: { sessions: [{ session_id: 'session-ui' }] },
+    HTMLTextAreaElement: class FakeTextArea {},
+    document: {
+      body,
+      get activeElement() { return activeElement; },
+      querySelectorAll: (selector) => selector === '[data-action="mode"]' ? modeControls : [...controls, ...modeControls],
+      querySelector: (selector) => selector.startsWith('[data-action="mode"]') ? modeControls[0] || null : null,
+    },
+    element: (tagName, className, textContent) => ({ tagName, className, textContent }),
+    root: { replaceChildren: () => { activeElement = body; }, querySelectorAll: () => controls },
+    displayPreferences: { mode: 'product', pinned: [] },
+    visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
+    idleHiddenSessions: () => [], isIdleHiddenSession: () => false,
+    sessionsAfterIdleFilter: (sessions) => sessions,
+    renderIdleNote() {}, renderRouting() {}, renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+    renderFinishedNote() {}, orderedProducts: () => [{ key: 'product-ui' }], productSection: () => ({}),
+  });
+  vm.runInContext(`const actionFocusRestores = new Map();\n${pageHtml.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0]}\n${functionSource(pageHtml, 'filterFocusFallback')}\n${functionSource(pageHtml, 'focusDataFor')}\n${functionSource(pageHtml, 'hasCodexOrigin')}\n${functionSource(pageHtml, 'render')}\nthis.actionFocusRestores = actionFocusRestores; this.rememberFocus = value => actionFocusRestores.set('operation', value);`, context);
+  return {
+    context,
+    draw(active, nextControls, remembered = null, nextModeControls = []) {
+      activeElement = active;
+      controls = nextControls;
+      modeControls = nextModeControls;
+      [...controls, ...modeControls].forEach((control) => { control.onFocus = (target) => { activeElement = target; }; });
+      context.actionFocusRestores?.clear();
+      if (remembered) context.rememberFocus(remembered);
+      context.render(context.lastState);
+      return activeElement;
+    },
+    body,
+  };
+}
+
+test('札が消えた再描画では代わりの札へ、札が無ければ現在の表示切り替えへフォーカスを戻す', () => {
+  const harness = renderFocusHarness();
+  const activeFilter = focusControl({ filter: 'blocking' });
+  const fallbackFilter = focusControl({ filter: 'agents' });
+  assert.equal(harness.draw(activeFilter, [fallbackFilter]), fallbackFilter);
+
+  const modeButton = focusControl({ action: 'mode', mode: 'product' }, { 'data-action': '', 'data-mode': 'product' });
+  assert.equal(harness.draw(activeFilter, [], null, [modeButton]), modeButton);
+});
+
+test('「元に戻す」にフォーカスがあれば、プロダクトが無くなる描き直しの後も同じ種類のボタンへ戻す', () => {
+  const harness = renderFocusHarness();
+  harness.context.orderedProducts = () => [];
+  const activeUndo = focusControl({}, { 'data-undo-hidden-sessions': '' });
+  const replacementUndo = focusControl({}, { 'data-undo-hidden-sessions': '' });
+
+  assert.equal(harness.draw(activeUndo, [replacementUndo]), replacementUndo);
+});
+
+function focusControl(dataset, attributes = {}, disabled = false) {
+  return {
+    dataset, disabled, focused: false,
+    hasAttribute(name) { return Object.hasOwn(attributes, name); },
+    getAttribute(name) { return attributes[name] ?? null; },
+    setAttribute() {},
+    focus() { this.focused = true; this.onFocus?.(this); },
+  };
+}
+
+test('マージ確認は disabled の戻し先を飛ばし、キャンセルと実行中の戻し先を順に探す', () => {
+  const harness = renderFocusHarness();
+  const key = 'merge-focus';
+  const method = focusControl({ mergeKey: key, mergeMethod: 'squash' }, { 'data-merge-method': '' }, true);
+  const alternativeMethod = focusControl({ mergeKey: key, mergeMethod: 'rebase' }, { 'data-merge-method': '' });
+  const opener = focusControl({ mergeKey: key, openMerge: key }, { 'data-open-merge': '' }, true);
+  const cancel = focusControl({ mergeKey: key, mergeCancel: key }, { 'data-merge-cancel': '' });
+  const go = focusControl({ mergeKey: key, mergeGo: key }, { 'data-merge-go': '' }, true);
+
+  assert.equal(harness.draw(focusControl({ openMerge: key, mergeKey: key }, { 'data-open-merge': '' }), [method, alternativeMethod]), alternativeMethod);
+  const availableOpener = focusControl({ mergeKey: key, openMerge: key }, { 'data-open-merge': '' });
+  const availableMethod = focusControl({ mergeKey: key, mergeMethod: 'squash' }, { 'data-merge-method': '' });
+  assert.equal(harness.draw(focusControl({ openMerge: key, mergeKey: key }, { 'data-open-merge': '' }), [availableMethod, availableOpener]), availableOpener);
+  const disabledCancel = focusControl({ mergeCancel: key, mergeKey: key }, { 'data-merge-cancel': '' }, true);
+  assert.equal(harness.draw(focusControl({ mergeCancel: key, mergeKey: key }, { 'data-merge-cancel': '' }), [disabledCancel, availableOpener, alternativeMethod]), availableOpener);
+  assert.equal(harness.draw(focusControl({ mergeCancel: key, mergeKey: key }, { 'data-merge-cancel': '' }), [disabledCancel, opener, alternativeMethod]), alternativeMethod);
+  assert.equal(harness.draw(harness.body, [go, cancel], { kind: 'merge-go', key }), cancel);
+});
+
+test('既読、サブエージェント、キュー、PR リンクのフォーカスを再描画後も戻す', () => {
+  const harness = renderFocusHarness();
+  const cases = [
+    [focusControl({ seen: 'one' }), [focusControl({ seen: 'two' })], 'seen'],
+    [focusControl({ closeAgent: 'session-ui::agent' }), [focusControl({ endedToggle: 'session-ui' }, { 'data-ended-toggle': 'session-ui' })], 'close-agent'],
+    [focusControl({ queueLeft: 'merge-key' }), [focusControl({ openMerge: 'merge-key' })], 'queue-left'],
+    [focusControl({ pullRequestLink: 'merge-key' }), [focusControl({ pullRequestLink: 'merge-key' })], 'pull-request-link'],
+  ];
+  for (const [active, controls, kind] of cases) {
+    const restored = harness.draw(active, controls);
+    assert.equal(restored, controls[0], kind);
+  }
+});
+
+test('モックのマージ確認と衝突確認を閉じると開いた操作へフォーカスを戻す', () => {
+  const restore = functionSource(mockHtml, 'restoreConfirmationFocus');
+  assert.ok(restore);
+  const controls = new Map();
+  const context = pageContext(mockHtml, {
+    CSS: { escape: value => value }, ui: { mode: 'product' },
+    document: { querySelector: selector => controls.get(selector) || null },
+  });
+  vm.runInContext(restore, context);
+
+  const key = 'example/project#42';
+  const opener = { disabled: false, focused: false, focus() { this.focused = true; } };
+  const method = { disabled: false, focused: false, focus() { this.focused = true; } };
+  controls.set(`[data-merge="${key}"]`, opener);
+  controls.set(`.merge-confirm[data-pr="${key}"] [data-method]`, method);
+  context.restoreConfirmationFocus({ kind: 'merge-cancel', key });
+  assert.equal(opener.focused, true);
+
+  opener.focused = false;
+  method.focused = false;
+  context.restoreConfirmationFocus({ kind: 'merge-open', key });
+  assert.equal(opener.focused, true);
+
+  opener.disabled = true;
+  context.restoreConfirmationFocus({ kind: 'merge-cancel', key });
+  assert.equal(method.focused, true);
+
+  opener.focused = false;
+  method.focused = false;
+  context.restoreConfirmationFocus({ kind: 'merge-open', key });
+  assert.equal(method.focused, true);
+
+  const conflict = { disabled: false, focused: false, focus() { this.focused = true; } };
+  controls.set(`[data-conflict="${key}"]`, conflict);
+  context.restoreConfirmationFocus({ kind: 'conflict-cancel', key });
+  assert.equal(conflict.focused, true);
+
+  const mergeCancel = { disabled: false, focused: false, focus() { this.focused = true; } };
+  controls.set(`[data-merge-cancel="${key}"]`, mergeCancel);
+  context.restoreConfirmationFocus({ kind: 'merge-go', key });
+  assert.equal(mergeCancel.focused, true);
+
+  mergeCancel.disabled = true;
+  const mode = { disabled: false, focused: false, focus() { this.focused = true; } };
+  controls.set(`[data-mode="product"]`, mode);
+  context.restoreConfirmationFocus({ kind: 'merge-go', key });
+  assert.equal(mode.focused, true);
+});
+
+test('aria-disabled の操作はクリックと Enter、Space で実行されない', () => {
+  const click = pageHtml.match(/document\.addEventListener\('click', \(event\) => \{\n  if \(event\.button === 0 && handleExternalLink\(event\)\) return;[\s\S]*?\n\}\);/)?.[0];
+  const keydown = pageHtml.match(/document\.addEventListener\('keydown', \(event\) => \{[\s\S]*?\n\}\);/g)?.find((handler) => handler.includes("event.target.closest('[aria-disabled=\"true\"]')"));
+  const mockClick = [...mockHtml.matchAll(/document\.addEventListener\('click', e => \{[\s\S]*?^\}\);/gm)]
+    .map((match) => match[0]).find((handler) => handler.includes("const t = e.target.closest('button')"));
+  assert.ok(click && keydown && mockClick);
+  const handlers = new Map();
+  const context = pageContext(pageHtml, { document: { addEventListener: (name, handler) => handlers.set(name, handler) } });
+  vm.runInContext(`${click}\n${keydown}`, context);
+  const button = { getAttribute: () => 'true' };
+  const target = { closest: () => button };
+  let prevented = false;
+  handlers.get('click')({ button: 1, target });
+  handlers.get('keydown')({ key: 'Enter', code: 'Enter', target, preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true);
+
+  const mockHandlers = new Map();
+  const mockContext = pageContext(mockHtml, { document: { addEventListener: (name, handler) => mockHandlers.set(name, handler) } });
+  vm.runInContext(mockClick, mockContext);
+  mockHandlers.get('click')({ target: { closest: () => button } });
 });
 
 test('レビュー不要の通信後は有効な同じPRの操作へフォーカスを戻す', async () => {
@@ -4188,7 +4400,7 @@ test('レビュー不要の通信後は有効な同じPRの操作へフォーカ
       refresh: async () => context.render(context.lastState),
       showWriteError() {},
     });
-    vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}\n${runAction}`, context);
+    vm.runInContext(`${functionSource(pageHtml, 'focusDataFor')}\n${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}\n${runAction}`, context);
 
     const pending = context.runCrossReviewSkipAction(activeButton);
     if (moveFocus) activeElement = buttons.find((button) => button.dataset.filter === 'prs');
@@ -4259,7 +4471,7 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
     orderedProducts: () => [{ key: 'product-ui' }],
     productSection: () => ({}),
   });
-  vm.runInContext(`${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
+  vm.runInContext(`${functionSource(pageHtml, 'focusDataFor')}\n${functionSource(pageHtml, 'hasCodexOrigin')}\n${render}`, context);
   context.render(context.lastState);
 
   assert.equal(replacementButton.focused, true);
@@ -4291,6 +4503,49 @@ test('作業中のタスクがあるセッションでは未着手を畳み、�
   assert.deepEqual(expanded.filter((node) => node.dataset.taskId).map((node) => node.dataset.taskId), ['doing', 'todo']);
   assert.equal(harness.context.expandedTodoTasks.has('session-a'), true);
   assert.equal(harness.context.expandedDoneTasks.has('session-a'), false);
+});
+
+test('完了操作の送信中はタスクボタンを aria-disabled にしてフォーカス可能にする', () => {
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.attributes = {}; this.classList = { add() {} }; }
+    append(...children) { this.children.push(...children); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  const closeKey = 'session-task::完了確認';
+  const context = pageContext(pageHtml, {
+    document: { createElement: tagName => new FakeElement(tagName) },
+    pendingTaskCloseActions: new Map(), taskCloseActionsInFlight: new Set([closeKey]),
+    badge: text => new FakeElement('span'), appendContextTags() {},
+  });
+  vm.runInContext(`${functionSource(pageHtml, 'element')}\n${functionSource(pageHtml, 'appendTaskItem')}`, context);
+  const root = new FakeElement('ul');
+  context.appendTaskItem(root, { title: '完了確認', state: 'doing', criteria: [] }, {}, { session_id: 'session-task' });
+  const descendants = node => [node, ...(node.children || []).flatMap(descendants)];
+  const nodes = descendants(root);
+  const button = nodes.find(node => node.dataset?.closeTask === closeKey);
+  assert.equal(button.disabled, undefined);
+  assert.equal(button.attributes['aria-disabled'], 'true');
+});
+
+test('実行中の worktree 操作は aria-disabled になりクリックを無視する', () => {
+  const calls = [];
+  const element = (_tag, className, textContent) => ({
+    className, textContent, dataset: {}, attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+    getAttribute(name) { return this.attributes[name] ?? null; },
+    addEventListener(name, handler) { this[name] = handler; },
+  });
+  const context = pageContext(pageHtml, {
+    element,
+    worktreeActionInFlight: new Set(['decision-copy:copy']),
+    runWorktreeAction: (...args) => calls.push(args),
+  });
+  vm.runInContext(functionSource(pageHtml, 'worktreeButton'), context);
+  const button = context.worktreeButton('コピー', 'copy', { session_id: 'session' }, { id: 'decision-copy' }, '文字列');
+
+  assert.equal(button.attributes['aria-disabled'], 'true');
+  button.click();
+  assert.equal(calls.length, 0);
 });
 
 test('作業中がなく未着手だけのセッションでは未着手を畳まない', () => {
@@ -5138,6 +5393,7 @@ test('モックの中断の行は画面と同じ文言と点で出し、終わ�
 test('完了条件が空のタスクは実画面とモックで件数と一覧を出さず、操作列の幅を維持する', () => {
   const element = (tagName, className = '', textContent = '') => ({
     tagName, className, textContent, children: [], dataset: {}, append(...nodes) { this.children.push(...nodes); },
+    setAttribute() {},
   });
   const context = pageContext(pageHtml, { element, badge: () => element('span'), appendContextTags() {},
     pendingTaskCloseActions: new Map(), taskCloseActionsInFlight: new Set() });
@@ -5164,6 +5420,7 @@ test('完了条件が空のタスクは実画面とモックで件数と一覧�
 test('作業中の完了条件は実画面とモックで doing クラスを付け、達成済みを優先する', () => {
   const element = (tagName, className = '', textContent = '') => ({
     tagName, className, textContent, children: [], dataset: {}, append(...nodes) { this.children.push(...nodes); },
+    setAttribute() {},
   });
   const context = pageContext(pageHtml, { element, badge: () => element('span'), appendContextTags() {},
     pendingTaskCloseActions: new Map(), taskCloseActionsInFlight: new Set() });
@@ -5295,12 +5552,17 @@ test('再起動待ちの帯はバージョンが違えば配置済みのバー�
 function restartNoteHarness(source, response = async () => ({ status: 202 })) {
   const buttons = [];
   const note = { hidden: true, value: '', get textContent() { return this.value; },
-    set textContent(value) { this.value = value; buttons.length = 0; this.rebuilt += 1; }, rebuilt: 0,
-    append(button) { buttons.push(button); } };
+    set textContent(value) { this.value = value; buttons.length = 0; activeElement = null; this.rebuilt += 1; }, rebuilt: 0,
+    append(button) { buttons.push(button); }, querySelectorAll: selector => selector === 'button' ? buttons : [] };
   let focused = null;
+  let activeElement = null;
   const timers = new Map();
   const context = pageContext(source, {
-    document: { getElementById: () => note, createElement: () => ({ addEventListener(type, fn) { this.click = fn; }, focus() { focused = this.textContent; } }) },
+    document: {
+      get activeElement() { return activeElement; },
+      getElementById: () => note,
+      createElement: () => ({ dataset: {}, addEventListener(type, fn) { this.click = fn; }, focus() { focused = this.textContent; activeElement = this; } }),
+    },
     requestServerRestart: response,
     setTimeout: (fn, ms) => { timers.set(fn, ms); return fn; }, clearTimeout: id => timers.delete(id),
   });
@@ -5383,6 +5645,17 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     assert.deepEqual(f.buttons.map(button => button.textContent), ['再起動する', 'やめる']);
     f.click('やめる');
     assert.equal(f.focused(), '常駐サーバーを再起動する');
+  });
+
+  test(`${label}の再起動確認で許可待ちの件数が変わってもフォーカスを保つ`, () => {
+    const f = restartNoteHarness(source);
+    f.click('常駐サーバーを再起動する');
+    const cancel = f.buttons.find(button => button.textContent === 'やめる');
+    cancel.focus();
+    f.state.sessions[0].permissionWaits.splice(1, 1);
+    f.render();
+    assert.notEqual(f.buttons[1], cancel);
+    assert.equal(f.focused(), 'やめる');
   });
 
   test(`${label}は受付後に再起動中を示し、起動時刻が変わると帯を消す`, async () => {

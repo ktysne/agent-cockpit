@@ -19,7 +19,7 @@ function element(tagName, className = '', text = '') {
 
 function context(overrides = {}) {
   const result = pageContext(web, {
-    element, worktreeActionStatus: new Map(), worktreeActionInFlight: new Set(),
+    element, worktreeActionStatus: new Map(), worktreeActionInFlight: new Set(), actionFocusRestores: new Map(),
     TERMINAL_LABELS: { auto: '自動', 'windows-terminal': 'Windows Terminal', pwsh: 'PowerShell 7', powershell: 'Windows PowerShell', cmd: 'コマンドプロンプト' },
     absoluteTimeLabel: () => '12:00', shownActiveDecisions: session => session.decisions || [],
     ...overrides,
