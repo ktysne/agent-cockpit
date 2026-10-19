@@ -168,6 +168,7 @@ function createRequestHandler(options) {
   const {
     homeDir,
     claudeHome,
+    codexHome,
     userHome,
     state,
     away,
@@ -198,6 +199,7 @@ function createRequestHandler(options) {
     stateCacheNow: options.stateCacheNow,
     homeDir,
     claudeHome,
+    codexHome,
     userHome,
     state,
     away,
@@ -712,6 +714,7 @@ async function startServer(options = {}) {
     diagnostics,
     homeDir,
     claudeHome,
+    codexHome,
     state,
     away,
     routing,
@@ -790,7 +793,7 @@ async function startServer(options = {}) {
         return typeof name === 'string' ? { ...file, name } : file;
       });
       state.syncSessionFiles([...(files || []), ...codexFiles]
-        .map((file) => ({ ...file, product: productFromCwd(file.cwd) })), now, { codexOnly: files === null });
+        .map((file) => ({ ...file, product: productFromCwd(file.cwd, { codexHome }) })), now, { codexOnly: files === null });
       // Claude の一覧を読めないときは生死を保留し、保存の期限切れの片付けだけを進める。
       if (!files) state.pruneExpiredStoreRecords(now);
       const sessions = state.snapshot().sessions;

@@ -1,12 +1,15 @@
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const { isCompleteCommitSha } = require('./pull-request-utils');
 const { findWorktreeRootSync } = require('./git-worktree');
 
 const HEAD_FILE_LIMIT_BYTES = 4096;
 const BRANCH_CACHE_TTL_MS = 10_000;
 const BRANCH_CACHE_MAX_ENTRIES = 256;
+const CODEX_WORKTREE_CACHE_MAX_ENTRIES = 256;
 const branchCache = new Map();
+const codexWorktreeCache = new Map();
 
 function pathApiFor(value) {
   if (/^[A-Za-z]:/.test(value) || value.startsWith('\\') || /^\/\/[^/]+\/[^/]+(?:\/|$)/.test(value)) {
@@ -81,6 +84,55 @@ function branchFromCwd(cwd, options = {}) {
   return branch;
 }
 
+function pathIsWithin(directory, parent, paths) {
+  const normalizedDirectory = paths === path.win32 ? directory.toLowerCase() : directory;
+  const normalizedParent = paths === path.win32 ? parent.toLowerCase() : parent;
+  return normalizedDirectory.startsWith(`${normalizedParent}${paths.sep}`);
+}
+
+function repositoryRootFromGitDirectory(gitDirectory, paths) {
+  if (!gitDirectory) return null;
+  const worktreeName = paths.basename(gitDirectory);
+  const gitWorktrees = paths.dirname(gitDirectory);
+  const gitDirectoryRoot = paths.dirname(gitWorktrees);
+  const sameSegment = (left, right) => paths === path.win32
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+  if (!worktreeName || !sameSegment(paths.basename(gitWorktrees), 'worktrees') ||
+    !sameSegment(paths.basename(gitDirectoryRoot), '.git')) return null;
+  return paths.dirname(gitDirectoryRoot);
+}
+
+function codexWorktreeRepositoryRoot(cwd, options, paths, fileSystem) {
+  const codexHome = options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  const worktreesRoot = paths.resolve(codexHome, 'worktrees');
+  if (!pathIsWithin(cwd, worktreesRoot, paths)) return null;
+
+  const cacheKey = paths === path.win32 ? cwd.toLowerCase() : cwd;
+  const shouldCache = fileSystem === fs;
+  const cachedRoot = shouldCache ? codexWorktreeCache.get(cacheKey) : null;
+  if (cachedRoot) return cachedRoot;
+
+  const worktree = findWorktreeRootSync(cwd, fileSystem, paths);
+  if (!worktree.root || !worktree.marker.isFile()) return null;
+  const gitDirectory = gitDirectoryFromFile(paths.join(worktree.root, '.git'), paths, fileSystem);
+  const repositoryRoot = repositoryRootFromGitDirectory(gitDirectory, paths);
+  if (!repositoryRoot) return null;
+  try {
+    if (!fileSystem.statSync(gitDirectory).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+
+  if (shouldCache) {
+    if (codexWorktreeCache.size >= CODEX_WORKTREE_CACHE_MAX_ENTRIES) {
+      codexWorktreeCache.delete(codexWorktreeCache.keys().next().value);
+    }
+    codexWorktreeCache.set(cacheKey, repositoryRoot);
+  }
+  return repositoryRoot;
+}
+
 function productFromCwd(cwd, options = {}) {
   if (typeof cwd !== 'string' || cwd.length === 0) return null;
 
@@ -100,6 +152,9 @@ function productFromCwd(cwd, options = {}) {
     }
   }
 
+  if (root === absoluteCwd) {
+    root = codexWorktreeRepositoryRoot(absoluteCwd, options, paths, options.fileSystem || fs) || root;
+  }
   const key = paths === path.win32 ? root.toLowerCase() : root;
   return { key, name: paths.basename(root) || root, branch: branchFromCwd(cwd, options) };
 }
