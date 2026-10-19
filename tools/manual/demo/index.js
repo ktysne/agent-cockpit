@@ -6,6 +6,7 @@ const scenarios = Object.freeze({
   decisions: () => require('./decisions'),
   empty: () => require('./empty'),
   'no-gh': () => require('./no-gh'),
+  verify: () => require('./verify'),
   'site-review': () => require('./site-review'),
   'site-work': () => require('./site-work'),
   states: () => require('./states'),

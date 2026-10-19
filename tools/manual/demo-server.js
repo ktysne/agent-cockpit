@@ -15,6 +15,7 @@ const BASE_TIME_MS = Date.UTC(2026, 9, 6, 5, 30, 0);
 const DEMO_ASK_POLL_GAP_MS = 24 * 60 * 60 * 1000;
 const HOOK_PID_FOR_UNMAPPED_SESSION = 1;
 const DEFAULT_INTEGRATIONS = Object.freeze({ codexAgent: true, crossReview: true });
+const DEMO_WORK_DISPLAY_ROOT = 'D:\\Develop';
 
 function runGit(args, directory, environment) {
   return new Promise((resolve, reject) => {
@@ -25,6 +26,17 @@ function runGit(args, directory, environment) {
   });
 }
 
+// 確認依頼のカードは worktree のパスを出す。一時ディレクトリのままだと撮るたびに画像が変わるので、表示する値だけを固定の場所に置き換える。
+function showWorktreePathsUnder(worktreeInfo, workRoot) {
+  const snapshot = worktreeInfo.snapshot.bind(worktreeInfo);
+  worktreeInfo.snapshot = (...args) => {
+    const worktree = snapshot(...args);
+    const relative = worktree?.path && path.relative(workRoot, worktree.path);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return worktree;
+    return { ...worktree, path: path.win32.join(DEMO_WORK_DISPLAY_ROOT, ...relative.split(path.sep)) };
+  };
+}
+
 function agentDefinitionText(values) {
   return `---\n${Object.entries(values).map(([key, value]) => `${key}: ${value}`).join('\n')}\n---\n`;
 }
@@ -32,6 +44,40 @@ function agentDefinitionText(values) {
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function commitDemoFiles(directory, files, message, environment) {
+  for (const [file, contents] of Object.entries(files)) {
+    const filePath = path.join(directory, file);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+  }
+  await runGit(['add', '--all'], directory, environment);
+  await runGit([
+    '-c', 'user.name=Agent Cockpit Manual',
+    '-c', 'user.email=manual@example.invalid',
+    'commit', '--quiet', '-m', message,
+  ], directory, environment);
+}
+
+async function createLinkedWorktree(productDirectory, worktreeDirectory, worktree, environment) {
+  await fs.mkdir(path.dirname(worktreeDirectory), { recursive: true });
+  await runGit(['worktree', 'add', '--quiet', '-b', worktree.branch, worktreeDirectory, 'main'], productDirectory, environment);
+  for (const [index, commit] of (worktree.commits || []).entries()) {
+    await commitDemoFiles(worktreeDirectory, commit.files, `manual fixture ${index + 1}`, environment);
+  }
+  for (const file of worktree.uncommittedFiles || []) {
+    const filePath = path.join(worktreeDirectory, file);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, 'Preview styles for the calendar.\n');
+  }
+  if (worktree.crossReview?.tool) {
+    await fs.mkdir(path.join(worktreeDirectory, 'tools'), { recursive: true });
+    await fs.writeFile(path.join(worktreeDirectory, 'tools', 'cross-review.js'), '');
+  }
+  if (worktree.crossReview?.state) {
+    await writeJson(path.join(worktreeDirectory, '.cross-review-state.json'), { branches: worktree.crossReview.state });
+  }
 }
 
 // ブランチは .git/HEAD から決まるので、コミットの無い本物のリポジトリを作って HEAD だけを向ける。
@@ -111,10 +157,14 @@ async function startDemoServer(options = {}) {
     for (const product of scenario.products) {
       const productDirectory = path.join(workRoot, product.name);
       await createRepository(productDirectory, product.branch, product.crossReview, gitEnvironment);
+      if ((product.worktrees || []).some((worktree) => worktree.gitWorktree)) {
+        await commitDemoFiles(productDirectory, { 'README.md': 'Manual scenario base branch.\n' }, 'manual fixture base', gitEnvironment);
+      }
       directories.set(`${product.name}/`, productDirectory);
       for (const worktree of product.worktrees || []) {
         const worktreeDirectory = path.join(productDirectory, '.claude', 'worktrees', worktree.name);
-        await createRepository(worktreeDirectory, worktree.branch, worktree.crossReview, gitEnvironment);
+        if (worktree.gitWorktree) await createLinkedWorktree(productDirectory, worktreeDirectory, worktree, gitEnvironment);
+        else await createRepository(worktreeDirectory, worktree.branch, worktree.crossReview, gitEnvironment);
         directories.set(`${product.name}/${worktree.name}`, worktreeDirectory);
       }
     }
@@ -173,6 +223,7 @@ async function startDemoServer(options = {}) {
       // デモには回答を待つフックが無く生存確認が届かないので、預かった質問を生存確認の途絶で解除しない。
       answerDeliveryOptions: { maxAskPollGapMs: DEMO_ASK_POLL_GAP_MS },
     });
+    showWorktreePathsUnder(runtime.state.worktreeInfo, workRoot);
     const { port, secret, uiSecret } = runtime.info;
 
     const post = (requestPath, body, { ui = false } = {}) => requestJson(port, 'POST', requestPath, {

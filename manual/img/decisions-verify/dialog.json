@@ -1,0 +1,118 @@
+{
+  "name": "dialog",
+  "target": ".decision-list > .decision-card:nth-child(1)",
+  "width": 1576,
+  "height": 1332,
+  "parts": [
+    {
+      "key": "verify.place",
+      "bounds": {
+        "x": 190,
+        "y": 223,
+        "width": 779,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.branch",
+      "bounds": {
+        "x": 190,
+        "y": 285,
+        "width": 317,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.uncommitted",
+      "bounds": {
+        "x": 772,
+        "y": 277,
+        "width": 226,
+        "height": 50
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.steps",
+      "bounds": {
+        "x": 54,
+        "y": 486,
+        "width": 1474,
+        "height": 217
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.step-copy",
+      "bounds": {
+        "x": 201,
+        "y": 486,
+        "width": 112,
+        "height": 178
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.launch",
+      "bounds": {
+        "x": 54,
+        "y": 344,
+        "width": 162,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.terminal",
+      "bounds": {
+        "x": 232,
+        "y": 344,
+        "width": 240,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.copy-path",
+      "bounds": {
+        "x": 488,
+        "y": 344,
+        "width": 188,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.options",
+      "bounds": {
+        "x": 52,
+        "y": 773,
+        "width": 1478,
+        "height": 231
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.recommended",
+      "bounds": {
+        "x": 52,
+        "y": 773,
+        "width": 1478,
+        "height": 112
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.answer",
+      "bounds": {
+        "x": 32,
+        "y": 1040,
+        "width": 1518,
+        "height": 270
+      },
+      "visible": true
+    }
+  ]
+}
