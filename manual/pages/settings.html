@@ -120,6 +120,14 @@
   変えた設定は、次に <span class="ui">ターミナルで開く</span> を押したときから使われます。
   この操作は Windows で使えます(<a href="decisions.html#decisions-verify">worktree の確認依頼</a>)。</p>
 
+  <h3 id="settings-pull-default-branch">マージ後に既定ブランチの作業ツリーを更新する</h3>
+  <p><span class="ui">既定ブランチへのマージ後、既定ブランチの作業ツリーを最新にする</span> は、main などの既定ブランチへのマージを検出したとき、そのブランチをチェックアウトしているローカルの作業ツリーを更新します。
+  オフが最初の設定です。
+  ダッシュボードからのマージ、予約によるマージ、GitHub 上でのマージが対象です。</p>
+  <p>更新は、remote から既定ブランチを取得し、fast-forward で取り込みます(<code>git fetch</code> と <code>git merge --ff-only</code>)。
+  追跡しているファイルに未コミットの変更がある場合や fast-forward できない場合は更新せず、結果をマージ通知と同じセッションへ知らせます。
+  既定ブランチ以外へのマージや、既定ブランチをチェックアウトしている作業ツリーが無い場合は何もしません。</p>
+
   <h3 id="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</h3>
   <p><span class="ui">デスクトップアプリのタスク一覧を取り込む</span> は、Claude Code デスクトップアプリのタスク一覧を 1 つのタスクの完了条件として取り込むか選びます。
   依頼ごとの題はモデルが登録します。

@@ -21,6 +21,7 @@ const DISPLAY_SCHEMA = Object.freeze({
   idleHideMinutes: Object.freeze({ type: 'integer', default: 10, minimum: 5, maximum: 1440 }),
   ghConcurrencyLimit: Object.freeze({ type: 'integer', default: 8, minimum: 1, maximum: 32 }),
   hideFinished: Object.freeze({ type: 'boolean', default: true }),
+  pullDefaultBranchAfterMerge: Object.freeze({ type: 'boolean', default: false }),
   importAppTasks: Object.freeze({ type: 'boolean', default: false }),
   importAppTasksAsked: Object.freeze({ type: 'boolean', default: false }),
   mergeableCondition: Object.freeze({ type: 'enum', default: 'cross-review', values: Object.freeze(['operation', 'ci', 'cross-review']) }),

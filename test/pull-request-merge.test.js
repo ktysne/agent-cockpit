@@ -35,6 +35,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
   let tracker;
   testContext.after(async () => {
     tracker?.close();
+    await Promise.all(manager.localUpdates);
     await diagnostics.flush();
     await state?.flushPersistence();
     await temporary.cleanup();
@@ -2129,4 +2130,163 @@ test('gh の実行中に始まった取得は実行が結果不明で終わっ�
   await fetching;
   assert.ok(fixture.state.pullRequestMergeIntent('example', 'project', 1));
   assert.deepEqual(fixture.tracker.snapshot()[0].reservationNotices, []);
+});
+
+async function localPullFixture(t, options = {}) {
+  const fixture = await mergeFixture(t);
+  const checkout = path.join(fixture.homeDir, 'checkout');
+  await fs.mkdir(path.join(checkout, '.git'), { recursive: true });
+  fixture.state.registerPullRequest('session-1', { url: ghPullRequest(1, 'feature/one', 'main').url }, {
+    cwd: checkout, product: { key: 'project', name: 'Project' },
+  }, NOW);
+  fixture.state.patchDisplayPreferences({ pullDefaultBranchAfterMerge: options.enabled !== false });
+  await fixture.tracker.refreshRepo('example', 'project');
+  const worktrees = options.worktrees || [
+    { path: checkout, branch: 'main' },
+    { path: path.join(fixture.homeDir, 'feature'), branch: 'feature/one' },
+    { path: path.join(fixture.homeDir, 'pruned'), branch: 'main', prunable: true },
+  ];
+  const localCalls = [];
+  fixture.manager.gitExecFileImpl = (file, args, executionOptions, callback) => {
+    localCalls.push(args);
+    assert.equal(file, 'git');
+    assert.equal(executionOptions.shell, false);
+    assert.equal(executionOptions.windowsHide, true);
+    const operation = args[2];
+    if (operation === 'config') {
+      callback(null, options.noRemote && args[1] === checkout && localCalls.some(call => call[2] === 'status')
+        ? 'remote.origin.url https://github.com/other/project.git' : 'remote.upstream.url https://github.com/example/project.git');
+    } else if (operation === 'worktree') {
+      callback(null, worktrees.map(tree => 'worktree ' + tree.path + '\nbranch refs/heads/' + tree.branch + (tree.prunable ? '\nprunable missing' : '') + '\n').join('\n'));
+    } else if (operation === 'symbolic-ref') {
+      const switched = options.switchedTo || (options.switchAfterFetch && localCalls.some(call => call[2] === 'fetch') ? 'feature/other' : null);
+      callback(null, (switched || 'main') + '\n');
+    }
+    else if (operation === 'status') callback(null, options.dirty ? ' M tracked.js\n' : '');
+    else if (operation === 'fetch') {
+      assert.equal(executionOptions.env.GIT_TERMINAL_PROMPT, '0');
+      if (options.holdPull) options.holdPull(callback);
+      else callback(options.failPull ? new Error('private output') : null, '');
+    } else if (operation === 'rev-parse') callback(null, 'a'.repeat(40) + '\n');
+    else if (operation === 'update-ref') callback(null, '');
+    else if (operation === 'merge') callback(null, '');
+    else assert.fail('unexpected local git command');
+  };
+  const detected = (changes = {}) => fixture.manager.handleDetectedMerge({
+    owner: 'example', repo: 'project', pullRequest: { ...ghPullRequest(1, 'feature/one', 'main'), ...changes },
+    mergedAt: new Date(NOW).toISOString(),
+    registrations: fixture.state.pullRequestRegistrationsForRepo('example', 'project'),
+  });
+  return { ...fixture, checkout, localCalls, detected };
+}
+
+test('マージ後のローカル更新がオフなら git を実行しない', async (t) => {
+  const f = await localPullFixture(t, { enabled: false });
+  await f.detected();
+  await Promise.all(f.manager.localUpdates);
+  assert.deepEqual(f.localCalls, []);
+});
+
+test('既定ブランチへのマージは既定ブランチの有効な worktree だけを重複せず pull する', async (t) => {
+  const f = await localPullFixture(t);
+  await f.detected();
+  await Promise.all(f.manager.localUpdates);
+  const fetchCall = f.localCalls.find(call => call[2] === 'fetch');
+  const fetchedRef = fetchCall[6].split(':')[1];
+  assert.match(fetchedRef, /^refs\/agent-cockpit\/default-branch-/);
+  assert.deepEqual(f.localCalls.filter(call => ['fetch', 'merge', 'update-ref'].includes(call[2])), [
+    ['-C', f.checkout, 'fetch', '--no-write-fetch-head', '--', 'upstream', `+refs/heads/main:${fetchedRef}`],
+    ['-C', f.checkout, 'merge', '--ff-only', 'a'.repeat(40)],
+    ['-C', f.checkout, 'update-ref', '-d', fetchedRef],
+  ]);
+  assert.match(f.notices.at(-1).message, /ローカルの main を最新にしました/);
+  const entries = await f.diagnostics.readRun(f.diagnostics.run);
+  assert.ok(entries.some(entry => entry.msg === 'merge.local-update' && entry.data.result === 'updated'));
+  assert.deepEqual(f.notices.at(-1).sessionIds, f.notices.at(-2).sessionIds);
+});
+
+test('未コミットの変更がある worktree は pull せずセッションへ知らせる', async (t) => {
+  const f = await localPullFixture(t, { dirty: true });
+  await f.detected();
+  await Promise.all(f.manager.localUpdates);
+  assert.equal(f.localCalls.some(call => call[2] === 'merge'), false);
+  assert.match(f.notices.at(-1).message, /未コミットの変更があるため main を更新しませんでした/);
+});
+
+test('探索の後に別のブランチへ切り替えた worktree は pull も通知もしない', async (t) => {
+  const f = await localPullFixture(t, { switchedTo: 'feature/other' });
+  await f.detected();
+  const noticeCount = f.notices.length;
+  await Promise.all(f.manager.localUpdates);
+  assert.equal(f.localCalls.some(call => call[2] === 'merge'), false);
+  assert.equal(f.notices.length, noticeCount);
+});
+
+test('取得を待つ間に別のブランチへ切り替えた worktree には取り込まない', async (t) => {
+  const f = await localPullFixture(t, { switchAfterFetch: true });
+  await f.detected();
+  await Promise.all(f.manager.localUpdates);
+  assert.equal(f.localCalls.some(call => call[2] === 'fetch'), true);
+  assert.equal(f.localCalls.some(call => call[2] === 'merge'), false);
+});
+
+test('リポジトリの状態を取得する前に検出したマージはイベントの既定ブランチで更新する', async (t) => {
+  const f = await localPullFixture(t);
+  f.tracker.repositoryState = () => null;
+  await f.manager.handleDetectedMerge({
+    owner: 'example', repo: 'project', pullRequest: ghPullRequest(1, 'feature/one', 'main'),
+    mergedAt: new Date(NOW).toISOString(), defaultBranch: 'main',
+    registrations: f.state.pullRequestRegistrationsForRepo('example', 'project'),
+  });
+  await Promise.all(f.manager.localUpdates);
+  assert.equal(f.localCalls.filter(call => call[2] === 'merge').length, 1);
+});
+
+test('pull の失敗はセッションへ知らせマージの成功を変えない', async (t) => {
+  const f = await localPullFixture(t, { failPull: true });
+  const outcome = await f.detected();
+  await Promise.all(f.manager.localUpdates);
+  assert.equal(outcome.warning, null);
+  assert.match(f.notices.at(-1).message, /main を更新できませんでした/);
+  assert.equal(f.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].number, 1);
+  const entries = (await f.diagnostics.readRun(f.diagnostics.run)).filter(entry => entry.msg === 'merge.local-update');
+  assert.deepEqual(entries.map(entry => entry.data), [{ repository: 'example/project', result: 'failed' }]);
+  assert.doesNotMatch(JSON.stringify(entries), /private output|checkout|stdout|stderr/);
+});
+
+test('既定ブランチ以外へのマージでは git を実行しない', async (t) => {
+  const f = await localPullFixture(t);
+  await f.detected({ baseRefName: 'feature/aggregate' });
+  await Promise.all(f.manager.localUpdates);
+  assert.deepEqual(f.localCalls, []);
+});
+
+test('一致する remote がない worktree は pull せずセッションへ知らせる', async (t) => {
+  const f = await localPullFixture(t, { noRemote: true });
+  await f.detected();
+  await Promise.all(f.manager.localUpdates);
+  assert.equal(f.localCalls.some(call => call[2] === 'merge'), false);
+  assert.match(f.notices.at(-1).message, /一致する remote がないため/);
+});
+
+test('pull が終わる前にマージ検出を返し同じ worktree の更新を直列化する', async (t) => {
+  const releases = [];
+  const f = await localPullFixture(t, { holdPull: callback => releases.push(callback) });
+  await f.detected();
+  await f.detected({ number: 2 });
+  while (!releases.length) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(releases.length, 1);
+  releases[0](null, '');
+  while (releases.length < 2) await new Promise(resolve => setImmediate(resolve));
+  releases[1](null, '');
+  await Promise.all(f.manager.localUpdates);
+  assert.equal(f.localCalls.filter(call => call[2] === 'merge').length, 2);
+});
+
+test('既定ブランチの worktree が無ければローカル更新の通知を送らない', async (t) => {
+  const f = await localPullFixture(t, { worktrees: [] });
+  await f.detected();
+  await Promise.all(f.manager.localUpdates);
+  assert.equal(f.localCalls.some(call => call[2] === 'merge'), false);
+  assert.equal(f.notices.length, 1);
 });

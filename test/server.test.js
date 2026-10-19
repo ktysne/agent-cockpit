@@ -2810,6 +2810,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
     ['idleHideMinutes', 4], ['idleHideMinutes', 1441], ['idleHideMinutes', 30.5], ['idleHideMinutes', '30'], ['idleHideMinutes', null],
     ['ghConcurrencyLimit', 0], ['ghConcurrencyLimit', 33],
+    ['pullDefaultBranchAfterMerge', 1], ['pullDefaultBranchAfterMerge', 'true'], ['pullDefaultBranchAfterMerge', null],
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
     ['importAppTasks', 1], ['importAppTasks', 'false'], ['importAppTasks', null],
     ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
@@ -2850,10 +2851,11 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(waitSettings).display.awayAnswerWaitMinutes, 30);
   assert.equal(runtime.answerDelivery.answerWaitMs(), 30 * 60_000);
   const hideFinished = await request(runtime.info.port, {
-    method: 'POST', path: endpoint, body: JSON.stringify({ hideFinished: true }), headers: validHeaders,
+    method: 'POST', path: endpoint, body: JSON.stringify({ hideFinished: true, pullDefaultBranchAfterMerge: true }), headers: validHeaders,
   });
   assert.equal(hideFinished.status, 200);
   assert.equal(jsonBody(hideFinished).display.hideFinished, true);
+  assert.equal(jsonBody(hideFinished).display.pullDefaultBranchAfterMerge, true);
   const importOff = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ importAppTasks: false }), headers: validHeaders,
   });
@@ -2888,7 +2890,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'sinceSeen', 'judgment', 'prs', 'now'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, ghConcurrencyLimit: 12, hideFinished: true, importAppTasks: true, importAppTasksAsked: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info', terminal: 'cmd',
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, ghConcurrencyLimit: 12, hideFinished: true, pullDefaultBranchAfterMerge: true, importAppTasks: true, importAppTasksAsked: true, mergeableCondition: 'cross-review', diagnosticsLevel: 'info', terminal: 'cmd',
   });
 });
 

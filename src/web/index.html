@@ -511,6 +511,11 @@ h3.sub .count { font-weight: normal; }
     </div>
     <p class="meta" id="settings-terminal-note">自動では、Windows Terminal、PowerShell 7、Windows PowerShell の順に、見つかったものを使う。選んだ端末が見つからないときは開かずに知らせる。</p>
     <div class="settings-theme-row">
+      <label for="settings-pull-default-branch">既定ブランチへのマージ後、既定ブランチの作業ツリーを最新にする</label>
+      <input id="settings-pull-default-branch" name="pullDefaultBranchAfterMerge" type="checkbox" aria-describedby="settings-pull-default-branch-note">
+    </div>
+    <p class="meta" id="settings-pull-default-branch-note">オンでは、既定ブランチへのマージを検出したとき、そのブランチをチェックアウトしているローカルの作業ツリーを fast-forward で更新する。追跡しているファイルに未コミットの変更がある作業ツリーは更新せず、セッションへ知らせる。</p>
+    <div class="settings-theme-row">
       <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
       <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
     </div>
@@ -594,6 +599,7 @@ for (const { input, min, max } of DISPLAY_INTEGER_SETTINGS) {
   input.min = String(min);
   input.max = String(max);
 }
+const pullDefaultBranchInput = document.getElementById('settings-pull-default-branch');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
 const importAppTasksInput = document.getElementById('settings-import-app-tasks');
 const diagnosticsLevelSelect = document.getElementById('diagnostics-level');
@@ -796,6 +802,7 @@ function normalizeDisplayPreferences(value) {
     ...Object.fromEntries(DISPLAY_INTEGER_SETTINGS.map(({ key, min, max, default: fallback }) => (
       [key, normalizeDisplayInteger(value?.[key], min, max, fallback)]
     ))),
+    pullDefaultBranchAfterMerge: value?.pullDefaultBranchAfterMerge === true,
     hideFinished: value?.hideFinished !== false,
     importAppTasks: value?.importAppTasksAsked === true && value?.importAppTasks === true,
     importAppTasksAsked: value?.importAppTasksAsked === true,
@@ -825,6 +832,7 @@ function renderDisplaySettings() {
     if (document.activeElement === input) continue;
     input.value = String(displayPreferences[key]);
   }
+  if (document.activeElement !== pullDefaultBranchInput) pullDefaultBranchInput.checked = displayPreferences.pullDefaultBranchAfterMerge === true;
   if (document.activeElement !== hideFinishedInput) hideFinishedInput.checked = displayPreferences.hideFinished;
   if (document.activeElement !== importAppTasksInput) importAppTasksInput.checked = displayPreferences.importAppTasks === true;
   if (!mergeableConditionInputs.includes(document.activeElement)) {
@@ -1093,6 +1101,7 @@ document.getElementById('settings-section-order-reset').addEventListener('click'
 for (const { key, input } of DISPLAY_INTEGER_SETTINGS) {
   input.addEventListener('change', () => changeDisplaySetting(key, input));
 }
+pullDefaultBranchInput.addEventListener('change', () => changeDisplaySetting('pullDefaultBranchAfterMerge', pullDefaultBranchInput));
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
 importAppTasksInput.addEventListener('change', async () => {
   if (await changeDisplaySetting('importAppTasks', importAppTasksInput)) displayPreferences.importAppTasksAsked = true;
