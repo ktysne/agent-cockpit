@@ -228,6 +228,7 @@ class PullRequestMergeManager {
   }
 
   async setReviewSkip(registration, headRefOid, reason) {
+    let saved;
     try {
       const candidate = await this.refreshedCandidate(registration);
       if (candidate.refreshFailed) return actionResult(502, 'Pull request state could not be refreshed');
@@ -235,7 +236,7 @@ class PullRequestMergeManager {
       if (candidate.pullRequest.headRefOid.toLowerCase() !== headRefOid.toLowerCase()) {
         return actionResult(409, 'Pull request head has changed');
       }
-      const saved = this.state.setCrossReviewSkip({
+      saved = this.state.setCrossReviewSkip({
         owner: registration.owner,
         repo: registration.repo,
         number: registration.number,
@@ -245,11 +246,15 @@ class PullRequestMergeManager {
       });
       if (!saved) return actionResult(400, 'Invalid review skip');
       await this.state.waitForPersistence();
-      await this.tracker.refreshReviewGroups(registration.owner, registration.repo);
-      return { ok: true, saved };
     } catch {
       return actionResult(502, 'Pull request state could not be refreshed');
     }
+    try {
+      await this.tracker.refreshReviewGroups(registration.owner, registration.repo);
+    } catch {
+      // 記録は永続化済みで、表示は次の取り直しで追いつく。
+    }
+    return { ok: true, saved };
   }
 
   async refreshedCandidate(registration) {

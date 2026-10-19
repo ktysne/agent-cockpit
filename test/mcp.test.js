@@ -320,7 +320,7 @@ test('MCP 書き込みの接続拒否は再送して記録する', async () => {
   assert.equal(requests, 2);
 });
 
-test('3 種類の MCP 書き込みは未知の失敗と再試行後の 401 を到達不能として返す', async () => {
+test('3 種類の MCP 書き込みは 500 を結果不明、再試行後の 401 を拒否として返す', async () => {
   const calls = [
     ['cockpit_set_tasks', { tasks: [] }],
     ['cockpit_add_pr', { url: 'https://github.com/example/project/pull/45' }],
@@ -345,11 +345,32 @@ test('3 種類の MCP 書き込みは未知の失敗と再試行後の 401 を�
           return new Response('{}', { status });
         },
       });
+      const expected = status === 500
+        ? '常駐サーバーが処理の途中で失敗した(HTTP 500)。記録できたかを確かめられなかったため、ダッシュボードで確かめてほしい'
+        : '常駐サーバーが書き込みを受け付けなかった(HTTP 401)。作業は続けてよい';
       assert.equal(responses[0].result.isError, true, `${name} with HTTP ${status}`);
-      assert.equal(responses[0].result.content[0].text, UNREACHABLE_MESSAGE, `${name} with HTTP ${status}`);
+      assert.equal(responses[0].result.content[0].text, expected, `${name} with HTTP ${status}`);
       assert.equal(fetchCount, status === 401 ? 2 : 1, `${name} with HTTP ${status}`);
     }
   }
+});
+
+test('cockpit_skip_review の 409 は head の変化かクローズを伝える文を返す', async () => {
+  const responses = await exchange([{
+    jsonrpc: '2.0', id: 409, method: 'tools/call',
+    params: { name: 'cockpit_skip_review', arguments: {
+      owner: 'example', repo: 'project', number: 45, headRefOid: 'a'.repeat(40), reason: '記録しない理由',
+    } },
+  }], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async url => url.endsWith('/api/diagnostics') ? new Response('{}', { status: 202 })
+      : new Response('{}', { status: 409 }),
+  });
+
+  assert.equal(responses[0].result.isError, true);
+  assert.equal(responses[0].result.content[0].text, 'PR の head が変わったか、オープンではありません。現在の状態を確認してください');
 });
 
 test('委譲した thread への MCP 書き込みは記録不要と返し、それ以外の 403 は親 ID があっても未登録の文を返す', async () => {
