@@ -40,10 +40,12 @@ test('Codex ラッパーの -C と --effort の値を除いて定義名を検出
     ['bash ~/.claude/tools/codex-agent.sh -C "D:/work" --effort max impl-hard', 'impl-hard'],
     ['bash ~/.claude/tools/codex-agent.sh -C D:/work\\ tree\\ dir impl-hard', 'impl-hard'],
     ['bash ~/.claude/tools/codex-agent.sh -C D:/work\\\\ impl-light', 'impl-light'],
+    ["bash ~/.claude/tools/codex-agent.sh -C 'D:\\work\\' impl-hard", 'impl-hard'],
+    ['bash ~/.claude/tools/codex-agent.sh -C D:\\work\\ impl-hard', 'impl-hard', 'PowerShell'],
   ];
-  for (const [command, definition] of commands) {
+  for (const [command, definition, toolName = 'Bash'] of commands) {
     const event = makeHookEvent({ session_id: 'codex-launch-options', hook_event_name: 'PreToolUse',
-      tool_name: 'Bash', tool_use_id: command, tool_input: { command } });
+      tool_name: toolName, tool_use_id: command, tool_input: { command } });
     assert.equal(event.codexLaunchDefinition, definition, command);
     assert.equal(sanitizeEvent(event).codexDefinition, definition, command);
   }

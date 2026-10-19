@@ -203,14 +203,20 @@ function isCodexAgent(word) {
   return /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word);
 }
 
-function withoutCodexAgentOptions(argumentsList) {
+// shellTokens は Bash の引用符の外でエスケープした空白で語を分ける。元のコマンドに「語 + 空白 + 次の語」がそのまま
+// 現れるときだけ、その空白はエスケープされていたので続けて値とみなす。引用符の中と PowerShell の末尾の \ は区切りではない。
+function continuesAfterEscapedSpace(word, nextWord, commandText) {
+  return Boolean(commandText) && nextWord !== undefined && /(?:^|[^\\])(?:\\\\)*\\$/.test(word) &&
+    commandText.includes(`${word} ${nextWord}`);
+}
+
+function withoutCodexAgentOptions(argumentsList, commandText = '') {
   const remaining = [];
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
     if (argument === '-C' || argument === '--effort') {
-      // shellTokens は引用符の外のエスケープした空白で語を分けるので、奇数個の \ で終わる語は次の語と続けて値として除く。
       index += 1;
-      while (/(?:^|[^\\])(?:\\\\)*\\$/.test(argumentsList[index] || '') && index + 1 < argumentsList.length) index += 1;
+      while (continuesAfterEscapedSpace(argumentsList[index] || '', argumentsList[index + 1], commandText)) index += 1;
     } else if (!argument.startsWith('--effort=')) {
       remaining.push(argument);
     }
@@ -220,8 +226,10 @@ function withoutCodexAgentOptions(argumentsList) {
 
 // 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
 function extractCodexLaunchDefinition(command, toolName = 'Bash') {
-  for (const argumentsList of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
-    const [argument = ''] = withoutCodexAgentOptions(argumentsList);
+  const commandText = pickString(command).replace(/\\\r?\n/g, ' ');
+  const escapedSpaceText = toolName === 'PowerShell' ? '' : commandText;
+  for (const argumentsList of codexAgentInvocations(commandText, isCodexAgent, launchCommandTexts, 0, toolName)) {
+    const [argument = ''] = withoutCodexAgentOptions(argumentsList, escapedSpaceText);
     const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
     if (definition) return definition;
   }
@@ -229,8 +237,10 @@ function extractCodexLaunchDefinition(command, toolName = 'Bash') {
 }
 
 function extractCodexWaitRunId(command, toolName = 'Bash') {
-  for (const argumentsList of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
-    const [argument, runId] = withoutCodexAgentOptions(argumentsList);
+  const commandText = pickString(command).replace(/\\\r?\n/g, ' ');
+  const escapedSpaceText = toolName === 'PowerShell' ? '' : commandText;
+  for (const argumentsList of codexAgentInvocations(commandText, isCodexAgent, launchCommandTexts, 0, toolName)) {
+    const [argument, runId] = withoutCodexAgentOptions(argumentsList, escapedSpaceText);
     if (argument === '--wait' && runId) return runId.slice(0, 256);
   }
   return '';
