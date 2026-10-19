@@ -3332,15 +3332,7 @@ function render() {
   } else if (focusData?.kind === 'task-close') {
     (document.querySelector(`[data-cancel-close-task="${CSS.escape(focusData.key)}"]`)
       || document.querySelector(`[data-close-task="${CSS.escape(focusData.key)}"]`))?.focus({ preventScroll: true });
-  } else if (focusData?.kind === 'merge-go') {
-    restoreConfirmationFocus(focusData);
-  } else if (focusData?.kind === 'merge-cancel') {
-    restoreConfirmationFocus(focusData);
-  } else if (focusData?.kind === 'merge-open') {
-    restoreConfirmationFocus(focusData);
-  } else if (focusData?.kind === 'conflict-cancel') {
-    restoreConfirmationFocus(focusData);
-  } else if (focusData?.kind === 'conflict-open') {
+  } else if (['merge-go', 'merge-cancel', 'merge-open', 'merge-reservation-toggle', 'conflict-cancel', 'conflict-open'].includes(focusData?.kind)) {
     restoreConfirmationFocus(focusData);
   } else if (focusData?.kind === 'review-skip') {
     const controls = [...document.querySelectorAll('[data-review-skip]')];
