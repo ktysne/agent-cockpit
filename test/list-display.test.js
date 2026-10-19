@@ -676,6 +676,22 @@ test('回答の送信中は選択肢、指示、送信ボタンを無効にし�
   }
 });
 
+test('モックはマージ可否の計算中をコンフリクトより先に理由として表示する', () => {
+  const blocker = functionSource(mock, 'mergeBaseConflictBlocker');
+  assert.ok(blocker);
+  const context = pageContext(mock, {
+    mockRetargetFailures: new Map(),
+    prKey: () => 'repo#1',
+    ui: { merged: {} },
+    parentPr: () => null,
+    effective: () => ({ base: 'main', retargetedFrom: null, needsRestack: false }),
+    mergeMethodFixed: () => null,
+    mergeTarget: () => 'main',
+  });
+  vm.runInContext(`${blocker}\nthis.blocker = mergeBaseConflictBlocker({}, { number: 1, base: 'main', mergeable: 'UNKNOWN', conflict: true });`, context);
+  assert.equal(context.blocker, 'GitHub がマージできるかを計算中');
+});
+
 test('キュー中と処理中の PR を札で分け、画面から実行中のマージは確認欄の処理中で示す', async () => {
   const webTree = functionSource(web, 'appendPullRequestTree');
   const webQueued = functionSource(web, 'queuedPullRequestMerge');
@@ -731,10 +747,12 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   const inFlightTarget = fakeElement('div');
   webContext.renderPullRequest(inFlightTarget, {}, {
     number: 1, title: '処理中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
-    mergeSessionId: 'session-1', canMerge: false, mergeIntent: { at: '12:00' }, headRefOid: 'abc', children: [],
+    mergeSessionId: 'session-1', canMerge: false, operationBlocker: 'GitHub がマージできるかを計算中',
+    mergeIntent: { at: '12:00' }, headRefOid: 'abc', children: [],
   });
   assert.match(inFlightTarget.textContent, /処理中…/);
   assert.doesNotMatch(inFlightTarget.textContent, /マージ処理中|マージキューに追加済み/);
+  assert.equal(webContext.pullRequestMergeConfirmations.has('repo#1'), true);
   const mergeableInFlightTarget = fakeElement('div');
   webContext.renderPullRequest(mergeableInFlightTarget, {}, {
     number: 1, title: '処理中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
@@ -751,6 +769,15 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   });
   assert.equal((reservingTarget.textContent.match(/マージ処理中 \(未マージ\)/g) || []).length, 1);
   webContext.pullRequestMergeInFlight.delete('repo#1');
+
+  webContext.pullRequestMergeConfirmations.set('repo#1', { method: 'merge' });
+  const blockedTarget = fakeElement('div');
+  webContext.renderPullRequest(blockedTarget, {}, {
+    number: 1, title: '計算中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
+    mergeSessionId: 'session-1', canMerge: false, operationBlocker: 'GitHub がマージできるかを計算中', children: [],
+  });
+  assert.doesNotMatch(blockedTarget.textContent, /処理中…/);
+  assert.equal(webContext.pullRequestMergeConfirmations.has('repo#1'), false);
 
   const mockItem = functionSource(mock, 'prItem');
   assert.ok(mockItem);

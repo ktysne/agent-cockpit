@@ -2491,10 +2491,14 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   const reservation = pullRequest.reservation || null;
   const queued = queuedPullRequestMerge(pullRequest);
   const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
-  const confirmation = mergeKey ? pullRequestMergeConfirmations.get(mergeKey) : null;
+  let confirmation = mergeKey ? pullRequestMergeConfirmations.get(mergeKey) : null;
   // 常駐サーバーは gh でマージしている間だけ一覧に mergeIntent を付ける。
   // 確認欄から実行中の操作は応答で結果が分かるので、それまでは確認欄の「処理中…」を出し続ける。
   const shownInConfirmation = Boolean(confirmation) && pullRequestMergeInFlight.has(mergeKey);
+  if (confirmation && pullRequest.operationBlocker && !reservation && !shownInConfirmation) {
+    pullRequestMergeConfirmations.delete(mergeKey);
+    confirmation = null;
+  }
   const unconfirmed = Boolean(mergeKey) && pullRequestResultUnconfirmed(mergeKey);
   const mergeInProgress = Boolean(pullRequest.mergeIntent) && !queued && !shownInConfirmation && !unconfirmed;
   const mergeIntent = queued || mergeInProgress;

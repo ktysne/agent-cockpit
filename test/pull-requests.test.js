@@ -364,6 +364,42 @@ async function trackerFixture(testContext, registeredNumbers = [31], cwd = proce
   return { state, github, calls, unexpectedCalls, tracker };
 }
 
+test('一覧にマージ可否の計算中のPRがあれば5秒後の取り直しを予約する', async (t) => {
+  const { tracker, github } = await trackerFixture(t);
+  github.openPullRequests.push(ghPullRequest(31, 'feature/31', 'main', { mergeable: 'UNKNOWN' }));
+  const scheduled = [];
+  const deferRefresh = tracker.deferRefresh.bind(tracker);
+  tracker.deferRefresh = (...args) => {
+    scheduled.push(args);
+    deferRefresh(...args);
+  };
+
+  try {
+    await tracker.refreshRepo('example', 'project');
+    assert.deepEqual(scheduled, [['example', 'project', 5_000]]);
+    assert.ok(tracker.deferredRefreshes.has('example/project'));
+  } finally {
+    clearTimeout(tracker.deferredRefreshes.get('example/project'));
+    tracker.deferredRefreshes.delete('example/project');
+  }
+});
+
+test('計算中が続いても早めの取り直しは連続3回までにし、計算中が消えたら数え直す', async (t) => {
+  const { tracker, github } = await trackerFixture(t);
+  github.openPullRequests.push(ghPullRequest(31, 'feature/31', 'main', { mergeable: 'UNKNOWN' }));
+  const scheduled = [];
+  tracker.deferRefresh = (...args) => scheduled.push(args);
+
+  for (let index = 0; index < 4; index += 1) await tracker.refreshRepo('example', 'project');
+  assert.equal(scheduled.length, 3);
+
+  github.openPullRequests[github.openPullRequests.length - 1].mergeable = 'MERGEABLE';
+  await tracker.refreshRepo('example', 'project');
+  github.openPullRequests[github.openPullRequests.length - 1].mergeable = 'UNKNOWN';
+  await tracker.refreshRepo('example', 'project');
+  assert.equal(scheduled.length, 4);
+});
+
 function holdGhExecutions(tracker) {
   const started = [];
   const pending = [];
@@ -619,6 +655,19 @@ test('merged parent の base をたどり、常駐サーバーの付け替え記
   assert.equal(withRetarget.effectiveBase, 'main');
   assert.equal(withRetarget.retargetedFrom, 32);
   assert.equal(withRetarget.blocker, 'base を main に付け替える必要がある');
+});
+
+test('GitHub がマージ可否を計算中の PR は計算中の理由でマージを止める', () => {
+  const pr = pullRequest(40, 'calculation', 'main', { mergeable: 'UNKNOWN', conflict: true });
+  const result = assemblePullRequestStacks({
+    defaultBranch: 'main',
+    openPullRequests: [pr],
+    registrations: [pullRequestRegistration(40)],
+    restackResults: checkedRestackResults([pr]),
+  });
+
+  assert.equal(result.trees[0].canMerge, false);
+  assert.equal(result.trees[0].blocker, 'GitHub がマージできるかを計算中');
 });
 
 test('マージできない理由は base、スタック、ドラフト、積み直し、CI、レビューの順にひとつ返す', () => {
