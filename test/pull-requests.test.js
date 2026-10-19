@@ -580,6 +580,13 @@ test('PowerShell のコマンドは \\ をエスケープとせず、末尾が \
   assert.equal(isGhPrCreateCommand('cd "D:\\repo\\"; gh pr create --fill'), false);
 });
 
+test('終わりの行が無い << とシェルに渡すヒアドキュメントは、本文として飛ばさずに後ろの gh pr create を検出する', () => {
+  assert.equal(isGhPrCreateCommand("n=$((1 << 2))\ngit push && gh pr create --title t"), true);
+  assert.equal(isGhPrCreateCommand("# <<EOF の書き方\ngh pr create --fill"), true);
+  assert.equal(isGhPrCreateCommand("bash <<'EOF'\ngit push && gh pr create --fill\nEOF"), true);
+  assert.equal(isGhPrCreateCommand("git commit -F - <<'EOF'\ngh pr create --fill\nEOF"), false);
+});
+
 test('gh 呼び出しは引数配列とトークンを除いた環境を使う', async () => {
   let captured;
   const output = await runGh(['pr', 'list'], {
