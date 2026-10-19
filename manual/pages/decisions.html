@@ -2,7 +2,7 @@
   <h1>判断事項と回答</h1>
   <p class="lead">判断事項は、セッションが開発者に決めてほしいと求めた事項です。
   <span class="ui">あなたの判断が必要なこと</span> の欄に、カードとして並びます。
-  このページでは、カードの見方と状態、ダッシュボードからの回答の操作、回答がセッションへ届く経路を説明します。</p>
+  このページでは、カードの見方と状態、worktree の確認依頼、ダッシュボードからの回答の操作、回答がセッションへ届く経路を説明します。</p>
 
   <h2 id="decisions-source">判断事項の元</h2>
   <p>判断事項は、次の質問や記録から作られます。</p>
@@ -77,20 +77,65 @@
   選択肢の説明は、判定に使いません。
   推奨と判定した選択肢には <span class="ui">推奨</span> の札が付き、名前から <code>(推奨)</code> などの文字を取り除いて表示します。</p>
 
+  <h2 id="decisions-verify">worktree の確認依頼</h2>
+  <p>worktree で作業するセッションが、確認の手順と <code>waiting</code> を付けて判断事項を登録すると、確認依頼のカードが <span class="ui">止めて待っている</span> 状態で出ます。
+  セッションは、回答が届くまで作業を待ちます。</p>
+  <figure class="guide-map" id="decisions-verify-map" data-shot="decisions-verify/dialog" data-alt="worktree の確認依頼カード。場所とブランチ、未コミットの変更、起動を頼むボタン、端末を開くボタンとパスをコピーするボタン、確かめ方の手順とコマンドのコピー、推奨の選択肢と回答欄がある">
+    <ol class="guide-list">
+      <li data-part="verify.place"><b>場所</b>：確認対象の worktree のパスです。</li>
+      <li data-part="verify.branch"><b>ブランチ</b>：worktree のブランチ名と、既定ブランチから先行しているコミット数です。</li>
+      <li data-part="verify.uncommitted"><b>変更の札</b>：未コミットのファイル数か、<span class="ui">すべてコミット済み</span> が出ます。</li>
+      <li data-part="verify.steps"><b>確かめ方</b>：セッションが登録した確認手順です。コマンドの下に補足がある場合は、その手順で確かめる内容が書かれています。</li>
+      <li data-part="verify.step-copy"><b><span class="ui">コピー</span></b>：その手順のコマンドをクリップボードにコピーします。</li>
+      <li data-part="verify.launch"><b><span class="ui">起動を頼む</span></b>：セッションに確認用アプリの起動を頼みます。セッションが起動先を報告すると、カードに表示されます。</li>
+      <li data-part="verify.terminal"><b><span class="ui">ターミナルで開く</span></b>：設定で選んだ端末を、この worktree の場所で開きます。Windows で使えます(<a href="settings.html#settings-terminal">端末の設定</a>)。</li>
+      <li data-part="verify.copy-path"><b><span class="ui">パスをコピー</span></b>：worktree のパスをクリップボードにコピーします。</li>
+      <li data-part="verify.options"><b>選択肢</b>：既定の選択肢は「確認した。コミットして PR を作る」と「直してほしい点がある」です。</li>
+      <li data-part="verify.recommended"><b><span class="ui">推奨</span> の札</b>：「確認した。コミットして PR を作る」 に付きます。</li>
+      <li data-part="verify.answer"><b>回答欄</b>：選択肢を選んで <span class="ui">回答を送る</span> を押します(<a href="#decisions-answer">ダッシュボードから回答する</a>)。</li>
+    </ol>
+  </figure>
+  <p>操作の結果は、ボタンの並びの右に出ます。
+  コピーできると <span class="ui">コマンドをコピーしました</span> か <span class="ui">パスをコピーしました</span>、端末を開けると「Windows Terminal で開きました」のように出ます。
+  ブラウザーがクリップボードへの書き込みを許さないときは <span class="ui">コピーできませんでした。文字列を選択してコピーしてください</span> と出るので、画面の文字列を選択してコピーします。</p>
+  <p><span class="ui">起動を頼む</span> を押すと、アプリの行に <span class="ui">起動を待っています。セッションが起動すると、ここに起動先が出ます</span> と出ます。
+  Codex のセッションでは、<span class="ui">起動を待っています。Codex のセッションには、次にプロンプトを送ると依頼が届きます</span> と出ます。
+  依頼中はボタンが <span class="ui">もう一度起動を頼む</span> に変わります。</p>
+  <figure class="guide-map" id="decisions-verify-pending-map" data-shot="decisions-verify/launch-pending" data-alt="起動を頼んだ後の確認依頼カード。起動を待っている案内と、もう一度起動を頼むボタンが出ている">
+    <ol class="guide-list">
+      <li data-part="verify.launch-waiting"><b>起動を待つ案内</b>：セッションから起動の報告が届くまで、起動先の表示位置に案内が出ます。</li>
+      <li data-part="verify.launch-retry"><b><span class="ui">もう一度起動を頼む</span></b>：起動の報告が届かないとき、もう一度セッションへ依頼します。</li>
+    </ol>
+  </figure>
+  <p>起動の報告が届くと、アプリの行に <span class="ui">起動中</span> の札と URL、またはプロセス名が出ます。
+  URL が報告された場合はリンクになり、プロセス名の場合は <span class="ui">のウィンドウを開いた</span> と続きます。
+  報告された時刻も表示し、ボタンは <span class="ui">もう一度起動を頼む</span> のままです。</p>
+  <figure class="guide-map" id="decisions-verify-launched-map" data-shot="decisions-verify/launched" data-alt="起動の報告が届いた確認依頼カード。起動中の札とローカル URL、起動した時刻、もう一度起動を頼むボタンが出ている">
+    <ol class="guide-list">
+      <li data-part="verify.launch-state"><b><span class="ui">起動中</span> の札</b>：セッションから起動の報告が届いた状態です。</li>
+      <li data-part="verify.launch-target"><b>起動先</b>：報告された URL またはプロセス名です。URL は押すと開きます。</li>
+      <li data-part="verify.launch-time"><b>起動した時刻</b>：セッションが起動を報告した時刻です。</li>
+    </ol>
+  </figure>
+  <p>worktree が削除済みの場合は、場所に <span class="ui">worktree が見つかりません</span>、操作欄に <span class="ui">worktree が見つかりません (削除済み)</span> と出ます。
+  <span class="ui">ターミナルで開く</span> と起動を頼むボタンは押せず、<span class="ui">パスをコピー</span> は出ません。</p>
+  <p>確認依頼の選択肢を選んで回答を送ると、カードに「次:」で始まる案内が出ます。
+  案内は、セッションがその回答を受けて次に何をするかを示します。たとえば「確認した。コミットして PR を作る」を送ると、セッションがコミットして PR を作り、PR の欄にクロスレビューとマージの段が出ることを示します。
+  回答の操作と状態は、<a href="#decisions-answer">ダッシュボードから回答する</a>を参照してください。</p>
+  <p>worktree で作業しているセッションには、確認依頼が出ていないときも、セッション名の横に <span class="ui">ターミナルで開く</span> と <span class="ui">パスをコピー</span> のリンクが出ます。
+  確認依頼が出ている間は、カードの中のボタンを使います。</p>
+
   <h2 id="decisions-desktop">デスクトップアプリで答える判断事項</h2>
   <p>回答欄が無く、選択肢を押せない判断事項は、デスクトップアプリで答えます。
-  上の図のカードが、その例です。
   カードの最下段に書いてあるプロダクトとセッションを、デスクトップアプリで開きます。
   質問のダイアログが出ていればダイアログで、出ていなければセッションの入力欄で答えます。</p>
   <p>次の判断事項が、これに当たります。</p>
   <ul>
     <li>離席中でないときに出た質問。質問のダイアログは、デスクトップアプリに出ています</li>
-    <li>セッションが <span class="ui">止めて待っている</span> として記録した判断</li>
     <li>同じ質問の文が 2 つ以上含まれる質問。回答を質問に対応づけられないためです</li>
   </ul>
   <p>ダッシュボードからは、これらの判断事項に回答を送れません。
-  Claude Code の質問のダイアログに答えると、質問のツールが終わり、判断事項は <span class="ui">解決済み</span> になります。
-  セッションが記録した判断は、セッションが解決済みに更新したときに <span class="ui">解決済み</span> になります。</p>
+  Claude Code の質問のダイアログに答えると、質問のツールが終わり、判断事項は <span class="ui">解決済み</span> になります。</p>
 
   <p>Codex の在席中の質問は、Codex の元の画面で答えます。
   すぐ戻る質問は、その会話への次の入力で <span class="ui">解決済み</span> になり、「次の入力を検出(回答は未確認)」と出ます。
@@ -101,6 +146,7 @@
   <p>回答欄が出るのは、次の判断事項です。</p>
   <ul>
     <li><span class="ui">仮に推奨案で進行中</span> の判断事項</li>
+    <li>セッションが <span class="ui">止めて待っている</span> として記録した判断事項(<a href="#decisions-verify">worktree の確認依頼</a>を含む)</li>
     <li>離席中に出た質問のうち、回答を待っているもの(<a href="away.html#away-questions">離席中の質問</a>)</li>
   </ul>
   <figure class="guide-map" id="decisions-answer-map" data-shot="decisions-answer/initial" data-alt="仮に推奨案で進行中の判断事項の回答欄。推奨の札が付いた選択肢ともう 1 つの選択肢、指示の入力欄、回答を送るボタンと送信の状態がある。最下段にセッションが書いた選択と理由がある">

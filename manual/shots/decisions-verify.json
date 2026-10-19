@@ -1,0 +1,65 @@
+{
+  "window": {
+    "width": 850,
+    "height": 1000
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "worktree の確認依頼",
+  "scenario": "verify",
+  "storage": {
+    "agent-cockpit.display": {
+      "mode": "product"
+    }
+  },
+  "steps": [
+    {
+      "do": "wait",
+      "selector": ".decision-list > .decision-card:nth-child(1) .verify-row:nth-child(2) .chip",
+      "text": "未コミット"
+    },
+    {
+      "do": "screenshot",
+      "name": "dialog",
+      "target": ".decision-list > .decision-card:nth-child(1)",
+      "parts": {
+        "verify.place": ".decision-list > .decision-card:nth-child(1) .verify-row:nth-child(1) code",
+        "verify.branch": ".decision-list > .decision-card:nth-child(1) .verify-row:nth-child(2) code",
+        "verify.uncommitted": ".decision-list > .decision-card:nth-child(1) .verify-row:nth-child(2) .chip",
+        "verify.steps": ".decision-list > .decision-card:nth-child(1) .verify-steps",
+        "verify.step-copy": [
+          ".decision-list > .decision-card:nth-child(1) .verify-steps li:nth-child(1) [data-worktree-action=step]",
+          ".decision-list > .decision-card:nth-child(1) .verify-steps li:nth-child(2) [data-worktree-action=step]"
+        ],
+        "verify.launch": ".decision-list > .decision-card:nth-child(1) .verify-actions [data-worktree-action=launch]",
+        "verify.terminal": ".decision-list > .decision-card:nth-child(1) .verify-actions [data-worktree-action=terminal]",
+        "verify.copy-path": ".decision-list > .decision-card:nth-child(1) .verify-actions [data-worktree-action=copy]",
+        "verify.options": ".decision-list > .decision-card:nth-child(1) .decision-options",
+        "verify.recommended": ".decision-list > .decision-card:nth-child(1) .decision-option.recommended",
+        "verify.answer": ".decision-list > .decision-card:nth-child(1) .decision-answer"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "launch-pending",
+      "target": ".decision-list > .decision-card:nth-child(2) .verify",
+      "parts": {
+        "verify.launch-waiting": ".decision-list > .decision-card:nth-child(2) .verify-row:nth-child(3)",
+        "verify.launch-retry": ".decision-list > .decision-card:nth-child(2) .verify-actions [data-worktree-action=launch]"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "launched",
+      "target": ".decision-list > .decision-card:nth-child(3) .verify",
+      "parts": {
+        "verify.launch-state": ".decision-list > .decision-card:nth-child(3) .verify-row:nth-child(3) .chip.ok",
+        "verify.launch-target": ".decision-list > .decision-card:nth-child(3) .verify-row:nth-child(3) code",
+        "verify.launch-time": ".decision-list > .decision-card:nth-child(3) .verify-row:nth-child(3) .meta"
+      }
+    }
+  ]
+}

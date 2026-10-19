@@ -1,0 +1,28 @@
+{
+  "name": "launch-pending",
+  "target": ".decision-list > .decision-card:nth-child(2) .verify",
+  "width": 1518,
+  "height": 582,
+  "parts": [
+    {
+      "key": "verify.launch-waiting",
+      "bounds": {
+        "x": 22,
+        "y": 146,
+        "width": 1474,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.launch-retry",
+      "bounds": {
+        "x": 22,
+        "y": 200,
+        "width": 265,
+        "height": 72
+      },
+      "visible": true
+    }
+  ]
+}
