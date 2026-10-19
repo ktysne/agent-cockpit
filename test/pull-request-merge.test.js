@@ -2005,3 +2005,33 @@ test('gh の実行中は期限を過ぎたオープン一覧の取得でも意�
   };
   assert.equal((await fixture.manager.merge(mergeInput(1, { deleteBranch: true }))).branchDeleted, true);
 });
+
+test('gh の実行中に始まった取得は実行が結果不明で終わった後に届いても意図を残す', async (t) => {
+  let now = NOW;
+  const fixture = await mergeFixture(t, undefined, { now: () => now });
+  const original = fixture.tracker.execFileImpl;
+  let release;
+  let listed;
+  const listing = new Promise((resolve) => { listed = resolve; });
+  let fetching;
+  fixture.control.waitForMerge = async () => {
+    now += GH_TIMEOUT_MS + 1;
+    fixture.tracker.execFileImpl = (file, args, options, callback) => {
+      if (args[0] === 'pr' && args[1] === 'list' && args.includes('open') && !release) {
+        const stdout = JSON.stringify(fixture.github.openPullRequests);
+        release = () => callback(null, stdout, '');
+        listed();
+      } else original(file, args, options, callback);
+    };
+    fetching = fixture.tracker.refreshRepo('example', 'project');
+    await listing;
+    fixture.control.failView = true;
+  };
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /マージの結果を確認できませんでした/);
+  release();
+  await fetching;
+  assert.ok(fixture.state.pullRequestMergeIntent('example', 'project', 1));
+  assert.deepEqual(fixture.tracker.snapshot()[0].reservationNotices, []);
+});

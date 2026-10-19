@@ -1736,6 +1736,8 @@ class PullRequestTracker {
   async fetchRepository(owner, repo, repository) {
     const key = repoKey(owner, repo);
     const fetchStartedAt = this.now();
+    // 実行中に取った一覧はマージ前のオープンを返しうるので、実行が終わってから突き合わせても意図を消さない。
+    const mergesExecutingAtStart = new Set(this.executingMerges);
     const checkedAt = new Date(fetchStartedAt).toISOString();
     const current = this.repositories.get(key) || {
       owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, configAvailable: false, fetchedAt: null, checkedAt: null,
@@ -1763,7 +1765,8 @@ class PullRequestTracker {
     if (listAvailable) {
       for (const pullRequest of openPullRequests) {
         const intent = this.state.pullRequestMergeIntent(owner, repo, pullRequest.number);
-        if (!intent || this.executingMerges.has(pullRequestKey(owner, repo, pullRequest.number)) ||
+        const mergeKey = pullRequestKey(owner, repo, pullRequest.number);
+        if (!intent || mergesExecutingAtStart.has(mergeKey) || this.executingMerges.has(mergeKey) ||
           fetchStartedAt < Date.parse(intent.createdAt) + GH_TIMEOUT_MS) continue;
         this.state.clearPullRequestMergeIntent(owner, repo, pullRequest.number);
         this.state.recordPullRequestMergeReservationNotice({
