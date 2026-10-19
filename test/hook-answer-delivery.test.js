@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { DashboardState } = require('../src/server/state');
 const { DecisionAnswerDelivery } = require('../src/server/decision-answers');
 const { runAnswerHook } = require('../src/hooks/answer');
-const { request, startTestServer, uiHeaders } = require('./support/server');
+const { hookHeaders, request, startTestServer, uiHeaders } = require('./support/server');
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -120,6 +120,29 @@ test('JSON 取得に失敗しても同じフック要求から回答と通知を
   assert.ok(answer.deliveredAt);
   assert.equal(answer.reflectedAt, null);
   assert.equal(c.runtime.answerDelivery.sessionNotifications.has(c.sessionId), false);
+});
+
+test('非対話の PostToolBatch はタスク催促を抑えつつ回答と通知を配信する', async (t) => {
+  const c = await fixture(t);
+  const base = c.now + 1;
+  const send = (hook_event_name, hookAt, values = {}) => request(c.info.port, {
+    method: 'POST', path: '/api/events', headers: hookHeaders(c.info.secret),
+    body: JSON.stringify({ session_id: c.sessionId, hook_event_name, hookAt, ...values }),
+  });
+  await send('UserPromptSubmit', base);
+  for (let index = 1; index <= 5; index += 1) await send('PreToolUse', base + index, { tool_name: 'Read' });
+  const calls = [];
+  const result = await runAnswerHook({ session_id: c.sessionId, hook_event_name: 'PostToolBatch' }, {
+    noninteractive: true,
+    homeDir: c.homeDir,
+    fetchImpl: fetchToServer(c, { calls }),
+  });
+
+  const batch = calls.find(({ body }) => body.action === 'post-tool-batch');
+  assert.equal(batch.body.suppress_task_reminder, true);
+  assert.match(result.output.hookSpecificOutput.additionalContext, /最初の回答。/);
+  assert.match(result.output.hookSpecificOutput.additionalContext, /PR の通知。/);
+  assert.doesNotMatch(result.output.hookSpecificOutput.additionalContext, /タスクが登録されていない/);
 });
 
 test('Codex PostToolUse は同じ要求の再送で回答と通知を回復する', async (t) => {

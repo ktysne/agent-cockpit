@@ -340,8 +340,9 @@ class DecisionAnswerDelivery {
     return pending.map((decision) => decisionAnswerText(this.state.decisionFor(sessionId, decision.id))).join('\n');
   }
 
-  deliverPostToolBatch(sessionId) {
-    const context = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId), this.taskNudges.reminderFor(sessionId)].filter(Boolean);
+  deliverPostToolBatch(sessionId, { includeTaskReminder = true } = {}) {
+    const context = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId),
+      includeTaskReminder ? this.taskNudges.reminderFor(sessionId) : null].filter(Boolean);
     return context.length ? context.join('\n') : null;
   }
 

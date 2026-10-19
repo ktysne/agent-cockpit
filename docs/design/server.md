@@ -976,6 +976,7 @@ Claude Code 2.1.302 の `-p` は `asyncRewake` フックの終了を待つため
 この指定がある Claude の `Stop` は、`stop-check` で未配信の回答・通知とレビュー記録の催促を一度確認する。
 返す内容があれば標準エラーへ書いて終了コード 2 で続行させ、無ければ終了コード 0 で終える。
 新たな回答の到着を long-poll で待たず、レビュー記録の確認には上の応答上限を使う。
+`AGENT_COCKPIT_NONINTERACTIVE=1` の `PostToolBatch` はタスク催促を求めず、`SessionStart` と `UserPromptSubmit` もタスク登録を案内しない。
 マーカーを指定しない対話セッションは、停止中の待機を続ける。
 
 ## 登録

@@ -113,13 +113,16 @@ function createHookRoutes(ctx) {
           hook_event_name: 'PostToolBatch',
           hookAt: Date.now(),
         });
-        const additionalContext = answerDelivery.deliverPostToolBatch(body.session_id);
+        const additionalContext = answerDelivery.deliverPostToolBatch(body.session_id, {
+          includeTaskReminder: body.suppress_task_reminder !== true,
+        });
         return { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolBatch', additionalContext } } : null };
       },
     },
     {
       matches: (body) => body.action === 'post-tool-use' && body.event_name === 'PostToolUse' && body.provider === 'codex',
       run: (body) => {
+        if (state.isDelegatedCodexThread(body.session_id)) return { hookOutput: null };
         const additionalContext = answerDelivery.deliverPostToolBatch(body.session_id);
         return { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext } } : null };
       },

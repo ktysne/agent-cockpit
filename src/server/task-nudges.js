@@ -41,6 +41,10 @@ class TaskNudges {
       if (ended) this.sessionEnded(event.session_id);
       return;
     }
+    if (this.state.isDelegatedCodexThread?.(event.session_id)) {
+      this.sessionEnded(event.session_id);
+      return;
+    }
     const session = this.sessionFor(event.session_id);
     const eventAt = Number.isFinite(event.hookAt) ? event.hookAt : this.now();
 
@@ -89,6 +93,10 @@ class TaskNudges {
   }
 
   reminderFor(sessionId) {
+    if (this.state.isDelegatedCodexThread?.(sessionId)) {
+      this.sessionEnded(sessionId);
+      return null;
+    }
     const session = this.sessionFor(sessionId);
     const now = this.now();
     const tasks = this.tasksFor(sessionId);

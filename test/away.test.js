@@ -125,6 +125,36 @@ test('Codex のメインセッションにはアプリの一覧の取り込み�
   assert.equal(result.hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
 });
 
+test('委譲した thread にはタスク登録を案内せず、通常のセッションには案内する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  for (const hookEventName of ['SessionStart', 'UserPromptSubmit']) {
+    for (const delegated of [true, false]) {
+      const result = await runAwayHook({ session_id: 'context-session', hook_event_name: hookEventName }, {
+        homeDir,
+        fetchImpl: async () => new Response(JSON.stringify({
+          enabled: false, since: null, importAppTasks: false, delegated, tasks: [], decisions: [],
+        })),
+      });
+      if (delegated) assert.equal(result, null);
+      else assert.equal(result.hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
+    }
+  }
+});
+
+test('AGENT_COCKPIT_NONINTERACTIVE ではタスク登録を案内せず離席中の文脈は返す', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const result = await runAwayHook({ session_id: 'print-session', hook_event_name: 'UserPromptSubmit' }, {
+    homeDir,
+    noninteractive: true,
+    fetchImpl: async () => new Response(JSON.stringify({
+      enabled: true, since: Date.parse('2026-10-02T01:02:03.000Z'), importAppTasks: false, delegated: false,
+    })),
+  });
+  const context = result.hookSpecificOutput.additionalContext;
+  assert.doesNotMatch(context, /cockpit_set_tasks/);
+  assert.match(context, /開発者は離席中です/);
+});
+
 test('取り込み設定がオフなら Claude に cockpit_set_tasks だけで登録するよう伝える', async (t) => {
   const homeDir = await temporaryHome(t);
   const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit' }, {
