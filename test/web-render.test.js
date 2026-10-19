@@ -3754,7 +3754,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     applyAppVersion() {},
     updateConnectionNote() {},
     isAwaitingDecision: () => false,
-    pruneStaleConfirmations() {},
+    pruneStaleConfirmations() {}, completedDisplaySaves: 0,
     render() { renders += 1; },
     header: { dataset: { away: 'false' } },
     awayToggle: { disabled: false, checked: false },
@@ -4724,7 +4724,7 @@ test('離席の切り替えだけでは一覧を描き直さない', async () =>
       applyAppVersion() {},
       updateConnectionNote() {},
       isPendingDecision: () => false,
-      pruneStaleConfirmations() {},
+      pruneStaleConfirmations() {}, completedDisplaySaves: 0,
       render() { renders += 1; },
       header: { dataset: { away: 'false' } },
       awayToggle: { disabled: false, checked: false },
@@ -5930,7 +5930,7 @@ test('前提が消えた衝突の確認欄と登録を外す確認は、条件�
     applyAwayState() {}, applyUpdateState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyAppVersion() {},
     refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pendingStateReads: 0,
     pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
-    lastVersion: 1, lastState: null, lastStateEtag: null, liveStatus: { textContent: '' }, reportWebFailure() {}, hasRenderedState: true, connectionLost: false, lastStateAt: null,
+    lastVersion: 1, lastState: null, lastStateEtag: null, liveStatus: { textContent: '' }, reportWebFailure() {}, hasRenderedState: true, connectionLost: false, lastStateAt: null, completedDisplaySaves: 0,
     render(state) {
       const root = new FakeElement('div');
       for (const group of state.pullRequests) {

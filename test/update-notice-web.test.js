@@ -114,7 +114,7 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
     applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     pendingStateReads: 0, AbortSignal: { timeout: () => ({}) },
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
-    lastVersion: 1, lastStateEtag: 'same', liveStatus: {}, pruneStaleConfirmations() {}, render: () => assert.fail('状態全体は描き直さない'),
+    lastVersion: 1, lastStateEtag: 'same', liveStatus: {}, pruneStaleConfirmations() {}, completedDisplaySaves: 0, render: () => assert.fail('状態全体は描き直さない'),
   });
   vm.runInContext(functionSource(html, 'refresh'), context);
   await context.refresh();
@@ -135,7 +135,7 @@ function refreshContext(fetch, syncDisplayPreferences = async () => {}) {
     AbortSignal: { timeout: (milliseconds) => ({ timeoutMs: milliseconds }) },
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastState: state, lastStateEtag: '"first"', connectionLost: true, lastStateAt: null,
-    liveStatus: {}, hasRenderedState: true, pruneStaleConfirmations() {}, render: value => renders.push(value),
+    liveStatus: {}, hasRenderedState: true, pruneStaleConfirmations() {}, completedDisplaySaves: 0, render: value => renders.push(value),
     countJudgments: () => ({ permission: 0, decisions: 0 }), isIdleHiddenSession: () => false,
   });
   vm.runInContext(['fetchUi', 'pollRefresh', 'checkUiVersion', 'refresh'].map(name => functionSource(html, name)).join('\n'), context);
@@ -382,4 +382,33 @@ test('更新を確認は、確認の間だけボタンを無効にして確認�
   await running;
   assert.equal(get('update-check').disabled, false);
   assert.equal(get('update-check').textContent, '更新を確認');
+});
+
+test('保存より前に送った取得の応答は、保存した表示の設定を戻さない', async () => {
+  const requests = [];
+  const { context } = refreshContext((_url, options) => new Promise((resolve) => requests.push({ options, resolve })));
+  Object.assign(context, {
+    displayPreferences: { mode: 'product', sectionOrder: [] }, displayPreferencesReady: true, pendingDisplayChanges: {},
+    pendingDisplayRequests: 0, completedDisplaySaves: 0, displayWriteTail: Promise.resolve(), displayPreferenceSaveStates: new Map(),
+    displayMigrationPending: false, displayMigrationData: null,
+    postUiAction: async () => ({ ok: true }), normalizeDisplayPreferences: (value) => ({ ...value }),
+    renderSectionOrder() {}, renderDisplaySettings() {}, clearLegacyDisplayPreferences() {}, maybeAskImportAppTasks() {}, lastStateEtag: null,
+  });
+  vm.runInContext(['syncDisplayPreferences', 'settleDisplaySaves', 'sendDisplayPatch', 'enqueueDisplayPatch', 'saveDisplayPreferences']
+    .map(name => functionSource(html, name)).join('\n'), context);
+  const respond = (index, mode) => requests[index].resolve({
+    ok: true, status: 200, headers: { get: () => `"${index}"` },
+    json: async () => ({ version: 1, sessions: [], away: {}, pullRequests: [], display: { mode, sectionOrder: [] } }),
+  });
+
+  const sentBeforeSave = context.refresh();
+  assert.equal(await context.saveDisplayPreferences({ mode: 'kind' }), true);
+  respond(0, 'product');
+  await sentBeforeSave;
+  assert.equal(context.displayPreferences.mode, 'kind');
+
+  const sentAfterSave = context.refresh();
+  respond(1, 'product');
+  await sentAfterSave;
+  assert.equal(context.displayPreferences.mode, 'product');
 });

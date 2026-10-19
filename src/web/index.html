@@ -815,6 +815,7 @@ let displayMigrationPending = false;
 let displayMigrationData = null;
 let pendingDisplayChanges = {};
 let pendingDisplayRequests = 0;
+let completedDisplaySaves = 0;
 let displayWriteTail = Promise.resolve();
 const displayPreferenceSaveStates = new Map();
 
@@ -870,7 +871,7 @@ async function sendDisplayPatch(changes) {
 
 function enqueueDisplayPatch(changes) {
   pendingDisplayRequests += 1;
-  const run = displayWriteTail.then(() => sendDisplayPatch(changes)).finally(() => { pendingDisplayRequests -= 1; });
+  const run = displayWriteTail.then(() => sendDisplayPatch(changes)).finally(() => { pendingDisplayRequests -= 1; completedDisplaySaves += 1; });
   displayWriteTail = run.catch(() => false);
   return run;
 }
@@ -951,7 +952,8 @@ function clearLegacyDisplayPreferences() {
   }
 }
 
-async function syncDisplayPreferences(serverDisplay) {
+// 保存より前に送った取得の応答は保存前の設定を含むので、savesBeforeRequest が進んでいれば上書きしない。
+async function syncDisplayPreferences(serverDisplay, savesBeforeRequest) {
   if (!displayPreferencesReady) {
     const current = serverDisplay === null
       ? readDisplayPreferences()
@@ -993,7 +995,7 @@ async function syncDisplayPreferences(serverDisplay) {
     if (saved) clearLegacyDisplayPreferences();
     return;
   }
-  if (serverDisplay !== null && pendingDisplayRequests === 0) {
+  if (serverDisplay !== null && pendingDisplayRequests === 0 && savesBeforeRequest === completedDisplaySaves) {
     const previousSectionOrder = displayPreferences.sectionOrder;
     displayPreferences = normalizeDisplayPreferences(serverDisplay);
     if (previousSectionOrder.some((key, index) => key !== displayPreferences.sectionOrder[index])) renderSectionOrder();
@@ -5426,6 +5428,7 @@ function pollRefresh() {
 
 async function refresh() {
   const sequence = ++refreshSequence;
+  const savesBeforeRequest = completedDisplaySaves;
   try {
     let response;
     let unchanged;
@@ -5444,7 +5447,7 @@ async function refresh() {
     // 後に始めた取得の応答を反映済みなら、遅れて届いた古い応答で表示を戻さない。
     if (sequence < appliedRefreshSequence) return true;
     if (checkUiVersion(state)) return;
-    if (!unchanged) await syncDisplayPreferences(state.display);
+    if (!unchanged) await syncDisplayPreferences(state.display, savesBeforeRequest);
     if (sequence < appliedRefreshSequence) return true;
     lastStateAt = new Date();
     connectionLost = false;
