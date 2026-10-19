@@ -2005,6 +2005,85 @@ test('Bash の push は cwd の product に PR を登録したリポジトリだ
   assert.equal(calls.all, 0);
 });
 
+test('PowerShell の PR 作成は PreToolUse の索引からセッションの product に登録する', async (t) => {
+  const calls = { repos: [] };
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    refreshRepo(owner, repo) { calls.repos.push(`${owner}/${repo}`); return Promise.resolve(); },
+    refreshAfterCommand() { return Promise.resolve(); },
+  };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  const hookCwd = path.join(runtime.homeDir, 'session-product', '.claude', 'worktrees', 'session');
+  const commandCwd = path.join(runtime.homeDir, 'other-product', '.claude', 'worktrees', 'feature');
+  const command = `cd "${commandCwd.replaceAll('\\', '/')}" && gh pr create --fill`;
+  const headers = hookHeaders(runtime.info.secret);
+
+  const pre = makeHookEvent({ session_id: 'powershell-index-pr', hook_event_name: 'PreToolUse', cwd: hookCwd,
+    tool_name: 'PowerShell', tool_use_id: 'create-indexed', tool_input: { command } });
+  await request(runtime.info.port, { method: 'POST', path: '/api/events', headers, body: JSON.stringify(pre) });
+  const post = makeHookEvent({ session_id: 'powershell-index-pr', hook_event_name: 'PostToolUse', cwd: hookCwd,
+    tool_name: 'PowerShell', tool_use_id: 'create-indexed', tool_input: { command },
+    tool_response: { stdout: 'https://github.com/example/project/pull/56' } });
+  delete post.ghPrCreateCommand;
+  post.commandCwd = commandCwd;
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/events', headers, body: JSON.stringify(post) });
+
+  assert.equal(response.status, 202);
+  const registered = runtime.state.pullRequestRegistrations().find((record) => record.number === 56);
+  assert.ok(registered);
+  assert.equal(registered.cwd, hookCwd);
+  assert.equal(registered.product.key, productFromCwd(hookCwd).key);
+  assert.notEqual(registered.product.key, productFromCwd(commandCwd).key);
+});
+
+test('PowerShell の PostToolUse 自身の作成判定で PR を登録する', async (t) => {
+  const pullRequestTracker = { start() {}, close() {}, snapshot: () => [],
+    refreshRepo() { return Promise.resolve(); }, refreshAfterCommand() { return Promise.resolve(); } };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  const cwd = path.join(runtime.homeDir, 'powershell-post-product', '.claude', 'worktrees', 'session');
+  const event = makeHookEvent({ session_id: 'powershell-post-pr', hook_event_name: 'PostToolUse', cwd,
+    tool_name: 'PowerShell', tool_use_id: 'create-post', tool_input: { command: 'gh pr create --fill' },
+    tool_response: { stdout: 'https://github.com/example/project/pull/57' } });
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event) });
+
+  assert.equal(response.status, 202);
+  const registered = runtime.state.pullRequestRegistrations().find((record) => record.number === 57);
+  assert.ok(registered);
+  assert.equal(registered.cwd, cwd);
+  assert.equal(registered.product.key, productFromCwd(cwd).key);
+});
+
+test('PowerShell の push は refreshScopeUnknown から全体を取り直す', async (t) => {
+  const calls = { all: 0, scoped: 0 };
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    refreshAfterCommand() { calls.all += 1; return Promise.resolve(); },
+    refreshRepoFresh() { calls.scoped += 1; return Promise.resolve(); },
+  };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  const cwd = path.join(runtime.homeDir, 'powershell-push-product', '.claude', 'worktrees', 'session');
+  runtime.state.registerPullRequest('powershell-registered', {
+    url: 'https://github.com/example/project/pull/58',
+  }, { cwd, product: productFromCwd(cwd) });
+  const commandCwd = path.join(runtime.homeDir, 'other-product', '.claude', 'worktrees', 'feature');
+  const event = makeHookEvent({ session_id: 'powershell-push', hook_event_name: 'PostToolUse', cwd,
+    tool_name: 'PowerShell', tool_use_id: 'push-other',
+    tool_input: { command: `cd "${commandCwd.replaceAll('\\', '/')}" && git push` } });
+
+  assert.equal(event.refreshScopeUnknown, true);
+  assert.equal(Object.hasOwn(event, 'commandCwd'), false);
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event) });
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(calls, { all: 1, scoped: 0 });
+});
+
 test('対象を 1 つに決められないコマンドの取り直しは、cwd に登録があっても全体へ行う', async (t) => {
   const calls = { all: 0, scoped: 0 };
   const pullRequestTracker = {

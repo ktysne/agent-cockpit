@@ -152,7 +152,7 @@
   <p>欄に出るのは、セッションに結び付けて登録した PR と、その PR とスタックでつながるオープンの PR です。
   登録は、次のどれかで行われます。</p>
   <ul>
-    <li>セッションが <code>gh pr create</code> を実行し、その出力に PR の URL がある。自動で登録されます</li>
+    <li>セッションが Bash または PowerShell ツールで <code>gh pr create</code> を実行し、その出力に PR の URL がある。自動で登録されます</li>
     <li>Claude Code のセッションが GitHub の MCP サーバーのツール(<code>create_pull_request</code>)で PR を作り、その応答に PR の URL がある。自動で登録されます</li>
     <li>メインセッションが、Agent Cockpit のツール <code>cockpit_add_pr</code> に PR の URL を渡す。手で作った PR のように、上の 2 つで登録されなかった PR に使います</li>
   </ul>
@@ -161,7 +161,8 @@
   Claude から委譲した Codex は、この自動登録の対象ではありません。</p>
   <p>URL は <code>https://github.com/&lt;owner&gt;/&lt;repo&gt;/pull/&lt;番号&gt;</code> の形でなければ登録されません。
   PR は、登録したセッションのプロダクトの欄に出ます。
-  <code>cd &lt;パス&gt; &amp;&amp; gh pr create</code> で作った場合、移動先を判定できれば、移動先のプロダクトに登録します。</p>
+  Bash で <code>cd &lt;パス&gt; &amp;&amp; gh pr create</code> を実行した場合は、移動先を判定できれば移動先のプロダクトに登録します。
+  PowerShell では移動先を推定せず、セッションの作業ディレクトリのプロダクトに登録します。</p>
   <p>登録していない PR でも、登録した PR とスタックでつながっていれば、行に出ます。
   ただし、その PR にはクロスレビューの行も <span class="ui">マージする</span> のボタンも出ません。
   クロスレビューの状態を読む作業ツリーが分かるのは登録したセッションだけで、マージの操作も、登録したセッションに結び付くためです。</p>

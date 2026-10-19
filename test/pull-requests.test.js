@@ -27,6 +27,7 @@ const {
   findPullRequestUrl,
   firstPullRequestUrl,
   isGhPrCreateCommand,
+  isPullRequestShellTool,
   parsePullRequestUrl,
   pullRequestCommandCwd,
   pullRequestRefreshScope,
@@ -482,6 +483,12 @@ test('gh pr create と git push の検出は引用した説明文をコマンド
   assert.equal(shouldRefreshPullRequests('git -C repo push origin feature'), true);
   assert.equal(shouldRefreshPullRequests('gh --repo example/project pr view 42'), true);
   assert.equal(shouldRefreshPullRequests('echo "git push"'), false);
+});
+
+test('PR 作成と取り直しの対象は Bash と PowerShell に限る', () => {
+  assert.equal(isPullRequestShellTool('Bash'), true);
+  assert.equal(isPullRequestShellTool('PowerShell'), true);
+  assert.equal(isPullRequestShellTool('Read'), false);
 });
 
 test('gh 呼び出しは引数配列とトークンを除いた環境を使う', async () => {

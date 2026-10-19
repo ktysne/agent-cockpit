@@ -97,6 +97,10 @@ function isGithubCreatePullRequestTool(toolName) {
   return normalized === 'create_pull_request' || /(?:^|__)github__create_pull_request$/.test(normalized);
 }
 
+function isPullRequestShellTool(toolName) {
+  return toolName === 'Bash' || toolName === 'PowerShell';
+}
+
 function pullRequestCommandCwd(command, cwd) {
   if (typeof command !== 'string' || typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
   const match = command.match(/^\s*cd[\t ]+(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\s;&|()<>]+))[\t ]*&&(?!&)/);
@@ -266,6 +270,7 @@ module.exports = {
   isSha256Digest,
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
+  isPullRequestShellTool,
   parsePullRequestUrl,
   parseGitHubRepositoryRemote,
   pullRequestCommandCwd,

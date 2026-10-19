@@ -1,7 +1,7 @@
 const { planUpdateForTool } = require('./plan-updates');
 const path = require('node:path');
 const { isHookSessionId } = require('./session-ids');
-const { parsePullRequestUrl, validRepositoryPart } = require('./pull-request-utils');
+const { isPullRequestShellTool, parsePullRequestUrl, validRepositoryPart } = require('./pull-request-utils');
 
 const EVENT_NAMES = new Set([
   'SessionStart',
@@ -31,8 +31,8 @@ function boundedString(value, limit) {
 }
 
 function sanitizePullRequestRefreshScope(event, input) {
-  if (event.tool_name !== 'Bash' || !['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) return;
-  if (typeof input.commandCwd === 'string' && input.commandCwd.length <= 4096 && path.isAbsolute(input.commandCwd)) {
+  if (!isPullRequestShellTool(event.tool_name) || !['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) return;
+  if (event.tool_name === 'Bash' && typeof input.commandCwd === 'string' && input.commandCwd.length <= 4096 && path.isAbsolute(input.commandCwd)) {
     event.commandCwd = input.commandCwd;
   }
   if (!event.refreshPullRequestsCommand && !event.refreshPullRequests) return;
@@ -40,6 +40,7 @@ function sanitizePullRequestRefreshScope(event, input) {
     event.refreshScopeUnknown = true;
     return;
   }
+  if (event.tool_name !== 'Bash') return;
   if (typeof input.refreshRepository !== 'string' || input.refreshRepository.length > 201) return;
   const parts = input.refreshRepository.split('/');
   if (parts.length === 2 && validRepositoryPart(parts[0]) && validRepositoryPart(parts[1])) {
