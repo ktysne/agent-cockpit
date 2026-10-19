@@ -771,6 +771,11 @@ const DATA = {
       perms: [],
       news: [{ t: 'PR #57 の CI が失敗した' }],
       subagents: [],
+      // メインがバックグラウンドで起動したシェルのコマンド。完了の通知、止めた記録、セッションの終了で消える。
+      backgrounds: [
+        { id: 'bg-test', text: '全体のテストを 5 回流す', tool: 'Bash: for i in 1 2 3 4 5; do npm test; done', since: '3 分前', state: 'busy' },
+        { id: 'bg-build', text: '配布物を作り直す', tool: 'Bash: npm run build', since: '1 分前', state: 'busy' },
+      ],
       tasks: [
         { title: 'ロックされた worktree の検出', state: 'done', criteria: [{ t: 'locked の worktree を一覧で区別する', met: true }] },
         { title: '削除前の確認ダイアログ', state: 'doing', criteria: [{ t: '未コミットの変更がある worktree を警告する', met: false }, { t: 'まとめて削除する件数を表示する', met: false }] },
@@ -903,14 +908,14 @@ for (const p of DATA.products) {
   const updatedAt = (minutesAgo) => new Date(Date.now() - Math.max(0, minutesAgo) * 60_000).toISOString();
   const mainSession = {
     id: `${p.id}-main`, title: p.sessionTitle, status: p.status, branch: p.branch, worktree: p.worktree,
-    main: p.main, perms: p.perms, subagents: p.subagents,
+    main: p.main, perms: p.perms, subagents: p.subagents, backgrounds: p.backgrounds || [],
     tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
     tasksUpdatedMin: 5, decisions: p.decisions, lastUpdatedAt: updatedAt(p.lastUpdatedMin ?? 2),
   };
   p.sessions = [mainSession, ...(p.extraSessions || []).map(session => ({
     ...session, lastUpdatedAt: updatedAt(session.lastUpdatedMin ?? 2),
   }))];
-  for (const key of ['branch', 'worktree', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions', 'lastUpdatedMin']) delete p[key];
+  for (const key of ['branch', 'worktree', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'backgrounds', 'tasks', 'decisions', 'extraSessions', 'lastUpdatedMin']) delete p[key];
 }
 
 DATA.products.push({
@@ -1968,7 +1973,9 @@ function mainRow(p, session, withTag, showOriginBands = false) {
   const permissionLabel = session.status === 'checking' ? '実行許可を確認中' : session.status === 'prompted' ? '許可待ち' : '';
   const mainIsWaiting = permissionLabel && session.perms.some(wait => wait.who === 'メイン' && wait.phase === session.status);
   // 状態不明の行の main.since は、ターンを確定しないイベントが最後に届いた時刻。無いときは時刻不明にする。
-  const status = permissionLabel ? `${mainIsWaiting ? '' : 'サブエージェントが'}${permissionLabel}` : nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
+  const backgroundCount = runningBackgrounds(session).length;
+  const waitLabel = backgroundCount ? `待機中(バックグラウンドタスク ${backgroundCount} 件)` : '待機中';
+  const status = permissionLabel ? `${mainIsWaiting ? '' : 'サブエージェントが'}${permissionLabel}` : nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? waitLabel : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
   const statusTitle = session.status === 'interrupted' ? ' title="利用者が中断した。セッションは生きていて、次の入力を待っている"' : '';
   const stateClass = nonInteractiveUnknown || session.status === 'checking' ? 'busy' : session.status === 'prompted' ? 'wait' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
@@ -1999,13 +2006,16 @@ const isBusyAgent = (session, agent) => agent.state === 'busy' && !isClosedByUse
 const isClosable = (session, agent) => ((agent.state !== 'busy' && !!agent.unconfirmed) || isMainBackgroundCodex(agent) || (!agent.isCodex && agent.backgrounded === true && agent.state === 'busy')) && !isClosedByUser(session, agent);
 const isUnconfirmed = (session, agent) => !!agent.unconfirmed && !isClosedByUser(session, agent);
 const isEndedAgent = (session, agent) => (agent.state === 'done' || isClosedByUser(session, agent)) && !isClosable(session, agent);
+// バックグラウンドで起動した Codex は Codex の行で出すので、ここには含まない。
+const runningBackgrounds = session => (session.backgrounds || []).filter(item => item.state === 'busy' && !isClosedByUser(session, item));
 
 function isFinishedSession(session) {
   return session.status === 'wait'
     && session.tasks.every(task => taskState(session, task) === 'done')
     && session.decisions.every(isEndedDecision)
     && session.perms.length === 0
-    && !session.subagents.some(agent => !isEndedAgent(session, agent));
+    && !session.subagents.some(agent => !isEndedAgent(session, agent))
+    && runningBackgrounds(session).length === 0;
 }
 
 function agentRow(p, session, agent, withTag, showOriginBands = false) {
@@ -2022,6 +2032,21 @@ function agentRow(p, session, agent, withTag, showOriginBands = false) {
   return `<div class="agent-row${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
     <div class="who"><span class="dot ${state[1]}"></span>サブエージェント${sessionTag(p, session, withTag)}<span class="agent-name"><span class="badge ${state[1]}">${state[0]}</span><strong>${esc(agent.type)}</strong>${close}</span></div>
     <div class="since">${esc(agent.since)}</div>${detail ? `<div class="detail">${detail}</div>` : ''}</div>`;
+}
+
+function backgroundRow(p, session, item, withTag, showOriginBands = false) {
+  const close = `<button type="button" class="link-btn close-agent" data-close-agent="${esc(closedAgentKey(session, item))}">終了にする</button>`;
+  const detail = `${item.text ? `<div class="agent-description">${esc(item.text)}</div>` : ''}${item.tool ? renderToolLine(item.tool) : ''}`;
+  const origin = sessionOrigin(session, showOriginBands);
+  return `<div class="agent-row${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
+    <div class="who"><span class="dot busy"></span>バックグラウンドタスク${sessionTag(p, session, withTag)}<span class="agent-name"><span class="badge busy">稼働中</span>${close}</span></div>
+    <div class="since">${esc(item.since)}</div>${detail ? `<div class="detail">${detail}</div>` : ''}</div>`;
+}
+
+function backgroundSection(p, session, withTag) {
+  const rows = runningBackgrounds(session).sort((a, b) => ageMinutes(a) - ageMinutes(b))
+    .map(item => backgroundRow(p, session, item, withTag)).join('');
+  return rows ? `<h3 class="sub">バックグラウンドタスク</h3><div class="agent-list">${rows}</div>` : '';
 }
 
 function endedAgentToggle(session) {
@@ -2928,7 +2953,7 @@ function sessionBlock(p, session, showOriginBands = true) {
       ${decisionSessionBlock(p, session, false)}` : '',
         tasks: taskSessionBlock(p, session, false),
         now: `<h3 class="sub">今やっていること</h3><div class="now">${mainRow(p, session, false)}</div>
-      ${agentSection(p, session, false)}`,
+      ${agentSection(p, session, false)}${backgroundSection(p, session, false)}`,
       })[key]).join('')}
     </div>
   </${groupTag}>`;
@@ -3264,6 +3289,7 @@ function renderKindMode(showOriginBands = true) {
     return [
       { age: ageMinutes(session.main), html: mainRow(p, session, true, showOriginBands) },
       ...agents.map(agent => ({ age: ageMinutes(agent), html: agentRow(p, session, agent, true, showOriginBands) })),
+      ...runningBackgrounds(session).map(item => ({ age: ageMinutes(item), html: backgroundRow(p, session, item, true, showOriginBands) })),
     ];
   }).sort((a, b) => a.age - b.age);
   const endedAgentCount = kindEndedAgentCount(sessions);
