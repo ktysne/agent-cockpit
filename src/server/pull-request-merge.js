@@ -261,16 +261,23 @@ class PullRequestMergeManager {
       saved = next === undefined ? this.state.setCrossReviewSkip(record)
         : this.state.setCrossReviewDeferral({ ...record, next });
       if (!saved) return actionResult(400, 'Invalid review skip');
+    } catch {
+      return actionResult(502, 'PR の状態を取り直せませんでした');
+    }
+    let persisted = true;
+    try {
       await this.state.flushStoreWrite();
       await this.state.waitForPersistence();
     } catch {
-      return actionResult(502, 'PR の状態の取得またはレビュー記録の保存に失敗しました');
+      persisted = false;
     }
     try {
       await this.tracker.refreshReviewGroups(registration.owner, registration.repo);
     } catch {
-      // 記録は永続化済みで、表示は次の取り直しで追いつく。
+      // 記録はメモリーに反映済みで、表示は次の取り直しで追いつく。
     }
+    // 記録はメモリーに反映済みで保存も再試行されるので、未記録と区別できる 500 で返す。
+    if (!persisted) return actionResult(500, 'レビュー記録を反映しましたが、保存を確かめられませんでした');
     return { ok: true, saved };
   }
 

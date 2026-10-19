@@ -1,5 +1,6 @@
 const test = require('node:test');
 const reviewFailure = (name, text, failed = true) => failed && ['cockpit_skip_review', 'cockpit_defer_review'].includes(name) ? `${text}\n記録できなかった。完了報告に未記録であることと理由を書いてください。` : text;
+const reviewUnknown = (name, text) => ['cockpit_skip_review', 'cockpit_defer_review'].includes(name) ? `${text}\n記録できたかを確かめられなかった。ダッシュボードの PR カードで記録を確かめ、確かめられなければ完了報告に、記録を確かめられなかったことと理由を書いてください。` : text;
 const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
 const {
@@ -296,7 +297,7 @@ test('MCP 書き込みの本文解析失敗や切断は再送せず結果不明�
       });
 
       assert.equal(result.isError, true, `${name}: ${failure}`);
-      assert.equal(result.content[0].text, reviewFailure(name, UNKNOWN_OUTCOME_MESSAGE), `${name}: ${failure}`);
+      assert.equal(result.content[0].text, reviewUnknown(name, UNKNOWN_OUTCOME_MESSAGE), `${name}: ${failure}`);
       assert.equal(requests, 1, `${name}: ${failure}`);
     }
   }
@@ -350,7 +351,7 @@ test('3 種類の MCP 書き込みは 500 を結果不明、再試行後の 401 
         ? '常駐サーバーが処理の途中で失敗した(HTTP 500)。記録できたかを確かめられなかったため、ダッシュボードで確かめてほしい'
         : '常駐サーバーが書き込みを受け付けなかった(HTTP 401)。作業は続けてよい';
       assert.equal(responses[0].result.isError, true, `${name} with HTTP ${status}`);
-      assert.equal(responses[0].result.content[0].text, reviewFailure(name, expected), `${name} with HTTP ${status}`);
+      assert.equal(responses[0].result.content[0].text, (status === 500 ? reviewUnknown : reviewFailure)(name, expected), `${name} with HTTP ${status}`);
       assert.equal(fetchCount, status === 401 ? 2 : 1, `${name} with HTTP ${status}`);
     }
   }
@@ -439,7 +440,7 @@ test('時間切れの add_pr、skip_review、plan は結果未確認の文を is
     });
 
     assert.equal(responses[0].result.isError, true, name);
-    assert.equal(responses[0].result.content[0].text, reviewFailure(name, TIMEOUT_MESSAGE), name);
+    assert.equal(responses[0].result.content[0].text, reviewUnknown(name, TIMEOUT_MESSAGE), name);
     assert.equal(fetchCount, 1, name);
     assert.equal(ensureCalls, 1, name);
   }

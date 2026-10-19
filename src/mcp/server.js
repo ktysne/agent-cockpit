@@ -44,7 +44,7 @@ const REVIEW_SKIP_ERROR_MESSAGES = new Map([
   [400, 'owner、repo、PR 番号、head SHA、理由を確認してください'],
   [404, 'このセッションで登録した PR が見つかりません'],
   [409, 'PR の head が変わったか、オープンではありません。現在の状態を確認してください'],
-  [502, 'PR の状態の取得またはレビュー記録の保存に失敗しました'],
+  [502, 'PR の状態を取り直せませんでした'],
 ]);
 
 const SET_TASKS_DESCRIPTION = 'タスクと完了条件の一覧をセッションに記録します。タスクの状態や完了条件が変わったときは、一覧全体を新しい内容に置き換えます。完了条件は met が true なら達成、met が false で doing が true なら作業中として表示します。';
@@ -205,6 +205,7 @@ TOOL_DEFINITIONS.push({
 });
 
 const REVIEW_RECORD_FAILURE_MESSAGE = '記録できなかった。完了報告に未記録であることと理由を書いてください。';
+const REVIEW_RECORD_UNKNOWN_MESSAGE = '記録できたかを確かめられなかった。ダッシュボードの PR カードで記録を確かめ、確かめられなければ完了報告に、記録を確かめられなかったことと理由を書いてください。';
 
 function toolResult(text, isError = false) {
   return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) };
@@ -379,7 +380,8 @@ async function postCrossReviewSkip(args, options = {}, deferred = false) {
   if (result.timedOut) return { timedOut: true };
   if (result.outcomeUnknown) return { outcomeUnknown: true };
   if (result.codexUnregistered) return codexUnregisteredResult(result);
-  return writeFailureResult(result, REVIEW_SKIP_ERROR_MESSAGES);
+  const failure = writeFailureResult(result, REVIEW_SKIP_ERROR_MESSAGES);
+  return failure && result.status === 500 ? { ...failure, recordUnknown: true } : failure;
 }
 
 async function callTool(name, args, options = {}) {
@@ -405,7 +407,8 @@ async function callTool(name, args, options = {}) {
     if (saved?.errorMessage && saved.isError === false) return toolResult(saved.errorMessage);
     const error = saved?.timedOut ? TIMEOUT_MESSAGE : saved?.outcomeUnknown ? UNKNOWN_OUTCOME_MESSAGE
       : !saved ? UNREACHABLE_MESSAGE : saved.errorMessage;
-    if (error) return toolResult(`${error}\n${REVIEW_RECORD_FAILURE_MESSAGE}`, true);
+    const recordUnknown = saved?.timedOut || saved?.outcomeUnknown || saved?.recordUnknown;
+    if (error) return toolResult(`${error}\n${recordUnknown ? REVIEW_RECORD_UNKNOWN_MESSAGE : REVIEW_RECORD_FAILURE_MESSAGE}`, true);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) の head ${saved.headRefOid.slice(0, 7)} を${deferred ? 'レビュー保留' : 'クロスレビュー不要'}として記録しました。`);
   }
   const saved = await postPlan(name, args, options);

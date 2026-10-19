@@ -90,6 +90,22 @@ for (const outcome of ['converged', 'halted']) {
   });
 }
 
+test('保留を反映した後に保存を確かめられなければ、未記録と断定せずダッシュボードでの確認を求める', async t => {
+  const f = await deferralApi(t);
+  const waitForPersistence = f.runtime.state.waitForPersistence.bind(f.runtime.state);
+  let failed = false;
+  f.runtime.state.waitForPersistence = async () => {
+    if (failed) return waitForPersistence();
+    failed = true;
+    throw new Error('disk full');
+  };
+  const result = await f.mcp('cockpit_defer_review');
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /記録できたかを確かめられなかった/);
+  assert.doesNotMatch(result.content[0].text, /記録できなかった。/);
+  assert.match(JSON.stringify(await f.snapshot()), /"deferred":true/);
+});
+
 test('MCP の保留は最新の head と登録元のセッションを照合する', async t => {
   const f = await deferralApi(t);
   for (const [args, session] of [[{ ...f.record, headRefOid: 'b'.repeat(40) }, 'review-session'], [f.record, 'other-session']]) {
