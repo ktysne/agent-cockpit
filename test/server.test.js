@@ -1384,6 +1384,71 @@ function askDecision(runtime, sessionId) {
   return runtime.state.decisionsFor(sessionId).find(decision => decision.source === 'ask');
 }
 
+test('/api/events は再開より古い SessionEnd の後も行と続くイベントを受け付ける', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'late-end-resumed';
+  const base = Date.now();
+  const send = event => sendHookEvent(runtime, { session_id: sessionId, ...event });
+  await send({ hook_event_name: 'SessionStart', source: 'resume', hookAt: base + 2 });
+  await send({ hook_event_name: 'SessionEnd', hookAt: base + 1 });
+  const sessions = () => request(runtime.info.port, { path: '/api/state' }).then(jsonBody).then(body => body.sessions);
+  assert.ok((await sessions()).some(session => session.session_id === sessionId));
+  await send({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'read-after-end', hookAt: base + 3 });
+  assert.equal((await sessions()).find(session => session.session_id === sessionId).status, '作業中');
+});
+
+test('/api/events は再開より古い SessionEnd で離席中の質問待ちを解放せず回答を配信する', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'late-end-ask';
+  const base = Date.now() - 100;
+  const headers = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`);
+  await sendHookEvent(runtime, { session_id: sessionId, hook_event_name: 'SessionStart', source: 'resume', hookAt: base + 2 });
+  await request(runtime.info.port, { method: 'POST', path: '/api/away', headers, body: JSON.stringify({ enabled: true }) });
+  const hookAnswer = body => request(runtime.info.port, { method: 'POST', path: '/api/hooks/answers',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify({ event_name: 'PreToolUse', session_id: sessionId, id: 'ask-1', ...body }) }).then(jsonBody);
+  const registered = await hookAnswer({ action: 'ask-register', tool_name: 'AskUserQuestion', questions: askQuestionEvent(sessionId).questions });
+  assert.equal(registered.awaiting, true);
+  await sendHookEvent(runtime, { session_id: sessionId, hook_event_name: 'SessionEnd', hookAt: base + 1 });
+  assert.ok(askDecision(runtime, sessionId).awaitingAnswerUntil);
+  const answered = await request(runtime.info.port, { method: 'POST', path: `/api/decisions/${encodeURIComponent(registered.decisionId)}/answer`,
+    headers, body: JSON.stringify({ session_id: sessionId, choice: 'pick', note: '', picks: [['JSON']] }) });
+  assert.equal(answered.status, 200);
+  assert.equal((await hookAnswer({ action: 'ask-poll' })).outcome, 'answered');
+  const finished = await hookAnswer({ action: 'ask-finish', decision_id: registered.decisionId, outcome: 'answered' });
+  assert.equal(finished.hookOutput.hookSpecificOutput.updatedInput.answers['形式を選んでください'], 'JSON');
+});
+
+test('/api/events は再開より古い SessionEnd の後もタスク催促の記録を保つ', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'late-end-nudge';
+  const base = Date.now() - 100;
+  const send = event => sendHookEvent(runtime, { session_id: sessionId, ...event });
+  await send({ hook_event_name: 'SessionStart', source: 'resume', hookAt: base + 2 });
+  await send({ hook_event_name: 'PreToolUse', tool_name: 'Agent', hookAt: base + 3 });
+  await send({ hook_event_name: 'SessionEnd', hookAt: base + 1 });
+  const batch = jsonBody(await request(runtime.info.port, { method: 'POST', path: '/api/hooks/answers',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify({ action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: sessionId, id: 'batch-late-end' }) }));
+  assert.match(batch.hookOutput.hookSpecificOutput.additionalContext, /タスクが登録されていない/);
+});
+
+test('/api/events は再開より古い SessionEnd でモデルの観測記録を消さない', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let reads = 0;
+  const runtime = await runningServer(t, { sessionModelDelayMs: 500, readSessionModel: async () => { reads += 1; return null; } });
+  const sessionId = 'late-end-model';
+  const base = Date.now();
+  const send = event => sendHookEvent(runtime, { session_id: sessionId, ...event });
+  await send({ hook_event_name: 'SessionStart', source: 'resume', hookAt: base + 2 });
+  t.mock.timers.tick(500);
+  await new Promise(setImmediate);
+  assert.equal(reads, 1);
+  await send({ hook_event_name: 'SessionEnd', hookAt: base + 1 });
+  await send({ hook_event_name: 'PreToolUse', tool_name: 'Read', hookAt: base + 3 });
+  t.mock.timers.tick(500);
+  await new Promise(setImmediate);
+  assert.equal(reads, 1);
+});
+
 test('/api/events は AskUserQuestion 後の区切りで却下された判断を withdrawn にする', async (t) => {
   const runtime = await runningServer(t);
   const sessionId = 'withdraw-after-ask';
