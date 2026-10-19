@@ -29,10 +29,9 @@ function outputForAway(input, away, snapshot = null, provider = 'claude', nonint
   if (snapshot && hookEventName === 'SessionStart' && ['compact', 'resume'].includes(input.source)) {
     context.push(sessionSummary(snapshot));
   }
-  // Claude から起動した Codex の委譲の分類は、親の非同期の起動イベントが届くまで決まらないので、委譲でないと分かるまで案内しない。
-  const delegationPending = provider === 'codex' && launchedFromClaude &&
-    (hookEventName === 'SessionStart' || snapshot?.delegated !== false);
-  const shouldAddTaskContext = !input.agent_id && snapshot?.delegated !== true && !noninteractive && !delegationPending &&
+  // Claude のツールから起動した Codex のタスクは起動元の Claude が記録する。委譲の分類は親の非同期の起動イベントが
+  // 届くまで決まらず、常駐サーバーも独立した起動を確定できないので、分類を待たずに案内しない。
+  const shouldAddTaskContext = !input.agent_id && snapshot?.delegated !== true && !noninteractive && !launchedFromClaude &&
     ['SessionStart', 'UserPromptSubmit'].includes(hookEventName);
   if (shouldAddTaskContext) {
     const importAppTasks = typeof away.importAppTasks === 'boolean' ? away.importAppTasks

@@ -141,7 +141,7 @@ test('委譲した thread にはタスク登録を案内せず、通常のセッ
   }
 });
 
-test('Claude から起動した Codex は委譲でないと分かるまでタスク登録を案内しない', async (t) => {
+test('Claude から起動した Codex には委譲の分類によらずタスク登録を案内しない', async (t) => {
   const homeDir = await temporaryHome(t);
   const run = (hookEventName, delegated) => runAwayHook({ session_id: 'codex-thread', hook_event_name: hookEventName }, {
     homeDir,
@@ -149,9 +149,9 @@ test('Claude から起動した Codex は委譲でないと分かるまでタス
     claudeParentSessionId: '11111111-2222-4333-8444-555555555555',
     fetchImpl: async () => new Response(JSON.stringify({ enabled: false, since: null, importAppTasks: false, delegated })),
   });
-  assert.equal(await run('SessionStart', false), null);
-  assert.equal(await run('UserPromptSubmit', undefined), null);
-  assert.equal((await run('UserPromptSubmit', false)).hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
+  for (const hookEventName of ['SessionStart', 'UserPromptSubmit']) {
+    for (const delegated of [undefined, false]) assert.equal(await run(hookEventName, delegated), null);
+  }
 });
 
 test('AGENT_COCKPIT_NONINTERACTIVE ではタスク登録を案内せず離席中の文脈は返す', async (t) => {

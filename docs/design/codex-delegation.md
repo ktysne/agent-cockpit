@@ -56,7 +56,7 @@ Codex のフックとセッション行の扱いは [codex-registration.md](code
 - 「委譲」の thread には Codex のセッション行が無いので、MCP の書き込みは順序 2 の照合で拒否される(403)。委譲した子のタスク、判断事項、PR を親の計画に書かない。
 - 委譲した thread の `UserPromptSubmit` は判断事項や通知の配信処理を行わず、委譲元の Claude セッションがタスク、判断事項、PR を記録するため `cockpit_*` を呼ばないよう `additionalContext` で知らせる。
 - 委譲した thread には、タスク登録の案内と `PostToolUse` / `PostToolBatch` のタスク催促を送らない。委譲元の Claude セッションがタスクを記録するためである。
-  親の Claude セッションから起動した Codex(`CLAUDE_CODE_SESSION_ID` を持つもの)の委譲の分類は、親の非同期の起動イベントが届くまで決まらない。そのため `SessionStart` では案内せず、`UserPromptSubmit` では常駐サーバーが委譲でないと答えたときだけ案内する。
+  Claude のツールから起動した Codex(`CLAUDE_CODE_SESSION_ID` を持つもの)には、委譲の分類によらずタスク登録を案内しない。タスクは起動元の Claude が記録するためである。委譲の分類は親の非同期の起動イベントが届くまで決まらず、常駐サーバーも独立した起動を確定できないので、分類を待たない。
 - 常駐サーバーは、委譲した thread への MCP の書き込みを、未登録や終了済みと分けて 403 の `error: "Codex session delegated"` で拒否する。MCP はこの理由のときだけ、エラーにせず、委譲元が記録するので呼ばなくてよいと返す。環境の `CLAUDE_CODE_SESSION_ID` だけでは判定しない。親に委譲行の無い独立した Codex も同じ値を持つためである。
 - 委譲した thread への `UserPromptSubmit` の案内は、配信の記録に載せない。載せると ACK で、その thread に残る回答と通知まで配信済みになるためである。
 - 委譲した Codex の終了は、親の行の下の `isCodex` の行が、結果行を受けて終わったものとして畳まれる今の表示のままとする。
