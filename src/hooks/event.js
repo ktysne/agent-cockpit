@@ -203,9 +203,23 @@ function isCodexAgent(word) {
   return /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word);
 }
 
+function withoutCodexAgentOptions(argumentsList) {
+  const remaining = [];
+  for (let index = 0; index < argumentsList.length; index += 1) {
+    const argument = argumentsList[index];
+    if (argument === '-C' || argument === '--effort') {
+      index += 1;
+    } else if (!argument.startsWith('--effort=')) {
+      remaining.push(argument);
+    }
+  }
+  return remaining;
+}
+
 // 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
 function extractCodexLaunchDefinition(command, toolName = 'Bash') {
-  for (const [argument = ''] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
+  for (const argumentsList of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
+    const [argument = ''] = withoutCodexAgentOptions(argumentsList);
     const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
     if (definition) return definition;
   }
@@ -213,7 +227,8 @@ function extractCodexLaunchDefinition(command, toolName = 'Bash') {
 }
 
 function extractCodexWaitRunId(command, toolName = 'Bash') {
-  for (const [argument, runId] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
+  for (const argumentsList of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
+    const [argument, runId] = withoutCodexAgentOptions(argumentsList);
     if (argument === '--wait' && runId) return runId.slice(0, 256);
   }
   return '';
@@ -277,8 +292,8 @@ function extractCodexReviewDefinition(command) {
   for (const match of commandText.matchAll(pattern)) {
     const commandStart = match.index + match[0].lastIndexOf(match[1]);
     const argumentsList = shellArguments(commandText.slice(commandStart + match[1].length));
-    // ヘルプを出すだけの起動と、Codex のラッパーを通らない起動は、Codex を動かさない。
-    if (['--no-codex-agent', '--help', '-h'].some((option) => argumentsList.includes(option))) continue;
+    // ヘルプを出すだけの起動は Codex を動かさない。--no-codex-agent は Codex を直接起動する。
+    if (['--help', '-h'].some((option) => argumentsList.includes(option))) continue;
 
     const fix = /review:codex:fix$/i.test(match[1]) || argumentsList.includes('--fix');
     return fix ? 'codex-subagent' : 'codex-review';

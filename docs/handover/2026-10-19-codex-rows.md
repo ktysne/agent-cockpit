@@ -7,15 +7,14 @@
 
 ## 現在地と次にやること
 
-計画を立て、#636 に着手した。
-#633 と #635 は、変更先がほかと重ならないので、別のセッションで並行に進める提案を出した。
-提案が始められなければ、#634 の後にこのセッションで直す。
+#636、#633、#635 を、それぞれの worktree で並行に実装している。
+#634 は #636 の上に積むので、#636 の実装が終わってから着手する。
 
 ## 決定済みの判断
 
 | 項目 | 決定 | 理由 |
 |---|---|---|
-| 進め方 | #636 と #634 はスタックで積み、#633 と #635 は main から別のセッションで並行に進める | #636 と #634 は `src/hooks/event.js` の起動の判定と結果行の取り出しを続けて触る。#633 は `src/hooks/route.js`、#635 は `src/server/session-projection.js` の区切りの処理だけを触り、ほかと重ならない |
+| 進め方 | #636 と #634 はスタックで積み、#633 と #635 は main から別の worktree で並行に進める | #636 と #634 は `src/hooks/event.js` の起動の判定と結果行の取り出しを続けて触る。#633 は `src/hooks/route.js`、#635 は `src/server/session-projection.js` の区切りの処理だけを触り、ほかと重ならない |
 | 各 Issue の対応 | Issue の「どう対応する」に従う | 原因と対応の案をコードで確かめ、食い違いが無かった |
 
 ## 対応順序、ブランチ、PR
@@ -24,8 +23,8 @@
 |---|---|---|---|---|---|---|
 | 1 | #636 | `src/hooks/event.js` の `extractCodexLaunchDefinition`、`extractCodexReviewDefinition` | standard | `claude/fix-636-launch-detection` | main | 実装中 |
 | 2 | #634 | `src/hooks/event.js` の `makeHookEvent`、`src/server/session-projection.js` の結果行の割り当て | hard | `claude/fix-634-result-origin` | 1 | 未着手 |
-| - | #633 | `src/hooks/route.js` | standard | `claude/fix-633-route-scope` | main | 別のセッションの提案 |
-| - | #635 | `src/server/session-projection.js` の `applyToolBatch` | hard | `claude/fix-635-denied-launch` | main | 別のセッションの提案 |
+| - | #633 | `src/hooks/route.js` | standard | `claude/fix-633-route-scope` | main | 実装中 |
+| - | #635 | `src/server/session-projection.js` の `applyToolBatch` | hard | `claude/fix-635-denied-launch` | main | 実装中 |
 
 ## 判断待ち
 
