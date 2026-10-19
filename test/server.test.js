@@ -1481,7 +1481,27 @@ test('/api/state は稼働中と PR 登録の worktree にあるクロスレビ�
 
   await fs.unlink(registeredTool);
   now += 10_000;
+  assert.deepEqual(await integrations(), { codexAgent: false, crossReview: true });
+  now += 10 * 60_000;
   assert.deepEqual(await integrations(), { codexAgent: false, crossReview: false });
+});
+
+test('/api/state は既知の cwd から外れた連携判定のキャッシュを破棄する', async (t) => {
+  const runtime = await runningServer(t);
+  const root = path.join(runtime.homeDir, 'repository');
+  const cwd = path.join(root, '.claude', 'worktrees', 'removed');
+  const tool = path.join(root, 'tools', 'cross-review.js');
+  await fs.mkdir(path.join(root, '.git'), { recursive: true });
+  await fs.mkdir(path.dirname(tool), { recursive: true });
+  await fs.writeFile(tool, '');
+  const integrations = async () => jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations;
+  runtime.state.syncSessionFiles([{ session_id: 'removed-worktree', cwd }]);
+  assert.equal((await integrations()).crossReview, true);
+  runtime.state.syncSessionFiles([]);
+  assert.equal((await integrations()).crossReview, false);
+  await fs.unlink(tool);
+  runtime.state.syncSessionFiles([{ session_id: 'removed-worktree', cwd }]);
+  assert.equal((await integrations()).crossReview, false);
 });
 
 test('/api/state のクロスレビュー判定を差し替え、両方の cwd を調べる', async (t) => {

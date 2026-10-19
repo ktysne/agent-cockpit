@@ -23,6 +23,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 const EMPTY_GIT_OBJECT_ID = '0000000000000000000000000000000000000000';
 const HEAD_TOOL_RESULT_LIMIT = 1024;
+const MISSING_CWD_RECHECK_MS = 10 * 60 * 1000;
 const REPOSITORY_NODE_ID_QUERY = `query($owner: String!, $repository: String!) {
   repository(owner: $owner, name: $repository) {
     id
@@ -653,15 +654,26 @@ function safeRepo(owner, repo) {
 
 const repoKey = repositoryKey;
 
-async function crossReviewToolExists(cwd, fileSystem = fs) {
-  const { root } = await findWorktreeRoot(cwd, fileSystem);
-  if (!root) return false;
+async function crossReviewToolExists(cwd, fileSystem = fs, missingCwdResults = null, now = Date.now()) {
+  if (typeof cwd !== 'string' || !cwd || !path.isAbsolute(cwd)) return false;
+  let missingCwd = false;
   try {
-    await fileSystem.stat(path.join(root, 'tools', 'cross-review.js'));
-    return true;
-  } catch {
-    return false;
+    await fileSystem.stat(cwd);
+  } catch (error) {
+    missingCwd = ['ENOENT', 'ENOTDIR'].includes(error.code);
   }
+  const cached = missingCwd && missingCwdResults?.get(cwd);
+  if (cached && now - cached.checkedAt < MISSING_CWD_RECHECK_MS) return cached.exists;
+  const { root } = await findWorktreeRoot(cwd, fileSystem);
+  let exists = false;
+  if (root) {
+    try {
+      await fileSystem.stat(path.join(root, 'tools', 'cross-review.js'));
+      exists = true;
+    } catch {}
+  }
+  if (missingCwd) missingCwdResults?.set(cwd, { exists, checkedAt: now });
+  return exists;
 }
 
 async function detectCrossReviewTool(cwd, fileSystem = fs) {
@@ -697,6 +709,7 @@ function crossReviewReadOptions(options) {
     execFileImpl: options?.execFileImpl || execFile,
     remoteRepositoryCache: options?.remoteRepositoryCache,
     headToolCache: options?.headToolCache,
+    baseAncestorCache: options?.baseAncestorCache,
   };
 }
 
@@ -783,7 +796,7 @@ async function crossReviewToolAtBase(root, baseRefName, remoteNames, execFileImp
 }
 
 async function readCrossReviewState(registration, pullRequest, options = {}) {
-  const { fileSystem, execFileImpl, remoteRepositoryCache, headToolCache } = crossReviewReadOptions(options);
+  const { fileSystem, execFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache } = crossReviewReadOptions(options);
   const report = (file, head = 'missing', failure = 'none', state = {}) => options.observeReview?.(registration, { file, head, failure, ...state });
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
@@ -842,6 +855,13 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
     const lastTriage = branchState.lastTriage;
     const triageSha = lastTriage?.sha;
     const triageOutcome = lastTriage?.outcome;
+    const recordedSha = lastReviewedSha || triageSha;
+    if (isCompleteCommitSha(recordedSha) && await reviewAlreadyInBase(
+      root, recordedSha, pullRequest.baseRefName, baseRemoteNames, execFileImpl, baseAncestorCache,
+    )) {
+      report('present', 'mismatch', 'stale-record');
+      return null;
+    }
     const triage = Number.isSafeInteger(lastTriage?.round) && lastTriage.round >= 1
       && isCompleteCommitSha(triageSha)
       && ['fixing', 'converged', 'halted'].includes(triageOutcome)
@@ -866,6 +886,34 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
     report('present', 'missing', 'parse');
     return { unavailable: true };
   }
+}
+
+async function reviewAlreadyInBase(root, sha, base, remoteNames, execFileImpl, cache) {
+  if (!validBranchName(base)) return false;
+  const key = JSON.stringify([process.platform === 'win32' ? root.toLowerCase() : root, sha.toLowerCase(), base, remoteNames]);
+  if (cache?.has(key)) return cache.get(key);
+  const run = (args) => new Promise((resolve) => {
+    try {
+      execFileImpl('git', ['-C', root, ...args], {
+        encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
+      }, (error, stdout) => resolve({ error, stdout }));
+    } catch (error) { resolve({ error }); }
+  });
+  const result = (async () => {
+    const refs = remoteNames.filter(validBranchName).map(name => `refs/remotes/${name}/${base}`);
+    let remoteFound = false;
+    for (const ref of [...refs, `refs/heads/${base}`]) {
+      if (remoteFound && ref === `refs/heads/${base}`) break;
+      const resolved = await run(['rev-parse', '--verify', `${ref}^{commit}`]);
+      if (resolved.error || !isCompleteCommitSha(resolved.stdout?.trim())) continue;
+      if (ref.startsWith('refs/remotes/')) remoteFound = true;
+      const ancestor = await run(['merge-base', '--is-ancestor', sha, ref]);
+      if (!ancestor.error) return true;
+    }
+    return false;
+  })();
+  cache?.set(key, result);
+  return result;
 }
 
 function listWorktrees(root, execFileImpl = execFile) {
@@ -1139,6 +1187,7 @@ class PullRequestTracker {
     this.repositories = new Map();
     this.productViews = new Map();
     this.crossReviewByRepository = new Map();
+    this.reviewGroupRefreshes = new Map();
     this.headToolResults = new Map();
     this.inFlight = new Map();
     this.lastFetchStartedAt = new Map();
@@ -1785,7 +1834,34 @@ class PullRequestTracker {
     return [...targets.values()];
   }
 
-  async refreshReviewGroups(owner, repo) {
+  refreshReviewGroups(owner, repo) {
+    const key = repoKey(owner, repo);
+    let refresh = this.reviewGroupRefreshes.get(key);
+    if (refresh) {
+      if (!refresh.pending) {
+        refresh.pending = new Promise((resolve, reject) => { refresh.next = { resolve, reject }; });
+      }
+      return refresh.pending;
+    }
+    refresh = {};
+    this.reviewGroupRefreshes.set(key, refresh);
+    return this.runReviewGroupRefresh(owner, repo, key, refresh);
+  }
+
+  async runReviewGroupRefresh(owner, repo, key, refresh) {
+    try {
+      await this.recalculateReviewGroups(owner, repo);
+    } finally {
+      if (refresh.pending) {
+        const next = refresh.next;
+        refresh.pending = null;
+        refresh.next = null;
+        this.runReviewGroupRefresh(owner, repo, key, refresh).then(next.resolve, next.reject);
+      } else this.reviewGroupRefreshes.delete(key);
+    }
+  }
+
+  async recalculateReviewGroups(owner, repo) {
     const key = repoKey(owner, repo);
     const repositoryState = this.repositories.get(key);
     if (!repositoryState) return;
@@ -1795,6 +1871,7 @@ class PullRequestTracker {
     const createdIdentities = new Set();
     const remoteRepositoryCache = new Map();
     const headToolCache = { known: this.headToolResults, unknown: new Set() };
+    const baseAncestorCache = new Map();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
     this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);
@@ -1802,7 +1879,7 @@ class PullRequestTracker {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
       if (!pullRequest) continue;
       const review = await this.readCrossReviewState(registration, pullRequest, {
-        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, headToolCache,
+        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache,
         observeReview: (record, result) => {
           const key = `${repositoryKey(owner, repo)}:${record.number}:${record.cwd}`;
           const signature = JSON.stringify(result);

@@ -81,6 +81,7 @@ function createReadRoutes(ctx) {
     return installed;
   }, UI_VERSION_CHECK_INTERVAL_MS);
   let integrations = { codexAgent: false, crossReview: false };
+  const missingCwdResults = new Map();
   const checkIntegrations = externalCache(async () => {
     let codexAgent = false;
     for (const scriptPath of codexAgentScriptPaths(claudeHome, userHome)) {
@@ -90,8 +91,12 @@ function createReadRoutes(ctx) {
       }
     }
     let crossReview = false;
-    for (const cwd of state.knownCwds()) {
-      if (await crossReviewToolExists(cwd) === true) {
+    const knownCwds = new Set(state.knownCwds());
+    for (const cwd of missingCwdResults.keys()) {
+      if (!knownCwds.has(cwd)) missingCwdResults.delete(cwd);
+    }
+    for (const cwd of knownCwds) {
+      if (await crossReviewToolExists(cwd, fs, missingCwdResults, nowMs()) === true) {
         crossReview = true;
         break;
       }
