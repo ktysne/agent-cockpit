@@ -201,7 +201,7 @@ test('再起動後に同じ質問の開始が届き直しても、離席中の�
   new DecisionAnswerDelivery({ state, ...options, now: () => NOW }).registerAsk({ sessionId: 'session-a', toolUseId: 'ask-1', questions: QUESTIONS });
   const restored = await restart(state);
   const delivery = new DecisionAnswerDelivery({ state: restored, ...options });
-  for (const event of [ask('ask-1', NOW), progress('Stop', NOW + 200)]) {
+  for (const event of [ask('ask-1', NOW + 100), progress('Stop', NOW + 200)]) {
     restored.addEvent(event);
     delivery.afterEvent(event);
   }
