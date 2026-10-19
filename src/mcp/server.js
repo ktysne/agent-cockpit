@@ -26,6 +26,7 @@ const MCP_TIMEOUT_MS = 5000;
 const MCP_GITHUB_TIMEOUT_MS = 60000;
 const UNREACHABLE_MESSAGE = 'ダッシュボードに書けなかった。作業は続けてよい';
 const TIMEOUT_MESSAGE = '常駐サーバーの応答が時間内に返らず、記録できたかを確かめられなかった。処理が続いている可能性があるため、ダッシュボードで確かめてほしい';
+const UNKNOWN_OUTCOME_MESSAGE = '常駐サーバーの応答を受け取れず、記録できたかを確かめられなかった。処理が済んでいる可能性があるため、ダッシュボードで確かめてほしい';
 const MAX_RESULT_ITEMS = 10;
 let codexClient = false;
 const CODEX_UNREGISTERED_MESSAGE = 'Codex のフックが届いていないため記録できなかった。未登録または終了済みのセッションです。';
@@ -247,13 +248,14 @@ async function postMcpRequest(requestPath, body, options, deadline, attemptTimeo
     deadline,
     now: options.now || Date.now,
     attemptTimeoutMs,
-    // タイムアウト後も常駐サーバーで処理が続くため、同じ書き込みを再送しない。
-    retryAfterTimeout: false,
+    // タイムアウトや切断の後も処理が済んでいる可能性があるため、
+    // 届いていないことが確かな接続の拒否の後だけ再送する。
+    retryAfterUnknownOutcome: false,
     ensure: true,
     errorJson: true,
   });
   reportMcpWrite(serverInfo, options, { tool: options.diagnosticTool, phase: 'result', ok: result.ok, status: result.status,
-    ...(!result.ok ? { failure: result.timedOut ? 'timeout' : result.status ? 'http' : 'unreachable' } : {}) });
+    ...(!result.ok ? { failure: result.timedOut ? 'timeout' : result.outcomeUnknown ? 'unknown' : result.status ? 'http' : 'unreachable' } : {}) });
   const codexUnregistered = Boolean(options.codexSessionId) && result.status === 403;
   return { ...result, codexUnregistered, codexDelegated: codexUnregistered && result.json?.error === 'Codex session delegated' };
 }
@@ -290,6 +292,7 @@ async function postPlan(toolName, args, options = {}) {
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/plan`, body, options, deadline);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
+  if (result.outcomeUnknown) return { outcomeUnknown: true };
   if (result.codexUnregistered) return codexUnregisteredResult(result);
   const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
@@ -310,6 +313,7 @@ async function postPullRequest(args, options = {}) {
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
+  if (result.outcomeUnknown) return { outcomeUnknown: true };
   if (result.codexUnregistered) return codexUnregisteredResult(result);
   const errorMessage = PR_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
@@ -341,6 +345,7 @@ async function postCrossReviewSkip(args, options = {}) {
   );
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
+  if (result.outcomeUnknown) return { outcomeUnknown: true };
   if (result.codexUnregistered) return codexUnregisteredResult(result);
   const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
@@ -356,6 +361,7 @@ async function callTool(name, args, options = {}) {
   if (name === 'cockpit_add_pr') {
     const saved = await postPullRequest(args, options);
     if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
+    if (saved?.outcomeUnknown) return toolResult(UNKNOWN_OUTCOME_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, saved.isError !== false);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) を登録しました。`);
@@ -363,12 +369,14 @@ async function callTool(name, args, options = {}) {
   if (name === 'cockpit_skip_review') {
     const saved = await postCrossReviewSkip(args, options);
     if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
+    if (saved?.outcomeUnknown) return toolResult(UNKNOWN_OUTCOME_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, saved.isError !== false);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) の head ${saved.headRefOid.slice(0, 7)} をクロスレビュー不要として記録しました。`);
   }
   const saved = await postPlan(name, args, options);
   if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
+  if (saved?.outcomeUnknown) return toolResult(UNKNOWN_OUTCOME_MESSAGE, true);
   if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
   if (saved.errorMessage) return toolResult(saved.errorMessage, saved.isError !== false);
   return toolResult(shortSavedList(name, saved));
@@ -458,6 +466,7 @@ module.exports = {
   MCP_GITHUB_TIMEOUT_MS,
   UNREACHABLE_MESSAGE,
   TIMEOUT_MESSAGE,
+  UNKNOWN_OUTCOME_MESSAGE,
   TOOL_DEFINITIONS,
   PR_ERROR_MESSAGES,
   REVIEW_SKIP_ERROR_MESSAGES,

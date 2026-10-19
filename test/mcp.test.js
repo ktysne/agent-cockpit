@@ -6,6 +6,7 @@ const {
   SERVER_VERSION,
   MCP_GITHUB_TIMEOUT_MS,
   TIMEOUT_MESSAGE,
+  UNKNOWN_OUTCOME_MESSAGE,
   UNREACHABLE_MESSAGE,
   callTool,
 } = require('../src/mcp/server');
@@ -251,6 +252,51 @@ test('常駐サーバーに届かない tools/call は isError で継続可能�
   });
   assert.equal(responses[0].result.isError, true);
   assert.equal(responses[0].result.content[0].text, UNREACHABLE_MESSAGE);
+});
+
+test('MCP 書き込みの本文解析失敗や切断は再送せず結果不明の文を isError で返す', async () => {
+  for (const [name, args] of [
+    ['cockpit_add_decision', { title: '確認すること', context: '', state: 'open', options: [] }],
+    ['cockpit_add_pr', { url: 'https://github.com/example/project/pull/45' }],
+    ['cockpit_skip_review', { owner: 'example', repo: 'project', number: 45, headRefOid: 'a'.repeat(40), reason: '説明文のみ' }],
+  ]) {
+    for (const failure of ['json', 'reset']) {
+      let requests = 0;
+      const result = await callTool(name, args, {
+        environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+        ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+        fetchImpl: async url => {
+          if (url.endsWith('/api/diagnostics')) return new Response('{}', { status: 202 });
+          requests += 1;
+          if (failure === 'json') return new Response('invalid JSON', { status: 200 });
+          throw new TypeError('fetch failed', { cause: Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }) });
+        },
+      });
+
+      assert.equal(result.isError, true, `${name}: ${failure}`);
+      assert.equal(result.content[0].text, UNKNOWN_OUTCOME_MESSAGE, `${name}: ${failure}`);
+      assert.equal(requests, 1, `${name}: ${failure}`);
+    }
+  }
+});
+
+test('MCP 書き込みの接続拒否は再送して記録する', async () => {
+  let requests = 0;
+  const result = await callTool('cockpit_set_tasks', { tasks: [] }, {
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async url => {
+      if (url.endsWith('/api/diagnostics')) return new Response('{}', { status: 202 });
+      requests += 1;
+      if (requests === 1) {
+        throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
+      }
+      return new Response('{"tasks":[]}', { status: 200 });
+    },
+  });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(requests, 2);
 });
 
 test('3 種類の MCP 書き込みは未知の失敗と再試行後の 401 を到達不能として返す', async () => {
