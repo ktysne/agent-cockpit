@@ -295,8 +295,8 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   };
 }
 
-// 許可待ち、ターンの状態、稼働中のエージェントから表示の状態を決める。スナップショットと表示側で同じ規則を使う。
-function sessionStatus({ permissionWaits, agents }, { turnKnown, interrupted, stopped }) {
+// 許可待ち、ターンの状態、稼働中のエージェントの有無から表示の状態を決める。スナップショットと表示側で同じ規則を使う。
+function sessionStatus({ permissionWaits, agentActive, turnKnown, interrupted, stopped }) {
   return permissionWaits.some((wait) => wait.phase === 'prompted')
     ? '許可待ち'
     : permissionWaits.length
@@ -305,7 +305,7 @@ function sessionStatus({ permissionWaits, agents }, { turnKnown, interrupted, st
         ? '不明'
         : interrupted
           ? '中断'
-          : stopped && agents.some((agent) => agent.active)
+          : stopped && agentActive
             ? '待機中(サブエージェント稼働中)'
             : stopped
               ? '待機中'
@@ -343,7 +343,13 @@ function sessionSnapshot(session) {
       };
     });
   const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
-  const status = sessionStatus(session, session);
+  const lifecycle = {
+    turnKnown: session.turnKnown,
+    interrupted: session.interrupted,
+    stopped: session.stopped,
+    activeAgentIds: session.agents.filter((agent) => agent.active).map((agent) => agent.agent_id),
+  };
+  const status = sessionStatus({ ...lifecycle, permissionWaits, agentActive: lifecycle.activeAgentIds.length > 0 });
 
   const snapshot = {
     session_id: session.session_id,
@@ -359,10 +365,9 @@ function sessionSnapshot(session) {
     decisions: session.decisions.map(cloneDecision),
     decisionBindings: { ...session.decisionBindings },
   };
-  // 表示側が終了にした行を除いて状態を決め直す入力。画面へ送らないよう列挙しない。
-  Object.defineProperty(snapshot, 'lifecycle', {
-    value: { turnKnown: session.turnKnown, interrupted: session.interrupted, stopped: session.stopped },
-  });
+  // 表示側が終了にした行を除いて状態を決め直す入力。親の行へまとめた Codex も稼働の判定に含めるため、まとめる前の行で持つ。
+  // 画面へ送らないよう列挙しない。
+  Object.defineProperty(snapshot, 'lifecycle', { value: lifecycle });
   // 完了通知の照合だけに使う。親の行にまとめた Codex も含むので表示の形に出さず、画面へ送らないよう列挙しない。
   Object.defineProperty(snapshot, 'backgroundCodex', {
     value: session.agents

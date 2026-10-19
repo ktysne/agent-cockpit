@@ -2722,7 +2722,13 @@ class DashboardState {
       tasksUpdatedAt: plan?.tasksUpdatedAt || null,
       ...(isNonInteractiveSessionFile(file) ? { nonInteractive: true } : {}),
     };
-    if (session) current.status = sessionStatus(current, session.lifecycle);
+    if (session) {
+      current.status = sessionStatus({
+        ...session.lifecycle,
+        permissionWaits: current.permissionWaits,
+        agentActive: session.lifecycle.activeAgentIds.some((agentId) => !closedAgentIds.has(agentId)),
+      });
+    }
     const worktree = this.worktreeInfo.snapshot(this.transcriptCwdFor(sessionId),
       decisions.some(decision => decision.verify && ['waiting', 'provisional'].includes(decision.state)));
     if (worktree) current.worktree = worktree;

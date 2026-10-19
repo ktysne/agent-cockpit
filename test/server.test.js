@@ -343,6 +343,20 @@ for (const delayed of [false, true]) {
   });
 }
 
+test('前面のサブエージェントを閉じても、その下で背景起動した Codex が動いていれば稼働中として区別する', async (t) => {
+  const c = await interruptionCockpit(t);
+  await c.hook('nested-codex', 'UserPromptSubmit', 0);
+  await c.hook('nested-codex', 'PreToolUse', 100, { tool_name: 'Agent', tool_use_id: 'call' });
+  await c.hook('nested-codex', 'SubagentStart', 200, { agent_id: 'child', agent_type: 'Explore' });
+  await c.hook('nested-codex', 'PreToolUse', 300, { agent_id: 'child', tool_name: 'Bash', tool_use_id: 'launch', codexReviewDefinition: 'codex-review' });
+  await c.hook('nested-codex', 'PostToolUse', 400, { agent_id: 'child', tool_name: 'Bash', tool_use_id: 'launch', backgroundTaskId: 'task-a' });
+  await c.hook('nested-codex', 'Stop', 500);
+  const session = c.status('nested-codex');
+  assert.equal(session.agents[0].unconfirmed, true);
+  assert.equal(session.agents[0].gpt.active, true);
+  assert.equal(session.status, '待機中(サブエージェント稼働中)');
+});
+
 test('背景の起動の応答が SubagentStart より先に届いてもメインの Stop 後も稼働を保つ', async (t) => {
   const c = await interruptionCockpit(t);
   await c.hook('early-response', 'UserPromptSubmit', 0);
