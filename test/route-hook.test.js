@@ -85,6 +85,21 @@ test('Claude 経路ではサブエージェントの codex-agent.sh 呼び出し
       permissionDecisionReason: CLAUDE_ROUTE_CONTEXT,
     },
   });
+  const powerShellInput = {
+    ...input,
+    tool_name: 'PowerShell',
+    tool_input: { command: '& "$HOME\\.claude\\tools\\codex-agent.sh" impl-standard' },
+  };
+  assert.deepEqual(outputForRoute(powerShellInput, { homeDir }), {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: CLAUDE_ROUTE_CONTEXT,
+    },
+  });
+  assert.equal(outputForRoute({
+    ...powerShellInput, tool_input: { command: 'Write-Output "codex-agent.sh impl-standard"' },
+  }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, agent_id: undefined }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, tool_input: { command: 'npm test' } }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, tool_name: 'Read' }, { homeDir }), null);

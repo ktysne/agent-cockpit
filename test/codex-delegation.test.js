@@ -8,6 +8,36 @@ const { hookHeaders, jsonBody, request, startTestServer } = require('./support/s
 const parentId = 'claude-parent';
 const command = 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md';
 
+test('PowerShell のクロスレビュー起動は /api/events から Codex の行になる', async (t) => {
+  const c = await startTestServer(t);
+  const send = (hook_event_name, fields = {}) => {
+    const event = makeHookEvent({
+      session_id: 'powershell-review',
+      hook_event_name,
+      tool_name: 'PowerShell',
+      tool_use_id: 'review',
+      cwd: process.cwd(),
+      tool_input: { command: 'npm run review:codex' },
+      ...fields,
+    });
+    return request(c.info.port, {
+      method: 'POST',
+      path: '/api/events',
+      headers: hookHeaders(c.info.secret),
+      body: JSON.stringify(event),
+    });
+  };
+  const response = await send('PreToolUse');
+  assert.equal(response.status, 202);
+  assert.equal((await send('PostToolUse', { tool_response: 'codex-agent: result=ok' })).status, 202);
+  const state = jsonBody(await request(c.info.port, { path: '/api/state' }));
+  assert.deepEqual(state.sessions.map(session => session.session_id), ['powershell-review']);
+  const [agent] = state.sessions[0].agents;
+  assert.equal(agent.agent_type, 'codex-review');
+  assert.equal(agent.lastTool.tool_name, 'PowerShell');
+  assert.equal(agent.resultReceived, true);
+});
+
 test('コマンド位置の起動は前置きや引用符、長いパスを含んでも全文の定義名で行を作る', () => {
   for (const command of [
     'bash "$HOME/.claude/tools/codex-agent.sh" impl-hard < "C:/tmp/p.md"',

@@ -314,7 +314,7 @@ bridge は `CLAUDE_CONFIG_DIR` にかかわらず `~/.claude/tools/` に置く�
       { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
     ],
     "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
+      { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
     ]
   }
 }

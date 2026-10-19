@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('../server/identity');
 const { ROUTE_VALUES, readRoutingSync } = require('../server/routing');
-const { commandSegments, commandWords } = require('../server/pull-request-utils');
+const { commandSegments, commandWords, isPullRequestShellTool } = require('../server/pull-request-utils');
 const { atomicWriteJsonSync } = require('../server/json-storage');
 
 const ROUTE_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -170,8 +170,8 @@ function effectiveRouteForSubagentStart(input, options = {}) {
 function outputForRoute(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const isStart = input.hook_event_name === 'SubagentStart';
-  const isBashUse = input.hook_event_name === 'PreToolUse' && input.tool_name === 'Bash';
-  if (!isStart && !isBashUse) return null;
+  const isShellToolUse = input.hook_event_name === 'PreToolUse' && isPullRequestShellTool(input.tool_name);
+  if (!isStart && !isShellToolUse) return null;
 
   const homeDir = cockpitHomeFromOptions(options);
   const fileSystem = options.fileSystem || fs;
