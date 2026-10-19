@@ -6,8 +6,9 @@ ai-cross-review の正本のスキルは変えない。変える必要が出た�
 
 ## 現在地と次にやること
 
-計画を立てた段階である。
-次のセッションは、下の表の状態の列を `gh pr view` で確かめ、未着手の最初の行から再開する。
+4 件とも PR を作り、クロスレビューは収束した。開発者のマージを待っている。
+マージは、agent-cockpit の #659 を先に、次に #661 を merge commit で行う。#660 と claude-codex-bridge#165 は独立していて、順序を問わない。
+次のセッションは、下の表の状態の列を `gh pr view` で確かめる。#659 のマージの後に #661 の base が main へ変わったことを確かめ、変わっていなければ `gh pr edit 661 --base main` で付け替える。
 
 ## 決定済みの判断
 
@@ -33,9 +34,9 @@ ai-cross-review の正本のスキルは変えない。変える必要が出た�
 | 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-20 に確認) |
 |---|---|---|---|---|---|---|
 | 1 | agent-cockpit #657 worktree 間の記録の競合 | `src/server/pull-requests.js`、`src/server/pull-request-merge.js`、`src/web/index.html`、`mock/index.html` | hard | `claude/fix-657-review-conflict` | main | PR #659。1 往復で収束 |
-| 2 | agent-cockpit #656 レビュー不要の記録の未完了 | `src/server/decision-answers.js`、`src/server/pull-requests.js`、`src/mcp/server.js`、`skills/agent-cockpit/SKILL.md` | hard | `claude/fix-656-review-pending` | 1 | 実装中(Codex の上限で中断し、途中の変更が作業ツリーにある) |
-| 3 | agent-cockpit #658 シェルの解析の不一致 | `src/hooks/event.js`、`src/hooks/route.js`、`src/server/pull-request-utils.js` | hard | `claude/fix-658-shell-commands` | main | 実装中(worktree `.claude/worktrees/fix-658`。テストの追加が残る) |
-| 4 | claude-codex-bridge #164 stderr を保持する子孫で終了を待ち続ける | `tools/codex-agent.sh` | hard | `fix/issue-164-stderr-holder` | main | PR claude-codex-bridge#165。レビュー中 |
+| 2 | agent-cockpit #656 レビュー不要の記録の未完了 | `src/server/decision-answers.js`、`src/server/pull-requests.js`、`src/mcp/server.js`、`skills/agent-cockpit/SKILL.md` | hard | `claude/fix-656-review-pending` | 1 | PR #661。3 往復で収束 |
+| 3 | agent-cockpit #658 シェルの解析の不一致 | `src/hooks/event.js`、`src/hooks/route.js`、`src/server/pull-request-utils.js` | hard | `claude/fix-658-shell-commands` | main | PR #660。3 往復で収束(worktree `.claude/worktrees/fix-658`) |
+| 4 | claude-codex-bridge #164 stderr を保持する子孫で終了を待ち続ける | `tools/codex-agent.sh` | hard | `fix/issue-164-stderr-holder` | main | PR claude-codex-bridge#165。収束 |
 
 base の列の数字は、表の順の PR のブランチを指す。
 
@@ -65,6 +66,6 @@ base の列の数字は、表の順の PR のブランチを指す。
 
 ```text
 docs/handover/2026-10-20-review-state-paths.md の計画に沿って、4 件の Issue の対応を続けてください。
-表の状態の列を gh で確かめてから、未着手の最初の行に着手してください。
-レビューでは、計画の「同じ情報を扱う経路」をレビュアーに渡してください。
+表の状態の列を gh で確かめ、「現在地と次にやること」の手順でマージ後の base を確かめてください。
+追加の修正が要るときは、計画の「同じ情報を扱う経路」をレビュアーに渡してください。
 ```
