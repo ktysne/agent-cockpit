@@ -20,6 +20,7 @@ test('レビュー起動は heredoc 後と前置きとシェル内部でも検�
   for (const [tool_name, command, expected] of [
     ['Bash', "cat > req.md <<'EOF'\nDo work.\nEOF\nnpm run review:codex", 'codex-review'],
     ['Bash', 'CROSS_REVIEW_NO_FETCH=1 npm run review:codex', 'codex-review'],
+    ['Bash', 'bash -c "echo \\#; npm run review:codex"', 'codex-review'],
     ['Bash', "bash -lc 'npm run review:codex'", 'codex-review'],
     ['Bash', "echo \"$(cat <<'EOF'\nit's (done\nEOF\n)\" && npm run review:codex", 'codex-review'],
     ['Bash', 'env -u DEBUG command npm run review:codex:fix', 'codex-subagent'],

@@ -30,6 +30,7 @@ test('Bash と PowerShell の実行部分は起動の検出と Claude 経路の�
     ['Bash', `X="$(cat <<'EOF'\n${launch}\nEOF\n)"`, false],
     ['Bash', `X="$(echo ok # it's\n)"; ${launch}`, true],
     ['Bash', `bash -lc '${launch}'`, true],
+    ['Bash', `bash -c "echo \\#; ${launch}"`, true],
     ['PowerShell', `$request = @'\nDo work.\n'@\n${launch}`, true],
     ['PowerShell', `$request = @'\n${launch}\n'@`, false],
     ['PowerShell', `Write-Output ok # ; ${launch}`, false],

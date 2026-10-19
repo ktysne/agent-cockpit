@@ -270,7 +270,14 @@ function shellArguments(value, toolName = 'Bash') {
     if (quote === "'") {
       if (character === "'") quote = '';
       else token.text += character;
-    } else if (character === (toolName === 'PowerShell' ? '`' : '\\')) {
+    } else if (quote === '"' && toolName !== 'PowerShell' && character === '\\' && /["\\$`]/.test(value[index + 1] || '')) {
+      token.text += value[index + 1];
+      index += 1;
+      token.started = true;
+    } else if (quote === '"' && toolName !== 'PowerShell' && character === '\\' && /\r?\n/.test(value.slice(index + 1, index + 3))) {
+      index += value[index + 1] === '\r' ? 2 : 1;
+      token.started = true;
+    } else if (character === (toolName === 'PowerShell' ? '`' : '\\') && quote !== '"') {
       token.text += value[index + 1] || '';
       index += 1;
       token.started = true;
