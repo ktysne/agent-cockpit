@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { isQuestionTool } = require('./events');
+const { isPullRequestShellTool } = require('./pull-request-utils');
 
 const COMPACT_THRESHOLD = 2000;
 const COMPACT_INTERVAL = 1000;
@@ -29,7 +30,7 @@ function buildIndex(entries) {
 function updateIndex(index, entry) {
   const { event } = entry;
   if (isQuestionEntry(entry)) index.questions.push(entry);
-  if (event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash' && event.tool_use_id) {
+  if (event.hook_event_name === 'PreToolUse' && isPullRequestShellTool(event.tool_name) && event.tool_use_id) {
     if (event.ghPrCreateCommand === true) index.creates.add(event.tool_use_id);
     if (event.refreshPullRequestsCommand === true) index.refreshes.add(event.tool_use_id);
   }
@@ -93,7 +94,7 @@ class SessionEntries {
     if (this.verify && record) {
       const field = kind === 'creates' ? 'ghPrCreateCommand' : 'refreshPullRequestsCommand';
       assert.equal(found, Boolean(toolUseId && record.full.some(({ event }) =>
-        event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash' &&
+        event.hook_event_name === 'PreToolUse' && isPullRequestShellTool(event.tool_name) &&
         event.tool_use_id === toolUseId && event[field] === true)));
     }
     return found;

@@ -36,7 +36,7 @@ function fakeClock() {
 const tags = (...versions) => versions.map(value => `abc\trefs/tags/v${value}`).join('\n');
 const gitResult = output => (_file, _args, _options, callback) => callback(null, output);
 
-test('タグの抽出は正式版だけを整数順で比べ、pre-release と剥離行を捨てる', () => {
+test('タグの抽出は正式なバージョンだけを整数順で比べ、pre-release と剥離行を捨てる', () => {
   assert.equal(latestVersionFromTags(tags('0.0.0', '1.9.99', '1.10.0', '1.10.0^{}', '2.0.0-rc.1')), '1.10.0');
   assert.equal(latestVersionFromTags(tags('0.0.0')), '0.0.0');
   assert.equal(latestVersionFromTags('abc\trefs/tags/1.0.0\nabc\trefs/heads/v8.0.0'), null);
@@ -128,17 +128,17 @@ test('失敗後の確認成功は結果と成功時刻を更新し、失敗分�
   assert.equal(result.error, null);
 });
 
-test('版確認のオプションが無いサーバーは git を起動しない', async t => {
+test('バージョンを確認するオプションが無いサーバーは git を起動しない', async t => {
   const calls = [];
   t.mock.method(childProcess, 'execFile', (...args) => calls.push(args));
-  t.mock.method(UpdateChecker.prototype, 'start', () => assert.fail('明示しなければ版確認は起動しない'));
+  t.mock.method(UpdateChecker.prototype, 'start', () => assert.fail('明示しなければバージョンの確認は起動しない'));
   const { runtime, info } = await startTestServer(t);
   assert.equal(runtime.updateChecker, null);
   assert.equal(jsonBody(await request(info.port, { path: '/api/state' })).update, null);
   assert.equal(calls.length, 0);
 });
 
-test('state の update は版番号を進めずに変わり、新しい版だけに依頼文とリンクが付く', async t => {
+test('state の update は版番号を進めずに変わり、新しいバージョンだけに依頼文とリンクが付く', async t => {
   const { runtime, info } = await startTestServer(t, { updateCheck: { current: '1.2.3', execFileImpl: gitResult(tags('1.3.0')) } });
   const version = runtime.state.version;
   await runtime.updateChecker.check();
@@ -165,7 +165,7 @@ test('0.0.0 からの通知リンクは新しいタグの tree を指す', async
     'https://github.com/ktysne/agent-cockpit/tree/v1.0.0');
 });
 
-test('サーバーは明示した時計で版を確認し、close で次の確認を止める', async t => {
+test('サーバーは明示した時計でバージョンを確認し、close で次の確認を止める', async t => {
   const clock = fakeClock();
   let calls = 0;
   const { runtime, info } = await startTestServer(t, { updateCheck: { ...clock, current: '0.0.0', execFileImpl(_file, _args, _options, callback) {
@@ -181,7 +181,7 @@ test('サーバーは明示した時計で版を確認し、close で次の確�
   assert.equal(calls, 1);
 });
 
-test('版確認の成功と失敗は診断 API から結果と分類だけを読める', async t => {
+test('バージョンの確認の成功と失敗は診断 API から結果と分類だけを読める', async t => {
   const { runtime, info } = await startTestServer(t, { updateCheck: { current: '0.0.0', execFileImpl: gitResult(tags('1.0.0')) } });
   await runtime.updateChecker.check();
   runtime.updateChecker.execFileImpl = (_file, _args, _options, callback) => callback(Object.assign(new Error('private stderr'), { code: 'ENOENT' }));
@@ -203,7 +203,7 @@ function checkRequest(info) {
   });
 }
 
-test('版確認のオプションが無いサーバーは、手動の確認も 409 を返し git を起動しない', async t => {
+test('バージョンを確認するオプションが無いサーバーは、手動の確認も 409 を返し git を起動しない', async t => {
   const calls = [];
   t.mock.method(childProcess, 'execFile', (...args) => calls.push(args));
   const { info } = await startTestServer(t);

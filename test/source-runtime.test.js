@@ -93,7 +93,7 @@ async function writeRun(directory, id, segments) {
   }
 }
 
-test('過去の起動は版とソースの最初の確定記録を独立に復元し、無い版を補わない', async t => {
+test('過去の起動はバージョンとソースの最初の確定記録を独立に復元し、無いバージョンを補わない', async t => {
   const { runtime, info } = await startTestServer(t, { ...revisionOptions, readSourceState: () => 'dirty' });
   const version = { version: '1.3.0', commit: '9fa2714' + 'b'.repeat(33) };
   const cases = [
@@ -118,7 +118,7 @@ test('過去の起動は版とソースの最初の確定記録を独立に復�
   }
 });
 
-test('起動時の区分が prune で消えても rotate から版と確定状態を復元する', async t => {
+test('起動時の区分が prune で消えても rotate からバージョンと確定状態を復元する', async t => {
   const { directory: homeDir } = temporaryDirectory(t);
   const runtime = { version: '1.3.0', commit, sourceState: 'release' };
   const diagnostics = new Diagnostics({ homeDir, maxLines: 3, maxSegments: 1, startedAt: '2026-10-10' });

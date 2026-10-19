@@ -5,7 +5,7 @@ const { validSessionId, validText, validPlanInput, decisionSummaries } = require
 const { sanitizeEvent, isQuestionTool } = require('../events');
 const { productFromCwd } = require('../identity');
 const { claudeAgentDefinition, codexAgentDefinition } = require('../session-files');
-const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, repositoryKey, validRepositoryPart } = require('../pull-request-utils');
+const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, isPullRequestShellTool, repositoryKey, validRepositoryPart } = require('../pull-request-utils');
 const { applyReviewSkip } = require('./review-skip');
 const { keepImportedCriteria } = require('../plan-updates');
 
@@ -276,7 +276,7 @@ function createHookRoutes(ctx) {
       }
     }
     if (event?.hook_event_name === 'PostToolUse' && event.pullRequest && (
-      (event.tool_name === 'Bash' && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
+      (isPullRequestShellTool(event.tool_name) && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
       isGithubCreatePullRequestTool(event.tool_name)
     )) {
       const registrationCwd = event.commandCwd || body.cwd;

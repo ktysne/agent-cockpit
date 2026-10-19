@@ -62,19 +62,19 @@
 
 ## 更新の確認
 
-公開する版の正本は `vX.Y.Z` 形式の Git タグとし、リリース時に `package.json` の `version` を合わせる。
-手元の版は `package.json` から読む。
-ブランチや worktree の HEAD に依存せず、稼働中のコードに付いた版を確認できるためである。
+公開するバージョンの正本は `vX.Y.Z` 形式の Git タグとし、リリース時に `package.json` の `version` を合わせる。
+手元のバージョンは `package.json` から読む。
+ブランチや worktree の HEAD に依存せず、稼働中のコードに付いたバージョンを確認できるためである。
 固定の `https://github.com/ktysne/agent-cockpit.git` へ `git ls-remote --refs --tags` で問い合わせる。
-チェックアウトの remote が fork や別の URL でも、配布元の版を確認するためである。
-正式な版タグだけを拾い、3 つの整数で比較し、最大の版が手元より新しければ通知する。
+チェックアウトの remote が fork や別の URL でも、配布元のバージョンを確認するためである。
+正式なバージョンのタグだけを拾い、3 つの整数で比較し、最大のバージョンが手元より新しければ通知する。
 `0.0.0` からの変更を見るリンクは、存在しないタグとの比較を避け、新しいタグの tree を指す。
 
 確認は起動 1 分後、その後 6 時間ごとに行う。
 git は対話を無効にし、15 秒の期限と 1MB の出力上限を設ける。
 タイマーは `unref()` し、終了時に解除し、確認中の処理が終わってから診断ログを閉じる。
 成功は結果を info で、失敗は分類だけを warn で診断ログに残す。
-`update` は `{current, latest, available, checkedAt, succeededAt, error}` を基本項目として持ち、新しい版がある場合は `prompt` と `compareUrl` も持つ。
+`update` は `{current, latest, available, checkedAt, succeededAt, error}` を基本項目として持ち、新しいバージョンがある場合は `prompt` と `compareUrl` も持つ。
 `checkedAt` は最後に試した時刻、`succeededAt` は最後に成功した時刻、`error` は最後に試した確認の失敗分類で、成功後は `error` を `null` にする。
 失敗時は前回成功した `latest`、`available`、`succeededAt` を残す。
 公開したタグは通常取り下げないため、一度見つけた更新候補は一時的な確認失敗の後も有効である。
@@ -83,7 +83,7 @@ git は対話を無効にし、15 秒の期限と 1MB の出力上限を設け�
 確認結果は `DashboardState` の snapshot に入れず、`/api/state` の `update` に並べる。
 セッションの状態が変わったわけではないため、状態の `version` を進めない。
 画面は版番号による描き直しの判定の外で、毎回通知を更新する。
-依頼文とリンクは新しい版がある場合だけサーバーが組み立て、依頼文の手順書の場所はサーバーのファイルの位置から求める。
+依頼文とリンクは新しいバージョンがある場合だけサーバーが組み立て、依頼文の手順書の場所はサーバーのファイルの位置から求める。
 
 画面の設定の「更新を確認」は `POST /api/update/check` で、定期の確認を待たずに今すぐ確かめる。
 本文は JSON のオブジェクトだけを受け付け、画面用の秘密値と Origin を照合する。
@@ -92,13 +92,13 @@ git は対話を無効にし、15 秒の期限と 1MB の出力上限を設け�
 確認を有効にしていないサーバー(`updateCheck` を渡していない場合)は `409` と `{"error":"update-check-disabled"}` を返す。
 定期の確認の時機は変えない。
 
-起動時の版は `/api/state` の `runtime: {version, commit, sourceState, startedAt}` で渡す。
+起動時のバージョンは `/api/state` の `runtime: {version, commit, sourceState, startedAt}` で渡す。
 互換のため `appVersion` も残す。
-画面のタイトルは `v1.4.0` の形で版だけを出し、commit は出さない。commit は利用者が読む情報ではないためである。
+画面のタイトルは `v1.4.0` の形でバージョンだけを出し、commit は出さない。commit は利用者が読む情報ではないためである。
 診断の記録は、sourceState が release 以外で commit があれば `v1.4.0+c933f60` の形にする。
 バージョンが無い場合は「バージョン不明」とする。
 runtime を返さない旧サーバーでは appVersion を使う。
-デモの常駐サーバーは `appVersion` を `null` にし、commit も読まずに版を出さない。マニュアルと紹介ページの画像が、版を上げるたびに変わらないためである。
+デモの常駐サーバーは `appVersion` を `null` にし、commit も読まずにバージョンを出さない。マニュアルと紹介ページの画像が、バージョンを上げるたびに変わらないためである。
 
 listen 前には `.git` のファイルから commit だけを読む。
 listen 後に info と同じ pid と startedAt で `{version, commit, pid, startedAt}` を確定し、以後変えない。
@@ -142,7 +142,7 @@ sourceState が無い応答は取り直さず、期限内に確定しない場�
 取り直し中に `/health` を取得できなくなった場合も最後の応答を返す。一時的な通信失敗で起動確認全体を失敗にしないためである。
 `releaseVerified` は `result` が `ok`、`commitVerified` が true、sourceState が release の場合だけ true とする。
 成功時は再起動したこととバージョンを出し、commit が未照合なら更新後のコードで動いているか確かめられないことを添える。
-失敗は `stop-timeout`（旧サーバーの終了未確認）、`start-failed`（起動失敗または起動後の health 取得失敗）、`stale`（旧起動の再利用）、`mismatch`（起動情報、版、コミットの不一致）に分ける。
+失敗は `stop-timeout`（旧サーバーの終了未確認）、`start-failed`（起動失敗または起動後の health 取得失敗）、`stale`（旧起動の再利用）、`mismatch`（起動情報、バージョン、コミットの不一致）に分ける。
 `--json` は人向けの文を付けずに `{result, stoppedPid, pid, expected: {version, commit}, running: {version, commit, sourceState} | null, commitVerified, releaseVerified}` を 1 行で出し、失敗時は終了コード 1 を返す。
 `restartServer` も成功時には同じ形を返し、失敗時の例外には分類を `result`、同じ形の情報を `details` に持たせる。
 更新用の再起動は `releaseVerified` を返すために sourceState の確定を待つが、タスクトレイの `ensure-server.js --verify` は待たない。
@@ -222,7 +222,7 @@ sourceState が dirty の場合は起動時に未コミットの変更があっ�
   メインのイベント(`agent_id` を持たないもの)を受けて約 500ms 後に 1 回読み、その状態が続く間は 60 秒ごとに読み直す。サブエージェントのイベントでは読まない。
 - 記録の場所と末尾 256KB の読み方は、状態不明の推定と同じとする。
 - 対象の行は、`type` が `queue-operation`、`operation` が `enqueue` で、`content` が `<task-notification>` で始まるものだけとする。ツールの入出力や会話の本文に写った通知の文字列を、終了と取り違えないためである。
-  enqueue の行を書かない古い版の Claude Code では、通知を読み取れないので、手で「終了にする」を使う。
+  enqueue の行を書かない古いバージョンの Claude Code では、通知を読み取れないので、手で「終了にする」を使う。
 - 通知から `<task-id>`(`[A-Za-z0-9_-]` の 1〜64 文字)と `<status>`(`completed`、`killed`、`failed`、`stopped`)を読む。`stopped` は前のプロセスで終わらなかった背景のエージェントの通知で、1 通に複数の `<task-id>` が並ぶので、すべてを読む。稼働中の Claude のサブエージェントに一致し、通知の時刻がそのサブエージェントの開始時刻より前でなければ、`SubagentStop` を合成して通常のイベントと同じ経路で処理する。
 
 ## 記録の削除
@@ -288,7 +288,7 @@ state が `merged` の登録は残す。
 |---|---|
 | 共通 | `session_id`、`hook_event_name`、`cwd`、`agent_id`、`agent_type`、`hookAt` |
 | PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで。切り詰めた場合は末尾に「…」を付ける)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る。Bash では、コマンドの全文から見つけた Codex の起動の定義名を `codexLaunchDefinition` として送る(見つけ方は「サブエージェントのモデルと effort」の節) |
-| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex の起動、クロスレビューの起動、`--wait` の Bash で、`tool_response.persistedOutputPath` が絶対パスでファイル名が `<英数字、_、->.txt` の形なら、出力の結果行の有無によらず、そのファイルの先頭と末尾の各 64KB から Codex の行を読み、出力から得た行より優先する。Claude Code は 30000 文字を超える出力の先頭だけを `stdout` に残して全文をこのファイルに置き、本物の結果行は出力の最後に出るためである(先頭に残った結果行は、最終報告に引用されたものでありうる)。`stderr` は見ない(bridge は Codex の行を標準出力へ出す)。PostToolUse の Codex の終了の判定は「サブエージェントのモデルと effort」の節に従う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash の PostToolUse では、コマンド先頭の `cd <パス> &&` から解決した絶対パスを `commandCwd` として送る(変数展開、`~`、引用符なしの `\`、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない) |
+| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex の起動、クロスレビューの起動、`--wait` の Bash で、`tool_response.persistedOutputPath` が絶対パスでファイル名が `<英数字、_、->.txt` の形なら、出力の結果行の有無によらず、そのファイルの先頭と末尾の各 64KB から Codex の行を読み、出力から得た行より優先する。Claude Code は 30000 文字を超える出力の先頭だけを `stdout` に残して全文をこのファイルに置き、本物の結果行は出力の最後に出るためである(先頭に残った結果行は、最終報告に引用されたものでありうる)。`stderr` は見ない(bridge は Codex の行を標準出力へ出す)。PostToolUse の Codex の終了の判定は「サブエージェントのモデルと effort」の節に従う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash または PowerShell の PostToolUse では、`tool_response.stdout` などから URL を送る。Bash はコマンド先頭の `cd <パス> &&` から解決した絶対パスを `commandCwd` として送る(変数展開、`~`、引用符なしの `\`、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない)。PowerShell では `commandCwd` を送らない |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。UserPromptSubmit では、`prompt` が `<task-notification>` で始まるときだけ通知を全件読み、`status` が終わり(`completed`、`failed`、`killed`、`stopped`)のものの `task-id` と `status` を `backgroundTaskEnds` に載せる。開発者が入力に引用した通知を、終了と取り違えないためである。出力ファイルの読み取りは 8 件までとし、`output-file` が絶対パスで、ファイル名が `<task-id>.output` と一致する場合は、先頭と末尾の各 64KB から Codex の監査行、結果行、実行 ID の行だけを `codexOutput` に載せる。128KB 以下のファイルは全体を読む。出力ファイルが無い通知には `outputMissing` を付け、Codex の行を終了未確認にする。上限を超えて読まなかった通知と、出力を読めなかった通知は送らず、記録ファイルを読み直すサーバーの照合に任せる。出力に `waiting` があれば行を閉じてはならないためである。サーバーの照合は、セッションの一覧から `cwd` を得られなければ、フックが最初に送った `cwd` で記録ファイルを探す。サーバーが受ける `backgroundTaskEnds` は最大 32 件とする。プロンプト本文と `summary` は送らない |
@@ -344,10 +344,10 @@ Windows のルート相対パスは `\` で始め、相対パスは実行環境�
   `--dev` では `uiVersion` を比較しない。
   再起動待ちの間、画面は再起動で更新が反映されることを通知欄に表示する。実行中と配置済みのバージョンが異なる場合は配置済みのバージョンを示し、それ以外の差は更新したファイルが配置されたことを示す。
   状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`GET /api/tray` はトレイ用に `{permissionKeys, decisionKeys, awayEnabled}` を返し、PR や「前回見てから」の情報を計算しない。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
-`POST /api/update/check` は今すぐの版の確認で、「更新の確認」の節に記す。
+`POST /api/update/check` は今すぐのバージョンの確認で、「更新の確認」の節に記す。
 - `GET /api/state` は計算済みの JSON 本文を、状態の指紋と有効期限が変わらない間だけ使い回す。
   指紋は `state.version`、PR の取得中の鍵の署名、整理後の離席状態、経路設定、更新確認の結果、画面の版、配置済みの状態、再起動待ちの判定、連携ツールの検出結果、ソースの状態から作る。
-  配置済みの HTML、パッケージの版、コミットは 5 秒、連携ツールは 10 秒を確認期限とし、状態の版が変わった場合も確認し直す。
+  配置済みの HTML、パッケージのバージョン、コミットは 5 秒、連携ツールは 10 秒を確認期限とし、状態の版が変わった場合も確認し直す。
   同時に要求が来たときは実行中の外部確認を共有する。確認中に版が変わっても待ち直さず、次の取得で確認し直す。イベントが続く間も応答を止めないためである。
   外部確認と離席期間の整理を済ませてから本文を同期で生成し、初回表示による既読時刻の初期化を含め、生成後の版で指紋を確定する。
 - 本文の有効期限は生成から 30 秒以内とし、予約通知の消失、マージ履歴の保持期限、開いた離席期間へ未来の記録が入る時刻、離席期間の保持期限が先に来れば、その時刻で失効する。
@@ -411,7 +411,7 @@ Windows のルート相対パスは `\` で始め、相対パスは実行環境�
 
 ## PR の表示
 
-PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツール `cockpit_add_pr` から登録し、`store.json` に保存する。
+PR は Bash または PowerShell の `gh pr create`、GitHub MCP の作成応答、または MCP ツール `cockpit_add_pr` から登録し、`store.json` に保存する。
 常駐サーバーは `gh` の保存済み認証を使い、60 秒ごとにリポジトリの状態を取得する。
 レビュー状態と PR 群の再計算はリポジトリごとに直列化し、実行中の要求は次の 1 回にまとめる。
 各要求は、要求後に開始する再計算の完了を待ち、その回の例外は待機した呼び出し元へ伝えるが、次の再計算は止めない。
@@ -652,12 +652,16 @@ AskUserQuestion は `tool_use_id` を id にし、1 回の呼び出しを質問�
 推奨は、単一選択の質問で label に「(推奨)」または「(Recommended)」(括弧は全角・半角を許容し、英語の大文字小文字は区別しない)を含む選択肢、または MCP の `cockpit_add_decision` で `recommended: true` を明示した選択肢がちょうど 1 つのときに付け、description は判定に使わない。
 同じセッションに未解決の同じ質問がある場合は、その id に後続の tool_use_id を結び付ける。
 PostToolUse は `resolved`、PostToolUseFailure は `withdrawn` にし、どちらも `resolvedAt` を記録する。
-デスクトップアプリ上で却下した質問には終了フックが来ないため、後続のメインセッションの UserPromptSubmit、Stop、別の tool_use_id の PreToolUse で `waiting` の質問を `withdrawn` にする。
+デスクトップアプリ上で却下した質問には終了フックが来ないため、後続のメインセッションの UserPromptSubmit、Stop、Interrupt、別の tool_use_id の PreToolUse で `waiting` の質問を `withdrawn` にする。
 受信済みの最新の質問開始より後の時刻のイベントだけを使い、同じ質問の出し直しは既存の判断事項へ結び付ける。
 `provisional` と、フックの回答待ちを扱った `decisionLifecycles` の記録がある質問は対象から外す。
 回答待ちの期限は再起動で消えるため、期限や回答の有無だけではなく記録の存在を保護の根拠にする。
 後続イベントによる取り下げは `finishedByToolUseId` と終了時刻に加え、推定の印を兼ねる根拠イベントの `hookAt` を `inferredWithdrawalHookAt` に保存する。
 この項目がない保存済みの判断事項は、推定による取り下げとして扱わない。
+質問の開始が区切りより遅れて届いた場合も、開始を受けたときに、その開始より後の時刻の区切りがすでに届いていれば、その場で推定の取り下げにする。
+`inferredWithdrawalHookAt` には、開始より後の区切りのうち最も早いものの `hookAt` を入れる。
+再起動後は記録がメモリーに無いため、遅れて届いた開始は次の区切りまで判断待ちに残る。
+記録の圧縮で区切りの PreToolUse が消えている場合は、根拠は後の Stop か UserPromptSubmit になる。
 推定で取り下げた呼び出し(`finishedByToolUseId`。出し直しがあれば最新の呼び出し)の PostToolUse / PostToolUseFailure が遅れて届き、その `hookAt` が推定の根拠より前なら、保存状態を終了フックの結果と終了時刻へ訂正し、推定の印を消す。
 出し直し前の呼び出しの終了フックは、最新の呼び出しの結果を説明しないので訂正に使わない。
 PostToolUse は `resolved` と回答内容、PostToolUseFailure は `withdrawn` と `resolution: null` を保存する。

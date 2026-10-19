@@ -1726,9 +1726,9 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
 test('一覧が残る再描画で表示設定のボタンが消えたらマージ結果か表示切り替えへフォーカスを戻す', () => {
   const render = functionSource(web, 'render');
   assert.ok(render);
-  assert.match(render, /\['show-finished', 'show-idle', 'merge-result-close'\]\.includes\(focusData\.kind\) && !button/);
+  assert.match(render, /\['show-finished', 'show-idle', 'close-merge-result'\]\.includes\(focusData\.kind\) && !button/);
 
-  const exercise = (hasMergeResult) => {
+  const exercise = (activeElement, hasMergeResult) => {
     const modeButton = {
       dataset: { mode: 'product' },
       setAttribute() {},
@@ -1753,7 +1753,7 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
       renderIdleNote() {},
       updateTitle() {},
       document: {
-        activeElement: { dataset: { showFinished: 'true' }, hasAttribute: () => false },
+        activeElement,
         querySelectorAll: () => [modeButton],
         querySelector: (selector) => selector === '[data-close-merge-result]'
           ? (hasMergeResult ? mergeResultButton : null)
@@ -1772,15 +1772,28 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
     return { modeButton, mergeResultButton, root };
   };
 
-  const withMergeResult = exercise(true);
+  const showFinished = { dataset: { showFinished: 'true' }, hasAttribute: () => false };
+  const closeMergeResult = { dataset: { closeMergeResult: 'result-1' }, hasAttribute: () => false };
+
+  const withMergeResult = exercise(showFinished, true);
   assert.deepEqual(JSON.parse(JSON.stringify(withMergeResult.mergeResultButton.focusOptions)), { preventScroll: true });
   assert.equal(withMergeResult.modeButton.focusOptions, undefined);
   assert.equal(withMergeResult.root.children.length, 1);
 
-  const withoutMergeResult = exercise(false);
+  const withoutMergeResult = exercise(showFinished, false);
   assert.deepEqual(JSON.parse(JSON.stringify(withoutMergeResult.modeButton.focusOptions)), { preventScroll: true });
   assert.equal(withoutMergeResult.mergeResultButton.focusOptions, undefined);
   assert.equal(withoutMergeResult.root.children.length, 1);
+
+  const closeWithMergeResult = exercise(closeMergeResult, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(closeWithMergeResult.mergeResultButton.focusOptions)), { preventScroll: true });
+  assert.equal(closeWithMergeResult.modeButton.focusOptions, undefined);
+  assert.equal(closeWithMergeResult.root.children.length, 1);
+
+  const closeWithoutMergeResult = exercise(closeMergeResult, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(closeWithoutMergeResult.modeButton.focusOptions)), { preventScroll: true });
+  assert.equal(closeWithoutMergeResult.mergeResultButton.focusOptions, undefined);
+  assert.equal(closeWithoutMergeResult.root.children.length, 1);
 });
 
 test('モックの終わった項目の表示は保存せず一時的に切り替える', () => {

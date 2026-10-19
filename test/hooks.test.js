@@ -320,6 +320,46 @@ test('gh pr create と GitHub MCP の応答から PR の URL だけを送る', a
   assert.equal(Object.hasOwn(noUrl, 'commandCwd'), false);
 });
 
+test('PowerShell の gh pr create は URL を送り、cd 先を commandCwd にしない', () => {
+  const commandCwd = path.resolve(os.tmpdir(), 'powershell-pr-repo', 'worktree');
+  const command = `cd "${commandCwd.replaceAll('\\', '/')}" && gh pr create --fill`;
+  const pre = makeHookEvent({
+    session_id: 'powershell-pr', hook_event_name: 'PreToolUse', cwd: process.cwd(),
+    tool_name: 'PowerShell', tool_use_id: 'powershell-pr', tool_input: { command },
+  });
+  assert.equal(pre.ghPrCreateCommand, true);
+  assert.equal(Object.hasOwn(pre, 'commandCwd'), false);
+
+  const post = makeHookEvent({
+    session_id: 'powershell-pr', hook_event_name: 'PostToolUse', cwd: process.cwd(),
+    tool_name: 'PowerShell', tool_use_id: 'powershell-pr', tool_input: { command },
+    tool_response: { stdout: 'https://github.com/example/project/pull/43' },
+  });
+  assert.equal(post.ghPrCreateCommand, true);
+  assert.deepEqual(post.pullRequest, {
+    owner: 'example', repo: 'project', number: 43, url: 'https://github.com/example/project/pull/43',
+  });
+  assert.equal(Object.hasOwn(post, 'commandCwd'), false);
+  assert.equal(Object.hasOwn(sanitizeEvent(post), 'commandCwd'), false);
+});
+
+test('PowerShell の push は未知スコープとして取り直し、cd 先を送らない', () => {
+  const commandCwd = path.resolve(os.tmpdir(), 'powershell-push-repo', 'worktree');
+  const command = `cd "${commandCwd.replaceAll('\\', '/')}" && git push`;
+  for (const hook_event_name of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure']) {
+    const event = makeHookEvent({
+      session_id: 'powershell-push', hook_event_name, cwd: process.cwd(),
+      tool_name: 'PowerShell', tool_use_id: 'powershell-push', tool_input: { command },
+    });
+    assert.equal(hook_event_name === 'PreToolUse' ? event.refreshPullRequestsCommand : event.refreshPullRequests, true);
+    assert.equal(event.refreshScopeUnknown, true);
+    assert.equal(Object.hasOwn(event, 'commandCwd'), false);
+    assert.equal(sanitizeEvent(event).refreshScopeUnknown, true);
+    assert.equal(Object.hasOwn(sanitizeEvent(event), 'commandCwd'), false);
+    assert.equal(Object.hasOwn(sanitizeEvent({ ...event, refreshRepository: 'example/project' }), 'refreshRepository'), false);
+  }
+});
+
 test('PR 取り直しコマンドの cwd と --repo を Claude と Codex のイベントに載せる', () => {
   const hookCwd = path.resolve(os.tmpdir(), 'session-repo', 'worktree');
   const commandCwd = path.resolve(os.tmpdir(), 'target-repo', 'worktree');

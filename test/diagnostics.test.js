@@ -307,7 +307,7 @@ test('種類の上限を超えると最も古い繰り返し件数を書き出�
   ]);
 });
 
-test('起動と停止の mark は版とポートを残し、秘密値を含めない', async t => {
+test('起動と停止の mark はバージョンとポートを残し、秘密値を含めない', async t => {
   const { runtime } = await startTestServer(t);
   const entries = await read(runtime);
   assert.equal(entries[0].level, 'mark');

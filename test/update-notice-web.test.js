@@ -24,7 +24,7 @@ const update = { current: '0.0.0', latest: '1.0.0', available: true,
   prompt: 'agent-cockpit を v1.0.0 に更新して。手順は C:/checkout/docs/update.md にある。',
   compareUrl: 'https://github.com/ktysne/agent-cockpit/tree/v1.0.0' };
 
-test('新しい版だけを通知欄に表示し、通知が無くなれば隠す', () => {
+test('新しいバージョンだけを通知欄に表示し、通知が無くなれば隠す', () => {
   const { context, get } = noticeContext();
   assert.match(html, /class="filter-note" id="update-note" role="status"/);
   assert.match(html, /id="update-compare" target="_blank" rel="noopener noreferrer"/);
@@ -64,7 +64,7 @@ test('クリップボードが使えなければ依頼文を選択表示し、�
   }
 });
 
-test('版はウィンドウのタイトルにだけ付け、見出しは名前だけにする', () => {
+test('バージョンはウィンドウのタイトルにだけ付け、見出しは名前だけにする', () => {
   assert.match(html, /alt="">Agent Cockpit<\/h1>/);
   const context = vm.createContext({ appVersion: '', document: { title: '' },
     countJudgments: () => ({ permission: 1, blocking: 1 }) });
@@ -256,7 +256,7 @@ function localUpdateTime(succeededAt) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
-test('更新を確認は、最新なら何も出さず、それ以外は結果を一行で出し、新しい版では通知欄も更新する', async () => {
+test('更新を確認は、最新なら何も出さず、それ以外は結果を一行で出し、新しいバージョンでは通知欄も更新する', async () => {
   const latest = { ...update, current: '0.0.0', checkedAt: 'x', error: null };
   const cases = [
     { body: { current: '1.0.1', latest: '1.0.1', available: false, checkedAt: 'x', error: null }, status: 200,

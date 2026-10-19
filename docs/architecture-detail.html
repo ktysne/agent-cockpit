@@ -307,7 +307,7 @@ ul.points li { margin-bottom: 6px; }
       <text class="s" x="762" y="614">診断ログの記録・読み出し・削除</text>
       <rect class="b-in" x="750" y="632" width="215" height="48" rx="7"/>
       <text class="t2" x="762" y="652">update-check.js</text>
-      <text class="s" x="762" y="670">新しい版のタグの確認（6 時間ごと）</text>
+      <text class="s" x="762" y="670">新しいバージョンの確認（6 時間ごと）</text>
 
       <rect class="b-gate" x="978" y="80" width="184" height="615" rx="8"/>
       <text class="t2" x="990" y="102">画面用の口</text>
@@ -346,7 +346,7 @@ ul.points li { margin-bottom: 6px; }
       <text class="t" x="1256" y="206">ダッシュボード（src/web/index.html）</text>
       <text class="s" x="1256" y="224">Edge の --app ウィンドウ、または内部ブラウザ</text>
       <rect class="b-in" x="1256" y="238" width="268" height="44" rx="7"/>
-      <text x="1268" y="257">ヘッダー</text><text class="s" x="1268" y="274">版と更新の通知・離席中・件数・経路の設定</text>
+      <text x="1268" y="257">ヘッダー</text><text class="s" x="1268" y="274">バージョンと更新の通知・離席中・件数・経路の設定</text>
       <rect class="b-in" x="1256" y="288" width="268" height="44" rx="7"/>
       <text x="1268" y="307">セッション</text><text class="s" x="1268" y="324">作業中・許可待ち・中断・状態の推定</text>
       <rect class="b-in" x="1256" y="338" width="268" height="44" rx="7"/>
@@ -413,7 +413,7 @@ ul.points li { margin-bottom: 6px; }
       <text class="s" x="1256" y="944">GH_TOKEN などの環境変数は消し、</text>
       <text class="s" x="1256" y="962">gh 自身のログインを使う</text>
       <text class="m" x="1256" y="996">git ls-remote --tags</text>
-      <text class="s" x="1256" y="1014">新しい版のタグ（6 時間ごと）</text>
+      <text class="s" x="1256" y="1014">新しいバージョンのタグ（6 時間ごと）</text>
 
       <!-- 経路 -->
       <g class="flow" data-flow="8">
@@ -536,7 +536,7 @@ ul.points li { margin-bottom: 6px; }
       <tr data-flow="7"><td class="no"><span class="dot" style="background:var(--gray)">7</span></td><td>経路の差し込み</td><td>route.js ⇄ ファイル</td><td><code>routing.json</code>、<code>route-agents/</code></td><td>サーバーを介さず設定ファイルを直接読む。Claude のフックにだけ登録する。サブエージェントの開始時に経路（既定・Codex・Claude）を記録して文脈に足し、終了までその経路を使う。Claude 指定中に <code>codex-agent.sh</code> を呼ぶ Bash は拒否する。</td></tr>
       <tr data-flow="8"><td class="no"><span class="dot" style="background:var(--blue)">8</span></td><td>計画・PR の登録</td><td>MCP → サーバー</td><td><code>POST /api/sessions/:id/plan</code>、<code>/prs</code>、<code>/api/diagnostics</code></td><td>タスクと完了条件の置き換え、判断事項の追加と更新、PR の URL の登録、クロスレビュー不要の記録。Claude は、常駐サーバーが MCP の親プロセスの pid と <code>~/.claude/sessions</code> の対応からセッションを特定し、見つからない場合に環境変数 <code>CLAUDE_CODE_SESSION_ID</code> を使う。Codex は <code>initialize</code> のクライアント名で見分け、<code>tools/call</code> の <code>_meta.sessionId</code> を記録先にする。Codex のフックで登録されていないセッションへの書き込みは 403 で断る。書き込みのたびに、その結果を診断ログへ送る。</td></tr>
       <tr data-flow="9"><td class="no"><span class="dot" style="background:var(--orange)">9</span></td><td>画面の配信</td><td>ダッシュボード ⇄ サーバー</td><td><code>GET /</code></td><td><code>index.html</code> を返す。画面用の秘密値 uiSecret と画面の版を meta 要素に埋め込み、画面からの書き込みは uiSecret を添えて送る。</td></tr>
-      <tr data-flow="10"><td class="no"><span class="dot" style="background:var(--orange)">10</span></td><td>状態の取得</td><td>ダッシュボード ⇄ サーバー</td><td><code>GET /api/state</code></td><td>2 秒ごとに全体の状態（セッション、タスク、判断事項、PR、離席中、経路の設定、連携の有無、版と新しい版の有無）を取得し、変わっていれば描き直す。画面の版が変わっていれば読み込み直す。</td></tr>
+      <tr data-flow="10"><td class="no"><span class="dot" style="background:var(--orange)">10</span></td><td>状態の取得</td><td>ダッシュボード ⇄ サーバー</td><td><code>GET /api/state</code></td><td>2 秒ごとに全体の状態（セッション、タスク、判断事項、PR、離席中、経路の設定、連携の有無、バージョンと新しいバージョンの有無）を取得し、変わっていれば描き直す。画面の版が変わっていれば読み込み直す。</td></tr>
       <tr data-flow="11"><td class="no"><span class="dot" style="background:var(--orange)">11</span></td><td>画面からの操作</td><td>ダッシュボード → サーバー</td><td><code>POST /api/decisions/:id/answer</code> ほか</td><td>判断事項への回答、離席中、経路の設定、表示設定（診断ログの記録のレベルを含む）、既読、セッションを一覧から外す、記録の削除、タスクやサブエージェントを閉じる、会話ログからの状態の推定。回答はサーバーの配信待ちに置かれ、③〜⑥ の経路で届く。<code>open-url</code> は https の URL だけを受け、サーバーが既定のブラウザーで開く（マニュアルと PR のリンク）。</td></tr>
       <tr data-flow="12"><td class="no"><span class="dot" style="background:var(--orange)">12</span></td><td>PR の操作</td><td>ダッシュボード → サーバー</td><td><code>POST /api/pull-requests/merge</code>・<code>reserve</code>・<code>cancel-reservation</code>・<code>conflict-request</code> ほか</td><td>開発者が確認した即時マージ、レビュー収束後マージの予約と取り消し、衝突の解消の依頼、レビュー不要の設定、マージ結果を閉じる、リポジトリの登録の解除。即時マージは画面で見た head、予約マージは収束記録の head の SHA を照合する。流れは <a href="#s6">図 3</a>。</td></tr>
       <tr data-flow="13"><td class="no"><span class="dot" style="background:var(--purple)">13</span></td><td>GitHub 連携</td><td>サーバー ⇄ GitHub</td><td><code>gh</code> CLI</td><td>登録された PR とその関連 PR、CI、レビューの状態を 60 秒ごとに取得する。PR の作成と push の後にも取り直す。マージは <code>gh pr merge --match-head-commit</code> で行う。</td></tr>
@@ -548,7 +548,7 @@ ul.points li { margin-bottom: 6px; }
       <tr data-flow="19"><td class="no"><span class="dot" style="background:var(--gray)">19</span></td><td>届かなかったフックの退避</td><td>event.js → ファイル</td><td><code>diagnostics/hooks-pending.jsonl</code></td><td>常駐サーバーから応答が無かったとき、その記録を退避ファイルに追記する（256 KiB まで）。サーバーは起動時と 10 秒ごとの走査で取り込み、診断ログへ移して消す。</td></tr>
       <tr data-flow="20"><td class="no"><span class="dot" style="background:var(--gray)">20</span></td><td>Codex の情報の読み取り</td><td>ファイル → サーバー</td><td><code>~/.codex/</code>（<code>CODEX_HOME</code>）</td><td>10 秒ごとに <code>session_index.jsonl</code> からスレッド名を読み、セッションの題にする。<code>thread-writer-locks/</code> のロックが消えた会話は、デスクトップのアーカイブで閉じたものとして 60 秒後に終了扱いにする。保存した Codex 本体の pid が生きていれば、再起動後も行を戻す。</td></tr>
       <tr data-flow="21"><td class="no"><span class="dot" style="background:var(--orange)">21</span></td><td>診断ログの閲覧</td><td>ダッシュボード ⇄ サーバー</td><td><code>GET /api/diagnostics</code>、<code>POST /api/diagnostics</code>・<code>/delete</code></td><td>起動の一覧と、選んだ起動の記録を読む。削除は uiSecret が要る。画面の取得や操作が失敗したときも、その記録を送る。</td></tr>
-      <tr data-flow="22"><td class="no"><span class="dot" style="background:var(--purple)">22</span></td><td>新しい版の確認</td><td>サーバー ⇄ GitHub</td><td><code>git ls-remote --tags</code></td><td>起動の 60 秒後と、その後 6 時間ごとに agent-cockpit のリポジトリのタグを見る。手元の版より新しい版があれば、画面に通知と、<code>docs/update.md</code> を指す更新の依頼文を出す。</td></tr>
+      <tr data-flow="22"><td class="no"><span class="dot" style="background:var(--purple)">22</span></td><td>新しいバージョンの確認</td><td>サーバー ⇄ GitHub</td><td><code>git ls-remote --tags</code></td><td>起動の 60 秒後と、その後 6 時間ごとに agent-cockpit のリポジトリのタグを見る。手元のバージョンより新しいバージョンがあれば、画面に通知と、<code>docs/update.md</code> を指す更新の依頼文を出す。</td></tr>
     </tbody>
   </table>
   </div>
@@ -569,7 +569,7 @@ ul.points li { margin-bottom: 6px; }
       <tr><td><code>routing.js</code></td><td>経路の設定（サブエージェントとクロスレビュー）を保存する。</td><td>⑪ ⑮（読むのは ⑦ の route.js）</td></tr>
       <tr><td><code>session-files.js</code><br><code>transcript.js</code><br><code>identity.js</code></td><td>稼働中セッションの検出、エージェント定義の読み取り、会話ログからの中断の検出と状態の推定、Codex のスレッド名の読み取り、作業ディレクトリからのプロダクトの判定（worktree は本体のリポジトリにまとめる）。</td><td>⑭ ⑳</td></tr>
       <tr><td><code>diagnostics.js</code></td><td>診断ログの記録、読み出し、削除。許した項目だけを残して文字列を伏せ、10 分以内に続く同じ記録は件数にまとめる。</td><td>⑮ ⑲ ㉑</td></tr>
-      <tr><td><code>update-check.js</code></td><td>新しい版のタグの確認。</td><td>㉒</td></tr>
+      <tr><td><code>update-check.js</code></td><td>新しいバージョンのタグの確認。</td><td>㉒</td></tr>
       <tr><td><code>display-preferences.js</code><br><code>request-validation.js</code></td><td>表示設定の既定値と範囲、要求の本文の検査、外部 URL の検査（https だけ）。</td><td>⑪</td></tr>
       <tr><td><code>credential-environment.js</code></td><td>起動時に <code>GH_TOKEN</code> などの環境変数を消し、<code>gh</code> 自身のログインを使わせる。</td><td>⑬</td></tr>
       <tr><td><code>json-storage.js</code></td><td>一時ファイルに書いてから置き換え、途中で止まっても壊れた JSON が残らないようにする。</td><td>⑮</td></tr>
@@ -583,7 +583,7 @@ ul.points li { margin-bottom: 6px; }
     <tbody>
       <tr><td><code>server-connection.js</code></td><td>常駐サーバーを探し、無ければ起動する。書き込みが認証か接続で失敗したら、<code>server.json</code> を読み直して 1 回だけやり直す。フックの接続の期限は 1 秒。</td><td>② ⑰</td></tr>
       <tr><td><code>hooks-pending.js</code><br><code>diagnostic-events.js</code></td><td>届かなかったフックの記録の退避と取り込み。外から届く診断の記録の種類とレベルを決める。</td><td>⑲ ㉑</td></tr>
-      <tr><td><code>restart-server.js</code></td><td>更新の後に常駐サーバーを再起動する CLI。保存のまとめ書きを待ってから止め、起動後の health の起動情報、版、コミットをこのチェックアウトの期待値と照合する。不一致は失敗、期待のコミットを取得できない場合は未照合と案内する。</td><td>②</td></tr>
+      <tr><td><code>restart-server.js</code></td><td>更新の後に常駐サーバーを再起動する CLI。保存のまとめ書きを待ってから止め、起動後の health の起動情報、バージョン、コミットをこのチェックアウトの期待値と照合する。不一致は失敗、期待のコミットを取得できない場合は未照合と案内する。</td><td>②</td></tr>
     </tbody>
   </table>
   </div>
