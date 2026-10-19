@@ -194,9 +194,12 @@ function launchCommandTexts(text, depth = 0) {
   return [code, ...substitutions];
 }
 
+function isCodexAgent(word) {
+  return /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word);
+}
+
 // 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
 function extractCodexLaunchDefinition(command) {
-  const isCodexAgent = (word) => /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word);
   for (const [argument = ''] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts)) {
     const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
     if (definition) return definition;
@@ -205,8 +208,10 @@ function extractCodexLaunchDefinition(command) {
 }
 
 function extractCodexWaitRunId(command) {
-  const match = commandPositionText(command).match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|)]+)/im);
-  return match ? match[1].slice(0, 256) : '';
+  for (const [argument, runId] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts)) {
+    if (argument === '--wait' && runId) return runId.slice(0, 256);
+  }
+  return '';
 }
 
 // コマンドの区切りまでの引数を返す。`2>&1` や `> "out file"` のリダイレクトは出力先ごと除く。
@@ -470,6 +475,7 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
   } else if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
+    if (eventName === 'PostToolUseFailure' && input.is_interrupt === true) event.isInterrupt = true;
     if (event.tool_name === 'Bash') {
       const command = pickString(input.tool_input?.command);
       if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;

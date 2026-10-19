@@ -8,7 +8,7 @@ const RETAINED_FIELDS = [
   'questions', 'decisionResolution', 'codexDefinition', 'codexWaitDefinition',
   'codexWaitRunId', 'codexWaitStatus', 'codexResult', 'codexRunId', 'codexAudit',
   'backgroundTaskId', 'backgroundOutputTaskId', 'stoppedTaskId', 'resolvedModel',
-  'backgroundTaskEnds', 'agentDefinition', 'codexAgentDefinition',
+  'backgroundTaskEnds', 'agentDefinition', 'codexAgentDefinition', 'isInterrupt',
 ];
 
 function isQuestionEntry({ event }) {

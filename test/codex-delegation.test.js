@@ -163,6 +163,147 @@ function codexSessions(state) {
   return state.snapshot().sessions.filter(session => session.provider === 'codex');
 }
 
+test('起動の中断は Failure と合成 Interrupt の順によらず終了未確認になる', () => {
+  for (const command of ['bash codex-agent.sh impl-hard', 'npm run review:codex']) {
+    for (const interruptFirst of [true, false]) {
+      const state = new DashboardState();
+      launch(state, 'launch', { tool_input: { command } });
+      const failure = () => state.addEvent(claudeEvent('PostToolUseFailure', {
+        hookAt: interruptFirst ? 300 : 200, is_interrupt: true,
+      }));
+      if (interruptFirst) state.recordInterruption(parentId, 200);
+      failure();
+      if (!interruptFirst) state.recordInterruption(parentId, 300);
+      const [agent] = state.snapshot().sessions[0].agents;
+      assert.deepEqual([agent.active, agent.unconfirmed, agent.closable], [false, true, true], command);
+    }
+  }
+});
+
+test('中断の印が無い起動の Failure は終了にする', () => {
+  for (const command of ['bash codex-agent.sh impl-hard', 'npm run review:codex']) {
+    const state = new DashboardState();
+    launch(state, 'launch', { tool_input: { command } });
+    state.addEvent(claudeEvent('PostToolUseFailure', { hookAt: 200, error: 'interrupted' }));
+    state.recordInterruption(parentId, 300);
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.equal(agent.active, false);
+    assert.notEqual(agent.unconfirmed, true);
+  }
+});
+
+const missingRunId = 'impl-hard-20261019-031058-1234';
+const missingRunLine = `codex-agent: run=${missingRunId} pid=1234 started=2026-10-19T03:10:58Z`;
+const missingLaunchAt = Date.parse('2026-10-19T03:10:58.900Z');
+
+function missingLaunch(state, toolUseId = 'launch') {
+  state.addEvent(claudeEvent('SubagentStart', { hookAt: missingLaunchAt - 1, agent_id: 'sub', agent_type: 'impl-hard' }));
+  launch(state, toolUseId, { hookAt: missingLaunchAt, agent_id: 'sub' });
+}
+
+test('起動の PostToolUse が無くても run 行の有無によらず子の --wait で同じ行を終了する', () => {
+  for (const withHeader of [true, false]) {
+    const state = new DashboardState();
+    missingLaunch(state);
+    if (withHeader) state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1,
+      agent_id: 'sub', tool_use_id: 'header', tool_input: { command: 'bash codex-agent.sh --header-of impl-hard' },
+      tool_response: missingRunLine }));
+    state.addEvent(claudeEvent('PreToolUse', { hookAt: missingLaunchAt + 2, agent_id: 'sub', tool_use_id: 'wait',
+      tool_input: { command: `bash codex-agent.sh --wait ${missingRunId}` } }));
+    state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 3, agent_id: 'sub', tool_use_id: 'wait',
+      tool_response: `${missingRunLine}\ncodex-agent: result=ok` }));
+    state.addEvent(claudeEvent('SubagentStop', { hookAt: missingLaunchAt + 4, agent_id: 'sub' }));
+    const [parent] = state.snapshot().sessions[0].agents;
+    assert.deepEqual([parent.active, parent.unconfirmed, parent.gpt.active, parent.gpt.unconfirmed], [false, false, false, false]);
+  }
+});
+
+test('メインの --wait の出力でも欠落した起動を親を問わず引き取って終了する', () => {
+  const state = new DashboardState();
+  missingLaunch(state);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1, tool_use_id: 'main-wait',
+    tool_input: { command: `bash codex-agent.sh --wait ${missingRunId}` },
+    tool_response: `${missingRunLine}\ncodex-agent: result=ok` }));
+  state.addEvent(claudeEvent('SubagentStop', { hookAt: missingLaunchAt + 2, agent_id: 'sub' }));
+  const [parent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([parent.active, parent.unconfirmed, parent.gpt.active, parent.gpt.unconfirmed], [false, false, false, false]);
+});
+
+test('同じ定義の起動が二つ欠落したとき run 行や --wait は引き取らない', () => {
+  const state = new DashboardState();
+  missingLaunch(state);
+  launch(state, 'second', { hookAt: missingLaunchAt, agent_id: 'sub' });
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1, agent_id: 'sub', tool_use_id: 'header',
+    tool_response: missingRunLine }));
+  state.addEvent(claudeEvent('PreToolUse', { hookAt: missingLaunchAt + 2, agent_id: 'sub', tool_use_id: 'wait',
+    tool_input: { command: `bash codex-agent.sh --wait ${missingRunId}` } }));
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 3, agent_id: 'sub', tool_use_id: 'wait',
+    tool_response: `${missingRunLine}\ncodex-agent: result=ok` }));
+  state.addEvent(claudeEvent('SubagentStop', { hookAt: missingLaunchAt + 4, agent_id: 'sub' }));
+  const [parent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([parent.unconfirmed, parent.gpt.active, parent.gpt.unconfirmed], [true, false, false]);
+});
+
+test('背景行と欠落した起動が共存すると正常な背景行の run 行を欠落した行へ付けない', () => {
+  for (const outputTask of [true, false]) {
+    const state = new DashboardState();
+    backgroundLaunch(state, 'impl-hard', missingLaunchAt);
+    launch(state, 'missing', { hookAt: missingLaunchAt + 1 });
+    state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 2, tool_use_id: 'header',
+      tool_input: { command: outputTask ? 'cat /tmp/task-a.output' : 'bash codex-agent.sh --header-of impl-hard' },
+      tool_response: missingRunLine }));
+    const agents = state.sessions.get(parentId).agents;
+    assert.equal(agents.find(agent => agent.agent_id === 'codex:missing').runId, undefined);
+    assert.equal(agents.find(agent => agent.agent_id === 'codex:launch').runId, outputTask ? missingRunId : undefined);
+  }
+});
+
+test('run 行で背景へ移った欠落起動はメインの Stop で終了未確認に戻らない', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: missingRunLine }));
+  state.addEvent(claudeEvent('Stop', { hookAt: missingLaunchAt + 2 }));
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.active, true);
+  assert.notEqual(agent.unconfirmed, true);
+  assert.equal(agent.backgroundTaskId, 'task-a');
+});
+
+test('Agent の報告に引用された run 行は欠落した起動へ付けない', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1, tool_name: 'Agent', tool_use_id: 'agent',
+    tool_input: { prompt: '依頼' }, tool_response: missingRunLine }));
+  const agent = state.sessions.get(parentId).agents.find(item => item.agent_id === 'codex:launch');
+  assert.equal(agent.runId, undefined);
+  assert.notEqual(agent.backgrounded, true);
+});
+
+test('結果を受け取った欠落起動は遅れて届いた中断で終了未確認に戻らない', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: `${missingRunLine}\ncodex-agent: result=ok` }));
+  state.addEvent(claudeEvent('PostToolUseFailure', { hookAt: missingLaunchAt + 2, is_interrupt: true }));
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.active, false);
+  assert.notEqual(agent.unconfirmed, true);
+});
+
+test('Codex の子は開始通知の有無によらず親の Stop の後も稼働し画面から閉じられる', () => {
+  for (const name of ['SubagentStart', 'PreToolUse']) {
+    const state = new DashboardState();
+    state.addEvent(codexEvent(name, { claudeParentSessionId: undefined, agent_id: 'child',
+      agent_type: 'default', tool_name: 'exec_command', tool_use_id: 'child-tool' }));
+    state.addEvent(codexEvent('Stop', { claudeParentSessionId: undefined, hookAt: 300 }));
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.deepEqual([agent.active, agent.backgrounded, agent.closable], [true, true, true]);
+    assert.equal(state.closeAgent('thread', 'child'), true);
+    assert.equal(state.snapshot().sessions[0].agents[0].active, false);
+  }
+});
+
 test('委譲した Codex は親の下にだけ表示され、結果行で終了する', () => {
   const state = new DashboardState();
   launch(state);
