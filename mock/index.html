@@ -1563,7 +1563,7 @@ function orderedProducts() {
 // セッションを外すか終えて PR もマージを終えたプロダクトは、未読の変化を既読にした時点でカードを消す。
 // PR を非表示にしている間は、PR だけで残るカードの本文が空になるので、PR を理由に残さない。
 function hasProductContent(p) {
-  return visibleSessions(p).length > 0 || (isShown('prs') && (p.repo.error || p.repo.loading || openPrs(p).length > 0 || hasPullRequestMergeResults(p)
+  return visibleSessions(p).length > 0 || (isShown('prs') && (p.repo.error || openPrs(p).length > 0 || hasPullRequestMergeResults(p)
     || p.prs.some(pr => isMerged(p, pr) && pr.headMismatch === true))) || (sinceSeenVisible() && p.news.length > 0 && !ui.seen.includes(p.id));
 }
 
@@ -2773,10 +2773,7 @@ function prBlock(p, withTag, showOriginBands = true) {
     const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
     return `<a class="badge mute${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''} href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`;
   }));
-  const empty = !roots.length && !p.repo.error
-    ? p.repo.loading ? `<div class="empty">GitHub から取得しています</div>`
-      : `<div class="empty">オープンの PR はありません</div>`
-    : '';
+  const empty = !roots.length && !p.repo.error ? `<div class="empty">オープンの PR はありません</div>` : '';
   const results = (pullRequestMergeResults.get(p.repo.name) || [])
     .filter(result => result.productId === p.id && pullRequestMergeResultVisible(result))
     .map(result => `<div class="merge-result" role="status"><span>PR #${result.number}: ${pullRequestMergeResultLine(result)}</span><button type="button" class="link-btn" data-close-merge-result="${esc(result.id)}">閉じる</button></div>`).join('');

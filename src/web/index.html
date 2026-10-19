@@ -2017,15 +2017,17 @@ function removePullRequestMergeResult(id) {
 }
 
 function pullRequestGroupHasVisibleContent(group) {
-  return group.openCount > 0 || group.openStateUnknown || group.error || group.loading || group.trees?.length
+  return group.openCount > 0 || group.openStateUnknown || group.error || group.trees?.length
     || group.mergeHistory?.some((record) => record.headMismatch === true
       || (record.automatic === true && record.automaticResult && pullRequestMergeResultVisible(record)))
       || group.reservationNotices?.some((notice) => !pullRequestTransientNoticeExpired(notice.at)) || hasPullRequestMergeResults(group);
 }
 
+// 最初の取得を終えていない PR 群は、表示の要否が決まるまで出さない。
 function visiblePullRequestGroups(groups) {
-  if (!hidesFinished()) return groups;
-  return groups.filter(pullRequestGroupHasVisibleContent);
+  const fetchedGroups = groups.filter((group) => !group.loading);
+  if (!hidesFinished()) return fetchedGroups;
+  return fetchedGroups.filter(pullRequestGroupHasVisibleContent);
 }
 
 // 同じ PR が複数のプロダクトの PR 群に載ることがあるので、owner、repo、番号で重複を除いて数える。
@@ -2721,12 +2723,8 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
     }
     content.append(line);
   };
-  if (!group.trees.length && !group.error) {
-    if (group.loading) {
-      content.append(element('div', 'empty', 'GitHub から取得しています'));
-    } else if (group.merged.length || group.mergeHistory?.length || group.registeredCount) {
-      content.append(element('div', 'empty', 'オープンの PR はありません'));
-    }
+  if (!group.trees.length && !group.error && (group.merged.length || group.mergeHistory?.length || group.registeredCount)) {
+    content.append(element('div', 'empty', 'オープンの PR はありません'));
   }
   if (Array.isArray(group.mergeHistory) && group.mergeHistory.length) {
     appendFoldedPrLine('merged', 'マージ済み (24 時間)', 'マージ済み', group.mergeHistory, (line, record) => {

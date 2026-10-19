@@ -2319,7 +2319,7 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
 
   const mockPrBlock = functionSource(fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8'), 'prBlock');
   assert.deepEqual(values, [1, 1]);
-  assert.match(mockPrBlock, /const empty = !roots\.length[\s\S]*?p\.repo\.loading[\s\S]*?オープンの PR はありません/);
+  assert.match(mockPrBlock, /const empty = !roots\.length[\s\S]*?オープンの PR はありません/);
 });
 
 test('終わったセッションはタスクの有無にかかわらず両方の表示から除く', () => {
