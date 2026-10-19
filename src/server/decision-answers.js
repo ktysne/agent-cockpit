@@ -616,7 +616,7 @@ class DecisionAnswerDelivery {
     return [
       '次の PR の現在の head には、クロスレビューの結論も、レビュー不要や保留の記録もありません(古い head の記録だけがある場合も含みます):',
       ...targets.map(({ owner, repo, number }) => `PR #${number} (${owner}/${repo})。`),
-      'クロスレビューを実施するか、省略するなら `cockpit_skip_review` に現在の head SHA と理由を渡して記録してください。保留するなら `cockpit_defer_review` に現在の head SHA、理由、次の作業(next)を渡してください。ツールが成功を返したことを確かめてから完了報告してください。失敗したら完了報告に未記録であることと理由を書いてください。保留はレビューを条件にしたマージの対象になりません。',
+      'クロスレビューを実施するか、省略するなら `cockpit_skip_review` に現在の head SHA と理由を渡して記録してください。保留するなら `cockpit_defer_review` に現在の head SHA、理由、次の作業(next)を渡してください。ツールが成功を返したことを確かめてから完了報告してください。成功しなければツールの応答に従い、未記録か、記録できたかを確かめられなかったかを、理由とともに完了報告に書いてください。保留はレビューを条件にしたマージの対象になりません。',
       SESSION_NOTIFICATION_REPLY_LANGUAGE,
     ].join('\n');
   }
