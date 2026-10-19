@@ -402,7 +402,7 @@ Codex(CLI とデスクトップ)のセッションも、Claude のセッショ�
     ],
     "PostToolUse": [
       { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] },
-      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 2 }] }
+      { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 5 }] }
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/event.js\" codex" }] },
@@ -430,7 +430,7 @@ Claude の登録との違いと、timeout の値の理由は次のとおりで�
 - `SessionStart` の `event.js` は、Claude と同じく常駐サーバーが動いていなければ起動し、ダッシュボードの URL を `additionalContext` でセッションへ渡します。Codex 本体のプロセス ID を調べるので、ほかのフックより時間がかかることがあります。timeout は付けずに Codex の既定に任せます。
 - `SessionStart` と `UserPromptSubmit` の `away.js` は、タスクの登録を促す文と、離席中の指示を `additionalContext` で渡します。判断事項の記録やレビュー不要の記録の使い方は、3 で置くスキルが伝えます。
 - `PreToolUse` の `away.js` は、Codex の質問ツール(`request_user_input_async` と `request_user_input`)だけを対象に、離席中にダッシュボードの回答を待ちます。timeout は Claude と同じ 1830 秒です。
-- Codex には `PostToolBatch` が無いので、`PostToolUse` の `answer.js`(timeout 2 秒)で、作業中のセッションへ回答を差し込みます。
+- Codex には `PostToolBatch` が無いので、`PostToolUse` の `answer.js`(timeout 5 秒)で、作業中のセッションへ回答を差し込みます。Windows では pwsh 経由の起動に約 0.5 秒かかります。フックが早く終われば、timeout は待ち時間になりません。
 - `Stop` の `answer.js` は、ターンの終わりに未配信の回答があれば続行させます。離席中は回答や通知を最大 59 分待ってから続行させます。そのあいだ Codex の画面は作業中の表示になり、`Esc` で中断できます。timeout はこの待ちに余裕を足した 3600 秒です。
 
 ### 2. MCP サーバーを登録する

@@ -74,7 +74,11 @@ Codex にはセッションを起こす手段が無い。
 ### フックの上限
 
 Codex のフックの既定の上限は 600 秒で、Claude の待ちの上限(30 分)より短い。
-回答用のフックの上限は、Claude の回答用のフックと同じ値を Codex のフックの設定に書く。
+回答用のフックの上限は、原則として Claude の対応するフックと同じ値を Codex の設定に書く。
+ただし Windows では `PostToolUse` が pwsh を経由して起動し、起動だけで約 0.5 秒かかるため、`UserPromptSubmit` と同じ 5 秒にする。
+フックが早く終われば、timeout は待ち時間にならない。
+確認応答は標準出力へ回答を書いた後に送る。
+書く前にフックが打ち切られると確認応答は届かず、常駐サーバーは次の機会に回答を配り直す。
 上限を超えても質問ツールはそのまま通るので、質問は失われない。
 
 ### 待つ間の中断
@@ -120,7 +124,7 @@ provider は `event.js` と同じく引数で決め、入力の形から推測�
     ],
     "PostToolUse": [
       {
-        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 2 }]
+        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/answer.js\" codex", "timeout": 5 }]
       }
     ],
     "UserPromptSubmit": [

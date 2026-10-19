@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { DashboardState } = require('../src/server/state');
 const { DecisionAnswerDelivery } = require('../src/server/decision-answers');
-const { runAnswerHook } = require('../src/hooks/answer');
+const { runAnswerHook, runAnswerHookMain } = require('../src/hooks/answer');
 const { hookHeaders, request, startTestServer, uiHeaders } = require('./support/server');
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -164,6 +164,38 @@ test('Codex PostToolUse は同じ要求の再送で回答と通知を回復す�
   assert.match(result.output.hookSpecificOutput.additionalContext, /PR の通知。/);
   assert.ok(c.state.decisionFor(c.sessionId, c.decision.id).answer.deliveredAt);
   assert.equal(c.runtime.answerDelivery.sessionNotifications.has(c.sessionId), false);
+});
+
+test('回答を標準出力へ書いてから確認応答を送る', async (t) => {
+  const c = await fixture(t, { sessionId: 'codex-hook-output-before-ack', provider: 'codex' });
+  const order = [];
+  const calls = [];
+  let output = '';
+  const transport = fetchToServer(c, { deliveryAction: 'post-tool-use', calls });
+  const stdout = {
+    write(chunk, callback) {
+      order.push('stdout');
+      output += chunk;
+      callback();
+      return true;
+    },
+  };
+  const stderr = { write(_chunk, callback) { callback(); return true; } };
+  const fetchImpl = async (url, init) => {
+    if (JSON.parse(init.body).action === 'delivery-ack') order.push('ack');
+    return transport(url, init);
+  };
+
+  const exitCode = await runAnswerHookMain(JSON.stringify({
+    session_id: c.sessionId,
+    hook_event_name: 'PostToolUse',
+  }), stdout, stderr, { provider: 'codex', homeDir: c.homeDir, deadline: Date.now() + 30_000, fetchImpl });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(order, ['stdout', 'ack']);
+  assert.match(output, /最初の回答。/);
+  assert.equal(calls.filter(({ body }) => body.action === 'delivery-ack').length, 1);
+  assert.ok(c.state.decisionFor(c.sessionId, c.decision.id).answer.deliveredAt);
 });
 
 test('Codex Stop-check は初回応答本文の喪失後も同じ世代の回答と通知を返す', async (t) => {
