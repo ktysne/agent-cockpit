@@ -1155,8 +1155,7 @@ test('マージ結果の一行と予約時の SHA 違いを完了表示の設定
   assert.equal(descendants(content).find((node) => node.dataset.closeMergeResult === 'result-1').textContent, '閉じる');
   const mismatch = { owner: 'example', repo: 'project', product: { key: 'project-b' }, openCount: 0, mergeHistory: [{ number: 51, headMismatch: true }] };
   const finished = { owner: 'example', repo: 'project', product: { key: 'project-c' }, openCount: 0, mergeHistory: [{ number: 52 }] };
-  const loading = { owner: 'example', repo: 'new-project', product: { key: 'project-d' }, openCount: 0, loading: true };
-  assert.deepEqual(JSON.parse(JSON.stringify(context.visibleGroups([mismatch, finished, loading]))), [mismatch, loading]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.visibleGroups([mismatch, finished]))), [mismatch]);
   const automaticShown = { owner: 'example', repo: 'project', product: { key: 'project-e' }, openCount: 0, mergeHistory: [{ number: 53, automatic: true, automaticResult: {} }] };
   const automaticHidden = { owner: 'example', repo: 'project', product: { key: 'project-f' }, openCount: 0, mergeHistory: [{ number: 54, automatic: true, automaticResult: {} }] };
   assert.deepEqual(JSON.parse(JSON.stringify(context.visibleGroups([automaticShown, automaticHidden]))), [automaticShown]);
@@ -1606,24 +1605,23 @@ test('マージの実行中は方式とブランチ削除の変更を受け付�
   assert.match(mock, /if \(pullRequestMergeInFlight\.has\(k\)\) \{ render\(\); return; \}/);
 });
 
-test('PR の初回取得中は空一覧の代わりに取得中の案内を出す', () => {
-  const resultFunctions = ['pullRequestMergeResultLine', 'appendPullRequestMergeResults', 'appendPullRequestError', 'appendPullRequestBlock'].map(name => functionSource(web, name));
-  assert.ok(resultFunctions.every(Boolean));
+test('PR の初回取得を終えるまではリポジトリを完了表示の設定にかかわらず出さない', () => {
+  const functions = ['pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'hasProductContent'].map(name => functionSource(web, name));
+  assert.ok(functions.every(Boolean));
   const context = pageContext(web, {
-    MERGE_METHOD_LABELS: {}, MERGED_VISIBLE_COUNT: 5, displayPreferences: { hideFinished: true },
-    pullRequestMergeResults: new Map(), pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}`,
-    element: fakeElement, document: { createTextNode: (text) => fakeElement('#text', '', text) },
-    durationAgoLabel: () => '少し前',
+    displayPreferences: { hideFinished: true }, isFilterShown: () => true,
+    pullRequestTransientNoticeExpired: () => false, pullRequestMergeResultVisible: () => true, hasPullRequestMergeResults: () => false,
   });
-  vm.runInContext(`${resultFunctions.join('\n')}\nthis.renderPrGroup = appendPullRequestBlock;`, context);
-  const target = fakeElement('div');
-  context.renderPrGroup(target, {
-    owner: 'example', repo: 'project', product: { key: 'project', name: 'Project' }, trees: [], error: null,
-    loading: true, merged: [], mergeHistory: [], fetchedAt: null, checkedAt: null,
-  });
-  assert.match(target.textContent, /GitHub から取得しています/);
-  assert.doesNotMatch(target.textContent, /オープンの PR はありません/);
-  assert.match(mock, /p\.repo\.loading \? `<div class="empty">GitHub から取得しています<\/div>`/);
+  vm.runInContext(functions.join('\n'), context);
+  const loading = { loading: true, openStateUnknown: true, openCount: 0, trees: [], mergeHistory: [], reservationNotices: [] };
+  const fetched = { ...loading, loading: false, openStateUnknown: false, openCount: 1 };
+  for (const hideFinished of [true, false]) {
+    context.displayPreferences.hideFinished = hideFinished;
+    assert.deepEqual(context.visiblePullRequestGroups([loading, fetched]), [fetched]);
+    assert.equal(context.hasProductContent({ key: 'project', sessions: [], pullRequestGroups: [loading] }, []), false);
+  }
+  assert.doesNotMatch(web, /GitHub から取得しています/);
+  assert.doesNotMatch(mock, /GitHub から取得しています|p\.repo\.loading/);
 });
 
 test('整数表示設定の範囲外は欄の近くに示し、ラベルにも範囲を示す', async () => {
