@@ -453,15 +453,36 @@ async function startServer(options = {}) {
     onFailure: (fileName) => logLine(homeDir, `${fileName} write failed`),
   });
   const perf = new PerfMetrics();
-  const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter, perf, worktreeOptions: options.worktreeOptions });
+  const storageFileSystem = options.storageOptions?.fileSystem || fs;
+  let state;
+  let away;
+  let routing;
+  try {
+    state = options.state || await DashboardState.load(homeDir, {
+      writer: storageWriter,
+      fileSystem: storageFileSystem,
+      readRetryOptions: options.storageOptions?.readRetryOptions,
+      perf,
+      worktreeOptions: options.worktreeOptions,
+    });
+    away = options.away || await AwayState.load(homeDir, storageFileSystem, storageWriter, options.storageOptions?.readRetryOptions);
+    routing = options.routing || await RoutingState.load(homeDir, {
+      writer: storageWriter,
+      fileSystem: storageFileSystem,
+      readRetryOptions: options.storageOptions?.readRetryOptions,
+    });
+  } catch (error) {
+    if (error.storageFileName) {
+      await logLine(homeDir, `${error.storageFileName} ${error.storageOperation} failed (${error.code || 'UNKNOWN'})`);
+    }
+    throw error;
+  }
   const diagnostics = new Diagnostics({ ...options.diagnosticsOptions, homeDir, userHome: options.userHome,
     getLevel: () => state.getDisplayPreferences?.()?.diagnosticsLevel || 'info' });
   state.diagnostics = diagnostics;
   const updateChecker = options.updateCheck ? new UpdateChecker({ diagnostics, ...options.updateCheck }) : null;
   state.attachWriter?.(storageWriter);
-  const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
   away.attachWriter?.(storageWriter);
-  const routing = options.routing || await RoutingState.load(homeDir, { writer: storageWriter });
   const pullRequestTracker = options.pullRequestTracker || new PullRequestTracker({ state, diagnostics, ...(options.pullRequestOptions || {}) });
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,

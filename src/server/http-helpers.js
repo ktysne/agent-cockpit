@@ -39,7 +39,7 @@ function escapeHtmlAttribute(value) {
 
 function logLine(homeDir, message) {
   const line = `${new Date().toISOString()} ${message}\n`;
-  fs.appendFile(path.join(homeDir, 'server.log'), line).catch(() => {});
+  return fs.appendFile(path.join(homeDir, 'server.log'), line).catch(() => {});
 }
 
 module.exports = { SECURITY_HEADERS, jsonResponse, textResponse, escapeHtmlAttribute, logLine };

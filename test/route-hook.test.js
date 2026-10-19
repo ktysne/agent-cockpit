@@ -248,3 +248,30 @@ test('routing.json を読めない場合はフック出力を返さない', asyn
   await fs.writeFile(path.join(homeDir, 'routing.json'), '{invalid');
   assert.equal(outputForRoute({ hook_event_name: 'SubagentStart' }, { homeDir, claudeHome: homeDir }), null);
 });
+
+test('routing.json の EBUSY が続く SubagentStart は応答も経路記録も作らない', async (t) => {
+  const homeDir = await temporaryHome(t, { agents: 'codex', review: 'default' });
+  let attempts = 0;
+  const delays = [];
+  const fileSystem = new Proxy(fsSync, {
+    get(target, property) {
+      if (property === 'readFileSync') return (filePath, ...args) => {
+        if (path.basename(filePath) === 'routing.json') {
+          attempts += 1;
+          throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+        }
+        return target.readFileSync.call(target, filePath, ...args);
+      };
+      const value = target[property];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+
+  assert.equal(outputForRoute({ hook_event_name: 'SubagentStart', session_id: 'busy-session', agent_id: 'busy-agent' }, {
+    homeDir, fileSystem, readRetryOptions: { delaySync: (milliseconds) => delays.push(milliseconds) },
+  }), null);
+
+  assert.equal(attempts, 5);
+  assert.ok(delays.reduce((sum, milliseconds) => sum + milliseconds, 0) <= 200);
+  assert.deepEqual(await fs.readdir(path.join(homeDir, 'route-agents')), []);
+});

@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const { AtomicJsonWriter } = require('./json-storage');
+const { readSyncWithRetry, readWithRetry, storageFailure } = require('./read-retry');
 
 const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
 const ROUTE_KEYS = new Set(['agents', 'review']);
@@ -19,19 +20,31 @@ function isValidRouteUpdate(value) {
     ROUTE_KEYS.has(value.key) && ROUTE_VALUES.has(value.value));
 }
 
-async function readRouting(homeDir, fileSystem = fs) {
+async function readRouting(homeDir, fileSystem = fs, readRetryOptions = {}) {
+  let contents;
   try {
-    const value = JSON.parse(await fileSystem.readFile(path.join(homeDir, 'routing.json'), 'utf8'));
-    return normalizeRouting(value);
+    contents = await readWithRetry(() => fileSystem.readFile(path.join(homeDir, 'routing.json'), 'utf8'), readRetryOptions);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw storageFailure(error, 'routing.json', 'read');
+    return { ...DEFAULT_ROUTING };
+  }
+  try {
+    return normalizeRouting(JSON.parse(contents));
   } catch {
     return { ...DEFAULT_ROUTING };
   }
 }
 
-function readRoutingSync(homeDir, fileSystem = fsSync) {
+function readRoutingSync(homeDir, fileSystem = fsSync, readRetryOptions = {}) {
+  let contents;
   try {
-    const value = JSON.parse(fileSystem.readFileSync(path.join(homeDir, 'routing.json'), 'utf8'));
-    return normalizeRouting(value);
+    contents = readSyncWithRetry(() => fileSystem.readFileSync(path.join(homeDir, 'routing.json'), 'utf8'), readRetryOptions);
+  } catch (error) {
+    if (error.code !== 'ENOENT') return null;
+    return { ...DEFAULT_ROUTING };
+  }
+  try {
+    return normalizeRouting(JSON.parse(contents));
   } catch {
     return { ...DEFAULT_ROUTING };
   }
@@ -50,7 +63,7 @@ class RoutingState {
   }
 
   static async load(homeDir, options = {}) {
-    return new RoutingState(homeDir, await readRouting(homeDir, options.fileSystem || fs), options);
+    return new RoutingState(homeDir, await readRouting(homeDir, options.fileSystem || fs, options.readRetryOptions), options);
   }
 
   snapshot() {

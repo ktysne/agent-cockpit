@@ -32,7 +32,7 @@
     <ul>
       <li>サブエージェントへの指定は、<code>route.js</code> のフックが、サブエージェントの開始時に追加の文脈として渡します。<span class="ui">Claude</span> のときは、Codex を呼ぶコマンドをツールの実行の直前に断ります。このフックを登録していないと、経路の札は付きますが、サブエージェントには伝わりません(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>のパターン C)</li>
       <li>クロスレビューの経路は、<code>node tools/cross-review.js route</code> が、常駐サーバーの保存先の <code>routing.json</code> を読んで、<code>codex</code>、<code>claude</code>、<code>default</code> のどれかを出力します。ファイルが読めないときは <code>default</code> です</li>
-      <li>常駐サーバーも、<code>routing.json</code> が読めないとき、または値が不正なときは、両方を <span class="ui">既定</span> として扱います</li>
+      <li>常駐サーバーは、<code>routing.json</code> が無いとき、壊れているとき、値が不正なときは、両方を <span class="ui">既定</span> として扱います。ほかのプログラムがファイルを開いているなどで読み直しても読めないときは起動せず、<code>route.js</code> のフックはサブエージェントに何も渡しません</li>
       <li>claude-codex-bridge の窓口が <span class="ui">Claude</span> の指定を受けたときの動きは、claude-codex-bridge 側の <a href="https://github.com/ktysne/claude-codex-bridge/issues/129">Issue 129</a> で扱っています</li>
     </ul>
   </details>
