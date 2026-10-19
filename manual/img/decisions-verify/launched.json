@@ -1,0 +1,38 @@
+{
+  "name": "launched",
+  "target": ".decision-list > .decision-card:nth-child(3) .verify",
+  "width": 1518,
+  "height": 594,
+  "parts": [
+    {
+      "key": "verify.launch-state",
+      "bounds": {
+        "x": 158,
+        "y": 145,
+        "width": 116,
+        "height": 50
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.launch-target",
+      "bounds": {
+        "x": 290,
+        "y": 157,
+        "width": 290,
+        "height": 28
+      },
+      "visible": true
+    },
+    {
+      "key": "verify.launch-time",
+      "bounds": {
+        "x": 596,
+        "y": 151,
+        "width": 273,
+        "height": 38
+      },
+      "visible": true
+    }
+  ]
+}
