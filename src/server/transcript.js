@@ -154,7 +154,7 @@ async function readTaskNotifications(claudeHome, cwd, sessionId, fileSystem = fs
       if (record?.type !== 'queue-operation' || record.operation !== 'enqueue') continue;
       if (typeof record.content !== 'string' || !record.content.startsWith('<task-notification>')) continue;
       const block = record.content.split('</task-notification>')[0];
-      // 前のプロセスで終わらなかった背景のエージェントは、stopped の 1 通にまとめて複数の task-id が並ぶ。
+      // 前のプロセスで終わらなかったバックグラウンドのエージェントは、stopped の 1 通にまとめて複数の task-id が並ぶ。
       const status = block.match(/<status>(completed|killed|failed|stopped)<\/status>/)?.[1];
       if (!status) continue;
       const recordedAt = typeof record.timestamp === 'string' ? record.timestamp : null;

@@ -179,7 +179,7 @@ test('idle の補完は稼働中のサブエージェントを含み画面で終
   state.addEvent({ session_id: 'unknown', hook_event_name: 'SubagentStop', agent_id: 'sub', hookAt: 200 });
   assert.equal(state.snapshot().sessions[0].status, '待機中');
 
-  // 背景のサブエージェントは確定したターンの PostToolUse(Agent)で付くため、ここでは Stop の後に作る。
+  // バックグラウンドのサブエージェントは確定したターンの PostToolUse(Agent)で付くため、ここでは Stop の後に作る。
   const background = backgroundClaudeState('closed');
   background.addEvent({ session_id: 'closed', hook_event_name: 'Stop', hookAt: 400 });
   background.syncSessionFiles([{ session_id: 'closed', status: 'idle' }]);
@@ -307,7 +307,7 @@ function backgroundClaudeState(sessionId = 'task-stop') {
   return state;
 }
 
-test('TaskStop で一致する背景サブエージェントを終了にし Stop 後は待機中になる', () => {
+test('TaskStop で一致するバックグラウンドサブエージェントを終了にし Stop 後は待機中になる', () => {
   const state = backgroundClaudeState();
   state.addEvent({ session_id: 'task-stop', hook_event_name: 'PostToolUse', tool_name: 'TaskStop', stoppedTaskId: 'task-1', hookAt: 400 });
   state.addEvent({ session_id: 'task-stop', hook_event_name: 'Stop', hookAt: 500 });
@@ -340,7 +340,7 @@ test('TaskStop と SubagentStop は未完了ツールと許可待ちを消す', 
   }
 });
 
-test('TaskStop で窓口配下の背景 Codex は終了未確認になる', () => {
+test('TaskStop で窓口配下のバックグラウンドの Codex は終了未確認になる', () => {
   const state = backgroundClaudeState();
   launchCodex(state, 'task-stop', 'codex-launch', 350, 'task-1');
   state.addEvent({ session_id: 'task-stop', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'codex-launch', agent_id: 'task-1', hookAt: 360 });
@@ -380,7 +380,7 @@ test('合成 SubagentStop で終了にし二度合成せず開始より前の通
   assert.equal(state.snapshot().sessions[0].agents[0].active, false);
 });
 
-test('背景起動した Claude サブエージェントは閉じられ閉じた後にイベントが来たら戻る', () => {
+test('バックグラウンド起動した Claude サブエージェントは閉じられ閉じた後にイベントが来たら戻る', () => {
   const state = backgroundClaudeState();
   state.addEvent({ session_id: 'task-stop', hook_event_name: 'Stop', hookAt: 400 });
   assert.equal(state.snapshot().sessions[0].agents[0].closable, true);
@@ -1470,7 +1470,7 @@ test('メインのクロスレビュー行は定義と監査行を反映し、�
   ]);
 });
 
-test('クロスレビューが背景へ移らず結果行なしで戻ると監査情報を反映して終了する', async (t) => {
+test('クロスレビューがバックグラウンドへ移らず結果行なしで戻ると監査情報を反映して終了する', async (t) => {
   await temporaryHome(t);
   for (const codexOutput of [undefined, { auditLine: 'codex-agent: agent=codex-review model=gpt-review-actual effort=high' }]) {
     const state = new DashboardState();
@@ -1514,7 +1514,7 @@ test('SubagentStop は完了通知のない子の Codex 起動を終了未確認
   assert.equal(parent.closable, true);
 });
 
-test('SubagentStop より後に並んだ背景移行通知では、子の Codex 起動を終了未確認のまま残す', async (t) => {
+test('SubagentStop より後に並んだバックグラウンド移行通知では、子の Codex 起動を終了未確認のまま残す', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'pending', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub', agent_type: 'impl-hard' });
@@ -1528,7 +1528,7 @@ test('SubagentStop より後に並んだ背景移行通知では、子の Codex 
   assert.deepEqual([parent.gpt.active, parent.gpt.unconfirmed, parent.closable], [false, true, true]);
 });
 
-test('中断より後の背景移行通知は終了未確認の Codex 起動を稼働中に戻す', async (t) => {
+test('中断より後のバックグラウンド移行通知は終了未確認の Codex 起動を稼働中に戻す', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchCodex(state, 'pending', 'call', 1);
@@ -1543,7 +1543,7 @@ test('中断より後の背景移行通知は終了未確認の Codex 起動を�
   assert.equal(agent.backgroundTaskId, 'bg-call');
 });
 
-test('背景で起動した Codex は後続の Read 出力にある結果行で終了し、親の GPT 情報にまとまる', async (t) => {
+test('バックグラウンドで起動した Codex は後続の Read 出力にある結果行で終了し、親の GPT 情報にまとまる', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'bg', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' }, {
@@ -1566,7 +1566,7 @@ test('背景で起動した Codex は後続の Read 出力にある結果行で�
   });
 });
 
-test('--wait は同じ親と同じ定義の背景 Codex を結果行で終了する', async (t) => {
+test('--wait は同じ親と同じ定義のバックグラウンドの Codex を結果行で終了する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'bg-wait', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
@@ -1588,7 +1588,7 @@ test('--wait は同じ親と同じ定義の背景 Codex を結果行で終了す
   assert.deepEqual([session.agents[0].gpt.model, session.agents[0].gpt.active, session.agents[0].gpt.unconfirmed], ['gpt-6-luna', false, false]);
 });
 
-test('orphaned の --wait が終了未確認にした行は、別の背景実行の結果行を受け取らない', async (t) => {
+test('orphaned の --wait が終了未確認にした行は、別のバックグラウンド実行の結果行を受け取らない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const orphanedRunId = 'impl-hard-20261003-123456-7';
@@ -1716,7 +1716,7 @@ test('--wait は別の親の結果未受領 Codex を再利用しない', async 
   ]);
 });
 
-test('実行 ID が分かっていて別の値の背景行は、別の実行の --wait で再開せず、新しい行を作る', async (t) => {
+test('実行 ID が分かっていて別の値のバックグラウンド行は、別の実行の --wait で再開せず、新しい行を作る', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const waitRunId = 'impl-hard-20261003-123456-7';
@@ -1859,7 +1859,7 @@ test('--wait が vanished で抜けた後に起動し直した Codex が終わ�
   assert.deepEqual([agent.gpt.model, agent.gpt.active, agent.gpt.unconfirmed], ['gpt-new', false, false]);
 });
 
-test('結果を受けた実行の --wait の結果行は、背景で動いている別の Codex を終了にしない', async (t) => {
+test('結果を受けた実行の --wait の結果行は、バックグラウンドで動いている別の Codex を終了にしない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const runId = 'impl-hard-20261003-123456-7';
@@ -1880,7 +1880,7 @@ test('結果を受けた実行の --wait の結果行は、背景で動いてい
   assert.deepEqual([agent.gpt.model, agent.gpt.active], ['gpt-running', true]);
 });
 
-test('後続の出力に出た終わった実行の結果行は、run= の行で照合し、背景で動いている別の Codex を終了にしない', async (t) => {
+test('後続の出力に出た終わった実行の結果行は、run= の行で照合し、バックグラウンドで動いている別の Codex を終了にしない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const finishedRunId = 'impl-hard-20261003-123456-7';
@@ -1978,7 +1978,7 @@ test('メインセッションの --wait は Codex 行を作らない', async (t
   assert.deepEqual(state.snapshot().sessions[0].agents, []);
 });
 
-test('同じ親の背景 Codex が複数あるときは、run= の無い結果行でどちらも終了にしない', async (t) => {
+test('同じ親のバックグラウンドの Codex が複数あるときは、run= の無い結果行でどちらも終了にしない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'bg-oldest', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
@@ -2003,7 +2003,7 @@ test('同じ親の背景 Codex が複数あるときは、run= の無い結果�
   assert.deepEqual([resumedAgent.gpt.model, resumedAgent.gpt.active, resumedAgent.gpt.unconfirmed], ['gpt-old', true, false]);
 });
 
-test('一致する runId の行が無い結果は、一意な背景 Codex に結び付ける', async (t) => {
+test('一致する runId の行が無い結果は、一意なバックグラウンドの Codex に結び付ける', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const runId = 'impl-hard-20261003-123456-7';
@@ -2025,7 +2025,7 @@ test('一致する runId の行が無い結果は、一意な背景 Codex に結
   assert.equal(afterWait.gpt.model, 'gpt-draft');
 });
 
-test('run= の無い結果行を、実行 ID が記録済みの背景 Codex に結び付けない', async (t) => {
+test('run= の無い結果行を、実行 ID が記録済みのバックグラウンドの Codex に結び付けない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const runId = 'impl-hard-20261003-123456-7';
@@ -2070,7 +2070,7 @@ test('完了した tool_use_id は、遅れて処理された PreToolUse で実�
   assert.deepEqual(state.snapshot().sessions[0].tools, []);
 });
 
-test('結果行が無いまま親が終わった背景 Codex は終了未確認になる', async (t) => {
+test('結果行が無いまま親が終わったバックグラウンドの Codex は終了未確認になる', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'unconfirmed', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
@@ -2081,7 +2081,7 @@ test('結果行が無いまま親が終わった背景 Codex は終了未確認�
   assert.deepEqual([agent.gpt.active, agent.gpt.unconfirmed], [false, true]);
 });
 
-test('メインの Stop 後もメイン直下の背景 Codex は稼働中で、結果行が届くと終了する', async (t) => {
+test('メインの Stop 後もメイン直下のバックグラウンドの Codex は稼働中で、結果行が届くと終了する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchCodex(state, 'main-background', 'bash-1', 1, null, { model: 'gpt-draft', effort: 'low' });
@@ -2103,7 +2103,7 @@ test('メインの Stop 後もメイン直下の背景 Codex は稼働中で、�
   assert.equal(session.status, '作業中');
 });
 
-test('メイン直下の稼働中の背景 Codex は閉じられ、結果行で閉じた記録が消える', async (t) => {
+test('メイン直下の稼働中のバックグラウンドの Codex は閉じられ、結果行で閉じた記録が消える', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchCodex(state, 'close-background', 'bash-1', 1, null);
@@ -2177,7 +2177,7 @@ test('クロスレビューの exit=3 は PostToolUse では結果にせず、Po
   }
 });
 
-test('監査行だけの出力では Codex を終了にせず、背景で動いているものとして扱う', async (t) => {
+test('監査行だけの出力では Codex を終了にせず、バックグラウンドで動いているものとして扱う', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'audit-only', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
@@ -2224,7 +2224,7 @@ test('再開した親が取り出した結果行で、終了未確認になっ�
   assert.deepEqual([agent.unconfirmed === true, agent.gpt.active, agent.gpt.unconfirmed], [false, false, false]);
 });
 
-test('Agent の結果に写った結果行では、背景の Codex を終了にしない', async (t) => {
+test('Agent の結果に写った結果行では、バックグラウンドの Codex を終了にしない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchCodex(state, 'agent-report', 'bash-1', 1, null);
@@ -2344,7 +2344,7 @@ function launchBackgroundCodexInMain(state, sessionId, toolUseId, backgroundTask
   });
 }
 
-test('メインが背景で起動した複数の Codex は、背景タスク ID で出力を読んだ行だけを終了にする', async (t) => {
+test('メインがバックグラウンドで起動した複数の Codex は、バックグラウンドタスク ID で出力を読んだ行だけを終了にする', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchBackgroundCodexInMain(state, 'bg-ids', 'bash-a', 'taska', 1);
@@ -2377,7 +2377,7 @@ test('メインが背景で起動した複数の Codex は、背景タスク ID 
   assert.ok(gpt().every((item) => item.active === false && item.unconfirmed === false));
 });
 
-test('完了通知の結果行は同じ親の背景 Codex のうち task ID が一致する行だけを終了する', async (t) => {
+test('完了通知の結果行は同じ親のバックグラウンドの Codex のうち task ID が一致する行だけを終了する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const sessionId = 'bg-notify-result';
@@ -2407,7 +2407,7 @@ test('完了通知の結果行は同じ親の背景 Codex のうち task ID が�
   ]);
 });
 
-test('背景クロスレビューの出力を読んだ呼び出しの exit=3 では、行を稼働中のまま残す', async (t) => {
+test('バックグラウンドクロスレビューの出力を読んだ呼び出しの exit=3 では、行を稼働中のまま残す', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchBackgroundCodexInMain(state, 'bg-review-output', 'launch', 'task-a', 1);
@@ -2421,7 +2421,7 @@ test('背景クロスレビューの出力を読んだ呼び出しの exit=3 で
   assert.deepEqual([agent.active, agent.unavailable, agent.resultReceived], [true, '', undefined]);
 });
 
-test('背景クロスレビューの完了通知の exit=3 は、status が failed のときだけ使用不能にする', async (t) => {
+test('バックグラウンドクロスレビューの完了通知の exit=3 は、status が failed のときだけ使用不能にする', async (t) => {
   await temporaryHome(t);
   for (const [status, expectedUnavailable, expectedResultReceived] of [
     ['completed', '', undefined],
@@ -2443,7 +2443,7 @@ test('背景クロスレビューの完了通知の exit=3 は、status が fail
   }
 });
 
-test('結果行のない完了通知は背景 Codex を稼働中から外し、状態再生でも保つ', async (t) => {
+test('結果行のない完了通知はバックグラウンドの Codex を稼働中から外し、状態再生でも保つ', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const sessionId = 'bg-notify-no-result';
@@ -2469,7 +2469,7 @@ test('結果行のない完了通知は背景 Codex を稼働中から外し、�
   ]);
 });
 
-test('Codex を起動した呼び出しの引数に別の背景タスクの出力ファイルがあっても、完了が重複して届いても、その行に結び付けない', async (t) => {
+test('Codex を起動した呼び出しの引数に別のバックグラウンドタスクの出力ファイルがあっても、完了が重複して届いても、その行に結び付けない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchBackgroundCodexInMain(state, 'bg-launch', 'bash-a', 'taska', 1);
@@ -2495,7 +2495,7 @@ test('Codex を起動した呼び出しの引数に別の背景タスクの出�
   assert.equal(agents.filter((agent) => agent.active === true).length, 1);
 });
 
-test('実行 ID の無い結果で失敗した Codex の起動が重複して届いても、背景で稼働中の別の Codex を終了にしない', async (t) => {
+test('実行 ID の無い結果で失敗した Codex の起動が重複して届いても、バックグラウンドで稼働中の別の Codex を終了にしない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchBackgroundCodexInMain(state, 'bg-fail', 'bash-a', 'taska', 1);
@@ -2516,7 +2516,7 @@ test('実行 ID の無い結果で失敗した Codex の起動が重複して届
   assert.equal(running[0].unavailable, '');
 });
 
-test('背景タスクの途中の出力に run= の行があれば、行に実行 ID を記録して後の結果行を実行 ID で照合する', async (t) => {
+test('バックグラウンドタスクの途中の出力に run= の行があれば、行に実行 ID を記録して後の結果行を実行 ID で照合する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchBackgroundCodexInMain(state, 'bg-run', 'bash-a', 'taska', 1);
@@ -2621,7 +2621,7 @@ test('中断の確認の候補は、フックが作業中か許可待ちのま�
 
   assert.deepEqual(candidate([prompt], idle(3000)), { cwd: '/work', statusUpdatedAt: at(3000), lastPromptAt: 1000 });
   assert.notEqual(candidate([prompt, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', hookAt: 1500 }], idle(3000)), null);
-  // 背景のサブエージェントのイベントは、メインの区切りの時刻に数えない。
+  // バックグラウンドのサブエージェントのイベントは、メインの区切りの時刻に数えない。
   assert.notEqual(candidate([prompt, { hook_event_name: 'SubagentStop', agent_id: 'bg', hookAt: 4000 }], idle(3000)), null);
 
   assert.equal(candidate([prompt], { ...idle(3000), status: 'busy' }), null);
@@ -2635,7 +2635,7 @@ test('中断の確認の候補は、フックが作業中か許可待ちのま�
 });
 
 
-test('フックの完了通知は背景タスク ID が無い行だけを run ID でも照合する', async (t) => {
+test('フックの完了通知はバックグラウンドタスク ID が無い行だけを run ID でも照合する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const run = 'codex-review-20261004-100000-1';
@@ -2651,7 +2651,7 @@ test('フックの完了通知は背景タスク ID が無い行だけを run ID
   assert.equal(agents.find(agent => agent.backgroundTaskId === 'other-task').active, true);
 });
 
-test('内部の背景終了は畳み込み後も再生できる', async (t) => {
+test('内部のバックグラウンド終了は畳み込み後も再生できる', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchBackgroundCodexInMain(state, 'compact-bg', 'launch', 'task-a', 1);

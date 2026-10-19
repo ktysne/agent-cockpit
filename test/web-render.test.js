@@ -522,7 +522,7 @@ test('ブラウザーに残った旧形式の表示設定を読んでも、サ�
 test('終わったセッションは待機中で未完了のものが無い場合だけと判定する', () => {
   const endedAgent = functionSource(pageHtml, 'isEndedAgent');
   const endedDecision = functionSource(pageHtml, 'isEndedDecision');
-  const isFinished = functionSource(pageHtml, 'isFinishedSession');
+  const isFinished = [functionSource(pageHtml, 'runningBackgrounds'), functionSource(pageHtml, 'isFinishedSession')].join('\n');
   const status = functionSource(pageHtml, 'activityStatus');
   assert.ok(endedAgent && endedDecision && isFinished && status);
   const context = pageContext(pageHtml, {});
@@ -537,6 +537,7 @@ test('終わったセッションは待機中で未完了のものが無い場�
   };
   assert.equal(context.isFinishedSession(finished), true);
   for (const update of [
+    { backgrounds: [{ taskId: 'task-a' }] },
     { tasks: [{ state: 'todo' }] },
     { tasks: [{ state: 'doing' }] },
     { tasks: [{ state: 'blocked' }] },
@@ -1075,7 +1076,7 @@ test('終了ボタンは状態と名前を含む flex 行の右端に置く', ()
 });
 
 test('作業行は先頭に名前と時刻を置き、詳細と状態不明の操作を全幅で続ける', () => {
-  const functions = ['element', 'appendToolLine', 'sessionDisplayName', 'appendContextTags', 'appendUnknownSessionControls', 'sessionOrigin', 'mainRow', 'appendAgents']
+  const functions = ['element', 'appendToolLine', 'sessionDisplayName', 'appendContextTags', 'appendUnknownSessionControls', 'sessionOrigin', 'runningBackgrounds', 'mainRow', 'backgroundRow', 'appendBackgrounds', 'appendAgents']
     .map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
 
@@ -1144,6 +1145,23 @@ test('作業行は先頭に名前と時刻を置き、詳細と状態不明の�
   }, product);
   assert.deepEqual(waiting.children.map((child) => child.className), ['who', 'since']);
 
+  const background = { taskId: 'task-a', agent_id: 'background:task-a', description: 'テストを実行',
+    tool_name: 'Bash', summary: 'npm test', startedAt: session.lastActivityAt };
+  const backgroundSession = { ...session, rowStatus: { tone: 'wait', label: '待機中' }, backgrounds: [background] };
+  const waitingBackground = context.mainRow(backgroundSession, product);
+  assert.equal(waitingBackground.children[0].children.at(-1).textContent, '待機中(バックグラウンドタスク 1 件)');
+  const backgroundBody = new FakeElement('div');
+  context.appendBackgrounds(backgroundBody, backgroundSession, product);
+  assert.equal(backgroundBody.children[0].textContent, 'バックグラウンドタスク');
+  const backgroundRow = backgroundBody.children[1].children[0];
+  assert.deepEqual(backgroundRow.children.map((child) => child.className), ['who', 'since', 'detail']);
+  assert.equal(backgroundRow.children[0].children[1].textContent, 'バックグラウンドタスク');
+  const name = backgroundRow.children[0].children.at(-1);
+  assert.equal(name.children[0].textContent, '稼働中');
+  assert.equal(name.children[1].dataset.closeAgent, 'session-main::background:task-a');
+  assert.equal(backgroundRow.children[2].children[0].textContent, 'テストを実行');
+  assert.equal(backgroundRow.children[2].children[1].className, 'tool-line');
+
   const controls = Object.assign(new FakeElement('div'), { className: 'session-extra' });
   const unknown = context.mainRow({
     ...session,
@@ -1175,7 +1193,7 @@ test('作業行は先頭に名前と時刻を置き、詳細と状態不明の�
 
 test('モックの作業行も名前と時刻の後に全幅の詳細を並べる', () => {
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
-  const functions = ['sessionOrigin', 'mainRow', 'agentRow'].map((name) => functionSource(mock, name));
+  const functions = ['sessionOrigin', 'runningBackgrounds', 'mainRow', 'agentRow'].map((name) => functionSource(mock, name));
   assert.ok(functions.every(Boolean));
   const context = pageContext(mock, {
     ui: { estimatedSessions: [] },
@@ -2324,7 +2342,7 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
 
 test('終わったセッションはタスクの有無にかかわらず両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'isEndedDecision', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
+    'isEndedAgent', 'isEndedDecision', 'activityStatus', 'runningBackgrounds', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
     'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences',
     'taskVisibility', 'kindDoneTaskCount', 'element', 'badge', 'appendTaskItem',
   ];
@@ -2386,7 +2404,7 @@ test('終わったセッションはタスクの有無にかかわらず両方�
 
 test('タスクの有無にかかわらず終わったセッションと履歴だけの PR は両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
+    'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'activityStatus', 'runningBackgrounds', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
     'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'isActiveDecision', 'countJudgments', 'sessionsAfterIdleFilter',
     'orderedProducts', 'sessionReferences', 'element', 'productCardSectionOrder', 'productSection',
   ];
@@ -4566,7 +4584,7 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
 
 test('一部完了のセッションでは完了タスクを表示できる', () => {
   const names = [
-    'element', 'activityStatus', 'isEndedAgent', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
+    'element', 'activityStatus', 'isEndedAgent', 'runningBackgrounds', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
     'kindEndedDecisionEntries', 'kindEndedAgentCount', 'sessionOrigin',
   ];
   const functions = names.map((name) => functionSource(pageHtml, name));
@@ -4773,7 +4791,7 @@ test('文や名前を差し込むバッジは折り返し、枠の外へはみ�
 
 test('非対話の実行中の行は状態名と時刻と API の札を出し、状態推定と一覧からの除外を出さない', () => {
   const functions = ['element', 'activityStatus', 'unknownSessionControls', 'appendUnknownSessionControls', 'appendToolLine', 'sessionOrigin',
-    'sessionDisplayName', 'appendContextTags', 'appendSessionModelLine', 'mainRow']
+    'sessionDisplayName', 'appendContextTags', 'appendSessionModelLine', 'runningBackgrounds', 'mainRow']
     .map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
 
@@ -4870,7 +4888,7 @@ test('モックの非対話の行は稼働中の札で出し、状態推定と�
     absoluteTimeLabel: () => '',
     ESTIMATE_WAITING: {},
   });
-  vm.runInContext(['sessionOrigin', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), context);
+  vm.runInContext(['sessionOrigin', 'runningBackgrounds', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), context);
 
   const nonInteractive = context.mainRow({}, {
     id: 'batch', status: 'unknown', nonInteractive: true, tasks: [], main: { tool: '', since: '3 分前' },
@@ -4957,7 +4975,7 @@ test('非対話の行は作業中と待機中を対話と同じ文言と色に�
     absoluteTimeLabel: () => '',
     ESTIMATE_WAITING: {},
   });
-  vm.runInContext(['sessionOrigin', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), mockContext);
+  vm.runInContext(['sessionOrigin', 'runningBackgrounds', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), mockContext);
 
   const cases = [
     { implSession: { status: '作業中', nonInteractive: true }, mockSession: { status: 'busy', nonInteractive: true }, label: '作業中', tone: 'busy' },
@@ -4992,7 +5010,7 @@ test('再起動直後の作業中と待機中は、経過時間にセッショ�
     durationAgoLabel: (value) => (value ? '5 分前' : '時刻不明'),
     relativeTimeElement: (value, className, label) => ({ tag: 'time', className, textContent: label, value }),
   });
-  vm.runInContext(['activityStatus', 'mainRow'].map((name) => functionSource(pageHtml, name)).join('\n'), context);
+  vm.runInContext(['activityStatus', 'runningBackgrounds', 'mainRow'].map((name) => functionSource(pageHtml, name)).join('\n'), context);
   const statusSince = '2026-10-05T00:00:00.000Z';
   const session = { session_id: 'restarted', status: '作業中', lastActivityAt: null, statusSince, tools: [], tasks: [], decisions: [] };
   const row = context.mainRow(session, { name: 'agent-cockpit' });
@@ -5070,7 +5088,7 @@ test('Codex が状態にあるときセッション、PR、「前回見てから
     isEndedDecision: () => false,
     appendTasks() {},
     mainRow: () => new FakeElement('div'),
-    appendAgents() {},
+    appendAgents() {}, appendBackgrounds() {},
     orderedSectionKeys: (keys) => keys,
   });
   vm.runInContext(`${helpers}\n${functionSource(pageHtml, 'sessionOrigin')}\n${functionSource(pageHtml, 'sessionBlock')}`, sessionContext);
@@ -5178,7 +5196,7 @@ test('起点帯の判定は非表示セッション、PR の履歴、新着ま�
     esc: (value) => String(value),
     visibleDecisions: () => [], visiblePerms: () => [], hasHiddenJudgmentItems: () => true,
     sessionDisplayName: (session) => session.title, sharedBranch: () => '', orderedSectionKeys: (keys) => keys,
-    taskSessionBlock: () => '', mainRow: () => '', agentSection: () => '', worktreeLinks: () => '',
+    taskSessionBlock: () => '', mainRow: () => '', agentSection: () => '', backgroundSection: () => '', worktreeLinks: () => '',
   });
   vm.runInContext(`${functionSource(mockHtml, 'sessionOrigin')}\n${functionSource(mockHtml, 'sessionBlock')}`, mockSessionContext);
   const mockSessionProduct = { sessions: [{}] };
@@ -5218,7 +5236,7 @@ function renderedKindOriginRows(provider, showOriginBands, permissionWaits = [],
     isFilterShown: () => true,
     taskVisibility: () => ({ visible: [], todoCount: 0, doneCount: 0 }),
   });
-  const functions = ['sessionOrigin', 'mainRow', 'isEndedAgent', 'appendAgents', 'appendKindTaskSession']
+  const functions = ['sessionOrigin', 'runningBackgrounds', 'mainRow', 'isEndedAgent', 'appendAgents', 'appendKindTaskSession']
     .map(name => functionSource(pageHtml, name));
   vm.runInContext(functions.join('\n'), context);
   const session = {
@@ -5250,7 +5268,7 @@ function renderedMockKindOriginRows(provider, showOriginBands, perms = [], ended
     isUnconfirmed: () => false,
     isClosable: () => false,
   });
-  const functions = ['sessionOrigin', 'mainRow', 'agentRow', 'kindTaskSessionBlock']
+  const functions = ['sessionOrigin', 'runningBackgrounds', 'mainRow', 'agentRow', 'kindTaskSessionBlock']
     .map(name => functionSource(mockHtml, name));
   vm.runInContext(functions.join('\n'), context);
   const session = { provider, status: 'wait', tasks: [], perms, main: { tool: '—', since: '1 分前' } };
@@ -5343,7 +5361,7 @@ test('中断したセッションは「中断」と輪郭だけの点で出し�
     durationAgoLabel: () => '5 分前',
     relativeTimeElement: (value, className, label) => ({ tag: 'time', className, textContent: label, value }),
   });
-  vm.runInContext(['activityStatus', 'isEndedAgent', 'isEndedDecision', 'isFinishedSession', 'isIdleHiddenSession', 'mainRow']
+  vm.runInContext(['activityStatus', 'isEndedAgent', 'isEndedDecision', 'runningBackgrounds', 'isFinishedSession', 'isIdleHiddenSession', 'mainRow']
     .map((name) => functionSource(pageHtml, name)).join('\n'), context);
   const session = {
     session_id: 'interrupted', status: '中断', lastActivityAt: old, lastUpdatedAt: old, tools: [], tasks: [{ state: 'done' }],
@@ -5380,7 +5398,7 @@ test('モックの中断の行は画面と同じ文言と点で出し、終わ�
     isEndedDecision: () => true,
     isEndedAgent: () => true,
   });
-  vm.runInContext(['sessionOrigin', 'mainRow', 'unknownSessionControls', 'isIdleHiddenSession', 'isFinishedSession']
+  vm.runInContext(['sessionOrigin', 'runningBackgrounds', 'mainRow', 'unknownSessionControls', 'isIdleHiddenSession', 'isFinishedSession']
     .map((name) => functionSource(mockHtml, name)).join('\n'), context);
   const session = { id: 'interrupted', status: 'interrupted', tasks: [], perms: [], decisions: [], subagents: [], lastUpdatedAt: old, main: { tool: '—', since: '3 分前' } };
 

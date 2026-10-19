@@ -2389,9 +2389,10 @@ class DashboardState {
   }
 
   closeAgent(sessionId, agentId) {
+    const background = this.sessions.get(sessionId)?.backgrounds?.find((item) => item.agent_id === agentId);
     const agent = this.sessions.get(sessionId)?.agents.find((item) => item.agent_id === agentId);
-    if (!agent) return null;
-    if (!isClosableAgent(agent)) return false;
+    if (!agent && !background) return null;
+    if (!background && !isClosableAgent(agent)) return false;
     let closed = this.closedAgents.get(sessionId);
     if (!closed) {
       closed = new Set();
@@ -2417,10 +2418,11 @@ class DashboardState {
     const closed = this.closedAgents.get(sessionId);
     if (!closed) return false;
     const agents = this.sessions.get(sessionId)?.agents || [];
+    const backgrounds = this.sessions.get(sessionId)?.backgrounds || [];
     let changed = false;
     for (const agentId of closed) {
       const agent = agents.find((item) => item.agent_id === agentId);
-      if (!agent || !isClosableAgent(agent)) {
+      if ((!agent || !isClosableAgent(agent)) && !backgrounds.some((item) => item.agent_id === agentId)) {
         closed.delete(agentId);
         changed = true;
       }
@@ -2779,6 +2781,7 @@ class DashboardState {
       sessionFileUpdatedAt: file?.updatedAt || null,
       lastUpdatedAt,
       tools: base.tools.filter((tool) => !closedAgentIds.has(tool.agent_id)).map((tool) => ({ ...tool })),
+      backgrounds: (base.backgrounds || []).filter((item) => !closedAgents.has(item.agent_id)).map((item) => ({ ...item })),
       agents: base.agents.map((agent) => {
         const closedByUser = isClosedByUser(agent);
         const snapshotAgent = closedByUser ? { ...agent, active: false, unconfirmed: false } : agent;

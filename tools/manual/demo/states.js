@@ -65,7 +65,7 @@ module.exports = function states() {
         ],
       });
 
-      // Codex を背景で動かしたまま、担当が終わった。Codex が終わったかどうかは分からない。
+      // Codex をバックグラウンドで動かしたまま、担当が終わった。Codex が終わったかどうかは分からない。
       at(45);
       const hardAgent = { id: 'agent-notes-hard', type: 'impl-hard' };
       await subagentStart('call-notes-hard', 'PDF 変換の本体を実装する', hardAgent, 'default');

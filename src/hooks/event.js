@@ -89,7 +89,7 @@ function pickString(value) {
 function inputSummary(toolName, toolInput) {
   if (!toolInput || typeof toolInput !== 'object') return toolName || '';
   let value = '';
-  if (toolName === 'Bash') value = pickString(toolInput.command);
+  if (isPullRequestShellTool(toolName)) value = pickString(toolInput.command);
   else if (['Read', 'Edit', 'Write'].includes(toolName)) {
     value = pickString(toolInput.file_path || toolInput.path || toolInput.notebook_path);
   }
@@ -364,7 +364,7 @@ function extractAskUserQuestionResolution(toolResponse) {
 const BACKGROUND_TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const TASK_END_STATUSES = new Set(['completed', 'failed', 'killed', 'stopped']);
 
-// 背景タスクの出力ファイルは <ID>.output という名前で書かれる。公開仕様ではないので、形に合わなければ何も返さない。
+// バックグラウンドタスクの出力ファイルは <ID>.output という名前で書かれる。公開仕様ではないので、形に合わなければ何も返さない。
 function backgroundOutputTaskIdOf(toolName, toolInput) {
   if (!toolInput || typeof toolInput !== 'object') return '';
   if (toolName === 'Read') {
@@ -571,6 +571,10 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     }
     const backgroundTaskId = isPullRequestShellTool(event.tool_name) ? input.tool_response?.backgroundTaskId : null;
     if (typeof backgroundTaskId === 'string' && BACKGROUND_TASK_ID.test(backgroundTaskId)) event.backgroundTaskId = backgroundTaskId;
+    if (eventName === 'PostToolUse' && event.backgroundTaskId && !input.agent_id) {
+      event.summary = inputSummary(event.tool_name, input.tool_input);
+      event.description = pickString(input.tool_input?.description).slice(0, 200);
+    }
     // TaskStop は非推奨の shell_id でも止める対象を受け付ける。
     const stoppedTaskId = eventName === 'PostToolUse' && event.tool_name === 'TaskStop'
       ? input.tool_input?.task_id || input.tool_input?.shell_id

@@ -1866,6 +1866,7 @@ function isIdleHiddenSession(session, now = Date.now()) {
     || (session.permissionWaits || []).length > 0) return false;
   if ((session.decisions || []).some(isActiveDecision)) return false;
   if ((session.agents || []).some((agent) => !isEndedAgent(agent))) return false;
+  if ((session.backgrounds || []).length > 0) return false;
   const lastUpdatedAt = Date.parse(session.lastUpdatedAt || session.statusSince || session.sessionFileUpdatedAt || '');
   const hiddenAt = session.hidden === true ? Date.parse(session.hiddenAt || '') : NaN;
   const updatedAt = Number.isFinite(hiddenAt) ? Math.max(Number.isFinite(lastUpdatedAt) ? lastUpdatedAt : hiddenAt, hiddenAt) : lastUpdatedAt;
@@ -2942,11 +2943,18 @@ function isFinishedSession(session) {
     && session.tasks.every((task) => task.state === 'done')
     && session.decisions.every(isEndedDecision)
     && session.permissionWaits.length === 0
-    && !session.agents.some((agent) => !isEndedAgent(agent));
+    && !session.agents.some((agent) => !isEndedAgent(agent))
+    && runningBackgrounds(session).length === 0;
+}
+
+function runningBackgrounds(session) {
+  return session.backgrounds || [];
 }
 
 function mainRow(session, product, withTags = false, multipleSessions = false, showOriginBands = false) {
   const status = activityStatus(session);
+  const backgroundCount = runningBackgrounds(session).length;
+  if (status.label === '待機中' && backgroundCount) status.label = `待機中(バックグラウンドタスク ${backgroundCount} 件)`;
   const isUnknown = status.tone === 'unknown';
   const hasEstimate = isUnknown && session.estimate?.canEstimate;
   const mainTool = hasEstimate ? null : newestFirst(session.tools.filter((tool) => !tool.agent_id))[0];
@@ -2975,6 +2983,37 @@ function mainRow(session, product, withTags = false, multipleSessions = false, s
   if (detail.childNodes.length) row.append(detail);
   appendUnknownSessionControls(row, session);
   return row;
+}
+
+function backgroundRow(session, product, item, withTags = false, multipleSessions = false, showOriginBands = false) {
+  const origin = sessionOrigin(session, showOriginBands);
+  const row = element('div', `agent-row${origin ? ` origin-${origin}` : ''}`);
+  if (origin) row.dataset.origin = origin;
+  const who = element('div', 'who');
+  who.append(element('span', 'dot busy'), document.createTextNode('バックグラウンドタスク'));
+  appendContextTags(who, product, session, withTags, multipleSessions);
+  const name = element('span', 'agent-name');
+  const close = element('button', 'link-btn close-agent', '終了にする');
+  close.type = 'button';
+  close.dataset.closeAgent = `${session.session_id}::${item.agent_id}`;
+  close.dataset.closeBackground = 'true';
+  name.append(badge('稼働中', 'busy'), close);
+  who.append(name);
+  row.append(who, relativeTimeElement(item.startedAt, 'since', durationAgoLabel(item.startedAt)));
+  const detail = element('div', 'detail');
+  if (item.description) detail.append(element('div', 'agent-description', item.description));
+  appendToolLine(detail, item);
+  row.append(detail);
+  return row;
+}
+
+function appendBackgrounds(body, session, product, withTags = false, multipleSessions = false) {
+  const items = newestFirst(runningBackgrounds(session));
+  if (!items.length) return;
+  body.append(element('h3', 'sub', 'バックグラウンドタスク'));
+  const list = element('div', 'agent-list');
+  for (const item of items) list.append(backgroundRow(session, product, item, withTags, multipleSessions));
+  body.append(list);
 }
 
 function appendAgents(body, session, product, withTags = false, multipleSessions = false, showEnded = expandedEndedSessions.has(session.session_id), includeToggle = true, showOriginBands = false) {
@@ -3755,6 +3794,7 @@ function sessionBlock(product, session, multipleSessions, showOriginBands = true
   now.append(mainRow(session, product));
   nowContent.append(now);
   appendAgents(nowContent, session, product);
+  appendBackgrounds(nowContent, session, product);
   sections.now.push(...nowContent.childNodes);
   for (const key of orderedSectionKeys(['judgment', 'tasks', 'now'])) body.append(...sections[key]);
   block.append(body);
@@ -4058,6 +4098,9 @@ function renderKindSections(products, showOriginBands = true, finishedPrCount = 
   const endedAgentCount = kindEndedAgentCount(references);
   for (const { product, session, multipleSessions } of references) {
     activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions, showOriginBands) });
+    for (const item of runningBackgrounds(session)) {
+      activityItems.push({ age: itemTimestamp(item), row: backgroundRow(session, product, item, true, multipleSessions, showOriginBands) });
+    }
     const holder = element('div');
     appendAgents(holder, session, product, true, multipleSessions, showEndedAgents, false, showOriginBands);
     const list = holder.querySelector('.agent-list');
@@ -4600,7 +4643,7 @@ function closeAgentButton(button) {
   void runCloseAction(button, '/api/closed-agents', {
     session_id: key.slice(0, separator),
     agent_id: key.slice(separator + 2),
-  }, 'サブエージェントを終了にできませんでした');
+  }, button.dataset.closeBackground ? 'バックグラウンドタスクを終了にできませんでした' : 'サブエージェントを終了にできませんでした');
 }
 
 function findPullRequestMergeTarget(key) {

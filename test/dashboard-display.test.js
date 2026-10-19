@@ -775,12 +775,12 @@ test('種類別とプロダクト別のセクションは既定の欄順に従�
       appendPermissionWaits(target) { target.append({ marker: 'permission' }); },
       appendDecisions(target) { target.append({ marker: 'decision' }); },
       appendTasks(target) { target.append({ marker: 'task' }); },
-      appendAgents(target) { target.append({ marker: 'agent' }); },
+      appendAgents(target) { target.append({ marker: 'agent' }); }, appendBackgrounds() {},
       mainRow: () => ({ marker: 'main' }),
     });
     vm.runInContext([constants, sectionOrderKeys, defaultOrder, normalize, ordered, visiblePullRequests, endedDecision,
       ...['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
-        .map((name) => functionSource(web, name)), functionSource(web, 'sessionOrigin'), renderKinds, renderSession].join('\n'), context);
+        .map((name) => functionSource(web, name)), functionSource(web, 'sessionOrigin'), functionSource(web, 'runningBackgrounds'), renderKinds, renderSession].join('\n'), context);
     const kindSections = JSON.parse(JSON.stringify(
       context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label),
     ));

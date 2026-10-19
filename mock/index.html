@@ -678,7 +678,7 @@ const DATA = {
         { type: 'codex-review', text: 'PR の差分をレビュー中 (2 往復目)', since: '1 分前', state: 'busy',
           model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' }, route: 'default',
           gpt: { name: 'gpt-6-astra', effort: 'high', home: '~/.codex' } },
-        { id: 'codex-main-bg', type: 'Codex (メイン直下)', text: 'Bash の背景実行を待機中', since: '1 分前', state: 'busy',
+        { id: 'codex-main-bg', type: 'Codex (メイン直下)', text: 'Bash のバックグラウンド実行を待機中', since: '1 分前', state: 'busy',
           isCodex: true, backgrounded: true, parent_agent_id: null,
           gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex' } },
       ],
@@ -1598,6 +1598,7 @@ function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === 'busy' || session.status === 'interrupted' || (session.status === 'unknown' && session.nonInteractive) || session.perms.length > 0) return false;
   if (session.decisions.some(isActiveDecision)) return false;
   if (session.subagents.some(agent => isBusyAgent(session, agent))) return false;
+  if ((session.backgrounds || []).some(item => item.state === 'busy' && !isClosedByUser(session, item))) return false;
   const lastUpdatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
   const hiddenAt = ui.hiddenSessions.includes(session.id) ? Date.parse(ui.hiddenSessionUpdatedAt[session.id] || '') : NaN;
   const updatedAt = Number.isFinite(hiddenAt) ? Math.max(Number.isFinite(lastUpdatedAt) ? lastUpdatedAt : hiddenAt, hiddenAt) : lastUpdatedAt;
@@ -1999,7 +2000,7 @@ function renderToolLine(tool) {
 }
 
 const closedAgentKey = (session, agent) => `${session.id}::${agent.id || agent.type}`;
-// メイン直下の背景 Codex は、メインのターンが終わっても動き続けるので稼働中のまま出し、画面から閉じられるようにする。
+// メイン直下のバックグラウンドの Codex は、メインのターンが終わっても動き続けるので稼働中のまま出し、画面から閉じられるようにする。
 const isMainBackgroundCodex = agent => agent.isCodex === true && agent.backgrounded === true && !agent.parent_agent_id && agent.state === 'busy';
 const isClosedByUser = (session, agent) => ui.closedAgents.includes(closedAgentKey(session, agent));
 const isBusyAgent = (session, agent) => agent.state === 'busy' && !isClosedByUser(session, agent);
@@ -2007,7 +2008,9 @@ const isClosable = (session, agent) => ((agent.state !== 'busy' && !!agent.uncon
 const isUnconfirmed = (session, agent) => !!agent.unconfirmed && !isClosedByUser(session, agent);
 const isEndedAgent = (session, agent) => (agent.state === 'done' || isClosedByUser(session, agent)) && !isClosable(session, agent);
 // バックグラウンドで起動した Codex は Codex の行で出すので、ここには含まない。
-const runningBackgrounds = session => (session.backgrounds || []).filter(item => item.state === 'busy' && !isClosedByUser(session, item));
+function runningBackgrounds(session) {
+  return (session.backgrounds || []).filter(item => item.state === 'busy' && !isClosedByUser(session, item));
+}
 
 function isFinishedSession(session) {
   return session.status === 'wait'
