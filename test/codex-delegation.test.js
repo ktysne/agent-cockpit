@@ -193,6 +193,76 @@ function codexSessions(state) {
   return state.snapshot().sessions.filter(session => session.provider === 'codex');
 }
 
+test('PostToolBatch は拒否された Codex 起動を外し、次の thread を独立として表示する', () => {
+  for (const agent_id of [null, 'window']) {
+    const state = new DashboardState();
+    launch(state, 'rejected', { agent_id,
+      tool_input: { command: 'bash ~/.claude/tools/codex-agent.sh impl-light --effort low < "<依頼文>"' } });
+    state.addEvent(claudeEvent('PostToolBatch', { agent_id, hookAt: 200 }));
+    if (agent_id) state.addEvent(claudeEvent('SubagentStop', { agent_id, hookAt: 210 }));
+    const agents = state.snapshot().sessions[0].agents;
+    assert.equal(agents.some(agent => agent.isCodex || agent.gpt), false);
+    assert.equal(state.hasRunningDelegation(parentId), false);
+    state.addEvent(codexEvent('SessionStart', { hookAt: 220 }));
+    assert.equal(codexSessions(state).length, 1);
+  }
+});
+
+test('PostToolBatch で拒否を除去した次の区切りでは正しい Codex 起動だけが残る', () => {
+  const state = new DashboardState();
+  launch(state, 'rejected', { tool_input: { command: 'npm run review:codex' } });
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: 200 }));
+  launch(state, 'accepted', { hookAt: 300 });
+  finish(state, { tool_use_id: 'accepted', hookAt: 400 });
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: 500 }));
+  const agents = state.snapshot().sessions[0].agents;
+  assert.deepEqual(agents.map(agent => agent.agent_id), ['codex:accepted']);
+  assert.equal(agents[0].resultReceived, true);
+});
+
+test('PostToolBatch は backgroundTaskId を受けた Codex 起動を残す', () => {
+  const state = new DashboardState();
+  backgroundLaunch(state);
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: 200 }));
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.backgroundTaskId, 'task-a');
+  assert.equal(agent.active, true);
+  assert.equal(state.hasRunningDelegation(parentId), true);
+});
+
+for (const delayed of [false, true]) {
+  test(`PostToolBatch は${delayed ? '遅れて届いた' : '先に届いた'}前面の PostToolUse があれば Codex 起動を残す`, () => {
+    const state = new DashboardState();
+    launch(state);
+    if (!delayed) finish(state, { hookAt: 150 });
+    state.addEvent(claudeEvent('PostToolBatch', { hookAt: 200 }));
+    if (delayed) finish(state, { hookAt: 150 });
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.equal(agent.agent_id, 'codex:launch');
+    assert.equal(agent.resultReceived, true);
+    assert.equal(state.hasRunningDelegation(parentId), false);
+  });
+}
+
+test('PostToolBatch は別のエージェントと区切りと同時刻の Codex 起動を残す', () => {
+  const state = new DashboardState();
+  launch(state, 'other', { agent_id: 'other' });
+  launch(state, 'same-time', { hookAt: 200 });
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: 200 }));
+  assert.equal(state.hasRunningDelegation(parentId), true);
+  assert.ok(state.snapshot().sessions[0].agents.some(agent => agent.agent_id === 'codex:same-time'));
+  assert.ok(state.snapshot().sessions[0].agents.find(agent => agent.agent_id === 'other').gpt);
+});
+
+test('PostToolBatch は Codex の --wait の待ちを外さない', () => {
+  const state = new DashboardState();
+  state.addEvent(claudeEvent('PreToolUse', { agent_id: 'window',
+    tool_input: { command: 'bash codex-agent.sh --wait impl-hard-20261019-110000-7' } }));
+  state.addEvent(claudeEvent('PostToolBatch', { agent_id: 'window', hookAt: 200 }));
+  assert.equal(state.hasRunningDelegation(parentId), true);
+  assert.equal(state.snapshot().sessions[0].agents.find(agent => agent.agent_id === 'window').gpt.active, true);
+});
+
 test('起動の中断は Failure と合成 Interrupt の順によらず終了未確認になる', () => {
   for (const command of ['bash codex-agent.sh impl-hard', 'npm run review:codex']) {
     for (const interruptFirst of [true, false]) {

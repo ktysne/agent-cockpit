@@ -806,7 +806,7 @@ function applyToolCompletion(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'tools'> & SessionPermissions} session
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions & SessionCodex & Pick<SessionAgents, 'agents'>} session
  */
 function applyToolBatch(session, event) {
   const eventName = event.hook_event_name;
@@ -815,6 +815,18 @@ function applyToolBatch(session, event) {
   // 拒否されたツールには PostToolUse も PostToolUseFailure も届かない。
   if (eventName === 'PostToolBatch') {
     const startedBeforeBatch = (item) => sameAgent(item.agent_id, agentId) && Date.parse(item.startedAt) < event.hookAt;
+    // 完了イベントは hookAt 順に先に適用されるため、区切りに残る前面の起動は拒否されたものとして外す。
+    for (const [toolUseId, codexAgentId] of Object.entries(session.pendingCodex)) {
+      if (session.pendingCodexWait[toolUseId]) continue;
+      const agent = agentFor(session, codexAgentId);
+      if (!agent || agent.backgrounded || !sameAgent(agent.parent_agent_id, agentId)
+        || Date.parse(agent.startedAt) >= event.hookAt) continue;
+      session.agents = session.agents.filter((item) => item.agent_id !== codexAgentId);
+      delete session.pendingCodex[toolUseId];
+      delete session.pendingCodexWait[toolUseId];
+      session.codexReviewAgentIds.delete(codexAgentId);
+      session.codexLaunchToolIds.delete(toolUseId);
+    }
     session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
     // メインの待ちの一括解除は、背景ツールの区切りで並列の待ちを巻き込むため避ける。
     session.permissionWaits = session.permissionWaits.filter((wait) => {
