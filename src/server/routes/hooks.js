@@ -182,7 +182,12 @@ function createHookRoutes(ctx) {
         if (replayAllowed) result = cached.response;
         else if (cached && body.action === 'stop-check') result = { hookOutput: null, generation: null, wait: false };
         else if (cached && body.action === 'stop-poll') result = { stderrText: null, done: true };
-        else result = await action.run(body);
+        else {
+          if (deliveryActions.has(body.action) || body.action === 'stop-start') {
+            answerDelivery.cancelHookReminders(body.session_id);
+          }
+          result = await action.run(body);
+        }
         if (result !== INVALID_ANSWER_REQUEST && deliveryActions.has(body.action) && hasHookOutput(result) && !replayAllowed &&
           !result[UNRECORDED_DELIVERY]) {
           const delivery = answerDelivery.recordHookDelivery({

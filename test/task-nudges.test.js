@@ -51,11 +51,13 @@ test('メインのツールを 5 回使うとタスク登録を促し、同じ�
 
   nudges.afterEvent(event('tools', 'PreToolUse', START + 5, { tool_name: 'Read' }));
   assert.equal(nudges.reminderFor('tools'), NO_TASKS_REMINDER);
+  nudges.acknowledgeReminder('tools', nudges.sessions.get('tools').pendingNudge);
   assert.equal(nudges.reminderFor('tools'), null);
   setNow(START + TASK_REMINDER_INTERVAL_MS - 1);
   assert.equal(nudges.reminderFor('tools'), null);
   setNow(START + TASK_REMINDER_INTERVAL_MS);
   assert.equal(nudges.reminderFor('tools'), NO_TASKS_REMINDER);
+  nudges.acknowledgeReminder('tools', nudges.sessions.get('tools').pendingNudge);
 
   nudges.afterEvent(event('tools', 'UserPromptSubmit', START + TASK_REMINDER_INTERVAL_MS + 1));
   assert.equal(nudges.reminderFor('tools'), null);
@@ -148,6 +150,7 @@ test('全件完了の一覧への案内は 1 つのターンで 1 回にし、�
   nudges.afterEvent(event('stale-interval', 'UserPromptSubmit', START));
   useTools(START);
   assert.equal(nudges.reminderFor('stale-interval'), STALE_TASKS_REMINDER);
+  nudges.acknowledgeReminder('stale-interval', nudges.sessions.get('stale-interval').pendingNudge);
   setNow(START + TASK_REMINDER_INTERVAL_MS);
   useTools(START + 10);
   assert.equal(nudges.reminderFor('stale-interval'), null);
@@ -157,6 +160,7 @@ test('全件完了の一覧への案内は 1 つのターンで 1 回にし、�
   useTools(nextTurn);
   setNow(nextTurn + 10);
   assert.equal(nudges.reminderFor('stale-interval'), STALE_TASKS_REMINDER);
+  nudges.acknowledgeReminder('stale-interval', nudges.sessions.get('stale-interval').pendingNudge);
 });
 
 test('遅れて届いた古い入力イベントで全件完了の一覧への催促カウントを巻き戻さない', () => {
@@ -243,12 +247,14 @@ test('サブエージェント終了ごとに 1 回だけ書き直しを促す',
 
   setNow(START + TASK_REMINDER_INTERVAL_MS + 1);
   assert.equal(nudges.reminderFor('once-per-stop'), SUBAGENT_REMINDER);
+  nudges.acknowledgeReminder('once-per-stop', nudges.sessions.get('once-per-stop').pendingNudge);
   setNow(START + 2 * TASK_REMINDER_INTERVAL_MS + 1);
   assert.equal(nudges.reminderFor('once-per-stop'), null);
 
   nudges.afterEvent(event('once-per-stop', 'SubagentStop', START + TASK_REMINDER_INTERVAL_MS + 2, { agent_id: 'agent-2' }));
   setNow(START + 2 * TASK_REMINDER_INTERVAL_MS + 2);
   assert.equal(nudges.reminderFor('once-per-stop'), SUBAGENT_REMINDER);
+  nudges.acknowledgeReminder('once-per-stop', nudges.sessions.get('once-per-stop').pendingNudge);
 });
 
 test('タスクを書き直すと催促記録を消し、以後の終了時刻を追跡する', () => {
@@ -257,6 +263,7 @@ test('タスクを書き直すと催促記録を消し、以後の終了時刻�
   const { nudges, setNow } = makeNudges({ state });
   nudges.afterEvent(event('task-write', 'PreToolUse', START, { tool_name: 'Agent' }));
   assert.equal(nudges.reminderFor('task-write'), NO_TASKS_REMINDER);
+  nudges.acknowledgeReminder('task-write', nudges.sessions.get('task-write').pendingNudge);
   assert.equal(nudges.sessions.get('task-write').lastNudgeAt, START);
 
   state.setTasks('task-write', [task()], START + 1);

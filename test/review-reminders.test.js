@@ -23,7 +23,17 @@ function reminderFixture(t, options = {}) {
     ...options,
   });
   t.after(() => { delivery.close(); tracker.close(); });
-  const stop = async () => delivery.waitForStopAnswer(sessionId, await delivery.startStop(sessionId, 'stop'));
+  let requestId = 0;
+  const stop = async () => {
+    const generation = delivery.startStop(sessionId, `stop-${++requestId}`);
+    const result = await delivery.waitForStopAnswer(sessionId, generation);
+    if (result.stderrText) {
+      const record = delivery.recordHookDelivery({ sessionId, action: 'stop-poll', requestId: `poll-${requestId}`,
+        requestGeneration: generation, generation, response: result });
+      delivery.acknowledgeHookDelivery(sessionId, record.deliveryId);
+    }
+    return result;
+  };
   return { state, sessionId, tracker, pr, logs, delivery, stop };
 }
 
@@ -201,4 +211,63 @@ test('読み直し中に次の入力が届いた Stop の催促は破棄する',
   assert.equal(delivery.deliverPrompt(sessionId, 'prompt', 2), null);
   finish(null);
   assert.deepEqual(await delivery.waitForStopAnswer(sessionId, await starting), { stderrText: null, done: true });
+});
+
+for (const action of ['stop-check', 'stop-poll']) {
+  test(`${action} の未 ACK のレビュー催促は次の Stop で再配信し、ACK 後は同じ head を繰り返さない`, async (t) => {
+    const f = reminderFixture(t);
+    const server = await startTestServer(t, { state: f.state, answerDelivery: f.delivery });
+    const send = async (action, id, extra = {}) => {
+      const response = await request(server.info.port, { method: 'POST', path: '/api/hooks/answers',
+        headers: { 'x-cockpit-secret': server.info.secret },
+        body: JSON.stringify({ session_id: f.sessionId, event_name: 'Stop', ...(action === 'stop-check' ? { provider: 'claude' } : {}), action, id, ...extra }) });
+      assert.equal(response.status, 200);
+      return JSON.parse(response.body);
+    };
+    const next = async (id) => {
+      const { generation } = await send('stop-start', `start-${id}`);
+      const body = { generation, parent_alive: true };
+      return { body, result: await send(action, id, body) };
+    };
+    const first = await next('lost');
+    assert.match(first.result.hookOutput?.reason || first.result.stderrText, /cockpit_skip_review/);
+    assert.deepEqual(await send(action, 'lost', first.body), first.result);
+    const second = await next('next');
+    assert.match(second.result.hookOutput?.reason || second.result.stderrText, /cockpit_skip_review/);
+    await send('delivery-ack', 'late-ack', { delivery_id: first.result.deliveryId });
+    const third = await next('still-unacknowledged');
+    assert.match(third.result.hookOutput?.reason || third.result.stderrText, /cockpit_skip_review/);
+    await send('delivery-ack', 'ack', { delivery_id: third.result.deliveryId });
+    const acknowledged = (await next('acknowledged')).result;
+    assert.equal(acknowledged.hookOutput || acknowledged.stderrText || null, null);
+  });
+}
+
+test('レビュー判定中に別の要求が取得したタスク催促を、レビュー催促の ACK で配信済みにしない', async (t) => {
+  const f = reminderFixture(t);
+  const server = await startTestServer(t, { state: f.state, answerDelivery: f.delivery });
+  const send = async (action, id, extra = {}) => {
+    const response = await request(server.info.port, { method: 'POST', path: '/api/hooks/answers',
+      headers: { 'x-cockpit-secret': server.info.secret },
+      body: JSON.stringify({ session_id: f.sessionId, action, id, ...extra }) });
+    assert.equal(response.status, 200);
+    return JSON.parse(response.body);
+  };
+  await request(server.info.port, { method: 'POST', path: '/api/events',
+    headers: { 'x-cockpit-secret': server.info.secret },
+    body: JSON.stringify({ session_id: f.sessionId, hook_event_name: 'PreToolUse', tool_name: 'Agent', hookAt: Date.now() - 1 }) });
+  let finishReview;
+  let reviewStarted;
+  const started = new Promise((resolve) => { reviewStarted = resolve; });
+  f.tracker.readCrossReviewState = () => new Promise((resolve) => { finishReview = resolve; reviewStarted(); });
+  const stop = send('stop-check', 'stop', { event_name: 'Stop', provider: 'claude' });
+  await started;
+  const batch = await send('post-tool-batch', 'batch', { event_name: 'PostToolBatch' });
+  assert.match(batch.hookOutput.hookSpecificOutput.additionalContext, /タスクが登録されていない/);
+  finishReview(null);
+  const review = await stop;
+  assert.match(review.hookOutput.reason, /cockpit_skip_review/);
+  await send('delivery-ack', 'review-ack', { delivery_id: review.deliveryId });
+  const retry = await send('post-tool-batch', 'next-batch', { event_name: 'PostToolBatch' });
+  assert.match(retry.hookOutput.hookSpecificOutput.additionalContext, /タスクが登録されていない/);
 });

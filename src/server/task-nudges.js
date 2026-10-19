@@ -29,6 +29,7 @@ class TaskNudges {
         nudgedSubagentStopAt: null,
         lastTaskWriteAt: null,
         lastNudgeAt: null,
+        pendingNudge: null,
       };
       this.sessions.set(sessionId, session);
     }
@@ -85,6 +86,7 @@ class TaskNudges {
 
   tasksWritten(sessionId, writtenAt = this.now()) {
     const session = this.sessionFor(sessionId);
+    session.pendingNudge = null;
     session.lastTaskWriteAt = writtenAt;
     session.lastNudgeAt = null;
     session.mainToolUseCount = 0;
@@ -98,6 +100,7 @@ class TaskNudges {
       return null;
     }
     const session = this.sessionFor(sessionId);
+    if (session.pendingNudge) return null;
     const now = this.now();
     const tasks = this.tasksFor(sessionId);
     const hasTasks = tasks.length > 0;
@@ -117,14 +120,30 @@ class TaskNudges {
     if (!subagentReportIsStale && !noTasksReminderIsDue && !staleTasksReminderIsDue) return null;
     if (session.lastNudgeAt !== null && now - session.lastNudgeAt < TASK_REMINDER_INTERVAL_MS) return null;
 
-    session.lastNudgeAt = now;
-    if (subagentReportIsStale) session.nudgedSubagentStopAt = session.lastSubagentStopAt;
+    session.pendingNudge = {
+      createdAt: now,
+      lastNudgeAt: now,
+      nudgedSubagentStopAt: subagentReportIsStale ? session.lastSubagentStopAt : session.nudgedSubagentStopAt,
+      staleTasksNudgedTurnAt: staleTasksReminderIsDue && !subagentReportIsStale && !noTasksReminderIsDue
+        ? session.turnStartedAt : session.staleTasksNudgedTurnAt,
+    };
     const setTasksOnly = this.state.providerForSession?.(sessionId) === 'codex' ||
       this.state.getDisplayPreferences?.()?.importAppTasks !== true;
     if (subagentReportIsStale) return setTasksOnly ? SET_TASKS_SUBAGENT_REMINDER : SUBAGENT_REMINDER;
     if (noTasksReminderIsDue) return setTasksOnly ? SET_TASKS_NO_TASKS_REMINDER : NO_TASKS_REMINDER;
-    session.staleTasksNudgedTurnAt = session.turnStartedAt;
     return setTasksOnly ? SET_TASKS_STALE_TASKS_REMINDER : STALE_TASKS_REMINDER;
+  }
+
+  acknowledgeReminder(sessionId, pendingNudge) {
+    const session = this.sessions.get(sessionId);
+    if (!pendingNudge || session?.pendingNudge !== pendingNudge) return;
+    const { createdAt, ...delivered } = pendingNudge;
+    Object.assign(session, delivered, { lastNudgeAt: this.now(), pendingNudge: null });
+  }
+
+  cancelReminder(sessionId, occurredAt = Infinity) {
+    const session = this.sessions.get(sessionId);
+    if (session?.pendingNudge && session.pendingNudge.createdAt < occurredAt) session.pendingNudge = null;
   }
 
   tasksFor(sessionId) {
