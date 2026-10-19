@@ -2167,7 +2167,9 @@ async function localPullFixture(t, options = {}) {
       assert.equal(executionOptions.env.GIT_TERMINAL_PROMPT, '0');
       if (options.holdPull) options.holdPull(callback);
       else callback(options.failPull ? new Error('private output') : null, '');
-    } else if (operation === 'merge') callback(null, '');
+    } else if (operation === 'rev-parse') callback(null, 'a'.repeat(40) + '\n');
+    else if (operation === 'update-ref') callback(null, '');
+    else if (operation === 'merge') callback(null, '');
     else assert.fail('unexpected local git command');
   };
   const detected = (changes = {}) => fixture.manager.handleDetectedMerge({
@@ -2189,9 +2191,13 @@ test('既定ブランチへのマージは既定ブランチの有効な worktre
   const f = await localPullFixture(t);
   await f.detected();
   await Promise.all(f.manager.localUpdates);
-  assert.deepEqual(f.localCalls.filter(call => ['fetch', 'merge'].includes(call[2])), [
-    ['-C', f.checkout, 'fetch', '--', 'upstream', 'main'],
-    ['-C', f.checkout, 'merge', '--ff-only', 'FETCH_HEAD'],
+  const fetchCall = f.localCalls.find(call => call[2] === 'fetch');
+  const fetchedRef = fetchCall[6].split(':')[1];
+  assert.match(fetchedRef, /^refs\/agent-cockpit\/default-branch-/);
+  assert.deepEqual(f.localCalls.filter(call => ['fetch', 'merge', 'update-ref'].includes(call[2])), [
+    ['-C', f.checkout, 'fetch', '--no-write-fetch-head', '--', 'upstream', `+refs/heads/main:${fetchedRef}`],
+    ['-C', f.checkout, 'merge', '--ff-only', 'a'.repeat(40)],
+    ['-C', f.checkout, 'update-ref', '-d', fetchedRef],
   ]);
   assert.match(f.notices.at(-1).message, /ローカルの main を最新にしました/);
   const entries = await f.diagnostics.readRun(f.diagnostics.run);

@@ -1,6 +1,7 @@
 'use strict';
 
 const { execFile } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { isCompleteCommitSha, pullRequestKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { safeRepo, crossReviewConvergedAtHead, ghFailureKind, matchingRepositoryCheckout, listWorktrees, gitRemotes } = require('./pull-requests');
@@ -853,12 +854,20 @@ class PullRequestMergeManager {
       const remotes = gitRemotes(remoteUrls);
       const remote = remotes.find((item) => item.owner?.toLowerCase() === owner.toLowerCase() && item.repo?.toLowerCase() === repo.toLowerCase());
       if (!remote || !remote.name || remote.name.startsWith('-')) return 'no-remote';
-      // 取得を待つ間に切り替えや変更が起きることがあるので、取り込む直前に確かめ直す。
-      await this.runLocalGit(root, ['fetch', '--', remote.name, defaultBranch]);
-      const after = await this.localWorktreeState(root, defaultBranch);
-      if (after !== 'clean') return after;
-      await this.runLocalGit(root, ['merge', '--ff-only', 'FETCH_HEAD']);
-      return 'updated';
+      // FETCH_HEAD は開発者の fetch で書き換わるので、専用の ref に取得して取り込む SHA を固定する。
+      const fetchedRef = `refs/agent-cockpit/default-branch-${randomUUID()}`;
+      try {
+        await this.runLocalGit(root, ['fetch', '--no-write-fetch-head', '--', remote.name, `+refs/heads/${defaultBranch}:${fetchedRef}`]);
+        const fetchedSha = (await this.runLocalGit(root, ['rev-parse', '--verify', `${fetchedRef}^{commit}`])).trim();
+        if (!isCompleteCommitSha(fetchedSha)) return 'failed';
+        // 取得を待つ間に切り替えや変更が起きることがあるので、取り込む直前に確かめ直す。
+        const after = await this.localWorktreeState(root, defaultBranch);
+        if (after !== 'clean') return after;
+        await this.runLocalGit(root, ['merge', '--ff-only', fetchedSha]);
+        return 'updated';
+      } finally {
+        await this.runLocalGit(root, ['update-ref', '-d', fetchedRef]).catch(() => {});
+      }
     } catch {
       return 'failed';
     }
