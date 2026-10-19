@@ -370,6 +370,38 @@ test('report はサーバーが無いか health を取得できなければ停�
   }
 });
 
+test('report は最初の health 応答が期限切れなら応答を待つよう案内する', async () => {
+  const lines = [];
+  await main(['report', 'v1.0.2'], { log: line => lines.push(line),
+    readServerInfo: async () => ({ port: 47821, pid: 123, startedAt: 'now' }),
+    requestFromServer: async () => ({ ok: false, status: null, json: null, timedOut: true }),
+  });
+  assert.deepEqual(lines, [
+    '公開したバージョン: v1.0.2',
+    '手元の常駐サーバーから応答がありませんでした。動いているかを確かめられません。少し待ってからもう一度実行してください。',
+  ]);
+});
+
+test('report は検証中の health 応答が期限切れなら応答を待つよう案内する', async () => {
+  const lines = [];
+  const info = { port: 47821, pid: 123, startedAt: 'now' };
+  let requests = 0;
+  await main(['report', 'v1.0.2'], { log: line => lines.push(line),
+    readServerInfo: async () => info,
+    requestFromServer: async () => {
+      requests += 1;
+      return requests === 1
+        ? { ok: true, status: 200, json: { app: 'agent-cockpit', ...info, version: '1.0.2', commit: HEAD, sourceState: 'release' } }
+        : { ok: false, status: null, json: null, timedOut: true };
+    },
+    execFileSync: () => HEAD,
+  });
+  assert.deepEqual(lines, [
+    '公開したバージョン: v1.0.2',
+    '手元の常駐サーバーから応答がありませんでした。動いているかを確かめられません。少し待ってからもう一度実行してください。',
+  ]);
+});
+
 test('report はバージョンとタグのコミットが一致する稼働中サーバーを公開したバージョンと案内する', async () => {
   const lines = [];
   const info = { port: 47821, pid: 123, startedAt: 'now' };

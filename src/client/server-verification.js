@@ -65,7 +65,10 @@ async function verifyServer(started, options = {}) {
   };
   const response = await requestHealth();
   if (!response.ok || !response.json) {
-    return { result: 'start-failed', expected, running: null, commitVerified: false, releaseVerified: false };
+    return {
+      result: 'start-failed', expected, running: null, commitVerified: false, releaseVerified: false,
+      ...(response.timedOut ? { timedOut: true } : {}),
+    };
   }
   let verification = verifyHealth(expected, started, response.json);
   if (!settleSourceState || verification.result !== 'ok' || verification.running.sourceState !== 'pending') {

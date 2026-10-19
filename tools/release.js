@@ -316,6 +316,10 @@ async function reportRelease(input, dependencies = {}) {
     const response = await request(info, '/health', { method: 'GET' }, {
       fetchImpl: dependencies.fetchImpl, now, deadline: now() + 1000,
     });
+    if (response.timedOut) {
+      log('手元の常駐サーバーから応答がありませんでした。動いているかを確かめられません。少し待ってからもう一度実行してください。');
+      return;
+    }
     const health = response.json;
     if (!response.ok || !health || health.app !== 'agent-cockpit' || health.pid !== info.pid || health.startedAt !== info.startedAt) {
       log('手元の常駐サーバーは動いていません。');
@@ -332,7 +336,9 @@ async function reportRelease(input, dependencies = {}) {
       sourceStateIntervalMs: dependencies.sourceStateIntervalMs,
       requestFromServer: request,
     });
-    if (verification.result === 'start-failed' || !verification.identityMatches) {
+    if (verification.timedOut) {
+      log('手元の常駐サーバーから応答がありませんでした。動いているかを確かめられません。少し待ってからもう一度実行してください。');
+    } else if (verification.result === 'start-failed' || !verification.identityMatches) {
       log('手元の常駐サーバーは動いていません。');
     } else if (verification.result === 'mismatch') {
       log(`手元の常駐サーバーはバージョン ${verification.running.version ?? '不明'} で動いています。公開したバージョンで動かすには、常駐サーバーを再起動してください。`);
