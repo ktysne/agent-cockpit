@@ -9,7 +9,10 @@ const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool,
 const { applyReviewSkip } = require('./review-skip');
 const { keepImportedCriteria } = require('../plan-updates');
 
-const DELEGATED_CODEX_PROMPT_CONTEXT = 'Agent Cockpit: タスク、判断事項、PR は委譲元の Claude のセッションが記録する。この実行は Claude のセッションから委譲された Codex なので、Agent Cockpit の MCP ツール(cockpit_*)を呼ばない。';
+const CODEX_SESSION_DELEGATED = 'Codex session delegated';
+// 委譲した thread への案内は配信の記録に載せない。載せると ACK で、届けていない回答と通知まで配信済みになる。
+const UNRECORDED_DELIVERY = Symbol('unrecorded delivery');
+const DELEGATED_CODEX_PROMPT_CONTEXT ='Agent Cockpit: タスク、判断事項、PR は委譲元の Claude のセッションが記録する。この実行は Claude のセッションから委譲された Codex なので、Agent Cockpit の MCP ツール(cockpit_*)を呼ばない。';
 
 function createHookRoutes(ctx) {
   const { state, answerDelivery, claudeHome, userHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
@@ -50,6 +53,7 @@ function createHookRoutes(ctx) {
         !validSessionId(body.codexSessionId) || routeId !== body.codexSessionId) {
         return { status: 400, error: 'Invalid session id' };
       }
+      if (state.isDelegatedCodexThread(body.codexSessionId)) return { status: 403, error: CODEX_SESSION_DELEGATED };
       const session = state.sessions.get(body.codexSessionId);
       if (session?.provider !== 'codex' || state.sessionHasEnded(body.codexSessionId)) {
         return { status: 403, error: 'Codex session unavailable' };
@@ -124,7 +128,8 @@ function createHookRoutes(ctx) {
       matches: (body) => body.action === 'user-prompt-submit' && body.event_name === 'UserPromptSubmit',
       run: (body) => {
         if (state.isDelegatedCodexThread(body.session_id)) {
-          return { hookOutput: { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: DELEGATED_CODEX_PROMPT_CONTEXT } } };
+          return { hookOutput: { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: DELEGATED_CODEX_PROMPT_CONTEXT } },
+            [UNRECORDED_DELIVERY]: true };
         }
         const additionalContext = answerDelivery.deliverPrompt(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined);
         return { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } } : null };
@@ -175,7 +180,8 @@ function createHookRoutes(ctx) {
         else if (cached && body.action === 'stop-check') result = { hookOutput: null, generation: null, wait: false };
         else if (cached && body.action === 'stop-poll') result = { stderrText: null, done: true };
         else result = await action.run(body);
-        if (result !== INVALID_ANSWER_REQUEST && deliveryActions.has(body.action) && hasHookOutput(result) && !replayAllowed) {
+        if (result !== INVALID_ANSWER_REQUEST && deliveryActions.has(body.action) && hasHookOutput(result) && !replayAllowed &&
+          !result[UNRECORDED_DELIVERY]) {
           const delivery = answerDelivery.recordHookDelivery({
             sessionId: body.session_id,
             action: body.action,

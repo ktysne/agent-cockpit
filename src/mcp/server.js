@@ -229,7 +229,8 @@ function shortSavedList(toolName, saved) {
   return `${action}: ${summary}${remainder}`;
 }
 
-// 常駐サーバーは、フックで登録されていないか終了した Codex のセッションへの書き込みを 403 で拒否する。
+// 常駐サーバーは、フックで登録されていないか終了した Codex のセッションと、委譲した thread への書き込みを 403 で拒否する。
+// 委譲した thread は応答の error で見分ける。
 async function postMcpRequest(requestPath, body, options, deadline, attemptTimeoutMs = 2000) {
   let serverInfo;
   const result = await postToServer(requestPath, body, {
@@ -249,10 +250,12 @@ async function postMcpRequest(requestPath, body, options, deadline, attemptTimeo
     // タイムアウト後も常駐サーバーで処理が続くため、同じ書き込みを再送しない。
     retryAfterTimeout: false,
     ensure: true,
+    errorJson: true,
   });
   reportMcpWrite(serverInfo, options, { tool: options.diagnosticTool, phase: 'result', ok: result.ok, status: result.status,
     ...(!result.ok ? { failure: result.timedOut ? 'timeout' : result.status ? 'http' : 'unreachable' } : {}) });
-  return { ...result, codexUnregistered: Boolean(options.codexSessionId) && result.status === 403 };
+  const codexUnregistered = Boolean(options.codexSessionId) && result.status === 403;
+  return { ...result, codexUnregistered, codexDelegated: codexUnregistered && result.json?.error === 'Codex session delegated' };
 }
 
 function requestDeadline(options, timeoutMs) {
@@ -270,9 +273,8 @@ function writerIdentity(options) {
   };
 }
 
-function codexUnregisteredResult(options) {
-  const environment = options.environment || process.env;
-  return isHookSessionId(environment.CLAUDE_CODE_SESSION_ID)
+function codexUnregisteredResult(result) {
+  return result.codexDelegated
     ? { errorMessage: DELEGATED_CODEX_UNREGISTERED_MESSAGE, isError: false }
     : { errorMessage: CODEX_UNREGISTERED_MESSAGE, isError: true };
 }
@@ -288,7 +290,7 @@ async function postPlan(toolName, args, options = {}) {
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/plan`, body, options, deadline);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
-  if (result.codexUnregistered) return codexUnregisteredResult(options);
+  if (result.codexUnregistered) return codexUnregisteredResult(result);
   const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -308,7 +310,7 @@ async function postPullRequest(args, options = {}) {
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
-  if (result.codexUnregistered) return codexUnregisteredResult(options);
+  if (result.codexUnregistered) return codexUnregisteredResult(result);
   const errorMessage = PR_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -339,7 +341,7 @@ async function postCrossReviewSkip(args, options = {}) {
   );
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
-  if (result.codexUnregistered) return codexUnregisteredResult(options);
+  if (result.codexUnregistered) return codexUnregisteredResult(result);
   const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }

@@ -317,14 +317,16 @@ async function postToServer(requestPath, body, options = {}) {
         now,
         async (response) => ({
           response,
-          json: response.ok && options.parseJson !== false ? await response.json() : undefined,
+          json: response.ok
+            ? (options.parseJson !== false ? await response.json() : undefined)
+            : (options.errorJson ? await response.json().catch(() => null) : null),
         }),
       );
       const { response, json } = result;
       if (response.ok) {
         return { ok: true, status: response.status, json };
       }
-      if (response.status !== 401 || attempt > 0) return { ok: false, status: response.status, json: null };
+      if (response.status !== 401 || attempt > 0) return { ok: false, status: response.status, json };
       const replacement = await readInfo(homeDir, fileSystem);
       info = replacement || (options.reuseInfoOnUnauthorized ? info : null);
     } catch (error) {

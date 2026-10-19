@@ -409,10 +409,11 @@ test('HTTP で委譲を受けた Codex は状態に表示されず MCP の書き
   const response = await post('/api/sessions/thread/plan', { codexSessionId: 'thread', kind: 'tasks',
     tasks: [{ title: '書き込まない', state: 'doing', criteria: [] }] });
   assert.equal(response.status, 403);
+  assert.equal(jsonBody(response).error, 'Codex session delegated');
   assert.equal(c.runtime.state.plans.size, 0);
 });
 
-test('委譲した Codex の UserPromptSubmit は記録不要の文脈を返し、独立した Codex には返さない', async (t) => {
+test('委譲した Codex の UserPromptSubmit は配信として記録せずに記録不要の文脈を返し、独立した Codex には返さない', async (t) => {
   const c = await startTestServer(t);
   const post = (url, body) => request(c.info.port, { method: 'POST', path: url,
     headers: hookHeaders(c.info.secret), body: JSON.stringify(body) });
@@ -431,6 +432,7 @@ test('委譲した Codex の UserPromptSubmit は記録不要の文脈を返し�
   assert.match(additionalContext, /Agent Cockpit/);
   assert.match(additionalContext, /Claude のセッションから委譲/);
   assert.match(additionalContext, /cockpit_\*/);
+  assert.equal(delegated.deliveryId, undefined);
   assert.equal((await submitPrompt('independent-thread')).hookOutput, null);
 });
 

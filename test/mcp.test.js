@@ -285,7 +285,7 @@ test('3 種類の MCP 書き込みは未知の失敗と再試行後の 401 を�
   }
 });
 
-test('委譲した Codex の MCP 書き込みは記録不要と返し、親 ID が無ければ未登録の文を返す', async () => {
+test('委譲した thread への MCP 書き込みは記録不要と返し、それ以外の 403 は親 ID があっても未登録の文を返す', async () => {
   const delegatedMessage = 'Claude のセッションから委譲された実行なので、Agent Cockpit には記録しない。記録は委譲元の Claude のセッションが行うので、このツールを呼ばなくてよい。';
   const unregisteredMessage = 'Codex のフックが届いていないため記録できなかった。未登録または終了済みのセッションです。';
   const calls = [
@@ -297,16 +297,17 @@ test('委譲した Codex の MCP 書き込みは記録不要と返し、親 ID �
   ];
 
   for (const [name, argumentsValue] of calls) {
-    for (const { environment, expected, isError } of [
-      { environment: { CLAUDE_CODE_SESSION_ID: 'claude-parent' }, expected: delegatedMessage, isError: undefined },
-      { environment: {}, expected: unregisteredMessage, isError: true },
+    for (const { error, expected, isError } of [
+      { error: 'Codex session delegated', expected: delegatedMessage, isError: undefined },
+      { error: 'Codex session unavailable', expected: unregisteredMessage, isError: true },
     ]) {
       const result = await callTool(name, argumentsValue, {
         homeDir: 'C:\\temporary-cockpit',
-        environment,
+        environment: { CLAUDE_CODE_SESSION_ID: 'claude-parent' },
         codexSessionId: 'codex-thread',
         ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
-        fetchImpl: async url => new Response('{}', { status: url.endsWith('/api/diagnostics') ? 202 : 403 }),
+        fetchImpl: async url => url.endsWith('/api/diagnostics') ? new Response('{}', { status: 202 })
+          : new Response(JSON.stringify({ error }), { status: 403 }),
       });
       assert.equal(result.isError, isError, name);
       assert.equal(result.content[0].text, expected, name);
