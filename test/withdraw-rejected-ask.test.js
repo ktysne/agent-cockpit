@@ -208,6 +208,20 @@ test('再起動後に同じ質問の開始が届き直しても、離席中の�
   assert.equal(decision(restored).state, 'waiting');
 });
 
+test('再起動後に前の呼び出しの開始が遅れて届いても、新しい呼び出しの回答待ちを消さない', async () => {
+  const state = new DashboardState();
+  state.addEvent(ask('ask-1', NOW));
+  const restored = await restart(state);
+  const away = { snapshot: () => ({ enabled: true }) };
+  const delivery = new DecisionAnswerDelivery({ state: restored, away, now: () => NOW + 1000, setTimeoutImpl: () => 1, clearTimeoutImpl: () => {} });
+  delivery.registerAsk({ sessionId: 'session-a', toolUseId: 'ask-2', questions: QUESTIONS });
+  const decisionId = restored.decisionIdForToolUse('session-a', 'ask-2');
+  const lateStart = ask('ask-1', NOW + 500);
+  restored.addEvent(lateStart);
+  delivery.afterEvent(lateStart);
+  assert.ok(restored.decisionFor('session-a', decisionId).awaitingAnswerUntil);
+});
+
 test('離席中にフックが却下した質問と送信済みの回答は後続イベントで取り下げない', async () => {
   const state = new DashboardState();
   const delivery = new DecisionAnswerDelivery({ state, away: { snapshot: () => ({ enabled: true }) },

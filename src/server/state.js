@@ -2625,10 +2625,11 @@ class DashboardState {
     return this.decisionFor(sessionId, decisionId);
   }
 
-  deleteDecisionLifecycle(sessionId, decisionId, { exceptAskToolUseId = null } = {}) {
+  deleteDecisionLifecycle(sessionId, decisionId, { exceptAskToolUseId = null, updatedBefore = Infinity } = {}) {
     const lifecycles = this.decisionLifecycles.get(sessionId);
     const lifecycle = lifecycles?.get(decisionId);
     if (!lifecycle || (exceptAskToolUseId && lifecycle.askToolUseId === exceptAskToolUseId)) return false;
+    if (!(Date.parse(lifecycle.updatedAt) < updatedBefore)) return false;
     lifecycles.delete(decisionId);
     if (!lifecycles.size) this.decisionLifecycles.delete(sessionId);
     this.touch();

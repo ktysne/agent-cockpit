@@ -658,8 +658,9 @@ class DecisionAnswerDelivery {
       const key = keyFor(sessionId, toolUseId);
       const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
       // 開始の送信と回答待ちの登録は別のフックなので、時刻の前後では同じ呼び出しかを決められない。
+      // 記録より古い開始は、別の呼び出しのものでも記録を消す根拠にならない。
       if (decisionId && !this.askWaits.has(key)) {
-        this.state.deleteDecisionLifecycle(sessionId, decisionId, { exceptAskToolUseId: toolUseId });
+        this.state.deleteDecisionLifecycle(sessionId, decisionId, { exceptAskToolUseId: toolUseId, updatedBefore: event.hookAt });
       }
       return;
     }
