@@ -709,7 +709,8 @@ const DATA = {
       // autoDeleteBranch は GitHub の「マージ後に head ブランチを自動で削除する」設定。
       repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前', autoDeleteBranch: true },
       // xr はクロスレビューの道具の状態ファイル(往復の回数、最後にレビューした head、非対応の指摘)。
-      // worktree に tools/cross-review.js はあるがこのブランチの記録が無い PR は null、tools/cross-review.js が無い(ai-cross-review を使っていない)PR には付けない。
+      // tools/cross-review.js はあるがこのブランチの記録が無い PR は null、道具が無い PR は { notRequired: true, source: 'tool-absent' }、
+      // 状態を読めない PR は { unavailable: true } とし、登録したセッションの無い関連 PR には付けない。
       // closedPrs はマージせずに閉じた PR。クローズの日時は取得しないので、PR 番号の大きい順に並べる。
       closedPrs: [{ number: 138, title: '試作: 拍子変更を別ファイルで持つ' }],
       // triage は主セッションが記録した最後の結論(lastTriage)。記録が無ければ付けない。
@@ -2273,6 +2274,7 @@ function crossReviewState(pr) {
   if (pr.xr === undefined) return { cls: 'mute', text: '', warn: null };
   if (pr.xr?.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null };
   if (!pr.xr) return { cls: 'warn', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  if (pr.xr.unavailable === true) return { cls: 'warn', text: '状態を確認できない', warn: 'クロスレビューの状態を確認できない' };
   const t = pr.xr.triage && pr.xr.triage.round <= pr.xr.round ? pr.xr.triage : null;
   if (t && pr.xr.round > t.round) return { cls: 'warn', text: `${pr.xr.round} 往復目の結論待ち`, warn: `クロスレビューの ${pr.xr.round} 往復目の結論がまだ出ていない` };
   if (t && t.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${t.round} 往復目の指摘に対応している途中` };
@@ -2291,7 +2293,8 @@ function crossReviewLine(p, pr) {
   if (pr.xr === undefined) return '';
   const key = prKey(p, pr.number);
   const skip = ui.reviewSkips[key];
-  if (skip?.sha === pr.sha) {
+  // 不要の記録より、今の head で収束した記録を優先する。
+  if (skip?.sha === pr.sha && !convergedAtHead(pr)) {
     return `<div class="xr">クロスレビュー <span class="badge mute" title="${esc(skip.reason)}">レビュー不要</span>
       <button type="button" class="link-btn" data-review-skip="clear" data-review-key="${esc(key)}">レビュー不要を取り消す</button></div>`;
   }
@@ -2302,7 +2305,7 @@ function crossReviewLine(p, pr) {
       ? `<button type="button" class="link-btn" data-review-skip="clear" data-review-key="${esc(key)}">レビュー不要を取り消す</button>` : '';
     return `<div class="xr">クロスレビュー <span class="badge mute"${reason}>レビュー不要</span>${action}</div>`;
   }
-  if (!pr.xr) return `<div class="xr">クロスレビュー <span class="badge ${state.cls}">${state.text}</span>
+  if (!pr.xr || pr.xr.unavailable === true) return `<div class="xr">クロスレビュー <span class="badge ${state.cls}">${state.text}</span>
     <button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button></div>`;
   const rounds = Array.from({ length: CROSS_REVIEW_MAX_ROUNDS }, (_, i) => `<span class="${i < pr.xr.round ? 'used' : ''}"></span>`).join('');
   // 不要の記録はレビューが要る状態(warn)でだけ出す。
@@ -2429,8 +2432,7 @@ function crossReviewWaitReason(p, pr) {
 
 function reservationWaitReasons(p, pr, method = null) {
   const waiting = [];
-  const reviewSkipRecorded = ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha;
-  if (pr.xr?.notRequired === true || reviewSkipRecorded || !convergedAtHead(pr)) waiting.push(pushedAfterConvergence(pr)
+  if (pr.xr?.notRequired === true || !convergedAtHead(pr)) waiting.push(pushedAfterConvergence(pr)
     ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
   if (pr.ci !== 'pass') waiting.push((CI_LABELS[pr.ci] || CI_LABELS.unknown).wait);
   const blocker = mergeOperationBlocker(p, pr);
@@ -2666,10 +2668,12 @@ function prItem(p, pr, showOriginBands = true) {
   const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
   const classes = ['pr', rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : '', origin ? `origin-${origin}` : '']
     .filter(Boolean).join(' ');
+  // 予約は収束の記録が無いと実行されないので、道具が無い PR には予約が残っているときだけ出す。
+  const reservationToggleShown = rsv || !(pr.xr?.notRequired === true && pr.xr.source === 'tool-absent');
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
     !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
-      <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : '',
+      ${reservationToggleShown ? `<label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : ''}` : '',
     conflictButton(p, pr),
   ].join('').trim();
   return `<div class="${classes}"${origin ? ` data-origin="${origin}"` : ''}>

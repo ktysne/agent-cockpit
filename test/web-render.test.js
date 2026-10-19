@@ -5579,3 +5579,31 @@ test('終わったものを一時表示しても帯の件数と記録削除の�
     harness.buttons().find(button => button.dataset.showFinished === 'note').listeners.click();
   }
 });
+
+for (const scenario of [
+  { name: '道具なしで予約なし', source: 'tool-absent', show: false },
+  { name: '道具なしで予約あり', source: 'tool-absent', reserved: true, show: true },
+  { name: '不要の記録あり', source: 'recorded', show: true },
+]) {
+  test(`PR 行が「${scenario.name}」なら収束後マージのチェックを${scenario.show ? '表示する' : '表示しない'}`, () => {
+    const element = (tagName, className = '', textContent = '') => ({ tagName, className, textContent, children: [], dataset: {},
+      append(...nodes) { this.children.push(...nodes); }, setAttribute() {} });
+    const context = pageContext(pageHtml, {
+      element, document: { createTextNode: (text) => element('text', '', text) },
+      queuedPullRequestMerge: () => null, pullRequestMergeKey: () => 'key', pullRequestResultUnconfirmed: () => false,
+      pullRequestMergeConfirmations: new Map(), pullRequestMergeInFlight: new Set(), pullRequestMergeMessages: new Map(),
+      pullRequestReservationPending: new Map(), pullRequestMergeConditionWaits: () => [], providerOrigin: () => '',
+      appendPullRequestBadges() {}, crossReviewState: () => ({}), crossReviewLine: () => element('div'),
+      badge: (_text) => element('span'), absoluteTimeLabel: () => '', pullRequestReservationWaits: () => [], MERGE_METHOD_LABELS: {},
+    });
+    vm.runInContext(functionSource(pageHtml, 'appendPullRequestTree'), context);
+    const root = element('div');
+    context.appendPullRequestTree(root, { mergeMethods: ['merge'] }, { number: 31, mergeSessionId: 'session-pr', canMerge: true, children: [],
+      crossReview: { notRequired: true, source: scenario.source }, reservation: scenario.reserved ? { method: 'merge' } : null });
+    const flatten = (node) => [node, ...node.children.flatMap(flatten)];
+    const toggle = flatten(root).find((node) => node.dataset.reservationToggle === 'key');
+    assert.equal(Boolean(toggle), scenario.show);
+    if (scenario.reserved) assert.equal(toggle.checked, true);
+    assert.ok(flatten(root).some((node) => node.dataset.openMerge === 'key'));
+  });
+}

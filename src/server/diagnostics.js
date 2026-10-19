@@ -28,6 +28,7 @@ const ALLOWED_DATA = Object.freeze({
   'server.perf': ['stateCount', 'stateCacheHitCount', 'stateTotalMs', 'stateMaxMs', 'eventCount', 'eventTotalMs', 'eventMaxMs', 'storeCount', 'storeTotalMs', 'storeMaxMs', 'snapshotCount', 'snapshotTotalMs', 'snapshotMaxMs', 'loopP99Ms', 'loopMaxMs'],
   'state.cache.mismatch': ['etag', 'version'],
   'gh.failed': ['operation', 'repository', 'number', 'session', 'failure', 'code', 'signal', 'exitCode', 'consecutive'],
+  'pr.refresh.failed': ['name'],
   'merge.check': ['operation', 'repository', 'number', 'head', 'condition', 'status'],
   'merge.reserved': ['repository', 'number'],
   'merge.cancelled': ['repository', 'number'],

@@ -11,7 +11,8 @@ function codexOutputLines(value) {
       for (const line of item.match(/^[\t ]*codex-agent:[\t ]*(?:agent=|result=|run=|(?:waiting|vanished|orphaned|unverified|not-found)[\t ]+run=)[^\r\n]*/gm) || []) {
         const normalized = line.trimStart();
         if (!lines.auditLine && normalized.startsWith('codex-agent: agent=')) lines.auditLine = normalized.slice(0, 1024);
-        else if (!lines.resultLine && normalized.startsWith('codex-agent: result=')) lines.resultLine = normalized.slice(0, 1024);
+        // 結果行は codex-agent.sh が出力の最後に出す。それより前の結果行は最終報告に引用されたものなので、後の行で上書きする。
+        else if (normalized.startsWith('codex-agent: result=')) lines.resultLine = normalized.slice(0, 1024);
         else if (!lines.runLine && normalized.startsWith('codex-agent: run=')) lines.runLine = normalized.slice(0, 1024);
         // codex-agent.sh は --wait の状態を最後の行で示すので、後の行で上書きする。
         else if (!normalized.startsWith('codex-agent: agent=') && !normalized.startsWith('codex-agent: result=') && !normalized.startsWith('codex-agent: run=')) {

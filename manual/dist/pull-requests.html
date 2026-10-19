@@ -343,6 +343,11 @@
     <p>作業ツリーに <code>tools/cross-review.js</code> が無いリポジトリは、クロスレビューを使っていないとみなし、<span class="ui">レビュー不要</span> と出します。
     この場合は、<span class="ui">レビュー不要にする</span> のボタンは出ません。
     状態ファイルが無くても、<code>tools/cross-review.js</code> があれば <span class="ui">レビュー未実施</span> です。</p>
+    <p>PR を登録した作業ツリーを消した後は、PR の今の head のコミットに <code>tools/cross-review.js</code> があるかを確かめます。
+    head のコミットが手元に無いときは、PR のマージ先のブランチで確かめます。
+    無ければ <span class="ui">レビュー不要</span>、あるか、確かめられなければ <span class="ui">状態を確認できない</span> と出します。
+    作業ツリーを <code>tools/cross-review.js</code> の無い別のブランチに切り替えても、PR の head(手元に無ければマージ先のブランチ)にあれば、記録どおりの状態を出します。
+    PR の head とマージ先のブランチのどちらでも確かめられないときは、<span class="ui">状態を確認できない</span> と出します。</p>
   </details>
 
   <h2 id="pr-mergeable">「マージできます」の条件</h2>
@@ -447,7 +452,8 @@
 
   <h2 id="pr-reserve">レビュー収束後マージ</h2>
   <p>PR の行の右の列にある <span class="ui">収束後マージ</span> のチェックで、その PR の予約を切り替えます。
-  チェックの状態は予約の有無を表し、開発者が PR ごとに操作します。既定の予約は作りません。</p>
+  チェックの状態は予約の有無を表し、開発者が PR ごとに操作します。既定の予約は作りません。
+  クロスレビューを使っていないリポジトリの PR には、チェックを出しません。予約は収束の記録を待つので、実行されないためです。予約が残っているときは、取り消せるように出します。</p>
   <p>チェックを入れると、画面で見た head、選んだマージ方式、ブランチ削除の設定を予約の口へ送ります。
   条件がそろっていれば、その場で収束記録の SHA を照合してマージします。
   その場でマージした場合、画面に結果の行が出るのは警告があるときだけです。
@@ -501,7 +507,7 @@
   <ul>
     <li>PR の行で <span class="ui">収束後マージ</span> のチェックを外したとき</li>
     <li>PR が、マージされずにクローズされたとき</li>
-    <li>クロスレビューの最後の結論が <code>halted</code>(停止)になったとき</li>
+    <li>今の往復のクロスレビューの結論が <code>halted</code>(停止)になったとき。停止の後に次の往復を始めていれば、取り消さずに結論を待ちます</li>
     <li>マージを実行して、PR がマージキューに入ったとき(以降は、方式を不明として扱い、ブランチは削除しません)</li>
   </ul>
   <p>取り消されると、リポジトリの枠の先頭に、PR へのリンクと取り消した理由が出ます。
@@ -521,7 +527,8 @@
   </ul>
   <p>記録すると、クロスレビューの状態の札が <span class="ui">レビュー不要</span> に変わり、ボタンは <span class="ui">レビュー不要を取り消す</span> になります。
   <span class="ui">レビュー不要</span> の札にマウスを載せると、記録した理由が出ます。
-  <span class="ui">レビュー不要を取り消す</span> を押すと、記録を消します。</p>
+  <span class="ui">レビュー不要を取り消す</span> を押すと、記録を消します。
+  記録した後に、今の head でクロスレビューが収束すると、札は <span class="ui">レビュー済み</span> に変わり、予約していれば収束の記録でマージします。</p>
   <figure class="guide-map" id="pr-skipped-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/237"><div class="gm-clip"><img src="img/pull-requests-skip/skipped.png" width="788" height="733" alt="レビュー不要と記録した PR の行。クロスレビューの行に、レビュー不要の札と、レビュー不要を取り消すがある" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-77.348%"></div><span class="gm-frame" data-gm="1" aria-hidden="true" style="left:1.65%;top:37.975%;width:96.701%;height:27.004%"></span><a class="gm-badge gm-place-left" data-gm="1" href="#pr-skipped-map-1" style="left:1.65%;top:51.477%" aria-label="1. クロスレビューの行">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-skipped-map-2" style="left:28.426%;top:37.975%" aria-label="2. レビュー不要を取り消す">2</a></div></div></div><ol class="gm-list"><li id="pr-skipped-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>クロスレビューの行</b>：<span class="ui">レビュー不要</span> は、クロスレビューを不要と記録した PR です。</div></li><li id="pr-skipped-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">レビュー不要を取り消す</span></b>：記録を消します。</div></li></ol></figure>
   <p>記録は、記録した時点の head にだけ有効です。
   push で head が変わると、記録は無効になり、札が元の状態に戻ります。

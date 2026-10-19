@@ -2537,20 +2537,24 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
     merge.dataset.openMerge = mergeKey;
     merge.dataset.mergeKey = mergeKey;
     merge.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey);
-    // 方式が取れないときに塞ぐのは新しい予約だけにする。既存の予約は方式が分からなくても取り消せる必要がある。
-    const reservationDisabled = pullRequestMergeInFlight.has(mergeKey) || (!reservation && !(group.mergeMethods || []).length);
-    const reservationChoice = element('label', `reservation-toggle ${reservationDisabled ? 'disabled' : ''}`.trim());
-    const reservationToggle = element('input');
-    reservationToggle.type = 'checkbox';
-    reservationToggle.checked = pullRequestReservationPending.has(mergeKey)
-      ? pullRequestReservationPending.get(mergeKey)
-      : Boolean(reservation);
-    reservationToggle.disabled = reservationDisabled;
-    reservationToggle.dataset.reservationToggle = mergeKey;
-    reservationToggle.dataset.mergeKey = mergeKey;
-    reservationToggle.setAttribute('aria-label', `PR #${pullRequest.number} のレビュー収束後マージを予約`);
-    reservationChoice.append(reservationToggle, document.createTextNode('収束後マージ'));
-    actions.append(merge, reservationChoice);
+    actions.append(merge);
+    // 予約は収束の記録が無いと実行されないので、道具が無い PR には予約が残っているときだけ出す。
+    if (reservation || !(pullRequest.crossReview?.notRequired === true && pullRequest.crossReview.source === 'tool-absent')) {
+      // 方式が取れないときに塞ぐのは新しい予約だけにする。既存の予約は方式が分からなくても取り消せる必要がある。
+      const reservationDisabled = pullRequestMergeInFlight.has(mergeKey) || (!reservation && !(group.mergeMethods || []).length);
+      const reservationChoice = element('label', `reservation-toggle ${reservationDisabled ? 'disabled' : ''}`.trim());
+      const reservationToggle = element('input');
+      reservationToggle.type = 'checkbox';
+      reservationToggle.checked = pullRequestReservationPending.has(mergeKey)
+        ? pullRequestReservationPending.get(mergeKey)
+        : Boolean(reservation);
+      reservationToggle.disabled = reservationDisabled;
+      reservationToggle.dataset.reservationToggle = mergeKey;
+      reservationToggle.dataset.mergeKey = mergeKey;
+      reservationToggle.setAttribute('aria-label', `PR #${pullRequest.number} のレビュー収束後マージを予約`);
+      reservationChoice.append(reservationToggle, document.createTextNode('収束後マージ'));
+      actions.append(reservationChoice);
+    }
   }
   text.append(line);
   const branch = element('div', 'branch');

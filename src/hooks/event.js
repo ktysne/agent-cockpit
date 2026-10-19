@@ -1,8 +1,8 @@
 const { planUpdateForTool } = require('../server/plan-updates');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
-const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution, parseCodexLaunch } = require('../server/events');
-const { readRouting } = require('../server/routing');
+const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
+const { codexAgentInvocations, effectiveRouteForSubagentStart } = require('./route');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, persistedOutputPath, readTaskOutputFile } = require('../shared/task-output');
@@ -134,6 +134,74 @@ function commandPositionText(command) {
     else if (context === 'substitution' && character === ')') contexts.pop();
   }
   return characters.join('');
+}
+
+function substitutionEnd(text, start) {
+  let depth = 1;
+  let quote = '';
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote === "'") {
+      if (character === "'") quote = '';
+    } else if (character === '\\') {
+      index += 1;
+    } else if (quote === '"') {
+      if (character === '"') quote = '';
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '(') {
+      depth += 1;
+    } else if (character === ')' && --depth === 0) {
+      return index;
+    }
+  }
+  return text.length;
+}
+
+// 起動を探すコマンドの文字列を返す。ヒアドキュメントの本文と引用符の外のコメントは、依頼文や説明なので外す。
+// コマンド置換 $( ) の中身は、二重引用符の中にあっても別のコマンドとして返す。
+function launchCommandTexts(text, depth = 0) {
+  let code = '';
+  const substitutions = [];
+  let quote = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      code += character;
+    } else if (character === '\\') {
+      code += text.slice(index, index + 2);
+      index += 1;
+    } else if (character === '$' && text[index + 1] === '(') {
+      const end = substitutionEnd(text, index + 2);
+      if (depth < 8) substitutions.push(...launchCommandTexts(text.slice(index + 2, end), depth + 1));
+      code += '_';
+      index = end;
+    } else if (quote === '"') {
+      if (character === '"') quote = '';
+      code += character;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      code += character;
+    } else if (character === '<' && text[index + 1] === '<') {
+      break;
+    } else if (character === '#' && (index === 0 || /\s/.test(text[index - 1]))) {
+      while (index + 1 < text.length && !/[\r\n]/.test(text[index + 1])) index += 1;
+    } else {
+      code += character;
+    }
+  }
+  return [code, ...substitutions];
+}
+
+// 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
+function extractCodexLaunchDefinition(command) {
+  const isCodexAgent = (word) => /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word);
+  for (const [argument = ''] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts)) {
+    const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
+    if (definition) return definition;
+  }
+  return '';
 }
 
 function extractCodexWaitRunId(command) {
@@ -383,6 +451,8 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     event.summary = inputSummary(event.tool_name, input.tool_input);
     if (event.tool_name === 'Bash') {
       const command = pickString(input.tool_input?.command);
+      const codexLaunchDefinition = extractCodexLaunchDefinition(command);
+      if (codexLaunchDefinition) event.codexLaunchDefinition = codexLaunchDefinition;
       const codexWaitRunId = extractCodexWaitRunId(command);
       if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
       const codexReviewDefinition = extractCodexReviewDefinition(command);
@@ -439,10 +509,10 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     // 終了コードが 0 以外の Bash は PostToolUseFailure の error に出力が載ることがある。
     const codexOutput = { ...codexOutputLines(input.error), ...codexOutputLines(input.tool_response) };
     // Claude Code は 30000 文字を超える出力の先頭だけを stdout に残すので、出力の最後に出る結果行は全文のファイルから読む。
-    if (event.tool_name === 'Bash' && !codexOutput.resultLine) {
+    if (event.tool_name === 'Bash') {
       const command = pickString(input.tool_input?.command);
       const outputPath = persistedOutputPath(input.tool_response?.persistedOutputPath);
-      if (outputPath && (parseCodexLaunch(command) || extractCodexReviewDefinition(command) || extractCodexWaitRunId(command))) {
+      if (outputPath && (extractCodexLaunchDefinition(command) || extractCodexReviewDefinition(command) || extractCodexWaitRunId(command))) {
         let output = null;
         try { output = (options.readTaskOutput || readTaskOutputFile)(outputPath); } catch {}
         if (typeof output === 'string') Object.assign(codexOutput, codexOutputLines(output));
@@ -518,7 +588,10 @@ async function runHook(input, options = {}) {
     if (Number.isInteger(pid) && pid > 0) event.codexPid = pid;
   }
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
-  if (event.provider !== 'codex' && event.hook_event_name === 'SubagentStart') event.route = (await readRouting(homeDir)).agents;
+  if (event.provider !== 'codex' && event.hook_event_name === 'SubagentStart') {
+    const route = effectiveRouteForSubagentStart(event, options);
+    if (route !== null) event.route = route;
+  }
   let dashboardUrl = null;
 
   if (event.hook_event_name === 'SessionStart') {

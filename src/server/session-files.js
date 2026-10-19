@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { codexAgentDefinitionPaths } = require('./identity');
 
 async function readSessionName(sessionId, claudeHome, fileSystem = fs) {
   const directory = path.join(claudeHome, 'sessions');
@@ -171,16 +172,20 @@ async function claudeAgentDefinition(agentType, claudeHome) {
   };
 }
 
-async function codexAgentDefinition(agentName, claudeHome) {
+async function codexAgentDefinition(agentName, claudeHome, userHome) {
   const safeName = safeDefinitionName(agentName);
   if (!safeName) return null;
-  const values = await readAgentDefinition(path.join(claudeHome, 'gpt-agents', `${safeName}.md`));
-  if (!values) return null;
-  return {
-    model: values.codex_model || '',
-    effort: values.codex_reasoning_effort || '',
-    source: 'gpt-agent-definition',
-  };
+  for (const definitionPath of codexAgentDefinitionPaths(safeName, claudeHome, userHome)) {
+    const values = await readAgentDefinition(definitionPath);
+    if (values) {
+      return {
+        model: values.codex_model || '',
+        effort: values.codex_reasoning_effort || '',
+        source: 'gpt-agent-definition',
+      };
+    }
+  }
+  return null;
 }
 
 module.exports = {

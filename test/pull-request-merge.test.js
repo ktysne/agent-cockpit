@@ -1843,3 +1843,13 @@ test('マージの gh 失敗と成功は結果分類と PR 番号を残す', asy
   assert.ok(entries.every(entry => entry.data.number === 1));
   assert.doesNotMatch(JSON.stringify(entries), /merge failed|message|stderr|--match-head-commit/);
 });
+
+test('halted の後に次の往復が始まった PR の予約は取り消さず待つ', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' })]);
+  await fixture.manager.reserve(mergeInput(1));
+  fixture.control.crossReviews.set(1, { round: 3, triage: { round: 2, sha: sha(1), outcome: 'halted' } });
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.ok(fixture.state.pullRequestMergeReservation('example', 'project', 1));
+  assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+  assert.deepEqual(fixture.tracker.snapshot()[0].reservationNotices, []);
+});

@@ -16,6 +16,36 @@ const {
 const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
 
+test('起動定義は Bash の開始イベントで定義名の形式と長さを満たすものだけ受ける', () => {
+  for (const [tool_name, hook_event_name, definition, expected] of [
+    ['Bash', 'PreToolUse', '_impl.hard-1', '_impl.hard-1'],
+    ['Read', 'PreToolUse', 'impl-hard', null],
+    ['Bash', 'PostToolUse', 'impl-hard', undefined],
+    ['Bash', 'PreToolUse', '--wait', null],
+    ['Bash', 'PreToolUse', 'a/b', null],
+    ['Bash', 'PreToolUse', 'x'.repeat(201), null],
+  ]) {
+    const event = sanitizeEvent({ session_id: 'launch-validation', tool_name, hook_event_name,
+      summary: 'bash codex-agent.sh impl-hard', codexLaunchDefinition: definition });
+    assert.equal(event.codexDefinition, expected);
+  }
+});
+
+test('標準出力に引用された結果があっても起動とレビューと待機の結果は全文ファイルを優先する', () => {
+  for (const command of ['bash "$HOME/tools/codex-agent.sh" impl-hard', 'npm run review:codex',
+    'bash codex-agent.sh --wait impl-hard-20261019-110000-7']) {
+    const outputPath = path.resolve('output.txt');
+    const event = makeHookEvent({ session_id: 'persisted-result', hook_event_name: 'PostToolUse',
+      tool_name: 'Bash', tool_input: { command },
+      tool_response: { stdout: 'codex-agent: result=rate-limited', persistedOutputPath: outputPath } }, 1,
+    { readTaskOutput(file) {
+      assert.equal(file, outputPath);
+      return 'codex-agent: result=rate-limited\ncodex-agent: result=ok';
+    } });
+    assert.equal(sanitizeEvent(event).codexResult.status, 'ok', command);
+  }
+});
+
 test('Claude の SessionStart の文字列のモデルだけを初期値として送る', () => {
   for (const model of ['claude-opus-5-5', undefined, 42]) {
     const event = makeHookEvent({ session_id: 'claude-model', hook_event_name: 'SessionStart', model });
@@ -30,6 +60,26 @@ async function temporaryHome(testContext) {
   return createTemporaryHome(testContext, 'agent-cockpit-test-', {
     environment: { AGENT_COCKPIT_HOME: (homeDir) => homeDir },
   });
+}
+
+async function capturePostedSubagentStart(options, sessionId = 'route-event') {
+  const startedAt = '2026-10-03T00:00:00.000Z';
+  await fs.writeFile(path.join(options.homeDir, 'server.json'), JSON.stringify({
+    pid: 12345, port: 47821, secret: 'hook-secret', uiSecret: 'ui-secret', startedAt,
+  }));
+  let postedEvent;
+  const result = await runHook({
+    session_id: sessionId, hook_event_name: 'SubagentStart', agent_id: 'agent-1', agent_type: 'impl-hard',
+  }, {
+    ...options,
+    deadline: Date.now() + 1000,
+    fetchImpl: async (url, requestOptions = {}) => {
+      if (url.endsWith('/health')) return { ok: true, json: async () => ({ app: 'agent-cockpit', pid: 12345, startedAt }) };
+      postedEvent = JSON.parse(requestOptions.body);
+      return { ok: true, status: 202 };
+    },
+  });
+  return { result, postedEvent };
 }
 
 test('TaskStop の成功だけに形の合う停止タスク ID を載せて正規化する', () => {
@@ -114,28 +164,45 @@ test('codex-agent: run= の最初の行を runLine として抽出し、形式�
   assert.equal(Object.hasOwn(sanitizeEvent(invalid), 'codexRunId'), false);
 });
 
-test('SubagentStart イベントに起動時の経路を記録する', async (t) => {
-  const { homeDir } = await temporaryHome(t);
-  const startedAt = '2026-10-03T00:00:00.000Z';
+test('bridge があり記録が無いときは現在の経路を SubagentStart イベントに送る', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const userHome = path.join(homeDir, 'user');
+  const bridgePath = path.join(claudeHome, 'tools', 'codex-agent.sh');
+  await fs.mkdir(path.dirname(bridgePath), { recursive: true });
+  await fs.writeFile(bridgePath, '');
   await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'claude', review: 'codex' }));
-  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({
-    pid: 12345, port: 47821, secret: 'hook-secret', uiSecret: 'ui-secret', startedAt,
-  }));
-  let postedEvent;
-  const result = await runHook({
-    session_id: 'route-event', hook_event_name: 'SubagentStart', agent_id: 'agent-1', agent_type: 'impl-hard',
-  }, {
-    homeDir,
-    deadline: Date.now() + 1000,
-    fetchImpl: async (url, options = {}) => {
-      if (url.endsWith('/health')) return { ok: true, json: async () => ({ app: 'agent-cockpit', pid: 12345, startedAt }) };
-      postedEvent = JSON.parse(options.body);
-      return { ok: true, status: 202 };
-    },
-  });
+  const { result, postedEvent } = await capturePostedSubagentStart({ homeDir, claudeHome, userHome });
 
   assert.equal(result.exitCode, 0);
   assert.equal(postedEvent.route, 'claude');
+});
+
+test('bridge が無いと SubagentStart イベントに route を含めない', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const userHome = path.join(homeDir, 'user');
+  await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'claude', review: 'codex' }));
+
+  const { postedEvent } = await capturePostedSubagentStart({ homeDir, claudeHome, userHome });
+
+  assert.equal(Object.hasOwn(postedEvent, 'route'), false);
+});
+
+test('SubagentStart の再開では記録済みの経路を route として送る', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const userHome = path.join(homeDir, 'user');
+  const bridgePath = path.join(claudeHome, 'tools', 'codex-agent.sh');
+  const sessionId = 'route-restart';
+  const recordPath = path.join(homeDir, 'route-agents',
+    `${Buffer.from(sessionId).toString('hex')}.${Buffer.from('agent-1').toString('hex')}.json`);
+  await fs.mkdir(path.dirname(bridgePath), { recursive: true });
+  await fs.writeFile(bridgePath, '');
+  await fs.mkdir(path.dirname(recordPath), { recursive: true });
+  await fs.writeFile(recordPath, JSON.stringify({ route: 'codex' }));
+  await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'claude', review: 'codex' }));
+
+  const { postedEvent } = await capturePostedSubagentStart({ homeDir, claudeHome, userHome }, sessionId);
+
+  assert.equal(postedEvent.route, 'codex');
 });
 
 test('Agent の説明は 200 文字までフックイベントに含める', async (t) => {
@@ -412,7 +479,7 @@ test('文字列やヒアドキュメントのクロスレビュー手順と、--
 test('クロスレビュー定義は Bash の許可値だけを受け、既存の起動定義を優先する', () => {
   const sanitize = (toolName, codexReviewDefinition, summary = 'npm run review:codex') => sanitizeEvent({
     session_id: 'codex-review-sanitize', hook_event_name: 'PreToolUse', tool_name: toolName,
-    codexReviewDefinition, summary,
+    codexReviewDefinition, summary, codexLaunchDefinition: summary.includes(' custom ') ? 'custom' : undefined,
   });
   assert.equal(sanitize('Bash', 'codex-review').codexDefinition, 'codex-review');
   assert.equal(sanitize('Bash', 'codex-review').codexReviewLaunch, true);
