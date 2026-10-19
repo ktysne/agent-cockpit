@@ -935,7 +935,7 @@ test('終了にしたエージェントは結果が確認された再構築で�
 
   state.addEvent({
     session_id: sessionId, hook_event_name: 'PostToolUse', hookAt: 5, agent_id: 'agent-1',
-    tool_name: 'Read', tool_use_id: 'read-1',
+    tool_name: 'Read', tool_use_id: 'read-1', backgroundOutputTaskId: 'agent-1-output',
     codexOutput: { auditLine: 'codex-agent: agent=impl-hard model=gpt-6-luna effort=high sandbox=read-only', resultLine: 'codex-agent: result=ok' },
   });
 
