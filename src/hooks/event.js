@@ -2,7 +2,7 @@ const { planUpdateForTool } = require('../server/plan-updates');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
 const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
-const { codexAgentInvocations, effectiveRouteForSubagentStart } = require('./route');
+const { codexAgentInvocationDetails, effectiveRouteForSubagentStart } = require('./route');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, persistedOutputPath, readTaskOutputFile } = require('../shared/task-output');
@@ -204,7 +204,7 @@ function isCodexAgent(word) {
 }
 
 // shellTokens は Bash の引用符の外でエスケープした空白で語を分ける。元のコマンドに「語 + 空白 + 次の語」がそのまま
-// 現れるときだけ、その空白はエスケープされていたので続けて値とみなす。引用符の中と PowerShell の末尾の \ は区切りではない。
+// 現れるときだけ、その空白はエスケープされていたので続けて値とみなす。引用符の中の末尾の \ は区切りではない。
 function continuesAfterEscapedSpace(word, nextWord, commandText) {
   return Boolean(commandText) && nextWord !== undefined && /(?:^|[^\\])(?:\\\\)*\\$/.test(word) &&
     commandText.includes(`${word} ${nextWord}`);
@@ -225,11 +225,16 @@ function withoutCodexAgentOptions(argumentsList, commandText = '') {
 }
 
 // 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
-function extractCodexLaunchDefinition(command, toolName = 'Bash') {
+// 末尾の \ を空白のエスケープと読むのは、その起動の語を Bash の規則で分けたとき(PowerShell の中の bash -c を含む)に限る。
+function codexAgentArgumentLists(command, toolName) {
   const commandText = pickString(command).replace(/\\\r?\n/g, ' ');
-  const escapedSpaceText = toolName === 'PowerShell' ? '' : commandText;
-  for (const argumentsList of codexAgentInvocations(commandText, isCodexAgent, launchCommandTexts, 0, toolName)) {
-    const [argument = ''] = withoutCodexAgentOptions(argumentsList, escapedSpaceText);
+  return codexAgentInvocationDetails(commandText, isCodexAgent, launchCommandTexts, 0, toolName).map((invocation) => (
+    withoutCodexAgentOptions(invocation.argumentsList, invocation.toolName === 'PowerShell' ? '' : commandText)
+  ));
+}
+
+function extractCodexLaunchDefinition(command, toolName = 'Bash') {
+  for (const [argument = ''] of codexAgentArgumentLists(command, toolName)) {
     const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
     if (definition) return definition;
   }
@@ -237,10 +242,7 @@ function extractCodexLaunchDefinition(command, toolName = 'Bash') {
 }
 
 function extractCodexWaitRunId(command, toolName = 'Bash') {
-  const commandText = pickString(command).replace(/\\\r?\n/g, ' ');
-  const escapedSpaceText = toolName === 'PowerShell' ? '' : commandText;
-  for (const argumentsList of codexAgentInvocations(commandText, isCodexAgent, launchCommandTexts, 0, toolName)) {
-    const [argument, runId] = withoutCodexAgentOptions(argumentsList, escapedSpaceText);
+  for (const [argument, runId] of codexAgentArgumentLists(command, toolName)) {
     if (argument === '--wait' && runId) return runId.slice(0, 256);
   }
   return '';

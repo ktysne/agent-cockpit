@@ -56,32 +56,38 @@ function segmentStartsWithEnv(segment) {
  * toolName は区切りの規則だけに使い、シェルの -c の文字列は Bash として分ける。
  */
 function codexAgentInvocations(command, isScript, prepare = (text) => [text], depth = 0, toolName = 'Bash') {
+  return codexAgentInvocationDetails(command, isScript, prepare, depth, toolName).map((invocation) => invocation.argumentsList);
+}
+
+/** codexAgentInvocations と同じ起動ごとに、語の列と、その語を分けたシェルの種別(toolName)を返す。 */
+function codexAgentInvocationDetails(command, isScript, prepare = (text) => [text], depth = 0, toolName = 'Bash') {
   if (typeof command !== 'string') return [];
   if (depth >= 8) return [];
   // PowerShell の行継続(逆引用符と改行)は、語の解析で引数として残らないよう空白にする。
   const joined = toolName === 'PowerShell' ? command.replace(/`\r?\n/g, ' ') : command;
+  const invocation = (argumentsList) => [{ argumentsList, toolName }];
   return prepare(joined).flatMap((text) => commandSegments(text, toolName)).flatMap((segment) => {
     let ungrouped = segment.trim();
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
     const words = withoutCommandPrefixes(commandWords(ungrouped), segmentStartsWithEnv(ungrouped));
-    if (isScript(words[0] || '')) return [words.slice(1)];
-    if (['source', '.'].includes(words[0])) return isScript(words[1] || '') ? [words.slice(2)] : [];
+    if (isScript(words[0] || '')) return invocation(words.slice(1));
+    if (['source', '.'].includes(words[0])) return isScript(words[1] || '') ? invocation(words.slice(2)) : [];
     const shell = commandName(words[0]);
     if (!['bash', 'sh', 'dash', 'zsh'].includes(shell)) return [];
     for (let index = 1; index < words.length;) {
       const option = words[index];
       if (option === '-c' || option === '--command' || /^-[^-]*c[^-]*$/.test(option)) {
-        return codexAgentInvocations(words[index + 1] || '', isScript, prepare, depth + 1);
+        return codexAgentInvocationDetails(words[index + 1] || '', isScript, prepare, depth + 1, 'Bash');
       }
       if (option === '--help' || option === '--version' || option === '-help' || option === '-version') return [];
-      if (option === '--') return isScript(words[index + 1] || '') ? [words.slice(index + 2)] : [];
+      if (option === '--') return isScript(words[index + 1] || '') ? invocation(words.slice(index + 2)) : [];
       if (option === '-o' || option === '-O' || option === '--rcfile' || option === '--init-file') {
         index += 2;
       } else if (option.startsWith('-') && option !== '-') {
         index += 1;
       } else {
-        return isScript(option) ? [words.slice(index + 1)] : [];
+        return isScript(option) ? invocation(words.slice(index + 1)) : [];
       }
     }
     return [];
@@ -229,4 +235,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, codexAgentInvocations, commandInvokesCodexAgent, effectiveRouteForSubagentStart, outputForInputText, outputForRoute, readRouting };
+module.exports = { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, codexAgentInvocationDetails, codexAgentInvocations, commandInvokesCodexAgent, effectiveRouteForSubagentStart, outputForInputText, outputForRoute, readRouting };

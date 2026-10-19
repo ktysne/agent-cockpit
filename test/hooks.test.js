@@ -42,6 +42,7 @@ test('Codex ラッパーの -C と --effort の値を除いて定義名を検出
     ['bash ~/.claude/tools/codex-agent.sh -C D:/work\\\\ impl-light', 'impl-light'],
     ["bash ~/.claude/tools/codex-agent.sh -C 'D:\\work\\' impl-hard", 'impl-hard'],
     ['bash ~/.claude/tools/codex-agent.sh -C D:\\work\\ impl-hard', 'impl-hard', 'PowerShell'],
+    ["bash -lc 'bash ~/.claude/tools/codex-agent.sh -C /mnt/d/work\\ tree impl-hard'", 'impl-hard', 'PowerShell'],
   ];
   for (const [command, definition, toolName = 'Bash'] of commands) {
     const event = makeHookEvent({ session_id: 'codex-launch-options', hook_event_name: 'PreToolUse',
@@ -61,6 +62,14 @@ test('Codex ラッパーの --new-prompt、--wait、--header-of は起動定義�
       tool_name: 'Bash', tool_use_id: command, tool_input: { command } });
     assert.equal(Object.hasOwn(event, 'codexLaunchDefinition'), false, command);
   }
+});
+
+test('PowerShell の中の bash -c は Bash の規則でエスケープした空白を読み、--wait の実行 ID を拾う', () => {
+  const command = "bash -lc 'bash ~/.claude/tools/codex-agent.sh -C /mnt/d/work\\ tree --wait impl-hard-20261019-110000-7'";
+  const event = makeHookEvent({ session_id: 'codex-launch-options', hook_event_name: 'PreToolUse',
+    tool_name: 'PowerShell', tool_use_id: command, tool_input: { command } });
+  assert.equal(Object.hasOwn(event, 'codexLaunchDefinition'), false);
+  assert.equal(event.codexWaitRunId, 'impl-hard-20261019-110000-7');
 });
 
 test('PowerShell の開始イベントから Codex 起動、待機、レビューの定義を抽出する', () => {
