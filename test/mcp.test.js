@@ -7,6 +7,7 @@ const {
   MCP_GITHUB_TIMEOUT_MS,
   TIMEOUT_MESSAGE,
   UNREACHABLE_MESSAGE,
+  callTool,
 } = require('../src/mcp/server');
 
 async function exchange(requests, options = {}) {
@@ -280,6 +281,35 @@ test('3 種類の MCP 書き込みは未知の失敗と再試行後の 401 を�
       assert.equal(responses[0].result.isError, true, `${name} with HTTP ${status}`);
       assert.equal(responses[0].result.content[0].text, UNREACHABLE_MESSAGE, `${name} with HTTP ${status}`);
       assert.equal(fetchCount, status === 401 ? 2 : 1, `${name} with HTTP ${status}`);
+    }
+  }
+});
+
+test('委譲した Codex の MCP 書き込みは記録不要と返し、親 ID が無ければ未登録の文を返す', async () => {
+  const delegatedMessage = 'Claude のセッションから委譲された実行なので、Agent Cockpit には記録しない。記録は委譲元の Claude のセッションが行うので、このツールを呼ばなくてよい。';
+  const unregisteredMessage = 'Codex のフックが届いていないため記録できなかった。未登録または終了済みのセッションです。';
+  const calls = [
+    ['cockpit_set_tasks', { tasks: [] }],
+    ['cockpit_add_pr', { url: 'https://github.com/example/project/pull/45' }],
+    ['cockpit_skip_review', {
+      owner: 'example', repo: 'project', number: 45, headRefOid: 'a'.repeat(40), reason: '記録しない理由',
+    }],
+  ];
+
+  for (const [name, argumentsValue] of calls) {
+    for (const { environment, expected, isError } of [
+      { environment: { CLAUDE_CODE_SESSION_ID: 'claude-parent' }, expected: delegatedMessage, isError: undefined },
+      { environment: {}, expected: unregisteredMessage, isError: true },
+    ]) {
+      const result = await callTool(name, argumentsValue, {
+        homeDir: 'C:\\temporary-cockpit',
+        environment,
+        codexSessionId: 'codex-thread',
+        ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+        fetchImpl: async url => new Response('{}', { status: url.endsWith('/api/diagnostics') ? 202 : 403 }),
+      });
+      assert.equal(result.isError, isError, name);
+      assert.equal(result.content[0].text, expected, name);
     }
   }
 });

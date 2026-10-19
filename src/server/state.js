@@ -2055,6 +2055,10 @@ class DashboardState {
     return this.measure('event', () => this.applyEvent(input, metadata));
   }
 
+  isDelegatedCodexThread(sessionId) {
+    return Boolean(this.entries.get(sessionId)?.[0]?.event.delegatedFrom);
+  }
+
   applyEvent(input, metadata = {}) {
     const event = sanitizeEvent(input, metadata);
     const rejected = (reason, result) => {

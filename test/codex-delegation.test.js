@@ -412,6 +412,28 @@ test('HTTP で委譲を受けた Codex は状態に表示されず MCP の書き
   assert.equal(c.runtime.state.plans.size, 0);
 });
 
+test('委譲した Codex の UserPromptSubmit は記録不要の文脈を返し、独立した Codex には返さない', async (t) => {
+  const c = await startTestServer(t);
+  const post = (url, body) => request(c.info.port, { method: 'POST', path: url,
+    headers: hookHeaders(c.info.secret), body: JSON.stringify(body) });
+  await post('/api/events', codexEvent('SessionStart', { session_id: 'independent-thread', hookAt: 50 }));
+  await post('/api/events', claudeEvent('PreToolUse'));
+  await post('/api/events', codexEvent('SessionStart', { hookAt: 200 }));
+  const submitPrompt = async (sessionId) => {
+    const response = await post('/api/hooks/answers', { action: 'user-prompt-submit', event_name: 'UserPromptSubmit',
+      session_id: sessionId, id: `${sessionId}-prompt`, hook_at: 300 });
+    assert.equal(response.status, 200);
+    return jsonBody(response);
+  };
+
+  const delegated = await submitPrompt('thread');
+  const additionalContext = delegated.hookOutput.hookSpecificOutput.additionalContext;
+  assert.match(additionalContext, /Agent Cockpit/);
+  assert.match(additionalContext, /Claude のセッションから委譲/);
+  assert.match(additionalContext, /cockpit_\*/);
+  assert.equal((await submitPrompt('independent-thread')).hookOutput, null);
+});
+
 test('Codex のフックは親の ID だけを送信し Claude のフックには付けない', async () => {
   const environment = { CLAUDE_CODE_SESSION_ID: parentId, CLAUDE_CODE_MESSAGING_TOKEN: 'secret-token-never-send' };
   for (const provider of ['codex', 'claude']) {

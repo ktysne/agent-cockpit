@@ -30,7 +30,7 @@ Issue #175 は、cockpit が管理する app-server で自由な指示を送る�
 ### 作業中と入力のとき
 
 Codex には `PostToolBatch` が無いので、`PostToolUse` の `additionalContext` で、`PostToolBatch` と同じ内容を届ける。
-入力のときは Claude と同じ処理を使う。
+通常の Codex セッションは入力時に Claude と同じ処理を使う。委譲した thread には判断事項や通知を配信せず、[委譲した Codex の表示と書き込み](codex-delegation.md#表示と書き込み)の規則を使う。
 どちらも順序 4 で入れた(PR #400)。
 
 ### ターンの後

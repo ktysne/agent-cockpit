@@ -9,6 +9,8 @@ const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool,
 const { applyReviewSkip } = require('./review-skip');
 const { keepImportedCriteria } = require('../plan-updates');
 
+const DELEGATED_CODEX_PROMPT_CONTEXT = 'Agent Cockpit: タスク、判断事項、PR は委譲元の Claude のセッションが記録する。この実行は Claude のセッションから委譲された Codex なので、Agent Cockpit の MCP ツール(cockpit_*)を呼ばない。';
+
 function createHookRoutes(ctx) {
   const { state, answerDelivery, claudeHome, userHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
 
@@ -121,6 +123,9 @@ function createHookRoutes(ctx) {
     {
       matches: (body) => body.action === 'user-prompt-submit' && body.event_name === 'UserPromptSubmit',
       run: (body) => {
+        if (state.isDelegatedCodexThread(body.session_id)) {
+          return { hookOutput: { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: DELEGATED_CODEX_PROMPT_CONTEXT } } };
+        }
         const additionalContext = answerDelivery.deliverPrompt(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined);
         return { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } } : null };
       },
