@@ -1453,7 +1453,7 @@ test('メインのクロスレビュー行は定義と監査行を反映し、�
 
   state.addEvent({
     session_id: 'main-review', hook_event_name: 'PostToolUse', hookAt: 8,
-    tool_name: 'Bash', tool_use_id: 'later-bash',
+    tool_name: 'Bash', tool_use_id: 'later-bash', backgroundOutputTaskId: 'review-bg',
     codexOutput: { resultLine: 'codex-agent: result=ok' },
   });
 
@@ -1553,7 +1553,7 @@ test('背景で起動した Codex は後続の Read 出力にある結果行で�
   state.addEvent({ session_id: 'bg', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
   state.addEvent({
     session_id: 'bg', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub-1',
-    tool_name: 'Read', tool_use_id: 'read-1',
+    tool_name: 'Read', tool_use_id: 'read-1', backgroundOutputTaskId: 'bg-output',
     codexOutput: codexOutput('gpt-5.5-codex', 'xhigh', 'ok', 'C:\\Users\\User Data\\.codex'),
   });
 
@@ -2095,7 +2095,7 @@ test('メインの Stop 後もメイン直下の背景 Codex は稼働中で、�
 
   state.addEvent({
     session_id: 'main-background', hook_event_name: 'PostToolUse', hookAt: 4,
-    tool_name: 'Read', tool_use_id: 'read-1', codexOutput: codexOutput('gpt-6-luna', 'low'),
+    tool_name: 'Read', tool_use_id: 'read-1', backgroundOutputTaskId: 'main-bg-output', codexOutput: codexOutput('gpt-6-luna', 'low'),
   });
   session = state.snapshot().sessions[0];
   [agent] = session.agents;
@@ -2119,7 +2119,7 @@ test('メイン直下の稼働中の背景 Codex は閉じられ、結果行で�
 
   state.addEvent({
     session_id: 'close-background', hook_event_name: 'PostToolUse', hookAt: 4,
-    tool_name: 'Read', tool_use_id: 'read-1', codexOutput: codexOutput('gpt-6-luna', 'low'),
+    tool_name: 'Read', tool_use_id: 'read-1', backgroundOutputTaskId: 'close-bg-output', codexOutput: codexOutput('gpt-6-luna', 'low'),
   });
   assert.equal(state.closedAgents.has('close-background'), false);
   session = state.snapshot().sessions[0];
@@ -2213,7 +2213,10 @@ test('再開した親が取り出した結果行で、終了未確認になっ�
   state.addEvent({ session_id: 'resumed', hook_event_name: 'SubagentStart', hookAt: 5, agent_id: 'sub-1', agent_type: 'impl-standard' });
   state.addEvent({
     session_id: 'resumed', hook_event_name: 'PostToolUse', hookAt: 6, agent_id: 'sub-1',
-    tool_name: 'Bash', tool_use_id: 'bash-wait', codexOutput: codexOutput('gpt-6-luna', 'max'),
+    tool_name: 'Bash', tool_use_id: 'bash-wait', codexOutput: {
+      ...codexOutput('gpt-6-luna', 'max'),
+      runLine: 'codex-agent: run=impl-hard-20261003-123456-7 pid=123 started=2026-10-03T12:34:56Z',
+    },
   });
   state.addEvent({ session_id: 'resumed', hook_event_name: 'SubagentStop', hookAt: 7, agent_id: 'sub-1' });
 

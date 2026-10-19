@@ -91,6 +91,77 @@ function backgroundLaunch(state, definition = 'impl-hard', startedAt = 100) {
   state.addEvent(claudeEvent('PostToolUse', { hookAt: startedAt + 1, tool_response: { backgroundTaskId: 'task-a' } }));
 }
 
+for (const tool_name of ['Read', 'Bash']) {
+  test(`${tool_name} で別ファイルの結果行を引用しても背景レビューを終了にしない`, () => {
+    for (const status of ['ok', 'rate-limited']) {
+      const state = new DashboardState();
+      launch(state, 'launch', { tool_input: { command: 'npm run review:codex' } });
+      state.addEvent(claudeEvent('PostToolUse', { hookAt: 101,
+        tool_response: { backgroundTaskId: 'task-a' } }));
+      state.addEvent(claudeEvent('PostToolUse', { hookAt: 200, tool_name, tool_use_id: 'quote',
+        tool_input: tool_name === 'Read' ? { file_path: '/repo/docs/gpt-agents.md' } : { command: 'cat docs/gpt-agents.md' },
+        tool_response: tool_name === 'Read' ? { file: { content: `  codex-agent: result=${status}` } }
+          : { stdout: `  codex-agent: result=${status}` } }));
+      const [agent] = state.snapshot().sessions[0].agents;
+      assert.equal(agent.active, true);
+      assert.notEqual(agent.resultReceived, true);
+      assert.equal(agent.unavailable, '');
+      state.addEvent(claudeEvent('UserPromptSubmit', { hookAt: 300,
+        prompt: '<task-notification><task-id>task-a</task-id><status>completed</status></task-notification>' }));
+      assert.equal(state.snapshot().sessions[0].agents[0].active, false);
+    }
+  });
+}
+
+test('背景出力の Read と TaskOutput は実行 ID の無い結果行で対応するレビューを終了する', () => {
+  for (const tool_name of ['Read', 'TaskOutput']) {
+    const state = new DashboardState();
+    backgroundLaunch(state, 'codex-review');
+    state.addEvent(claudeEvent('PostToolUse', { hookAt: 200, tool_name, tool_use_id: 'output',
+      tool_input: tool_name === 'Read' ? { file_path: '/tmp/task-a.output' } : { task_id: 'task-a' },
+      tool_response: { file: { content: 'codex-agent: result=ok' } } }));
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.equal(agent.resultReceived, true);
+    assert.equal(agent.active, false);
+  }
+});
+
+test('背景タスク ID の記録が無い背景行も出力ファイルの結果行で終了する', () => {
+  const state = new DashboardState();
+  launch(state);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: 101 }));
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: 200, tool_name: 'Read', tool_use_id: 'output',
+    tool_input: { file_path: '/tmp/task-a.output' }, tool_response: { file: { content: 'codex-agent: result=ok' } } }));
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.resultReceived, true);
+  assert.equal(agent.active, false);
+});
+
+test('別の背景タスクの出力は一意な背景行にも割り当てない', () => {
+  const state = new DashboardState();
+  backgroundLaunch(state);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: 200, tool_name: 'Read', tool_use_id: 'output',
+    tool_input: { file_path: '/tmp/task-b.output' }, tool_response: { file: { content: 'codex-agent: result=ok' } } }));
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.active, true);
+  assert.notEqual(agent.resultReceived, true);
+});
+
+test('子の --wait は背景出力の印も実行 ID の行も無い応答で同じ Codex を終了する', () => {
+  const state = new DashboardState();
+  missingLaunch(state);
+  state.addEvent(claudeEvent('PreToolUse', { hookAt: missingLaunchAt + 1, agent_id: 'sub', tool_use_id: 'wait',
+    tool_input: { command: `bash codex-agent.sh --wait ${missingRunId}` } }));
+  const event = claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 2, agent_id: 'sub', tool_use_id: 'wait',
+    tool_input: { command: `bash codex-agent.sh --wait ${missingRunId}` }, tool_response: 'codex-agent: result=ok' });
+  assert.equal(event.backgroundOutputTaskId, undefined);
+  assert.equal(event.codexOutput.runLine, undefined);
+  state.addEvent(event);
+  const [parent] = state.snapshot().sessions[0].agents;
+  assert.equal(parent.gpt.active, false);
+  assert.equal(parent.gpt.unconfirmed, false);
+});
+
 test('killed と stopped の通知に結果が無ければ背景 Codex は終了未確認になる', () => {
   for (const status of ['killed', 'stopped']) {
     const state = new DashboardState();

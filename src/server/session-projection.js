@@ -182,14 +182,16 @@ function stopAgent(session, agentId, stoppedAgentIds) {
   session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
 }
 
-// 実行 ID で直接特定できない結果行は、条件に合う行が一つの場合だけ割り当てる。実行 ID があれば、定義名が同じで、
-// 実行の開始(秒で切り捨て)が行の開始より前でない行に限る。別の実行の結果行や過去のログの引用を割り当てないため。
+// 実行 ID で直接特定できない結果行は、条件に合う行が一つの場合だけ割り当てる。実行 ID があれば定義名が同じで開始(秒で切り捨て)が
+// 行の開始より前でない行、無ければ出力ファイルを読んだ応答で背景タスク ID の無い行に限る。引用や別の実行の結果行を割り当てないため。
 // 待機の終わった行はラッパーの出力に結果行が届かないので、実行 ID の一致だけで特定する。
-function uniqueBackgroundedCodex(session, parentAgentId, runId = null, runStartedAt = null) {
+function uniqueBackgroundedCodex(session, parentAgentId, runId = null, runStartedAt = null, backgroundOutputTaskId = null) {
+  if (!runId && !backgroundOutputTaskId) return null;
   const definition = runId?.replace(/-\d{8}-\d{6}-\d+$/, '');
   const candidates = session.agents.filter((agent) => (
     agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) &&
     sameAgent(agent.parent_agent_id, parentAgentId) && (!agent.runId || agent.runId === runId) &&
+    (runId || !agent.backgroundTaskId) &&
     (!runId || (agent.agent_type === definition &&
       (!runStartedAt || Date.parse(runStartedAt) >= Date.parse(agent.startedAt) - 1000)))
   ));
@@ -576,7 +578,7 @@ function applyCodexResult(session, event) {
     const matched = codexForRun || outputCodex;
     const targetAgent = matched
       ? (matched.resultReceived ? null : matched)
-      : uniqueBackgroundedCodex(session, agentId, event.codexRunId, event.codexRunStartedAt);
+      : uniqueBackgroundedCodex(session, agentId, event.codexRunId, event.codexRunStartedAt, event.backgroundOutputTaskId);
     // 途中の出力を読んだだけでは、直接起動へ切り替えたレビューが続いているかを判断できない。
     if (targetAgent && ignoresReviewResult(session, targetAgent, event.codexResult, false)) return;
     if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
