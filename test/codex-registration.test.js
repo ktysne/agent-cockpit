@@ -25,7 +25,7 @@ async function cockpit(t, options = {}) {
   const mcp = async (name, args, meta, extra = {}) => {
     const response = await handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/call',
       params: { name, arguments: args, ...(meta === undefined ? {} : { _meta: meta }) },
-    }, { homeDir: server.homeDir, ...extra });
+    }, { homeDir: server.homeDir, environment: {}, ...extra });
     return response.result;
   };
   return { ...server, post, event, snapshot, initialize, mcp };

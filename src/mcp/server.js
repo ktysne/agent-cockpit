@@ -29,6 +29,7 @@ const TIMEOUT_MESSAGE = '常駐サーバーの応答が時間内に返らず、�
 const MAX_RESULT_ITEMS = 10;
 let codexClient = false;
 const CODEX_UNREGISTERED_MESSAGE = 'Codex のフックが届いていないため記録できなかった。未登録または終了済みのセッションです。';
+const DELEGATED_CODEX_UNREGISTERED_MESSAGE = 'Claude のセッションから委譲された実行なので、Agent Cockpit には記録しない。記録は委譲元の Claude のセッションが行うので、このツールを呼ばなくてよい。';
 const PLAN_ERROR_MESSAGES = new Map([
   [400, '入力が正しくないか、上限を超えています'],
   [404, '判断事項が見つからないか、解決済みです'],
@@ -228,7 +229,8 @@ function shortSavedList(toolName, saved) {
   return `${action}: ${summary}${remainder}`;
 }
 
-// 常駐サーバーは、フックで登録されていないか終了した Codex のセッションへの書き込みを 403 で拒否する。
+// 常駐サーバーは、フックで登録されていないか終了した Codex のセッションと、委譲した thread への書き込みを 403 で拒否する。
+// 委譲した thread は応答の error で見分ける。
 async function postMcpRequest(requestPath, body, options, deadline, attemptTimeoutMs = 2000) {
   let serverInfo;
   const result = await postToServer(requestPath, body, {
@@ -248,10 +250,12 @@ async function postMcpRequest(requestPath, body, options, deadline, attemptTimeo
     // タイムアウト後も常駐サーバーで処理が続くため、同じ書き込みを再送しない。
     retryAfterTimeout: false,
     ensure: true,
+    errorJson: true,
   });
   reportMcpWrite(serverInfo, options, { tool: options.diagnosticTool, phase: 'result', ok: result.ok, status: result.status,
     ...(!result.ok ? { failure: result.timedOut ? 'timeout' : result.status ? 'http' : 'unreachable' } : {}) });
-  return { ...result, codexUnregistered: Boolean(options.codexSessionId) && result.status === 403 };
+  const codexUnregistered = Boolean(options.codexSessionId) && result.status === 403;
+  return { ...result, codexUnregistered, codexDelegated: codexUnregistered && result.json?.error === 'Codex session delegated' };
 }
 
 function requestDeadline(options, timeoutMs) {
@@ -269,6 +273,12 @@ function writerIdentity(options) {
   };
 }
 
+function codexUnregisteredResult(result) {
+  return result.codexDelegated
+    ? { errorMessage: DELEGATED_CODEX_UNREGISTERED_MESSAGE, isError: false }
+    : { errorMessage: CODEX_UNREGISTERED_MESSAGE, isError: true };
+}
+
 async function postPlan(toolName, args, options = {}) {
   const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
   const identity = writerIdentity(options);
@@ -280,7 +290,7 @@ async function postPlan(toolName, args, options = {}) {
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/plan`, body, options, deadline);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
-  if (result.codexUnregistered) return { errorMessage: CODEX_UNREGISTERED_MESSAGE };
+  if (result.codexUnregistered) return codexUnregisteredResult(result);
   const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -300,7 +310,7 @@ async function postPullRequest(args, options = {}) {
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
-  if (result.codexUnregistered) return { errorMessage: CODEX_UNREGISTERED_MESSAGE };
+  if (result.codexUnregistered) return codexUnregisteredResult(result);
   const errorMessage = PR_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -331,7 +341,7 @@ async function postCrossReviewSkip(args, options = {}) {
   );
   if (result.ok) return result.json;
   if (result.timedOut) return { timedOut: true };
-  if (result.codexUnregistered) return { errorMessage: CODEX_UNREGISTERED_MESSAGE };
+  if (result.codexUnregistered) return codexUnregisteredResult(result);
   const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -347,20 +357,20 @@ async function callTool(name, args, options = {}) {
     const saved = await postPullRequest(args, options);
     if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
-    if (saved.errorMessage) return toolResult(saved.errorMessage, true);
+    if (saved.errorMessage) return toolResult(saved.errorMessage, saved.isError !== false);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) を登録しました。`);
   }
   if (name === 'cockpit_skip_review') {
     const saved = await postCrossReviewSkip(args, options);
     if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
-    if (saved.errorMessage) return toolResult(saved.errorMessage, true);
+    if (saved.errorMessage) return toolResult(saved.errorMessage, saved.isError !== false);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) の head ${saved.headRefOid.slice(0, 7)} をクロスレビュー不要として記録しました。`);
   }
   const saved = await postPlan(name, args, options);
   if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
   if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
-  if (saved.errorMessage) return toolResult(saved.errorMessage, true);
+  if (saved.errorMessage) return toolResult(saved.errorMessage, saved.isError !== false);
   return toolResult(shortSavedList(name, saved));
 }
 

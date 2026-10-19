@@ -738,6 +738,7 @@ MCP サーバーは `src/mcp/server.js` で、JSON-RPC を stdio の行単位で
 ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision`、`cockpit_add_pr`、`cockpit_skip_review` の 5 つである。
 計画の変更は `ensureServerRunning` で常駐サーバーを確かめ、`secret` 付きで `/plan` に送る。PR の登録とクロスレビュー不要の記録は `/prs` に送る。
 MCP が渡す `ppid` と `CLAUDE_CODE_SESSION_ID` のうち、常駐サーバーはまず `ppid` から `~/.claude/sessions/*.json` に対応する session ID を探し、見つからない場合に環境変数の ID を使う。どちらも無ければ書き込みを拒否する。
+委譲した Codex の thread への書き込みは、403 の `error: "Codex session delegated"` で拒否し、MCP は委譲元の Claude のセッションが記録するので呼ばなくてよいと、エラーにせずに返す(詳細は [委譲した Codex の表示](codex-delegation.md))。
 他の環境変数値や `CLAUDE_CODE_MESSAGING_TOKEN` は MCP の結果、ログ、常駐サーバーへの要求に含めない。
 `cockpit_add_decision` は質問を 1 つ持つ判断事項を作り、`cockpit_update_decision` は `provisional` または `resolved` と `resolution` を記録する。
 成功時の MCP 応答は、保存した後の一覧を短く示す。
