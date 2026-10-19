@@ -2047,7 +2047,7 @@ function codexAgentInvocation(script, opts, deps = {}) {
   if (def && def.error) {
     return { error: `定義 ${agentName} を読めないため起動しません (${def.error}): ${def.path}` };
   }
-  // <cwd> 側を優先して読む旧版の bridge は、この定義の codex_home と codex_sandbox で起動するため渡さない。
+  // <cwd> 側を優先して読む古いバージョンの bridge は、この定義の codex_home と codex_sandbox で起動するため渡さない。
   if (def && def.projectOnly) {
     warn(`[cross-review] ホーム側に定義 ${agentName} が無く、作業ディレクトリ側の定義だけがあるため直接起動へ切り替えます: ${def.path}\n`);
     return null;
