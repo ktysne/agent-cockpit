@@ -221,6 +221,43 @@ function mergeInput(number = 1, changes = {}) {
   };
 }
 
+function holdNextOpenList(fixture) {
+  const original = fixture.tracker.execFileImpl;
+  let release;
+  let listed;
+  const started = new Promise((resolve) => { listed = resolve; });
+  fixture.tracker.execFileImpl = (file, args, options, callback) => {
+    if (args[0] === 'pr' && args[1] === 'list' && args.includes('open') && !release) {
+      const stdout = JSON.stringify(fixture.github.openPullRequests);
+      release = () => callback(null, stdout, '');
+      listed();
+    } else original(file, args, options, callback);
+  };
+  return { started, release: () => release() };
+}
+
+async function mergeDuringOpenList(t, pullRequests, beforeList = () => {}) {
+  const fixture = await mergeFixture(t, pullRequests);
+  let staleList;
+  let fetching;
+  fixture.control.waitForMerge = async () => {
+    beforeList(fixture);
+    staleList = holdNextOpenList(fixture);
+    fetching = fixture.tracker.refreshRepo('example', 'project');
+    await staleList.started;
+  };
+  const notify = fixture.answerDelivery.notifySessions.bind(fixture.answerDelivery);
+  const recorded = new Promise((resolve) => {
+    fixture.answerDelivery.notifySessions = (...args) => { notify(...args); resolve(); };
+  });
+  const merging = fixture.manager.merge(mergeInput());
+  await recorded;
+  const freshList = holdNextOpenList(fixture);
+  staleList.release();
+  await fetching;
+  return { fixture, merging, freshList };
+}
+
 function savedMergeIntent(pr, changes = {}) {
   return {
     session_id: `session-${pr.number}`, owner: 'example', repo: 'project', number: pr.number,
@@ -2004,6 +2041,64 @@ test('gh の実行中は期限を過ぎたオープン一覧の取得でも意�
     assert.deepEqual(fixture.tracker.snapshot()[0].reservationNotices, []);
   };
   assert.equal((await fixture.manager.merge(mergeInput(1, { deleteBranch: true }))).branchDeleted, true);
+});
+
+test('マージの記録後に古いオープン一覧が届いても登録とマージ操作を復活させない', async (t) => {
+  const { fixture, merging, freshList } = await mergeDuringOpenList(t);
+  try {
+    assert.equal(fixture.state.pullRequestRegistrationsForRepo('example', 'project')[0].state, 'merged');
+    assert.deepEqual(fixture.tracker.repositoryState('example', 'project').openPullRequests, []);
+    assert.equal(findPullRequestInTrees(fixture.tracker.snapshot()[0].trees, 1), null);
+  } finally {
+    await freshList.started;
+    freshList.release();
+    assert.equal((await merging).ok, true);
+  }
+});
+
+test('マージ後は実行中の取得の完了を待って新しいオープン一覧を取得する', async (t) => {
+  const { merging, freshList } = await mergeDuringOpenList(t);
+  await freshList.started;
+  freshList.release();
+  assert.equal((await merging).ok, true);
+});
+
+test('古い取得でもマージと無関係な PR の題と head の更新は反映する', async (t) => {
+  const other = ghPullRequest(2, 'feature/two', 'main', { sha: sha(3), fields: { title: '更新した題' } });
+  const { fixture, merging, freshList } = await mergeDuringOpenList(t, [
+    ghPullRequest(1, 'feature/one', 'main'), ghPullRequest(2, 'feature/two', 'main'),
+  ], (fixture) => { fixture.github.openPullRequests[1] = other; });
+  try {
+    const pr = findPullRequestInTrees(fixture.tracker.snapshot()[0].trees, 2);
+    assert.equal(pr.title, other.title);
+    assert.equal(pr.headRefOid, other.headRefOid);
+    assert.equal(fixture.state.pullRequestRegistrationsForRepo('example', 'project').find((record) => record.number === 2).lastOpen.headRefOid, other.headRefOid);
+  } finally {
+    await freshList.started;
+    freshList.release();
+    await merging;
+  }
+});
+
+test('取得開始後にクローズを検出した PR は古い一覧で登録と行を復活させない', async (t) => {
+  const fixture = await mergeFixture(t);
+  await fixture.tracker.refreshRepo('example', 'project');
+  fixture.state.rememberRelatedPullRequest(fixture.state.pullRequestRegistrationsForRepo('example', 'project')[0], NOW);
+  const held = holdNextOpenList(fixture);
+  const fetching = fixture.tracker.refreshRepo('example', 'project');
+  await held.started;
+  const pr = fixture.github.openPullRequests[0];
+  fixture.github.openPullRequests = [];
+  fixture.github.views.set(1, { ...pr, state: 'CLOSED', mergedAt: null });
+  const detector = new PullRequestTracker({ state: fixture.state, now: () => NOW, execFileImpl: fixture.execFileImpl });
+  t.after(() => detector.close());
+  await detector.refreshRepo('example', 'project');
+  held.release();
+  await fetching;
+  assert.equal(fixture.state.pullRequestRegistrationsForRepo('example', 'project')[0].state, 'closed');
+  assert.equal(fixture.state.relatedPullRequestRegistrationsForRepo('example', 'project')[0].state, 'closed');
+  assert.deepEqual(fixture.tracker.repositoryState('example', 'project').openPullRequests, []);
+  assert.equal(findPullRequestInTrees(fixture.tracker.snapshot()[0].trees, 1), null);
 });
 
 test('gh の実行中に始まった取得は実行が結果不明で終わった後に届いても意図を残す', async (t) => {

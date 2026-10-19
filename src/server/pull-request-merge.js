@@ -524,7 +524,7 @@ class PullRequestMergeManager {
     } finally {
       this.tracker.executingMerges.delete(mergeKey);
     }
-    await this.tracker.refreshRepo(registration.owner, registration.repo).catch(() => {});
+    await this.tracker.refreshRepoFresh(registration.owner, registration.repo, { priority: true }).catch(() => {});
     await this.state.waitForPersistence?.();
     const history = this.state.mergedPullRequestHistoryForRepo(registration.owner, registration.repo, this.now())
       .find((record) => record.number === registration.number);

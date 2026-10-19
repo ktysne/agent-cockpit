@@ -1736,6 +1736,7 @@ class PullRequestTracker {
   async fetchRepository(owner, repo, repository) {
     const key = repoKey(owner, repo);
     const fetchStartedAt = this.now();
+    const closureGenerationAtStart = this.state.pullRequestClosureGeneration(owner, repo);
     // 実行中に取った一覧はマージ前のオープンを返しうるので、実行が終わってから突き合わせても意図を消さない。
     const mergesExecutingAtStart = new Set(this.executingMerges);
     const checkedAt = new Date(fetchStartedAt).toISOString();
@@ -1837,15 +1838,18 @@ class PullRequestTracker {
         }
       }));
     }
+    // 取得中に確定したマージとクローズを古い一覧で戻さず、ほかの PR の更新は反映する。
+    const currentOpenPullRequests = openPullRequests.filter((pr) =>
+      this.state.pullRequestClosureGeneration(owner, repo, pr.number) <= closureGenerationAtStart);
     this.updateProductMembership(owner, repo, {
-      registrations, relatedPullRequests, openPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
+      registrations, relatedPullRequests, openPullRequests: currentOpenPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
       mergedPullRequests, mergedCandidates, mergeTargetHeadChecks, uninspectedNumbers, mergeMethods,
     });
 
     this.repositories.set(key, {
       owner,
       repo,
-      openPullRequests,
+      openPullRequests: currentOpenPullRequests,
       defaultBranch,
       mergeMethods,
       autoDeleteBranch,
