@@ -8,6 +8,7 @@ const {
   isCompleteCommitSha,
   parseGitHubRepositoryRemote,
   parsePullRequestUrl,
+  pullRequestKey,
   repositoryKey,
   validBranchName,
   validRepositoryPart,
@@ -16,6 +17,7 @@ const { isGithubCredentialEnvironmentVariable } = require('./credential-environm
 const { findWorktreeRoot } = require('./git-worktree');
 const { DISPLAY_SCHEMA } = require('./display-preferences');
 
+const GH_TIMEOUT_MS = 20_000;
 const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
 const MERGED_PULL_REQUEST_LIMIT = 1000;
 const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
@@ -621,7 +623,7 @@ function runGh(args, options = {}) {
   return new Promise((resolve, reject) => {
     execFileImpl(ghPath, args, {
       encoding: 'utf8',
-      timeout: options.timeoutMs || 20_000,
+      timeout: options.timeoutMs || GH_TIMEOUT_MS,
       maxBuffer: 4 * 1024 * 1024,
       windowsHide: true,
       shell: false,
@@ -633,6 +635,13 @@ function runGh(args, options = {}) {
       } else resolve(stdout);
     });
   });
+}
+
+function ghFailureKind(error) {
+  if (error?.killed || error?.signal || error?.code === 'ETIMEDOUT') return 'unconfirmed';
+  if (typeof error?.code === 'number') return 'exit';
+  if (error?.syscall?.startsWith('spawn')) return 'spawn';
+  return 'unconfirmed';
 }
 
 function ghErrorMessage(error) {
@@ -1198,6 +1207,7 @@ class PullRequestTracker {
     this.reviewGroupRefreshes = new Map();
     this.headToolResults = new Map();
     this.inFlight = new Map();
+    this.executingMerges = new Set();
     this.lastFetchStartedAt = new Map();
     this.activeGhCount = 0;
     this.ghQueue = [];
@@ -1615,6 +1625,7 @@ class PullRequestTracker {
       }
       const value = result.value;
       const closedState = classified.kind;
+      if (closedState === 'merged' && this.executingMerges.has(pullRequestKey(owner, repo, result.number))) continue;
       const stateChanges = classified.stateChanges;
       for (const record of result.tracked.registrations) {
         this.state.updatePullRequest(record.session_id, owner, repo, result.number, stateChanges);
@@ -1724,7 +1735,8 @@ class PullRequestTracker {
 
   async fetchRepository(owner, repo, repository) {
     const key = repoKey(owner, repo);
-    const checkedAt = new Date(this.now()).toISOString();
+    const fetchStartedAt = this.now();
+    const checkedAt = new Date(fetchStartedAt).toISOString();
     const current = this.repositories.get(key) || {
       owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, configAvailable: false, fetchedAt: null, checkedAt: null,
     };
@@ -1746,6 +1758,20 @@ class PullRequestTracker {
       await this.inspectDisappearedPullRequests(owner, repo, repository, {
         registrationsBeforeInspection, relatedBeforeInspection, openPullRequests, openNumbers, errors, uninspectedNumbers, defaultBranch,
       });
+    }
+
+    if (listAvailable) {
+      for (const pullRequest of openPullRequests) {
+        const intent = this.state.pullRequestMergeIntent(owner, repo, pullRequest.number);
+        if (!intent || this.executingMerges.has(pullRequestKey(owner, repo, pullRequest.number)) ||
+          fetchStartedAt < Date.parse(intent.createdAt) + GH_TIMEOUT_MS) continue;
+        this.state.clearPullRequestMergeIntent(owner, repo, pullRequest.number);
+        this.state.recordPullRequestMergeReservationNotice({
+          owner, repo, number: pullRequest.number, url: intent.url,
+          at: new Date(this.now()).toISOString(),
+          message: '前回のマージ操作の結果を確認できませんでした',
+        });
+      }
     }
 
     // gh pr view で補ったオープンの PR も含めるため、マージ済みの一覧は補った後に取る。
@@ -2073,6 +2099,8 @@ function attachCrossReviewState(pullRequest, crossReviewByNumber) {
 }
 
 module.exports = {
+  GH_TIMEOUT_MS,
+  ghFailureKind,
   productGroupsFor,
   selectPullRequestsToInspect,
   classifyInspectedPullRequest,
