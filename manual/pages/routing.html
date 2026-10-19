@@ -2,8 +2,9 @@
   <h1>経路の設定</h1>
   <p class="lead">経路の設定は、サブエージェントとクロスレビューを、Codex と Claude のどちらで行うかを選ぶ欄です。
   画面の上部にあり、全セッションに共通です。
-  サブエージェントの経路は Claude のセッションにだけ効き、Codex が自分で起動したサブエージェントには効きません。
-  変えた設定は、次に起動する Claude のサブエージェントと、次に始めるクロスレビューから効きます。</p>
+  サブエージェントの経路は Claude のセッションが起動する bridge の窓口(<code>impl-hard</code>、<code>impl-standard</code>、<code>impl-light</code>、<code>codex-subagent</code>)に効きます。
+  <code>codex-review</code> はクロスレビューの経路に従い、Codex が自分で起動したサブエージェントにはどちらも効きません。
+  変えた設定は、次に起動する対象の窓口と、次に始めるクロスレビューから効きます。</p>
 
   <h2 id="routing-choices">選べる経路</h2>
   <p>サブエージェントとクロスレビューのそれぞれに、<span class="ui">既定</span>、<span class="ui">Codex</span>、<span class="ui">Claude</span> の 3 つから 1 つを選びます。
@@ -17,12 +18,13 @@
   </figure>
   <p>経路の意味は、サブエージェントとクロスレビューで少し違います。</p>
   <ul>
-    <li><span class="ui">既定</span>：経路を指定しません。サブエージェントにもクロスレビューにも、何も伝えず、止めもしません。選び直さなければ、この状態です</li>
-    <li><span class="ui">Codex</span>：サブエージェントは、Codex へ委譲して作業するよう、起動時に伝えられます。クロスレビューは、Codex をレビュアーにします</li>
-    <li><span class="ui">Claude</span>：サブエージェントは、Codex へ委譲せずに Claude 自身で作業するよう、起動時に伝えられます。クロスレビューは、Claude をレビュアーにします</li>
+    <li><span class="ui">既定</span>：経路を指定しません。bridge の窓口にもクロスレビューにも、何も伝えず、止めもしません。選び直さなければ、この状態です</li>
+    <li><span class="ui">Codex</span>：bridge の窓口には、Codex へ委譲して作業するよう、起動時に伝えられます。クロスレビューは、Codex をレビュアーにします</li>
+    <li><span class="ui">Claude</span>：bridge の窓口には、Codex へ委譲せずに Claude 自身で作業するよう、起動時に伝えられます。クロスレビューは、Claude をレビュアーにします</li>
   </ul>
-  <p>Claude のサブエージェントの経路は、claude-codex-bridge の窓口(<code>impl-hard</code> など)が Codex を呼ぶ仕組みに対する指定です。
-  <span class="ui">Claude</span> を選んだサブエージェントが Codex を呼び出そうとすると、フックが止めます。
+  <p>サブエージェントの経路は、Claude のセッションが起動する claude-codex-bridge の窓口に対する指定です。
+  <code>codex-review</code> はサブエージェントの設定ではなく、クロスレビューの設定に従います。
+  <span class="ui">Claude</span> を選んだ対象の窓口が Codex を呼び出そうとすると、フックが止めます。
   止められた窓口は、Claude 側で実装する担当への委譲し直しを、メインセッションに報告します。</p>
   <p>クロスレビューの経路は、ai-cross-review が、レビューを始める直前に読みます。
   <span class="ui">Codex</span> か <span class="ui">Claude</span> を選んでいるのに、違うレビュアーで始めようとすると、ai-cross-review は始めずに断ります。
@@ -30,7 +32,7 @@
   <details class="more">
     <summary>経路の動きの詳細</summary>
     <ul>
-      <li>サブエージェントへの指定は、<code>route.js</code> のフックが、サブエージェントの開始時に追加の文脈として渡します。<span class="ui">Claude</span> のときは、Codex を呼ぶコマンドをツールの実行の直前に断ります。このフックを登録していないと、経路の札は付きますが、サブエージェントには伝わりません(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>のパターン C)</li>
+      <li><code>route.js</code> は <code>impl-hard</code>、<code>impl-standard</code>、<code>impl-light</code>、<code>codex-subagent</code> ではサブエージェントの設定を、<code>codex-review</code> ではクロスレビューの設定を開始時に追加の文脈として渡します。その他の agent_type は対象外です。<span class="ui">Claude</span> の経路を記録した窓口では、Codex を呼ぶコマンドをツールの実行の直前に断ります。このフックを登録していないと、経路の札は付きますが、窓口には伝わりません(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>のパターン C)</li>
       <li>クロスレビューの経路は、<code>node tools/cross-review.js route</code> が、常駐サーバーの保存先の <code>routing.json</code> を読んで、<code>codex</code>、<code>claude</code>、<code>default</code> のどれかを出力します。ファイルが読めないときは <code>default</code> です</li>
       <li>常駐サーバーは、<code>routing.json</code> が無いとき、壊れているとき、値が不正なときは、両方を <span class="ui">既定</span> として扱います。ほかのプログラムがファイルを開いているなどで読み直しても読めないときは起動せず、<code>route.js</code> のフックはサブエージェントに何も渡しません</li>
       <li>claude-codex-bridge の窓口が <span class="ui">Claude</span> の指定を受けたときの動きは、claude-codex-bridge 側の <a href="https://github.com/ktysne/claude-codex-bridge/issues/129">Issue 129</a> で扱っています</li>
@@ -59,20 +61,20 @@
   保存できなかったときは、<span class="ui">経路の設定を保存できませんでした。</span> と出て、ボタンは元の選択のままです。</p>
   <p>変えた設定は、次のものから効きます。</p>
   <ul>
-    <li>サブエージェント：設定を変えた後に起動するものから。稼働中のサブエージェントは、止めも、切り替えもしません</li>
+    <li>bridge の窓口：設定を変えた後に Claude セッションが起動するものから。稼働中の窓口は、止めも、切り替えもしません</li>
     <li>クロスレビュー：設定を変えた後に始めるレビューから</li>
   </ul>
   <details class="more">
     <summary>サブエージェントの経路の記録の詳細</summary>
     <ul>
-      <li>サブエージェントの経路は、起動したときに読み、そのときの値を保存先の <code>route-agents/</code> に記録します。起動した後は、設定を変えても、この記録を使い続けます</li>
+      <li>bridge の窓口は「サブエージェント」の値を、<code>codex-review</code> は「クロスレビュー」の値を開始時に読み、「既定」を含めて <code>route-agents/</code> に記録します。「既定」の場合は文脈を差し込まず、Codex の起動も拒否しません</li>
       <li>同じサブエージェントが再開したときも、最初の記録の経路のままです</li>
       <li>記録は、読むたびに更新時刻を進めます。24 時間使われていない記録は、新しいサブエージェントの開始時に削除します</li>
     </ul>
   </details>
 
   <h2 id="routing-stale">経路の札と「変更前」</h2>
-  <p>claude-codex-bridge を入れているときは、稼働中のサブエージェントの行に、起動したときの経路が <span class="ui">経路:</span> の札で出ます。
+  <p>claude-codex-bridge を入れているときは、Claude セッションが起動した対象の窓口と、Codex または Claude の「クロスレビュー」経路で動く <code>codex-review</code> の稼働中の行に、起動したときの経路が <span class="ui">経路:</span> の札で出ます。
   起動した後で経路の設定を変えると、いまの設定と違う札に <span class="ui">(変更前)</span> が付きます。
   札は、稼働中のサブエージェントが、いまの設定とは別の経路で動いていることを示します。</p>
   <figure class="guide-map" id="routing-changed-setting-map" data-shot="routing-changed/setting" data-alt="サブエージェントの経路を Claude に変えた経路の設定。サブエージェントの段で Claude が選ばれている">

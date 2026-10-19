@@ -156,7 +156,7 @@
     <ol class="guide-list">
       <li data-part="rows.agent-who" data-at="0.127,0.535"><b>状態の札と名前</b>：状態の札は、<span class="ui">稼働中</span>、<span class="ui">終了</span>、<span class="ui">終了未確認</span> のどれかです(<a href="#work-agent-unconfirmed">終了未確認の行</a>)。名前は、サブエージェントの種類です。</li>
       <li data-part="rows.agent-description"><b>依頼の内容</b>：メインセッションが渡した作業の説明です。説明が無いときは、最後に使ったツールが出ます。</li>
-      <li data-part="rows.route" data-place="bottom"><b>経路の札</b>：起動の時点で効いていた、サブエージェントの経路の設定です(<a href="#work-agent-route">経路の札</a>)。</li>
+      <li data-part="rows.route" data-place="bottom"><b>経路の札</b>：起動時に効いていた経路の設定です(<a href="#work-agent-route">経路の札</a>)。</li>
       <li data-part="rows.models" data-place="bottom"><b>モデルの札</b>：Claude のモデルと effort です。サブエージェントが Codex を起動したときは、矢印に続けて Codex のモデルと effort が出ます。</li>
       <li data-part="rows.agent-time" data-place="bottom"><b>経過時間</b>：サブエージェントを起動してからの時間です。</li>
       <li data-part="rows.ended" data-place="bottom"><b>終了した行</b>：終わったサブエージェントです。状態の札は <span class="ui">終了</span> で、経路の札は付きません。</li>
@@ -188,9 +188,9 @@
   </details>
 
   <h3 id="work-agent-route">経路の札</h3>
-  <p>経路の札は、claude-codex-bridge を入れているときの、Claude のセッションの稼働中のサブエージェントにだけ付きます。
+  <p>経路の札は、claude-codex-bridge を入れているときの、Claude セッションが起動した対象窓口と、Codex または Claude のクロスレビュー経路で動く <code>codex-review</code> の行に付きます。
   <span class="ui">経路:</span> に続けて、<span class="ui">既定</span>、<span class="ui">Codex</span>、<span class="ui">Claude</span> のどれかが出ます。
-  サブエージェントを起動した時点で効いていた、サブエージェントの経路の設定を示します。
+  bridge の窓口では「サブエージェント」、<code>codex-review</code> では「クロスレビュー」で選んだ経路を示します。
   マウスを載せると、<span class="ui">起動時に効いていた経路の設定</span> と出ます。</p>
   <p>起動の後で経路の設定を変えると、いまの設定と違う札には <span class="ui">(変更前)</span> が付きます。
   経路の設定は、次に起動するサブエージェントから効きます。

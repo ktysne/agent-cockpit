@@ -8,6 +8,8 @@ const { atomicWriteJsonSync } = require('../server/json-storage');
 const ROUTE_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CLAUDE_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Claude で行い、codex-agent.sh を呼ばない';
 const CODEX_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Codex(codex-agent.sh 経由の委譲)で行う';
+const AGENTS_ROUTE_AGENT_TYPES = new Set(['impl-hard', 'impl-standard', 'impl-light', 'codex-subagent']);
+const REVIEW_ROUTE_AGENT_TYPES = new Set(['codex-review']);
 const CODEX_AGENT_SCRIPT = /(?:^|[\\/])codex-agent\.sh$/i;
 const readRouting = readRoutingSync;
 const TRANSPARENT_COMMANDS = new Set(['command', 'nohup', 'time', 'builtin', '!']);
@@ -166,14 +168,23 @@ function codexAgentScriptExists(options, fileSystem) {
   });
 }
 
+function routeKeyForAgentType(agentType) {
+  if (AGENTS_ROUTE_AGENT_TYPES.has(agentType)) return 'agents';
+  if (REVIEW_ROUTE_AGENT_TYPES.has(agentType)) return 'review';
+  return null;
+}
+
 function effectiveRouteForSubagentStart(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || input.hook_event_name !== 'SubagentStart') return null;
+  const routeKey = routeKeyForAgentType(input.agent_type);
+  if (!routeKey) return null;
   const fileSystem = options.fileSystem || fs;
   if (!codexAgentScriptExists(options, fileSystem)) return null;
   const homeDir = cockpitHomeFromOptions(options);
   const recordPath = routeRecordPath(input, homeDir);
   if (!recordPath) return null;
-  return readRouteRecordValue(recordPath, fileSystem) || readRouting(homeDir, fileSystem, options.readRetryOptions)?.agents || null;
+  const recordedRoute = readRouteRecordValue(recordPath, fileSystem);
+  return recordedRoute || readRouting(homeDir, fileSystem, options.readRetryOptions)?.[routeKey] || null;
 }
 
 function outputForRoute(input, options = {}) {
@@ -181,6 +192,8 @@ function outputForRoute(input, options = {}) {
   const isStart = input.hook_event_name === 'SubagentStart';
   const isShellToolUse = input.hook_event_name === 'PreToolUse' && isPullRequestShellTool(input.tool_name);
   if (!isStart && !isShellToolUse) return null;
+  const routeKey = isStart ? routeKeyForAgentType(input.agent_type) : null;
+  if (isStart && !routeKey) return null;
 
   const homeDir = cockpitHomeFromOptions(options);
   const fileSystem = options.fileSystem || fs;
@@ -199,8 +212,8 @@ function outputForRoute(input, options = {}) {
     let route = readRouteRecord(recordPath, fileSystem);
     if (!route) {
       const routing = readRouting(homeDir, fileSystem, options.readRetryOptions);
-      if (!routing || !writeRouteRecord(recordPath, routing.agents, fileSystem)) return null;
-      route = routing.agents;
+      route = routing?.[routeKey];
+      if (!routing || !writeRouteRecord(recordPath, route, fileSystem)) return null;
     }
     if (route === 'claude') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT } };
     if (route === 'codex') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CODEX_ROUTE_CONTEXT } };

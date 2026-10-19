@@ -143,7 +143,7 @@ test('モックに合わせた配色、札、タスク行を表示する', () =>
   assert.match(mock, /PR #57 の CI が失敗した'/);
 });
 
-test('経路札は起動時の設定を表示し、現在と違う設定には変更前を付ける', () => {
+test('経路札は agent_type に対応する現在値と比べ、違えば変更前を付ける', () => {
   const route = web.match(/const ROUTE = \{[\s\S]*?\n\};/)?.[0];
   const routeValues = web.match(/const ROUTE_VALUES = new Set\([^\n]+/)?.[0];
   const routeName = functionSource(web, 'routeName');
@@ -151,7 +151,7 @@ test('経路札は起動時の設定を表示し、現在と違う設定には�
   const appendModelLine = functionSource(web, 'appendModelLine');
   assert.ok(route && routeValues && routeName && routeTag && appendModelLine);
   const context = pageContext(web, {
-    routing: { agents: 'claude' },
+    routing: { agents: 'claude', review: 'codex' },
     codexAgentAvailable: true,
     element: (tag, className, textContent = '') => ({
       tag, className, textContent, children: [],
@@ -161,12 +161,32 @@ test('経路札は起動時の設定を表示し、現在と違う設定には�
   vm.runInContext(`${route}\n${routeValues}\n${routeName}\n${routeTag}\n${appendModelLine}\nthis.routeTag = routeTag; this.appendModelLine = appendModelLine;`, context);
 
   context.routing.agents = 'default';
-  assert.equal(context.routeTag({ active: true, route: 'default' }).textContent, '経路: 既定');
+  assert.equal(context.routeTag({ active: true, agent_type: 'impl-hard', route: 'default' }).textContent, '経路: 既定');
   context.routing.agents = 'claude';
-  const tag = context.routeTag({ active: true, route: 'default' });
+  const tag = context.routeTag({ active: true, agent_type: 'impl-hard', route: 'default' });
   assert.equal(tag.textContent, '経路: 既定 (変更前)');
   assert.equal(tag.className, 'route-tag stale');
-  assert.equal(context.routeTag({ active: false, route: 'default' }), null);
+  assert.equal(context.routeTag({ active: true, agent_type: 'codex-review', route: 'codex' }).textContent, '経路: Codex');
+  assert.equal(context.routeTag({ active: false, agent_type: 'codex-review', route: 'codex' }), null);
+  context.routing.review = 'default';
+  assert.equal(context.routeTag({ active: true, agent_type: 'codex-review', route: 'default' }).textContent, '経路: 既定');
+  context.routing.review = 'claude';
+  assert.equal(context.routeTag({ active: true, agent_type: 'codex-review', route: 'codex' }).textContent, '経路: Codex (変更前)');
+
+  const mockRoute = mock.match(/const ROUTE = \{[\s\S]*?\n\};/)?.[0];
+  const mockRouteName = mock.match(/const routeName = [^\n]+/)?.[0];
+  const mockRouteTag = functionSource(mock, 'routeTag');
+  assert.ok(mockRoute && mockRouteName && mockRouteTag);
+  const mockContext = pageContext(mock, {
+    DATA: { integrations: { codexAgent: true } },
+    ui: { routing: { agents: 'claude', review: 'codex' } },
+    esc: (value) => value,
+  });
+  vm.runInContext(`${mockRoute}\n${mockRouteName}\n${mockRouteTag}\nthis.routeTag = routeTag;`, mockContext);
+  assert.doesNotMatch(mockContext.routeTag({ state: 'busy', agent_type: 'codex-review', route: 'codex' }), /変更前/);
+  assert.match(mockContext.routeTag({ state: 'busy', agent_type: 'impl-hard', route: 'codex' }), /変更前/);
+  mockContext.ui.routing.review = 'default';
+  assert.doesNotMatch(mockContext.routeTag({ state: 'busy', agent_type: 'codex-review', route: 'default' }), /変更前/);
 
   const target = { children: [], append(...items) { this.children.push(...items); } };
   context.appendModelLine(target, { agent_id: 'agent-1', active: true, route: 'default', model: 'claude-sonnet-5-5' });

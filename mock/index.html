@@ -1857,8 +1857,9 @@ const routeName = (k, v) => ROUTE[k].opts.find(o => o.v === v).t;
 
 function routeTag(s) {
   if (!DATA.integrations.codexAgent || !s.route || s.state !== 'busy') return '';
-  const stale = s.route !== ui.routing.agents;
-  return `<span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? ' (変更前)' : ''}</span>`;
+  const routeKey = s.agent_type === 'codex-review' ? 'review' : 'agents';
+  const stale = s.route !== ui.routing[routeKey];
+  return `<span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName(routeKey, s.route))}${stale ? ' (変更前)' : ''}</span>`;
 }
 
 function renderRouting() {
