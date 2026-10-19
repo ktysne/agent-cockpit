@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const {
   PullRequestTracker,
   classifyInspectedPullRequest,
@@ -1828,6 +1829,207 @@ async function installCrossReview(root) {
   await fs.writeFile(path.join(root, 'tools', 'cross-review.js'), '');
 }
 
+for (const fails of [false, true]) {
+  test(`並行したレビュー再計算は次の回を共有し、古い head で上書きしない (先行失敗: ${fails})`, async (t) => {
+    const { tracker, github } = await trackerFixture(t);
+    tracker.readCrossReviewState = async () => null;
+    github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', 'a'.repeat(40))];
+    await tracker.refreshRepo('example', 'project');
+    const pending = [];
+    tracker.readCrossReviewState = () => new Promise((resolve, reject) => pending.push({ resolve, reject }));
+    const first = tracker.refreshReviewGroups('example', 'project');
+    const firstResult = fails ? assert.rejects(first, /read failed/) : first;
+    const repo = tracker.repositories.get('example/project');
+    tracker.repositories.set('example/project', { ...repo,
+      openPullRequests: repo.openPullRequests.map(pr => ({ ...pr, headRefOid: 'b'.repeat(40) })) });
+    const second = tracker.refreshReviewGroups('example', 'project');
+    const third = tracker.refreshReviewGroups('example', 'project');
+    assert.equal(pending.length, 1);
+    if (fails) pending.shift().reject(new Error('read failed'));
+    else pending.shift().resolve(null);
+    await firstResult;
+    await new Promise(setImmediate);
+    assert.equal(pending.length, 1);
+    let finished = false;
+    second.then(() => { finished = true; });
+    await new Promise(setImmediate);
+    assert.equal(finished, false);
+    const fourth = tracker.refreshReviewGroups('example', 'project');
+    pending.shift().resolve(null);
+    await Promise.all([second, third]);
+    await new Promise(setImmediate);
+    assert.equal(pending.length, 1);
+    pending.shift().resolve(null);
+    await fourth;
+    assert.equal(tracker.snapshot()[0].trees[0].headRefOid, 'b'.repeat(40));
+    assert.equal(pending.length, 0);
+  });
+}
+
+test('消えた cwd から元のリポジトリの道具を検出し、探索結果を10分間使い回す', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  const cwd = path.join(root, '.claude', 'worktrees', 'removed');
+  for (const code of ['ENOENT', 'ENOTDIR']) {
+    const calls = [];
+    const fileSystem = { async stat(file) {
+      calls.push(file);
+      if (file === cwd) throw Object.assign(new Error('missing'), { code });
+      return fs.stat(file);
+    } };
+    const results = new Map();
+    assert.equal(await crossReviewToolExists(cwd, fileSystem, results, 1000), true);
+    assert.ok(calls.includes(path.join(root, '.git')));
+    assert.deepEqual(results.get(cwd), { exists: true, checkedAt: 1000 });
+    calls.length = 0;
+    assert.equal(await crossReviewToolExists(cwd, fileSystem, results, 2000), true);
+    assert.deepEqual(calls, [cwd]);
+    calls.length = 0;
+    assert.equal(await crossReviewToolExists(cwd, fileSystem, results, 601001), true);
+    assert.ok(calls.includes(path.join(root, '.git')));
+  }
+});
+
+test('消えた cwd の道具なしも使い回し、cwd が実在すれば毎回確認する', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  const cwd = path.join(root, 'missing');
+  const results = new Map();
+  assert.equal(await crossReviewToolExists(cwd, fs, results, 1000), false);
+  await installCrossReview(root);
+  assert.equal(await crossReviewToolExists(cwd, fs, results, 2000), false);
+  await fs.mkdir(cwd);
+  assert.equal(await crossReviewToolExists(cwd, fs, results, 3000), true);
+  await fs.unlink(path.join(root, 'tools', 'cross-review.js'));
+  assert.equal(await crossReviewToolExists(cwd, fs, results, 4000), false);
+});
+
+test('別リポジトリのレビュー再計算は実行中のリポジトリを待たない', async (t) => {
+  const { tracker, github, state } = await trackerFixture(t);
+  tracker.readCrossReviewState = async () => null;
+  github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', 'a'.repeat(40))];
+  await tracker.refreshRepo('example', 'project');
+  state.registerPullRequest('other-session', { url: 'https://github.com/example/other/pull/31' }, {
+    cwd: process.cwd(), product: { key: 'other', name: 'other' },
+  });
+  tracker.repositories.set('example/other', tracker.repositories.get('example/project'));
+  let release;
+  tracker.readCrossReviewState = registration => registration.session_id === 'other-session'
+    ? Promise.resolve(null) : new Promise(resolve => { release = resolve; });
+  const running = tracker.refreshReviewGroups('example', 'project');
+  try {
+    await tracker.refreshReviewGroups('example', 'other');
+    assert.ok(tracker.snapshot().some(group => group.repo === 'other'));
+  } finally { release(null); await running; }
+});
+
+test('base に統合したレビュー記録を未実施として診断し、同じ再計算では照合を使い回す', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: {
+    'feat/open': { round: 1, dismissed: [], lastTriage: { round: 1, sha: 'a'.repeat(40), outcome: 'converged' } },
+  } }));
+  const reports = [];
+  let comparisons = 0;
+  const options = { baseAncestorCache: new Map(), observeReview: (_record, report) => reports.push(report),
+    execFileImpl: (_file, args, _options, callback) => {
+      if (args[2] === 'config') callback(null, 'remote.origin.url https://github.com/example/project.git\n');
+      else if (args[2] === 'rev-parse') callback(null, 'b'.repeat(40));
+      else if (args[2] === 'merge-base') { comparisons += 1; callback(null, ''); }
+      else callback(new Error('unexpected git call'));
+    } };
+  const pr = { url: 'https://github.com/example/project/pull/31', headRefName: 'feat/open',
+    baseRefName: 'main', headRefOid: 'c'.repeat(40) };
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await readCrossReviewState({ cwd: root, number: 31 }, pr, options), null);
+  }
+  assert.equal(comparisons, 1);
+  assert.ok(reports.every(report => report.failure === 'stale-record'));
+});
+
+test('base に含まれないか Git が照合できないレビュー記録は維持する', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: {
+    'feat/open': { round: 1, dismissed: [], lastReviewedSha: 'a'.repeat(40) },
+  } }));
+  for (const code of [1, 128, 'EPERM']) {
+    const review = await readCrossReviewState({ cwd: root, number: 31 }, {
+      url: 'https://github.com/example/project/pull/31', headRefName: 'feat/open',
+      baseRefName: 'main', headRefOid: 'c'.repeat(40),
+    }, { execFileImpl: (_file, args, _options, callback) => {
+      if (args[2] === 'config') callback(null, 'remote.origin.url https://github.com/example/project.git\n');
+      else if (args[2] === 'rev-parse') callback(null, 'b'.repeat(40));
+      else callback(Object.assign(new Error('cannot establish ancestry'), { code }));
+    } });
+    assert.equal(review.reviewedSha, 'a'.repeat(40));
+  }
+});
+
+test('--uncommitted のレビューで lastReviewedSha が base に残っていても、今の head の収束は記録として残す', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: {
+    'feat/open': { round: 2, dismissed: [], lastReviewedSha: 'a'.repeat(40),
+      lastTriage: { round: 2, sha: 'c'.repeat(40), outcome: 'converged' } },
+  } }));
+  const review = await readCrossReviewState({ cwd: root, number: 31 }, {
+    url: 'https://github.com/example/project/pull/31', headRefName: 'feat/open',
+    baseRefName: 'main', headRefOid: 'c'.repeat(40),
+  }, { execFileImpl: (_file, args, _options, callback) => {
+    if (args[2] === 'config') callback(null, 'remote.origin.url https://github.com/example/project.git\n');
+    else if (args[2] === 'rev-parse') callback(null, 'b'.repeat(40));
+    else if (args[2] === 'merge-base') callback(args[4] === 'a'.repeat(40) ? null : Object.assign(new Error('not ancestor'), { code: 1 }), '');
+    else callback(new Error('unexpected git call'));
+  } });
+  assert.deepEqual(review.triage, { round: 2, sha: 'c'.repeat(40), outcome: 'converged' });
+});
+
+for (const merged of [true, false]) {
+  test(`別 worktree のレビュー記録は統合済みなら未実施にし、rebase した同じ PR なら残す (統合済み: ${merged})`, async (t) => {
+    const root = await temporaryDirectory(t);
+    const git = (...args) => execFileSync('git', ['-C', root, ...args], {
+      encoding: 'utf8', windowsHide: true,
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(root, 'no-config') },
+    }).trim();
+    git('init', '-b', 'main');
+    git('config', 'user.name', 'Test');
+    git('config', 'user.email', 'test@example.invalid');
+    await installCrossReview(root);
+    git('add', 'tools/cross-review.js');
+    git('commit', '-m', 'initial');
+    git('checkout', '-b', 'old-review');
+    git('commit', '--allow-empty', '-m', 'reviewed');
+    const reviewedSha = git('rev-parse', 'HEAD');
+    git('checkout', 'main');
+    if (merged) git('merge', '--no-ff', 'old-review', '-m', 'merged');
+    else git('commit', '--allow-empty', '-m', 'base advanced');
+    git('remote', 'add', 'origin', 'https://github.com/example/project.git');
+    git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'main'));
+    const other = path.join(root, 'other');
+    git('worktree', 'add', '-b', 'feat/open', other, merged ? 'main' : 'old-review');
+    if (!merged) git('-C', other, 'rebase', '--force-rebase', 'main');
+    git('-C', other, 'commit', '--allow-empty', '-m', 'new head');
+    await fs.writeFile(path.join(other, '.cross-review-state.json'), JSON.stringify({ branches: {
+      'feat/open': { round: 1, dismissed: [], lastReviewedSha: reviewedSha },
+    } }));
+    const { tracker, github } = await trackerFixture(t, [31], root);
+    github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', git('-C', other, 'rev-parse', 'HEAD'))];
+    const reports = [];
+    tracker.diagnostics = { record: (...args) => reports.push(args) };
+    await tracker.refreshRepo('example', 'project');
+    const review = tracker.snapshot()[0].trees[0].crossReview;
+    if (merged) {
+      assert.equal(review, null);
+      assert.ok(reports.some(args => args[3]?.failure === 'stale-record'));
+    } else assert.equal(review.reviewedSha, reviewedSha);
+  });
+}
+
 test('どの GitHub の remote とも PR のリポジトリが一致しないとクロスレビュー状態を確認不能にする', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
@@ -2240,7 +2442,7 @@ test('登録の cwd とは別の worktree が PR のブランチをチェック�
   await tracker.refreshRepo('example', 'project');
 
   const [group] = tracker.snapshot();
-  assert.deepEqual(gitCalls, [
+  assert.deepEqual(gitCalls.filter(call => ['config', 'worktree'].includes(call[3])), [
     ['git', '-C', sessionRoot, 'config', '--get-regexp', '^remote\\..*\\.url$'],
     ['git', '-C', sessionRoot, 'worktree', 'list', '--porcelain'],
     ['git', '-C', reviewRoot, 'config', '--get-regexp', '^remote\\..*\\.url$'],
