@@ -2,7 +2,7 @@ const { planUpdateForTool } = require('../server/plan-updates');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { isHookSessionId } = require('../server/session-ids');
 const { sanitizeQuestions, sanitizeCodexQuestions, isQuestionTool, sanitizeDecisionResolution } = require('../server/events');
-const { codexAgentInvocations, effectiveRouteForSubagentStart } = require('./route');
+const { codexAgentInvocationDetails, effectiveRouteForSubagentStart } = require('./route');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const { TASK_OUTPUT_MISSING, codexOutputLines, taskOutputPath, persistedOutputPath, readTaskOutputFile } = require('../shared/task-output');
@@ -203,9 +203,38 @@ function isCodexAgent(word) {
   return /(?:^|[\\/])codex-agent(?:\.sh|\.cmd|\.ps1)?$/i.test(word);
 }
 
+// shellTokens は Bash の引用符の外でエスケープした空白で語を分ける。元のコマンドに「語 + 空白 + 次の語」がそのまま
+// 現れるときだけ、その空白はエスケープされていたので続けて値とみなす。引用符の中の末尾の \ は区切りではない。
+function continuesAfterEscapedSpace(word, nextWord, commandText) {
+  return Boolean(commandText) && nextWord !== undefined && /(?:^|[^\\])(?:\\\\)*\\$/.test(word) &&
+    commandText.includes(`${word} ${nextWord}`);
+}
+
+function withoutCodexAgentOptions(argumentsList, commandText = '') {
+  const remaining = [];
+  for (let index = 0; index < argumentsList.length; index += 1) {
+    const argument = argumentsList[index];
+    if (argument === '-C' || argument === '--effort') {
+      index += 1;
+      while (continuesAfterEscapedSpace(argumentsList[index] || '', argumentsList[index + 1], commandText)) index += 1;
+    } else if (!argument.startsWith('--effort=')) {
+      remaining.push(argument);
+    }
+  }
+  return remaining;
+}
+
 // 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
+// 末尾の \ を空白のエスケープと読むのは、その起動の語を Bash の規則で分けたとき(PowerShell の中の bash -c を含む)に限る。
+function codexAgentArgumentLists(command, toolName) {
+  const commandText = pickString(command).replace(/\\\r?\n/g, ' ');
+  return codexAgentInvocationDetails(commandText, isCodexAgent, launchCommandTexts, 0, toolName).map((invocation) => (
+    withoutCodexAgentOptions(invocation.argumentsList, invocation.toolName === 'PowerShell' ? '' : commandText)
+  ));
+}
+
 function extractCodexLaunchDefinition(command, toolName = 'Bash') {
-  for (const [argument = ''] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
+  for (const [argument = ''] of codexAgentArgumentLists(command, toolName)) {
     const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
     if (definition) return definition;
   }
@@ -213,7 +242,7 @@ function extractCodexLaunchDefinition(command, toolName = 'Bash') {
 }
 
 function extractCodexWaitRunId(command, toolName = 'Bash') {
-  for (const [argument, runId] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
+  for (const [argument, runId] of codexAgentArgumentLists(command, toolName)) {
     if (argument === '--wait' && runId) return runId.slice(0, 256);
   }
   return '';
@@ -277,8 +306,8 @@ function extractCodexReviewDefinition(command) {
   for (const match of commandText.matchAll(pattern)) {
     const commandStart = match.index + match[0].lastIndexOf(match[1]);
     const argumentsList = shellArguments(commandText.slice(commandStart + match[1].length));
-    // ヘルプを出すだけの起動と、Codex のラッパーを通らない起動は、Codex を動かさない。
-    if (['--no-codex-agent', '--help', '-h'].some((option) => argumentsList.includes(option))) continue;
+    // ヘルプを出すだけの起動は Codex を動かさない。--no-codex-agent は Codex を直接起動する。
+    if (['--help', '-h'].some((option) => argumentsList.includes(option))) continue;
 
     const fix = /review:codex:fix$/i.test(match[1]) || argumentsList.includes('--fix');
     return fix ? 'codex-subagent' : 'codex-review';

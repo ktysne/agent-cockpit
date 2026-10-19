@@ -550,10 +550,10 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - PostToolUse の `resolvedModel` は、その行のモデルに反映する。
 - Agent 呼び出しの説明は、PostToolUse で Agent の実行中ツールを消す前に、対象の行へ書く。SubagentStart の時点の結び付けは到着順で誤ることがあるので、既に説明があっても呼び出し自身の説明で上書きする。
 - Claude のモデル名は、画面では `claude-sonnet-5-5` を `Sonnet 5.5` のように読みやすく表示する。
-- Bash と PowerShell の PreToolUse では、コマンドの全文から、経路の判定(`route.js`)と同じ規則で `codex-agent.sh <定義名>` の起動を探す。区切り(`;`、`&&`、`||`、`|`、改行)ごとに、括弧と、先頭の代入、`env`、`timeout`、`nohup` などの前置きを外し、`bash` などのシェルの引数と `-c` の文字列もたどる。その前に、引用符の外のコメントと、引用符の外の `<<` から後(ヒアドキュメントの本文)を外し、コマンド置換 `$( )` の中身は二重引用符の中にあっても別のコマンドとして探す。シェルの `-c` の文字列にも同じ前処理を当てる。経路の判定はヒアドキュメントで `bash` に渡す起動も拒むため、この前処理を持たない。引数や文字列の中の `codex-agent.sh`(`git diff -- tools/codex-agent.sh` など)と、`--wait` などのオプションの呼び出しは起動として扱わない。要約は 80 字で切られ、引数に現れたパスと起動を区別できないためである。
+- Bash と PowerShell の PreToolUse では、コマンドの全文から、経路の判定(`route.js`)と同じ規則で `codex-agent.sh <定義名>` の起動を探す。区切り(`;`、`&&`、`||`、`|`、改行)ごとに、括弧と、先頭の代入、`env`、`timeout`、`nohup` などの前置きを外し、`bash` などのシェルの引数と `-c` の文字列もたどる。その前に、引用符の外のコメントと、引用符の外の `<<` から後(ヒアドキュメントの本文)を外し、コマンド置換 `$( )` の中身は二重引用符の中にあっても別のコマンドとして探す。シェルの `-c` の文字列にも同じ前処理を当てる。経路の判定はヒアドキュメントで `bash` に渡す起動も拒むため、この前処理を持たない。引数や文字列の中の `codex-agent.sh`(`git diff -- tools/codex-agent.sh` など)と、定義名より前に `--new-prompt`、`--wait`、`--header-of` がある呼び出しは起動として扱わない。`-C <パス>`、`--effort <値>`、`--effort=<値>` が定義名より前にあれば、各オプションと値を除いた先頭の語を定義名にする。要約は 80 字で切られ、引数に現れたパスと起動を区別できないためである。
 - 起動を見つけたら、Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)を先に、そこが `~/.claude` と異なる場合は後者も対象にして `gpt-agents/<定義名>.md` を探し、先に読めた定義の frontmatter から `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
 - Bash と PowerShell の PreToolUse では、要約の切り詰め前にコマンド位置にあるクロスレビュー起動も Codex 呼び出しとして扱う。
-- `npm run review:codex` と `node tools/cross-review.js codex` は `codex-review`、`--fix` 付きと `npm run review:codex:fix` は `codex-subagent` の定義を使い、`--no-codex-agent` 付きは対象にしない。
+- `npm run review:codex` と `node tools/cross-review.js codex` は `codex-review`、`--fix` 付きと `npm run review:codex:fix` は `codex-subagent` の定義を使う。`--no-codex-agent` 付きも同じ規則で定義名を選ぶ。
 - `codex-agent.sh` の起動の PostToolUse は、結果行を受けたときに終了とし、結果行が無ければ背景で動いているものとして扱う。
 - 起動の PostToolUseFailure は、結果行が無い場合、`isInterrupt` が真なら終了未確認にし、それ以外は終了にする。Claude のフック入力の `is_interrupt === true` を `isInterrupt` として受け、保存後の作り直しでも保持する。合成の Interrupt との順序や error の文言には依存しない。別の出力で結果を受けた行は、遅れて届いた中断で終了未確認に戻さない。
 - 出力に結果行が複数あれば最後の行を使い、監査行と run 行は最初の行を使う。bridge は結果行を出力の最後に出し、それより前の結果行は最終報告に引用されたものでありうるためである。

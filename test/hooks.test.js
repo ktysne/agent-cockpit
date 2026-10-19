@@ -32,6 +32,46 @@ test('起動定義は Bash と PowerShell の開始イベントで定義名の�
   }
 });
 
+test('Codex ラッパーの -C と --effort の値を除いて定義名を検出する', () => {
+  const commands = [
+    ['bash ~/.claude/tools/codex-agent.sh -C "D:/work" impl-light < "req.md"', 'impl-light'],
+    ['bash ~/.claude/tools/codex-agent.sh --effort high impl-hard', 'impl-hard'],
+    ['bash ~/.claude/tools/codex-agent.sh --effort=high impl-standard', 'impl-standard'],
+    ['bash ~/.claude/tools/codex-agent.sh -C "D:/work" --effort max impl-hard', 'impl-hard'],
+    ['bash ~/.claude/tools/codex-agent.sh -C D:/work\\ tree\\ dir impl-hard', 'impl-hard'],
+    ['bash ~/.claude/tools/codex-agent.sh -C D:/work\\\\ impl-light', 'impl-light'],
+    ["bash ~/.claude/tools/codex-agent.sh -C 'D:\\work\\' impl-hard", 'impl-hard'],
+    ['bash ~/.claude/tools/codex-agent.sh -C D:\\work\\ impl-hard', 'impl-hard', 'PowerShell'],
+    ["bash -lc 'bash ~/.claude/tools/codex-agent.sh -C /mnt/d/work\\ tree impl-hard'", 'impl-hard', 'PowerShell'],
+  ];
+  for (const [command, definition, toolName = 'Bash'] of commands) {
+    const event = makeHookEvent({ session_id: 'codex-launch-options', hook_event_name: 'PreToolUse',
+      tool_name: toolName, tool_use_id: command, tool_input: { command } });
+    assert.equal(event.codexLaunchDefinition, definition, command);
+    assert.equal(sanitizeEvent(event).codexDefinition, definition, command);
+  }
+});
+
+test('Codex ラッパーの --new-prompt、--wait、--header-of は起動定義として検出しない', () => {
+  for (const command of [
+    'bash ~/.claude/tools/codex-agent.sh -C "D:/work" --new-prompt',
+    'bash ~/.claude/tools/codex-agent.sh --effort=high --wait run-id',
+    'bash ~/.claude/tools/codex-agent.sh -C "D:/work" --header-of value',
+  ]) {
+    const event = makeHookEvent({ session_id: 'codex-launch-options', hook_event_name: 'PreToolUse',
+      tool_name: 'Bash', tool_use_id: command, tool_input: { command } });
+    assert.equal(Object.hasOwn(event, 'codexLaunchDefinition'), false, command);
+  }
+});
+
+test('PowerShell の中の bash -c は Bash の規則でエスケープした空白を読み、--wait の実行 ID を拾う', () => {
+  const command = "bash -lc 'bash ~/.claude/tools/codex-agent.sh -C /mnt/d/work\\ tree --wait impl-hard-20261019-110000-7'";
+  const event = makeHookEvent({ session_id: 'codex-launch-options', hook_event_name: 'PreToolUse',
+    tool_name: 'PowerShell', tool_use_id: command, tool_input: { command } });
+  assert.equal(Object.hasOwn(event, 'codexLaunchDefinition'), false);
+  assert.equal(event.codexWaitRunId, 'impl-hard-20261019-110000-7');
+});
+
 test('PowerShell の開始イベントから Codex 起動、待機、レビューの定義を抽出する', () => {
   const runId = 'impl-standard-20261019-110000-7';
   const cases = [
@@ -558,6 +598,7 @@ test('前置きとシェルの文字列内の --wait を起動と同じ規則で
   const runId = 'impl-hard-20261019-031058-1234';
   for (const command of [
     `timeout 600 bash ~/.claude/tools/codex-agent.sh --wait ${runId}`,
+    `bash ~/.claude/tools/codex-agent.sh -C "D:/work" --wait ${runId}`,
     `env A=1 bash ~/.claude/tools/codex-agent.sh --wait ${runId}`,
     `A=1 bash ~/.claude/tools/codex-agent.sh --wait ${runId}`,
     `bash -lc 'bash ~/.claude/tools/codex-agent.sh --wait ${runId}'`,
@@ -625,19 +666,14 @@ test('クロスレビューの fix 起動と node 起動から定義名を選ぶ
   }
 });
 
-test('文字列やヒアドキュメントのクロスレビュー手順と、--no-codex-agent 付きとヘルプの起動は拾わない', () => {
+test('文字列やヒアドキュメントのクロスレビュー手順とヘルプ起動は拾わない', () => {
   const commands = [
     `cat <<'EOF'\nnpm run review:codex\nEOF`,
     'echo "npm run review:codex"',
     "git commit -m 'node tools/cross-review.js codex --fix'",
-    'npm run review:codex -- --no-codex-agent',
-    'node tools/cross-review.js codex --no-codex-agent',
-    "node tools/cross-review.js codex '--no-codex-agent'",
-    'node tools/cross-review.js codex 2>&1 --no-codex-agent',
     'node tools/cross-review.js codex --help',
     'npm run review:codex -- -h',
     'node tools/cross-review.js codex > "review output.log" --help',
-    'node tools/cross-review.js codex > "review output.log" --no-codex-agent',
   ];
   for (const command of commands) {
     const event = makeHookEvent({
@@ -645,6 +681,24 @@ test('文字列やヒアドキュメントのクロスレビュー手順と、--
       tool_input: { command },
     });
     assert.equal(Object.hasOwn(event, 'codexReviewDefinition'), false, command);
+  }
+});
+
+test('--no-codex-agent 付きのクロスレビューも定義名を選ぶ', () => {
+  const commands = [
+    ['npm run review:codex -- --no-codex-agent', 'codex-review'],
+    ['node tools/cross-review.js codex --no-codex-agent', 'codex-review'],
+    ["node tools/cross-review.js codex '--no-codex-agent'", 'codex-review'],
+    ['node tools/cross-review.js codex 2>&1 --no-codex-agent', 'codex-review'],
+    ['npm run review:codex:fix -- --no-codex-agent', 'codex-subagent'],
+    ['node tools/cross-review.js codex --no-codex-agent --fix', 'codex-subagent'],
+  ];
+  for (const [command, definition] of commands) {
+    const event = makeHookEvent({
+      session_id: 'codex-review-hook', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: command,
+      tool_input: { command },
+    });
+    assert.equal(event.codexReviewDefinition, definition, command);
   }
 });
 
