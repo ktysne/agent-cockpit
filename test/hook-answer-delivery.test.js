@@ -467,3 +467,22 @@ for (const kind of ['タスク未登録', 'サブエージェント報告', '全
     assert.equal((await fetch('acknowledged')).json.hookOutput, null);
   });
 }
+
+test('催促より前の時刻の PostToolUse が ACK の前に届いても、ACK で催促を配信済みにする', async (t) => {
+  const c = await fixture(t, { answerNote: null, notify: false });
+  const now = Date.now();
+  const sendEvent = async (hook_event_name, hookAt, values = {}) => {
+    const response = await request(c.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(c.info.secret),
+      body: JSON.stringify({ session_id: c.sessionId, hook_event_name, hookAt, ...values }) });
+    assert.equal(response.status, 202);
+  };
+  await sendEvent('UserPromptSubmit', now - 650_000);
+  await sendEvent('PreToolUse', now - 2, { tool_name: 'Agent', tool_use_id: 'agent-call' });
+  const fetch = (id) => postHookRequest(c, { session_id: c.sessionId, action: 'post-tool-batch', event_name: 'PostToolBatch', id });
+  const reminder = await fetch('reminder');
+  assert.match(reminder.json.hookOutput.hookSpecificOutput.additionalContext, /タスクが登録されていない/);
+  await sendEvent('PostToolUse', now - 1, { tool_name: 'Agent', tool_use_id: 'agent-call' });
+  await postHookRequest(c, { session_id: c.sessionId, action: 'delivery-ack', id: 'ack', delivery_id: reminder.json.deliveryId });
+  await sendEvent('PreToolUse', Date.now() + 60_000, { tool_name: 'Read' });
+  assert.equal((await fetch('after-ack')).json.hookOutput, null);
+});

@@ -121,6 +121,7 @@ class TaskNudges {
     if (session.lastNudgeAt !== null && now - session.lastNudgeAt < TASK_REMINDER_INTERVAL_MS) return null;
 
     session.pendingNudge = {
+      createdAt: now,
       lastNudgeAt: now,
       nudgedSubagentStopAt: subagentReportIsStale ? session.lastSubagentStopAt : session.nudgedSubagentStopAt,
       staleTasksNudgedTurnAt: staleTasksReminderIsDue && !subagentReportIsStale && !noTasksReminderIsDue
@@ -136,12 +137,13 @@ class TaskNudges {
   acknowledgeReminder(sessionId, pendingNudge) {
     const session = this.sessions.get(sessionId);
     if (!pendingNudge || session?.pendingNudge !== pendingNudge) return;
-    Object.assign(session, pendingNudge, { lastNudgeAt: this.now(), pendingNudge: null });
+    const { createdAt, ...delivered } = pendingNudge;
+    Object.assign(session, delivered, { lastNudgeAt: this.now(), pendingNudge: null });
   }
 
-  cancelReminder(sessionId) {
+  cancelReminder(sessionId, occurredAt = Infinity) {
     const session = this.sessions.get(sessionId);
-    if (session) session.pendingNudge = null;
+    if (session?.pendingNudge && session.pendingNudge.createdAt < occurredAt) session.pendingNudge = null;
   }
 
   tasksFor(sessionId) {

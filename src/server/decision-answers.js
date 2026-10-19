@@ -434,9 +434,10 @@ class DecisionAnswerDelivery {
       : []);
   }
 
-  cancelHookReminders(sessionId) {
-    this.pendingHookReminders.delete(sessionId);
-    this.taskNudges.cancelReminder(sessionId);
+  // 非同期のフックのイベントは配信した区切りより後に届くことがあるので、催促を組み立てた後に起きたイベントでだけ取り消す。
+  cancelHookReminders(sessionId, occurredAt = Infinity) {
+    if (this.pendingHookReminders.get(sessionId)?.createdAt < occurredAt) this.pendingHookReminders.delete(sessionId);
+    this.taskNudges.cancelReminder(sessionId, occurredAt);
   }
 
   recordHookDelivery({ sessionId, action, requestId, response, requestGeneration = null, generation = null, decisionId = null }) {
@@ -592,6 +593,7 @@ class DecisionAnswerDelivery {
     const targets = candidates.filter(({ owner, repo, number, headRefOid }) => !seen.has(`${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`));
     if (!targets.length) return null;
     this.pendingHookReminders.set(sessionId, {
+      createdAt: this.now(),
       reviewHeads: targets.map(({ owner, repo, number, headRefOid }) =>
         `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`),
     });
@@ -630,7 +632,7 @@ class DecisionAnswerDelivery {
     const key = sessionId;
     const previous = this.lastLifecycleAt.get(key) ?? -1;
     if (hookAt < previous) return;
-    this.cancelHookReminders(sessionId);
+    this.cancelHookReminders(sessionId, hookAt);
     this.lastLifecycleAt.set(key, hookAt);
     if (eventName === 'UserPromptSubmit') {
       this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
@@ -671,7 +673,7 @@ class DecisionAnswerDelivery {
       !event.agent_id && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName) &&
       event.hookAt > (this.lastLifecycleAt.get(sessionId) ?? -1)
     ) {
-      this.cancelHookReminders(sessionId);
+      this.cancelHookReminders(sessionId, event.hookAt);
       this.lastLifecycleAt.set(sessionId, event.hookAt);
       this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
       this.signal(sessionId);
