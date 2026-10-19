@@ -784,16 +784,22 @@ test('種類別とプロダクト別のセクションは既定の欄順に従�
     const kindSections = JSON.parse(JSON.stringify(
       context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label),
     ));
+    const kindSectionsWhileLoading = JSON.parse(JSON.stringify(
+      context.renderKindSections([{ pullRequestGroups: [] }], true, 0, true).map(({ label }) => label),
+    ));
     const session = { session_id: 'session-1', status: 'busy', decisions: [], tasks: [] };
     const sessionBlock = context.sessionBlock({ sessions: [session] }, session, false);
     const body = sessionBlock.children[0];
     const sessionParts = body.childNodes.map((node) => node.textContent || node.marker || (node.children[0]?.marker === 'main' ? 'now-content' : ''));
-    return { kindSections, sessionParts };
+    return { kindSections, kindSectionsWhileLoading, sessionParts };
   }
 
   const defaultResult = renderWithOrder(['sinceSeen', 'judgment', 'prs', 'tasks', 'now']);
   assert.deepEqual(defaultResult.kindSections, [
     '前回見てから', 'あなたの判断が必要なこと', 'プルリクエスト', 'タスクと完了条件', '今やっていること',
+  ]);
+  assert.deepEqual(defaultResult.kindSectionsWhileLoading, [
+    '前回見てから', 'あなたの判断が必要なこと', 'タスクと完了条件', '今やっていること',
   ]);
   assert.deepEqual(defaultResult.sessionParts, ['session-1', 'あなたの判断が必要なこと', 'permission', 'decision', 'task', '今やっていること', 'now-content', 'agent']);
 
@@ -936,8 +942,8 @@ test('PRフィルターの切り替えは保存し、両表示モードのPR欄�
   assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.hidden)), []);
   assert.deepEqual(JSON.parse(JSON.stringify(patches.map((patch) => patch.hidden))), [['prs'], []]);
   assert.equal(renders, 2);
-  assert.match(productSection, /if \(isFilterShown\('prs'\)\)/);
-  assert.match(kindSections, /if \(isFilterShown\('prs'\)\)/);
+  assert.match(productSection, /if \(isFilterShown\('prs'\) &&/);
+  assert.match(kindSections, /if \(isFilterShown\('prs'\) &&/);
 });
 
 test('サブエージェントを隠したときに空の案内を出さない', () => {

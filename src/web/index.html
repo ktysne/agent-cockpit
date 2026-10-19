@@ -2912,6 +2912,7 @@ function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
       ...product,
       sessions: [...product.sessions].sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left)),
       pullRequestGroups: visiblePullRequestGroups(product.pullRequestGroups || []),
+      pullRequestsLoading: (product.pullRequestGroups || []).some((group) => group.loading),
     }))
     .sort((left, right) => {
       const leftPinned = displayPreferences.pinned.includes(left.key);
@@ -3850,7 +3851,8 @@ function productSection(product, index, products, pinnedCount, showOriginBands =
   const sessionOrderIndex = sectionOrder.indexOf('sessions');
   const prsBeforeSessions = sectionOrder.indexOf('prs') < sessionOrderIndex;
   const pullRequestContent = [];
-  if (isFilterShown('prs')) {
+  // 取得中の PR 群が残る間は、PR が無いと断定しないよう欄ごと出さない。
+  if (isFilterShown('prs') && (pullRequestGroups.length || !product.pullRequestsLoading)) {
     const openCount = pullRequestOpenCount(pullRequestGroups);
     const prsHeading = element('h3', 'sub', 'プルリクエスト');
     prsHeading.append(element('span', 'count', `(${openCount} 件)`));
@@ -4014,7 +4016,7 @@ function kindEndedAgentCount(references) {
   return references.reduce((count, reference) => count + reference.session.agents.filter(isEndedAgent).length, 0);
 }
 
-function renderKindSections(products, showOriginBands = true, finishedPrCount = 0) {
+function renderKindSections(products, showOriginBands = true, finishedPrCount = 0, pullRequestsLoading = false) {
   const references = sessionReferences(products);
   const waitingItems = [];
   const endedDecisions = element('div', 'kind-ended');
@@ -4104,7 +4106,7 @@ function renderKindSections(products, showOriginBands = true, finishedPrCount = 
   };
   const pullRequestGroups = products.flatMap((product) => visiblePullRequestGroups(product.pullRequestGroups)
     .map((group) => ({ product, group })));
-  if (isFilterShown('prs')) {
+  if (isFilterShown('prs') && (pullRequestGroups.length || !pullRequestsLoading)) {
     const pullRequests = element('div', 'body');
     for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true, showOriginBands);
     const controls = element('div', 'kind-section-controls');
@@ -4281,7 +4283,8 @@ function render(state) {
       : null;
     root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount, showOriginBands, markAllSeenProductKey)));
   } else {
-    root.replaceChildren(...renderKindSections(products, showOriginBands, hiddenFinished.pullRequests));
+    root.replaceChildren(...renderKindSections(products, showOriginBands, hiddenFinished.pullRequests,
+      pullRequestGroups.some((group) => group.loading)));
   }
 
   if (focusData) restoreFocus();

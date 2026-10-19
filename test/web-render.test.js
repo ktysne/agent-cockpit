@@ -2317,6 +2317,9 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
     values.push(textOf(context.productSection(product, 0, [product], 0)).match(/オープンの PR はありません/g)?.length || 0);
   }
 
+  const loadingProduct = { ...product, pullRequestsLoading: true };
+  assert.doesNotMatch(textOf(context.productSection(loadingProduct, 0, [loadingProduct], 0)), /プルリクエスト|オープンの PR はありません/);
+
   const mockPrBlock = functionSource(fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8'), 'prBlock');
   assert.deepEqual(values, [1, 1]);
   assert.match(mockPrBlock, /const empty = !roots\.length[\s\S]*?オープンの PR はありません/);
