@@ -632,8 +632,8 @@ async function startServer(options = {}) {
         const ordered = [...notifications].sort(([a], [b]) => cache.failed.has(a) - cache.failed.has(b));
         for (const [taskId, notification] of ordered) {
           if (!['completed', 'failed', 'killed', 'stopped'].includes(notification.status)) continue;
-          if (state.sessionView(sessionId)?.backgrounds.some((item) => item.taskId === taskId
-            && !(Date.parse(notification.recordedAt) < Date.parse(item.startedAt)))) {
+          // task-id は起動ごとに一意なので時刻は比べない。フックの到着順で開始時刻が遅れて記録され、短いタスクの通知を拒むため。
+          if (state.sessionView(sessionId)?.backgrounds.some((item) => item.taskId === taskId)) {
             state.recordBackgroundTaskEnd(sessionId, { taskId, status: notification.status });
           }
           const candidates = () => state.backgroundCodexAgents(sessionId).filter(agent =>

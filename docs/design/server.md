@@ -234,6 +234,7 @@ sourceState が dirty の場合は起動時に未コミットの変更があっ�
   サブエージェントと provider が `codex` のセッションのバックグラウンドタスクも対象外にする。
 - `UserPromptSubmit` の `backgroundTaskEnds` と、記録ファイルを読み直して作る `BackgroundTaskEnd` のどちらでも、一致する task-id の行を消す。
   終了状態は `completed`、`failed`、`killed`、`stopped` を扱う。
+  task-id は起動ごとに一意なので、通知の時刻と行の開始時刻は比べない。フックの到着順によっては開始時刻が実際より遅れて記録され、短いタスクの通知を拒むためである。
   稼働中のタスクがある間は、メインが待機中でも記録ファイルの完了通知を読む。
   `TaskStop` の成功時の `stoppedTaskId` が一致したときと、`SessionEnd` でも行を消す。
 - 「終了にする」は既存の `/api/closed-agents` と `closedAgents` の記録を使い、`background:<taskId>` を行の識別子とする。
