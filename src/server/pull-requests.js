@@ -1677,6 +1677,7 @@ class PullRequestTracker {
           reservation,
           registrations: result.tracked.registrations,
           stackedPullRequests,
+          defaultBranch,
         });
       } else if (closedState === 'closed' && result.tracked.record.state !== 'closed') {
         const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);

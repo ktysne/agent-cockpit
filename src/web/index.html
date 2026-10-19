@@ -514,7 +514,7 @@ h3.sub .count { font-weight: normal; }
       <label for="settings-pull-default-branch">既定ブランチへのマージ後、既定ブランチの作業ツリーを最新にする</label>
       <input id="settings-pull-default-branch" name="pullDefaultBranchAfterMerge" type="checkbox" aria-describedby="settings-pull-default-branch-note">
     </div>
-    <p class="meta" id="settings-pull-default-branch-note">オンでは、既定ブランチへのマージを検出したとき、そのブランチをチェックアウトしているローカルの作業ツリーで git pull --ff-only を実行する。未コミットの変更がある作業ツリーは更新せず、セッションへ知らせる。</p>
+    <p class="meta" id="settings-pull-default-branch-note">オンでは、既定ブランチへのマージを検出したとき、そのブランチをチェックアウトしているローカルの作業ツリーを fast-forward で更新する。追跡しているファイルに未コミットの変更がある作業ツリーは更新せず、セッションへ知らせる。</p>
     <div class="settings-theme-row">
       <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
       <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">

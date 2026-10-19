@@ -835,19 +835,29 @@ class PullRequestMergeManager {
     if (lines.length) this.answerDelivery?.notifySessions(sessionIds, lines.join('\n'));
   }
 
+  // 追跡していないファイルは見ない。衝突するときは merge --ff-only が失敗する。
+  async localWorktreeState(root, defaultBranch) {
+    const branch = await this.runLocalGit(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+    if (branch.trim() !== defaultBranch) return 'switched';
+    const status = await this.runLocalGit(root, ['status', '--porcelain', '--untracked-files=no']);
+    return status.trim() ? 'dirty' : 'clean';
+  }
+
   async updateDefaultBranchWorktree(root, owner, repo, defaultBranch) {
     try {
       // 探索後に開発者が別のブランチへ切り替えた場合は、そのブランチを更新しない。
-      const branch = await this.runLocalGit(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
-      if (branch.trim() !== defaultBranch) return 'switched';
-      const status = await this.runLocalGit(root, ['status', '--porcelain', '--untracked-files=no']);
-      if (status.trim()) return 'dirty';
+      const before = await this.localWorktreeState(root, defaultBranch);
+      if (before !== 'clean') return before;
       const remoteUrls = await this.runLocalGit(root, ['config', '--get-regexp', '^remote\\..*\\.url$'])
         .catch((error) => { if (error.code === 1) return ''; throw error; });
       const remotes = gitRemotes(remoteUrls);
       const remote = remotes.find((item) => item.owner?.toLowerCase() === owner.toLowerCase() && item.repo?.toLowerCase() === repo.toLowerCase());
       if (!remote || !remote.name || remote.name.startsWith('-')) return 'no-remote';
-      await this.runLocalGit(root, ['pull', '--ff-only', '--', remote.name, defaultBranch]);
+      // 取得を待つ間に切り替えや変更が起きることがあるので、取り込む直前に確かめ直す。
+      await this.runLocalGit(root, ['fetch', '--', remote.name, defaultBranch]);
+      const after = await this.localWorktreeState(root, defaultBranch);
+      if (after !== 'clean') return after;
+      await this.runLocalGit(root, ['merge', '--ff-only', 'FETCH_HEAD']);
       return 'updated';
     } catch {
       return 'failed';
@@ -872,7 +882,8 @@ class PullRequestMergeManager {
     this.state.clearPullRequestMergeIntent(owner, repo, pullRequest.number);
 
     const repositoryState = this.tracker.repositoryState(owner, repo);
-    const defaultBranch = confirmedIntent?.defaultBranch || repositoryState?.defaultBranch;
+    // 初回の取得では repositoryState がまだ無いので、取得した event.defaultBranch で補う。
+    const defaultBranch = confirmedIntent?.defaultBranch || repositoryState?.defaultBranch || event.defaultBranch;
     const synchronization = pullRequest.headRefName === defaultBranch;
     const targetBranch = validBranchName(pullRequest.baseRefName) ? pullRequest.baseRefName : defaultBranch;
     const savedStackedByNumber = new Map([
