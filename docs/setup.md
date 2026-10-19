@@ -456,6 +456,9 @@ approval_mode = "approve"
 
 [mcp_servers.agent-cockpit.tools.cockpit_skip_review]
 approval_mode = "approve"
+
+[mcp_servers.agent-cockpit.tools.cockpit_defer_review]
+approval_mode = "approve"
 ```
 
 各ツールの `approval_mode = "approve"` は、呼び出しのたびに許可を求めないための設定です。
@@ -524,3 +527,18 @@ Codex 対応より前のバージョンから更新したときは、Codex の�
 - 常駐サーバーのログは `AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `server.log` にあります。
 - 常駐サーバーを手で起動するときは、リポジトリのルートで `npm start` を実行します。終了は `Ctrl+C` です。
 - `~/.claude/sessions/*.json` は Claude Code の公開仕様ではありません。Claude Code のバージョンによって読めなくても、フックから組み立てた表示は動きます。ただし、パターン D のクロスレビューの段は、そのリポジトリの PR を登録するか、そのリポジトリで Codex のセッションを開くまで出ません。
+
+### PR のレビューを省略または保留するとき
+
+現在の head の記録が無い PR はカードに次の操作を表示し、Stop でも記録を促します。
+古い head のレビューだけがある場合も対象です。
+配信への ACK は、レビューの記録を完了したことにはなりません。
+新しい入力の後か最後の配信から 30 分後の Stop で再び促し、同じセッションと head で 3 回までにします。
+上限後も未記録の案内はカードに残ります。
+省略するなら `cockpit_skip_review` に owner、repo、number、現在の head SHA(headRefOid)、理由(reason)を渡します。
+保留するなら `cockpit_defer_review` に同じ項目と次の作業(next)を渡します。
+登録したセッションからだけ記録でき、サーバーが最新の head を照合します。
+ツールが成功を返したことを確かめてから完了報告してください。
+失敗時は未記録であることと理由を完了報告に書いてください。
+保留は理由と次の作業を表示し、レビューを条件にしたマージを待たせます。
+不要記録と保留は後からの記録だけが有効で、head が変わると無効になります。

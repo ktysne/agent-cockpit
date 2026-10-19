@@ -6,6 +6,8 @@ const { TaskNudges } = require('./task-nudges');
 const ANSWER_WAIT_MS = 5 * 60_000;
 const MAX_LONG_POLL_MS = 25_000;
 const REVIEW_REMINDER_WAIT_MS = 3_000;
+const REVIEW_REMINDER_REPEAT_MS = 30 * 60_000;
+const MAX_REVIEW_REMINDERS_PER_HEAD = 3;
 const MAX_ASK_POLL_GAP_MS = 30_000;
 const HOOK_DELIVERY_TTL_MS = 10 * 60_000;
 const MAX_HOOK_DELIVERY_RECORDS_PER_SESSION = 128;
@@ -155,6 +157,7 @@ class DecisionAnswerDelivery {
     this.reviewReminderWaitMs = reviewReminderWaitMs;
     this.stopReviewReminders = new Map();
     this.remindedReviewHeads = new Map();
+    this.reviewPromptVersions = new Map();
     this.pendingHookReminders = new Map();
     this.hookDeliveryReminders = new WeakMap();
     this.away = away;
@@ -512,8 +515,12 @@ class DecisionAnswerDelivery {
     }
     const reminders = this.hookDeliveryReminders.get(record);
     if (reminders?.review && this.pendingHookReminders.get(sessionId) === reminders.review) {
-      const seen = this.remindedReviewHeads.get(sessionId) || new Set();
-      for (const head of reminders.review.reviewHeads) seen.add(head);
+      const seen = this.remindedReviewHeads.get(sessionId) || new Map();
+      for (const head of reminders.review.reviewHeads) {
+        const previous = seen.get(head);
+        seen.set(head, { count: (previous?.count || 0) + 1, deliveredAt: reminders.review.createdAt,
+          promptVersion: reminders.review.promptVersion });
+      }
       this.remindedReviewHeads.set(sessionId, seen);
       this.pendingHookReminders.delete(sessionId);
     }
@@ -589,11 +596,17 @@ class DecisionAnswerDelivery {
     const candidates = await pending.candidates;
     if (!candidates?.length || this.closed || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation) return null;
     if (this.state.decisionsFor(sessionId).some((decision) => decision.state === 'waiting')) return null;
-    const seen = this.remindedReviewHeads.get(sessionId) || new Set();
-    const targets = candidates.filter(({ owner, repo, number, headRefOid }) => !seen.has(`${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`));
+    const seen = this.remindedReviewHeads.get(sessionId) || new Map();
+    const promptVersion = this.reviewPromptVersions.get(sessionId) || 0;
+    const targets = candidates.filter(({ owner, repo, number, headRefOid }) => {
+      const previous = seen.get(`${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`);
+      return !previous || (previous.count < MAX_REVIEW_REMINDERS_PER_HEAD &&
+        (promptVersion > previous.promptVersion || this.now() - previous.deliveredAt >= REVIEW_REMINDER_REPEAT_MS));
+    });
     if (!targets.length) return null;
     this.pendingHookReminders.set(sessionId, {
       createdAt: this.now(),
+      promptVersion,
       reviewHeads: targets.map(({ owner, repo, number, headRefOid }) =>
         `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`),
     });
@@ -601,9 +614,9 @@ class DecisionAnswerDelivery {
       this.diagnostics?.record('info', 'merge', 'review.reminder', { repository: `${owner}/${repo}`, number, session: sessionId.slice(0, 8) });
     }
     return [
-      '次の PR には、クロスレビューの記録もレビュー不要の記録もありません:',
+      '次の PR の現在の head には、クロスレビューの結論も、レビュー不要や保留の記録もありません(古い head の記録だけがある場合も含みます):',
       ...targets.map(({ owner, repo, number }) => `PR #${number} (${owner}/${repo})。`),
-      'ダッシュボードではレビュー未実施と表示され、レビューを条件にしたマージの対象になりません。レビューを省略した場合は、PR の現在の head SHA を確かめ、`cockpit_skip_review` に理由と一緒に渡して記録してください。これからレビューする場合は、対応は不要です。',
+      'クロスレビューを実施するか、省略するなら `cockpit_skip_review` に現在の head SHA と理由を渡して記録してください。保留するなら `cockpit_defer_review` に現在の head SHA、理由、次の作業(next)を渡してください。ツールが成功を返したことを確かめてから完了報告してください。失敗したら完了報告に未記録であることと理由を書いてください。保留はレビューを条件にしたマージの対象になりません。',
       SESSION_NOTIFICATION_REPLY_LANGUAGE,
     ].join('\n');
   }
@@ -635,6 +648,7 @@ class DecisionAnswerDelivery {
     this.cancelHookReminders(sessionId, hookAt);
     this.lastLifecycleAt.set(key, hookAt);
     if (eventName === 'UserPromptSubmit') {
+      this.reviewPromptVersions.set(sessionId, (this.reviewPromptVersions.get(sessionId) || 0) + 1);
       this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
     } else if (eventName === 'SessionEnd') {
       this.endedSessions.add(sessionId);
@@ -647,6 +661,7 @@ class DecisionAnswerDelivery {
     this.taskNudges.sessionEnded(sessionId);
     this.stopReviewReminders.delete(sessionId);
     this.remindedReviewHeads.delete(sessionId);
+    this.reviewPromptVersions.delete(sessionId);
     this.handleLifecycleEvent(sessionId, 'SessionEnd', `SessionEnd:${endedAt}`, endedAt);
     this.clearSessionAskWaits(sessionId);
     // 待ちの印が残ると、再開後に送った回答が通常の配信経路から外れたままになる。

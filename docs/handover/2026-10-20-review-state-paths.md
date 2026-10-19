@@ -32,10 +32,10 @@ ai-cross-review の正本のスキルは変えない。変える必要が出た�
 
 | 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-20 に確認) |
 |---|---|---|---|---|---|---|
-| 1 | agent-cockpit #657 worktree 間の記録の競合 | `src/server/pull-requests.js`、`src/server/pull-request-merge.js`、`src/web/index.html`、`mock/index.html` | hard | `claude/fix-657-review-conflict` | main | 未着手 |
-| 2 | agent-cockpit #656 レビュー不要の記録の未完了 | `src/server/decision-answers.js`、`src/server/pull-requests.js`、`src/mcp/server.js`、`skills/agent-cockpit/SKILL.md` | hard | `claude/fix-656-review-pending` | 1 | 未着手 |
-| 3 | agent-cockpit #658 シェルの解析の不一致 | `src/hooks/event.js`、`src/hooks/route.js`、`src/server/pull-request-utils.js` | hard | `claude/fix-658-shell-commands` | main | 未着手 |
-| 4 | claude-codex-bridge #164 stderr を保持する子孫で終了を待ち続ける | `tools/codex-agent.sh` | hard | `fix/issue-164-stderr-holder` | main | 未着手 |
+| 1 | agent-cockpit #657 worktree 間の記録の競合 | `src/server/pull-requests.js`、`src/server/pull-request-merge.js`、`src/web/index.html`、`mock/index.html` | hard | `claude/fix-657-review-conflict` | main | PR #659。1 往復で収束 |
+| 2 | agent-cockpit #656 レビュー不要の記録の未完了 | `src/server/decision-answers.js`、`src/server/pull-requests.js`、`src/mcp/server.js`、`skills/agent-cockpit/SKILL.md` | hard | `claude/fix-656-review-pending` | 1 | 実装中(Codex の上限で中断し、途中の変更が作業ツリーにある) |
+| 3 | agent-cockpit #658 シェルの解析の不一致 | `src/hooks/event.js`、`src/hooks/route.js`、`src/server/pull-request-utils.js` | hard | `claude/fix-658-shell-commands` | main | 実装中(worktree `.claude/worktrees/fix-658`。テストの追加が残る) |
+| 4 | claude-codex-bridge #164 stderr を保持する子孫で終了を待ち続ける | `tools/codex-agent.sh` | hard | `fix/issue-164-stderr-holder` | main | PR claude-codex-bridge#165。レビュー中 |
 
 base の列の数字は、表の順の PR のブランチを指す。
 
@@ -58,6 +58,8 @@ base の列の数字は、表の順の PR のブランチを指す。
 
 - `.claude/skills/cross-review/SKILL.md` は ai-cross-review からの同期の写しである。この計画では編集しない。
 - 予約マージは、開発者がダッシュボードで予約したときだけ動く。テストで実際の `gh pr merge` を起動しない。
+- 実装の担当へ別の worktree を渡すときは、依頼文の行頭に `作業ディレクトリ: <絶対パス>` を書く。書かないと、Codex はメインセッションの作業フォルダーで起動し、指定の worktree に書き込めない。
+- Claude 側の担当は、メインセッションの worktree と別の、同じリポジトリの worktree のファイルを Edit で書けない。別の worktree の作業は、作業ディレクトリを指定した Codex の担当に渡す。
 
 ## 次のセッションの開始用プロンプト
 

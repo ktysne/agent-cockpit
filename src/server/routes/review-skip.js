@@ -11,4 +11,9 @@ async function applyReviewSkip({ pullRequestTracker, pullRequestMergeManager, re
   return pullRequestMergeManager.setReviewSkip(registration, headRefOid, reason);
 }
 
-module.exports = { applyReviewSkip, pullRequestStateUnavailable };
+async function applyReviewDeferral({ pullRequestTracker, pullRequestMergeManager, registration, headRefOid, reason, next }) {
+  if (pullRequestStateUnavailable(pullRequestTracker) || !pullRequestMergeManager?.setReviewDeferral) return UNAVAILABLE;
+  return pullRequestMergeManager.setReviewDeferral(registration, headRefOid, reason, next);
+}
+
+module.exports = { applyReviewSkip, applyReviewDeferral, pullRequestStateUnavailable };

@@ -231,7 +231,7 @@ test('基本のシナリオを流し込むと、全体図に要る状態が隔�
     assert.match(byNumber.get(119).blocker, /^積み直し待ち/);
     assert.equal(byNumber.get(120).blocker, 'コンフリクトあり');
     assert.equal(byNumber.get(121).blocker, 'ドラフト');
-    assert.deepEqual(byNumber.get(57).mergeConditionWaits, ['クロスレビュー未実施']);
+    assert.deepEqual(byNumber.get(57).mergeConditionWaits, ['レビュー保留']);
     assert.equal(byNumber.get(44).crossReview.notRequired, true);
     assert.equal(byNumber.get(42).parentNumber, 41);
     assert.equal(byNumber.get(43).parentNumber, 42);

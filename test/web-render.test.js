@@ -1337,7 +1337,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
 
   const missing = line({ headRefOid: headSha, crossReview: null });
   const missingBadge = allNodes(missing).find((node) => node.className?.startsWith('badge'));
-  assert.equal(textOf(missing), 'クロスレビュー レビュー未実施');
+  assert.match(textOf(missing), /現在の head の記録がありません。クロスレビューを実施するか、レビュー不要にする操作で記録してください。レビュー未実施/);
   assert.equal(missingBadge.className, 'badge warn');
 
   const changed = line({
@@ -1345,7 +1345,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
     crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha },
   });
   const changedBadge = allNodes(changed).find((node) => node.className?.startsWith('badge'));
-  assert.equal(textOf(changed), 'クロスレビュー 2 / 3 往復、非対応 1 レビューの後に変更あり (レビュー済み aaaaaaa)');
+  assert.match(textOf(changed), /現在の head の記録がありません。.*2 \/ 3 往復、非対応 1 レビューの後に変更あり \(レビュー済み aaaaaaa\)/);
   assert.equal(changedBadge.className, 'badge warn');
   assert.ok(!textOf(changed).includes(headSha));
 
@@ -1445,7 +1445,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
     crossReview: { round: 1, max: 3, dismissed: 0, reviewedSha: null },
   });
   const unverifiableBadge = allNodes(unverifiable).find((node) => node.className?.startsWith('badge'));
-  assert.equal(textOf(unverifiable), 'クロスレビュー 1 / 3 往復、非対応 0 head を確かめられない');
+  assert.match(textOf(unverifiable), /現在の head の記録がありません。.*1 \/ 3 往復、非対応 0 head を確かめられない$/);
   assert.equal(unverifiableBadge.className, 'badge mute');
   assert.ok(!textOf(unverifiable).includes('レビューの後に変更あり'));
 
@@ -1458,7 +1458,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.ok(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'converged' } }));
   assert.equal(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' } }), undefined);
   assert.equal(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha }), undefined);
-  assert.equal(skipButtonOf({ round: 1, max: 3, dismissed: 0, reviewedSha: null }), undefined);
+  assert.ok(skipButtonOf({ round: 1, max: 3, dismissed: 0, reviewedSha: null }));
 
   const changedAfter64DigitReview = context.crossReviewState({
     headRefOid: 'e'.repeat(64),

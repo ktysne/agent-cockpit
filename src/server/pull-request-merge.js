@@ -234,6 +234,14 @@ class PullRequestMergeManager {
   }
 
   async setReviewSkip(registration, headRefOid, reason) {
+    return this.setReviewRecord(registration, headRefOid, reason);
+  }
+
+  async setReviewDeferral(registration, headRefOid, reason, next) {
+    return this.setReviewRecord(registration, headRefOid, reason, next);
+  }
+
+  async setReviewRecord(registration, headRefOid, reason, next) {
     let saved;
     try {
       const candidate = await this.reviewSkipCandidate(registration);
@@ -242,18 +250,21 @@ class PullRequestMergeManager {
       if (candidate.pullRequest.headRefOid.toLowerCase() !== headRefOid.toLowerCase()) {
         return actionResult(409, 'PR の head が変わりました。現在の状態を確認してください');
       }
-      saved = this.state.setCrossReviewSkip({
+      const record = {
         owner: registration.owner,
         repo: registration.repo,
         number: registration.number,
         headRefOid: candidate.pullRequest.headRefOid,
         reason,
         recordedAt: new Date(this.now()).toISOString(),
-      });
+      };
+      saved = next === undefined ? this.state.setCrossReviewSkip(record)
+        : this.state.setCrossReviewDeferral({ ...record, next });
       if (!saved) return actionResult(400, 'Invalid review skip');
+      await this.state.flushStoreWrite();
       await this.state.waitForPersistence();
     } catch {
-      return actionResult(502, 'PR の状態を取り直せませんでした');
+      return actionResult(502, 'PR の状態の取得またはレビュー記録の保存に失敗しました');
     }
     try {
       await this.tracker.refreshReviewGroups(registration.owner, registration.repo);
@@ -710,6 +721,7 @@ class PullRequestMergeManager {
     if (!candidate?.repository?.listAvailable || !candidate.repository.configAvailable || !pullRequest) return waiting('repository-unavailable');
     const review = pullRequest.crossReview;
     const triage = review?.triage;
+    if (review?.deferred === true) return waiting('review-deferred');
     if (review?.conflict?.length) return waiting('review-conflict');
     if (triage?.outcome === 'halted' && triage.round === review.round) {
       waiting('review-halted');

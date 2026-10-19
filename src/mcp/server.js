@@ -44,7 +44,7 @@ const REVIEW_SKIP_ERROR_MESSAGES = new Map([
   [400, 'owner、repo、PR 番号、head SHA、理由を確認してください'],
   [404, 'このセッションで登録した PR が見つかりません'],
   [409, 'PR の head が変わったか、オープンではありません。現在の状態を確認してください'],
-  [502, 'GitHub から PR の状態を確認できませんでした'],
+  [502, 'PR の状態の取得またはレビュー記録の保存に失敗しました'],
 ]);
 
 const SET_TASKS_DESCRIPTION = 'タスクと完了条件の一覧をセッションに記録します。タスクの状態や完了条件が変わったときは、一覧全体を新しい内容に置き換えます。完了条件は met が true なら達成、met が false で doing が true なら作業中として表示します。';
@@ -177,7 +177,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'cockpit_skip_review',
-    description: '理由を添えて、登録済み PR の指定した head をクロスレビュー不要として記録します。head が変わると記録は無効になります。',
+    description: '理由を添えて、登録済み PR の指定した head をクロスレビュー不要として記録します。head が変わると記録は無効になります。成功を確かめてから完了報告してください。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -192,6 +192,19 @@ const TOOL_DEFINITIONS = [
     },
   },
 ];
+
+const reviewSkipTool = TOOL_DEFINITIONS.find(tool => tool.name === 'cockpit_skip_review');
+TOOL_DEFINITIONS.push({
+  name: 'cockpit_defer_review',
+  description: '理由と次の作業を添えて、登録済み PR の指定 head のレビューを保留します。保留はマージ条件を満たしません。成功を確かめてから完了報告してください。',
+  inputSchema: {
+    ...reviewSkipTool.inputSchema,
+    properties: { ...reviewSkipTool.inputSchema.properties, next: { type: 'string', minLength: 1, maxLength: 2000 } },
+    required: [...reviewSkipTool.inputSchema.required, 'next'],
+  },
+});
+
+const REVIEW_RECORD_FAILURE_MESSAGE = '記録できなかった。完了報告に未記録であることと理由を書いてください。';
 
 function toolResult(text, isError = false) {
   return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) };
@@ -335,21 +348,24 @@ async function postPullRequest(args, options = {}) {
   return writeFailureResult(result, PR_ERROR_MESSAGES);
 }
 
-async function postCrossReviewSkip(args, options = {}) {
+async function postCrossReviewSkip(args, options = {}, deferred = false) {
   if (!validRepositoryPart(args.owner) || !validRepositoryPart(args.repo) || !Number.isSafeInteger(args.number) || args.number < 1 ||
-    !isCompleteCommitSha(args.headRefOid) || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000) {
-    return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(400) };
+    !isCompleteCommitSha(args.headRefOid) || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000 ||
+    (deferred && !validText(args.next, 2000))) {
+    return { errorMessage: deferred ? 'owner、repo、PR 番号、head SHA、理由、次の作業(next)を確認してください'
+      : REVIEW_SKIP_ERROR_MESSAGES.get(400) };
   }
   const deadline = requestDeadline(options, MCP_GITHUB_TIMEOUT_MS);
   const identity = writerIdentity(options);
   const routeSessionId = identity.routeSessionId;
   const body = {
-    kind: 'skip_review',
+    kind: deferred ? 'defer_review' : 'skip_review',
     owner: args.owner,
     repo: args.repo,
     number: args.number,
     headRefOid: args.headRefOid,
     reason: args.reason,
+    ...(deferred ? { next: args.next } : {}),
     ...identity.body,
   };
   const result = await postMcpRequest(
@@ -369,7 +385,7 @@ async function postCrossReviewSkip(args, options = {}) {
 async function callTool(name, args, options = {}) {
   const tool = TOOL_DEFINITIONS.find((item) => item.name === name);
   if (!tool) return toolResult('指定されたツールはありません。', true);
-  if (!args || typeof args !== 'object' || Array.isArray(args)) return toolResult('入力が正しくありません。', true);
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return toolResult(`入力が正しくありません。${['cockpit_skip_review', 'cockpit_defer_review'].includes(name) ? REVIEW_RECORD_FAILURE_MESSAGE : ''}`, true);
   if (name === 'cockpit_report_launch' && (!validText(args.id, 256) || !validLaunchTarget(args) ||
     !Object.keys(args).every(key => ['id', 'url', 'process'].includes(key)))) return toolResult('入力が正しくありません。', true);
   options = { ...options, diagnosticTool: name };
@@ -383,13 +399,14 @@ async function callTool(name, args, options = {}) {
     const action = saved.created === false ? 'は登録済みです' : 'を登録しました';
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) ${action}。`);
   }
-  if (name === 'cockpit_skip_review') {
-    const saved = await postCrossReviewSkip(args, options);
-    if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
-    if (saved?.outcomeUnknown) return toolResult(UNKNOWN_OUTCOME_MESSAGE, true);
-    if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
-    if (saved.errorMessage) return toolResult(saved.errorMessage, saved.isError !== false);
-    return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) の head ${saved.headRefOid.slice(0, 7)} をクロスレビュー不要として記録しました。`);
+  if (['cockpit_skip_review', 'cockpit_defer_review'].includes(name)) {
+    const deferred = name === 'cockpit_defer_review';
+    const saved = await postCrossReviewSkip(args, options, deferred);
+    if (saved?.errorMessage && saved.isError === false) return toolResult(saved.errorMessage);
+    const error = saved?.timedOut ? TIMEOUT_MESSAGE : saved?.outcomeUnknown ? UNKNOWN_OUTCOME_MESSAGE
+      : !saved ? UNREACHABLE_MESSAGE : saved.errorMessage;
+    if (error) return toolResult(`${error}\n${REVIEW_RECORD_FAILURE_MESSAGE}`, true);
+    return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) の head ${saved.headRefOid.slice(0, 7)} を${deferred ? 'レビュー保留' : 'クロスレビュー不要'}として記録しました。`);
   }
   const saved = await postPlan(name, args, options);
   if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
@@ -426,7 +443,7 @@ async function handleRequest(request, options = {}) {
     const meta = request.params?._meta;
     if ((codexClient && !isHookSessionId(meta?.sessionId)) ||
       (!codexClient && meta && Object.hasOwn(meta, 'threadId'))) {
-      return { jsonrpc: '2.0', id: request.id, result: toolResult('Codex の接続情報または sessionId が無いため記録できなかった。', true) };
+      return { jsonrpc: '2.0', id: request.id, result: toolResult(`Codex の接続情報または sessionId が無いため記録できなかった。${['cockpit_skip_review', 'cockpit_defer_review'].includes(name) ? REVIEW_RECORD_FAILURE_MESSAGE : ''}`, true) };
     }
     const callOptions = codexClient ? { ...options, codexSessionId: meta.sessionId } : options;
     const result = await callTool(name, request.params?.arguments || {}, callOptions);

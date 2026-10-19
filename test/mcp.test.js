@@ -1,4 +1,5 @@
 const test = require('node:test');
+const reviewFailure = (name, text, failed = true) => failed && ['cockpit_skip_review', 'cockpit_defer_review'].includes(name) ? `${text}\n記録できなかった。完了報告に未記録であることと理由を書いてください。` : text;
 const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
 const {
@@ -50,7 +51,7 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
   assert.equal(responses[0].id, 1);
   assert.equal(responses[0].result.serverInfo.name, 'agent-cockpit');
   assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), [
-    'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_report_launch', 'cockpit_update_decision', 'cockpit_add_pr', 'cockpit_skip_review',
+    'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_report_launch', 'cockpit_update_decision', 'cockpit_add_pr', 'cockpit_skip_review', 'cockpit_defer_review',
   ]);
   const setTasksTool = responses[1].result.tools.find((tool) => tool.name === 'cockpit_set_tasks');
   const criteriaSchema = setTasksTool.inputSchema.properties.tasks.items.properties.criteria.items;
@@ -295,7 +296,7 @@ test('MCP 書き込みの本文解析失敗や切断は再送せず結果不明�
       });
 
       assert.equal(result.isError, true, `${name}: ${failure}`);
-      assert.equal(result.content[0].text, UNKNOWN_OUTCOME_MESSAGE, `${name}: ${failure}`);
+      assert.equal(result.content[0].text, reviewFailure(name, UNKNOWN_OUTCOME_MESSAGE), `${name}: ${failure}`);
       assert.equal(requests, 1, `${name}: ${failure}`);
     }
   }
@@ -349,7 +350,7 @@ test('3 種類の MCP 書き込みは 500 を結果不明、再試行後の 401 
         ? '常駐サーバーが処理の途中で失敗した(HTTP 500)。記録できたかを確かめられなかったため、ダッシュボードで確かめてほしい'
         : '常駐サーバーが書き込みを受け付けなかった(HTTP 401)。作業は続けてよい';
       assert.equal(responses[0].result.isError, true, `${name} with HTTP ${status}`);
-      assert.equal(responses[0].result.content[0].text, expected, `${name} with HTTP ${status}`);
+      assert.equal(responses[0].result.content[0].text, reviewFailure(name, expected), `${name} with HTTP ${status}`);
       assert.equal(fetchCount, status === 401 ? 2 : 1, `${name} with HTTP ${status}`);
     }
   }
@@ -370,7 +371,7 @@ test('cockpit_skip_review の 409 は head の変化かクローズを伝える�
   });
 
   assert.equal(responses[0].result.isError, true);
-  assert.equal(responses[0].result.content[0].text, 'PR の head が変わったか、オープンではありません。現在の状態を確認してください');
+  assert.equal(responses[0].result.content[0].text, reviewFailure('cockpit_skip_review', 'PR の head が変わったか、オープンではありません。現在の状態を確認してください'));
 });
 
 test('委譲した thread への MCP 書き込みは記録不要と返し、それ以外の 403 は親 ID があっても未登録の文を返す', async () => {
@@ -398,7 +399,7 @@ test('委譲した thread への MCP 書き込みは記録不要と返し、そ�
           : new Response(JSON.stringify({ error }), { status: 403 }),
       });
       assert.equal(result.isError, isError, name);
-      assert.equal(result.content[0].text, expected, name);
+      assert.equal(result.content[0].text, reviewFailure(name, expected, isError === true), name);
     }
   }
 });
@@ -438,7 +439,7 @@ test('時間切れの add_pr、skip_review、plan は結果未確認の文を is
     });
 
     assert.equal(responses[0].result.isError, true, name);
-    assert.equal(responses[0].result.content[0].text, TIMEOUT_MESSAGE, name);
+    assert.equal(responses[0].result.content[0].text, reviewFailure(name, TIMEOUT_MESSAGE), name);
     assert.equal(fetchCount, 1, name);
     assert.equal(ensureCalls, 1, name);
   }

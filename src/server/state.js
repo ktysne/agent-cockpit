@@ -197,6 +197,15 @@ function normalizeCrossReviewSkip(record) {
   };
 }
 
+function validCrossReviewDeferral(record) {
+  return validCrossReviewSkip(record) && typeof record.next === 'string' &&
+    record.next.trim().length > 0 && record.next.length <= 2000;
+}
+
+function normalizeCrossReviewDeferral(record) {
+  return { ...normalizeCrossReviewSkip(record), next: record.next };
+}
+
 function validPullRequestLastOpen(value) {
   if (value === null) return true;
   if (!isRecord(value) ||
@@ -475,6 +484,7 @@ function normalizeStore(value) {
   const seenAtByProduct = value.seenAtByProduct === undefined ? {} : value.seenAtByProduct;
   const ciFailures = value.ciFailures === undefined ? [] : value.ciFailures;
   const crossReviewSkips = value.crossReviewSkips === undefined ? [] : value.crossReviewSkips;
+  const crossReviewDeferrals = value.crossReviewDeferrals === undefined ? [] : value.crossReviewDeferrals;
   if (!Array.isArray(prs) || !prs.every(validPullRequestRecord) ||
     !Array.isArray(relatedPrs) || !relatedPrs.every(validRelatedPullRequestRecord) ||
     !Array.isArray(retargetedPrs) || !retargetedPrs.every(validPullRequestRetarget) ||
@@ -490,7 +500,8 @@ function normalizeStore(value) {
     !Array.isArray(ciFailures) || !ciFailures.every((record) => isRecord(record) &&
       validRepositoryPart(record.owner) && validRepositoryPart(record.repo) && Number.isSafeInteger(record.number) && record.number > 0 &&
       validProduct(record.product) && validTimestamp(record.at)) ||
-    !Array.isArray(crossReviewSkips) || !crossReviewSkips.every(validCrossReviewSkip)) {
+    !Array.isArray(crossReviewSkips) || !crossReviewSkips.every(validCrossReviewSkip) ||
+    !Array.isArray(crossReviewDeferrals) || !crossReviewDeferrals.every(validCrossReviewDeferral)) {
     throw new Error('Invalid pull request records');
   }
   return {
@@ -518,6 +529,7 @@ function normalizeStore(value) {
     seenAtByProduct: new Map(Object.entries(seenAtByProduct)),
     ciFailures: ciFailures.map((record) => ({ ...record, product: cloneProduct(record.product) })),
     crossReviewSkips: crossReviewSkips.map(normalizeCrossReviewSkip),
+    crossReviewDeferrals: crossReviewDeferrals.map(normalizeCrossReviewDeferral),
   };
 }
 
@@ -712,6 +724,7 @@ class DashboardState {
     this.seenAtByProduct = new Map();
     this.ciFailures = [];
     this.crossReviewSkips = new Map();
+    this.crossReviewDeferrals = new Map();
     this.closedAgents = new Map();
     // イベントから再構成できない復元済みの回数と、SessionEnd で捨てた回数を保持する。
     this.codexResumesBeforeEnd = new Map();
@@ -848,6 +861,9 @@ class DashboardState {
     this.crossReviewSkips = new Map(store.crossReviewSkips.map((record) => [
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
+    this.crossReviewDeferrals = new Map(store.crossReviewDeferrals.map((record) => [
+      relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
+    ]));
     this.pruneExpiredStoreRecords(now);
   }
 
@@ -902,14 +918,16 @@ class DashboardState {
       }
     }
     // 登録の Map のキーは relatedPullRequestRecordKey と同じ規則で作る。マージを記録するたびに呼ぶので、登録一覧を組み立てない。
-    const retainedPullRequestKeys = this.crossReviewSkips.size ? new Set([
+    const retainedPullRequestKeys = this.crossReviewSkips.size || this.crossReviewDeferrals.size ? new Set([
       ...[...this.pullRequests.values()].flatMap((records) => [...records.keys()]),
       ...this.relatedPullRequests.keys(),
     ]) : null;
-    for (const key of this.crossReviewSkips.keys()) {
-      if (retainedPullRequestKeys.has(key)) continue;
-      this.crossReviewSkips.delete(key);
-      crossReviewSkipsChanged = true;
+    for (const records of [this.crossReviewSkips, this.crossReviewDeferrals]) {
+      for (const key of records.keys()) {
+        if (retainedPullRequestKeys.has(key)) continue;
+        records.delete(key);
+        crossReviewSkipsChanged = true;
+      }
     }
     for (const [key, record] of this.mergedPullRequests) {
       if (!Number.isFinite(Date.parse(record.mergedAt)) || now - Date.parse(record.mergedAt) >= MERGED_PULL_REQUEST_RETENTION_MS) {
@@ -1056,6 +1074,7 @@ class DashboardState {
       seenAtByProduct: Object.fromEntries(this.seenAtByProduct),
       ciFailures: this.ciFailures.map((record) => ({ ...record, product: cloneProduct(record.product) })),
       crossReviewSkips: [...this.crossReviewSkips.values()].map(normalizeCrossReviewSkip),
+      crossReviewDeferrals: [...this.crossReviewDeferrals.values()].map(normalizeCrossReviewDeferral),
     };
   }
 
@@ -1134,8 +1153,25 @@ class DashboardState {
     const next = normalizeCrossReviewSkip(record);
     const key = relatedPullRequestRecordKey(next.owner, next.repo, next.number);
     const current = this.crossReviewSkips.get(key);
-    if (current && stableStringify(current) === stableStringify(next)) return { ...current };
+    if (current && stableStringify(current) === stableStringify(next) && !this.crossReviewDeferrals.has(key)) return { ...current };
+    this.crossReviewDeferrals.delete(key);
     this.crossReviewSkips.set(key, next);
+    this.touch();
+    this.requestStoreWrite();
+    return { ...next };
+  }
+
+  crossReviewDeferral(owner, repo, number) {
+    const record = this.crossReviewDeferrals.get(relatedPullRequestRecordKey(owner, repo, number));
+    return record ? { ...record } : null;
+  }
+
+  setCrossReviewDeferral(record) {
+    if (!validCrossReviewDeferral(record)) return false;
+    const next = normalizeCrossReviewDeferral(record);
+    const key = relatedPullRequestRecordKey(next.owner, next.repo, next.number);
+    this.crossReviewSkips.delete(key);
+    this.crossReviewDeferrals.set(key, next);
     this.touch();
     this.requestStoreWrite();
     return { ...next };
@@ -1154,12 +1190,14 @@ class DashboardState {
   invalidateCrossReviewSkips(owner, repo, pullRequests) {
     const currentHeads = new Map(pullRequests.map((pullRequest) => [pullRequest.number, String(pullRequest.headRefOid || '').toLowerCase()]));
     let invalidated = 0;
-    for (const [key, record] of this.crossReviewSkips) {
-      if (record.owner.toLowerCase() !== owner.toLowerCase() || record.repo.toLowerCase() !== repo.toLowerCase()) continue;
-      const headRefOid = currentHeads.get(record.number);
-      if (!headRefOid || headRefOid === record.headRefOid) continue;
-      this.crossReviewSkips.delete(key);
-      invalidated += 1;
+    for (const records of [this.crossReviewSkips, this.crossReviewDeferrals]) {
+      for (const [key, record] of records) {
+        if (record.owner.toLowerCase() !== owner.toLowerCase() || record.repo.toLowerCase() !== repo.toLowerCase()) continue;
+        const headRefOid = currentHeads.get(record.number);
+        if (!headRefOid || headRefOid === record.headRefOid) continue;
+        records.delete(key);
+        invalidated += 1;
+      }
     }
     if (invalidated) {
       this.touch();

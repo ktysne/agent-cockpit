@@ -1076,12 +1076,14 @@ function selectCrossReview(candidates, headSha) {
 }
 
 function crossReviewConvergedAtHead(pullRequest) {
+  if (pullRequest.crossReview?.deferred === true) return false;
   if (pullRequest.crossReview?.notRequired === true) return true;
   const review = pullRequest.crossReview;
   return !review?.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'converged';
 }
 
 function crossReviewWaitReason(review, headSha) {
+  if (review?.deferred === true) return 'レビュー保留';
   if (review?.notRequired === true) return null;
   if (review?.conflict?.length) return 'クロスレビューの記録が食い違う';
   if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
@@ -1950,7 +1952,9 @@ class PullRequestTracker {
     for (const { owner, repo, number } of registrations) {
       const key = repoKey(owner, repo);
       const pullRequest = this.repositories.get(key)?.openPullRequests.find((pr) => pr.number === number);
-      if (pullRequest?.headRefOid && this.crossReviewByRepository.get(key)?.get(number) === null) {
+      const review = this.crossReviewByRepository.get(key)?.get(number);
+      if (pullRequest?.headRefOid && (review === null || (review && !review.unavailable && !review.notRequired &&
+        !review.deferred && !review.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'stale'))) {
         targets.set(`${key}#${number}`, { owner, repo, number, headRefOid: pullRequest.headRefOid });
       }
     }
@@ -2037,6 +2041,15 @@ class PullRequestTracker {
     }
     for (const [number, review] of crossReviewByNumber) {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === number);
+      const deferral = this.state.crossReviewDeferral?.(owner, repo, number);
+      // 保留の後に今の head で始めたレビューの記録(収束、判断待ちを含む)を隠さないため、記録が今の head に触れないときだけ重ねる。
+      if (deferral?.headRefOid === pullRequest.headRefOid.toLowerCase() &&
+        !review?.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'stale') {
+        crossReviewByNumber.set(number, { deferred: true, source: 'recorded', reason: deferral.reason, next: deferral.next,
+          ...(review?.conflict ? { conflict: review.conflict } : {}),
+        });
+        continue;
+      }
       const skip = this.state.crossReviewSkip?.(owner, repo, number);
       if (skip?.headRefOid !== pullRequest.headRefOid.toLowerCase()) continue;
       const converged = !review?.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'converged';
