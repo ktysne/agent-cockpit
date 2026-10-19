@@ -1233,6 +1233,57 @@ async function runningServer(t, options = {}) {
   return server.runtime;
 }
 
+function askQuestionEvent(sessionId, hookAt) {
+  return { session_id: sessionId, hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'ask-1',
+    questions: [{ question: '形式を選んでください', header: '形式', options: [{ label: 'JSON', description: 'JSON形式' }] }], hookAt };
+}
+
+async function sendHookEvent(runtime, event) {
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event) });
+  assert.equal(response.status, 202);
+}
+
+function askDecision(runtime, sessionId) {
+  return runtime.state.decisionsFor(sessionId).find(decision => decision.source === 'ask');
+}
+
+test('/api/events は AskUserQuestion 後の区切りで却下された判断を withdrawn にする', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'withdraw-after-ask';
+  const hookAt = Date.now();
+  await sendHookEvent(runtime, askQuestionEvent(sessionId, hookAt));
+  await sendHookEvent(runtime, { session_id: sessionId, hook_event_name: 'Stop', hookAt: hookAt + 1 });
+  assert.equal(askDecision(runtime, sessionId).state, 'withdrawn');
+});
+
+test('/api/events は先行した区切りより古い質問を withdrawn にする', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'withdraw-before-ask';
+  const hookAt = Date.now();
+  await sendHookEvent(runtime, { session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: hookAt + 1 });
+  await sendHookEvent(runtime, askQuestionEvent(sessionId, hookAt));
+  assert.equal(askDecision(runtime, sessionId).state, 'withdrawn');
+});
+
+test('/api/events は離席解除で待ちが解放された質問を区切りで withdrawn にする', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'withdraw-released-ask';
+  const awayHeaders = uiHeaders(runtime.info);
+  await request(runtime.info.port, { method: 'POST', path: '/api/away', headers: awayHeaders, body: JSON.stringify({ enabled: true }) });
+  const registered = jsonBody(await request(runtime.info.port, { method: 'POST', path: '/api/hooks/answers',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify({ action: 'ask-register', event_name: 'PreToolUse',
+      session_id: sessionId, id: 'ask-1', tool_name: 'AskUserQuestion', questions: askQuestionEvent(sessionId, Date.now()).questions }) }));
+  assert.equal(registered.awaiting, true);
+  await request(runtime.info.port, { method: 'POST', path: '/api/away', headers: awayHeaders, body: JSON.stringify({ enabled: false }) });
+  const released = jsonBody(await request(runtime.info.port, { method: 'POST', path: '/api/hooks/answers',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify({ action: 'ask-finish', event_name: 'PreToolUse',
+      session_id: sessionId, id: 'ask-1', decision_id: registered.decisionId, outcome: 'released' }) }));
+  assert.equal(released.outcome, 'released');
+  await sendHookEvent(runtime, { session_id: sessionId, hook_event_name: 'Stop', hookAt: Date.now() + 1 });
+  assert.equal(askDecision(runtime, sessionId).state, 'withdrawn');
+});
+
 test('ファイル不在から24時間以内の再開では、前のツール表示を復元する', async (t) => {
   const runtime = await runningServer(t);
   const sessionId = 'absent-recent-resume';

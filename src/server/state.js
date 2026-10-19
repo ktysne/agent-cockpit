@@ -420,7 +420,8 @@ function normalizeStore(value) {
       if (!isRecord(lifecycle) || (lifecycle.answer !== null && !isRecord(lifecycle.answer)) ||
         (lifecycle.state !== null && typeof lifecycle.state !== 'string') ||
         (lifecycle.awaitingAnswerUntil != null && !validTimestamp(lifecycle.awaitingAnswerUntil)) ||
-        (lifecycle.updatedAt !== undefined && lifecycle.updatedAt !== null && !validTimestamp(lifecycle.updatedAt))) {
+        (lifecycle.updatedAt !== undefined && lifecycle.updatedAt !== null && !validTimestamp(lifecycle.updatedAt)) ||
+        (lifecycle.askToolUseId !== undefined && typeof lifecycle.askToolUseId !== 'string')) {
         throw new Error('Invalid decision lifecycle');
       }
       const legacyAnswer = lifecycle.answer?.choice === 'hold';
@@ -432,6 +433,7 @@ function normalizeStore(value) {
         updatedAt: lifecycle.updatedAt ?? null,
         ...(validTimestamp(lifecycle.provisionalAt) ? { provisionalAt: lifecycle.provisionalAt } : {}),
         ...(validTimestamp(lifecycle.awaitingAnswerUntil) ? { awaitingAnswerUntil: lifecycle.awaitingAnswerUntil } : {}),
+        ...(lifecycle.askToolUseId ? { askToolUseId: lifecycle.askToolUseId.slice(0, 256) } : {}),
       });
     }
     decisionLifecycles.set(sessionId, lifecycles);
@@ -2635,6 +2637,18 @@ class DashboardState {
     this.touch();
     this.requestStoreWrite(true);
     return this.decisionFor(sessionId, decisionId);
+  }
+
+  deleteDecisionLifecycle(sessionId, decisionId, { exceptAskToolUseId = null, updatedBefore = Infinity } = {}) {
+    const lifecycles = this.decisionLifecycles.get(sessionId);
+    const lifecycle = lifecycles?.get(decisionId);
+    if (!lifecycle || (exceptAskToolUseId && lifecycle.askToolUseId === exceptAskToolUseId)) return false;
+    if (!(Date.parse(lifecycle.updatedAt) < updatedBefore)) return false;
+    lifecycles.delete(decisionId);
+    if (!lifecycles.size) this.decisionLifecycles.delete(sessionId);
+    this.touch();
+    this.requestStoreWrite(true);
+    return true;
   }
 
   touch() {

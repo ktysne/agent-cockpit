@@ -192,10 +192,34 @@ test('離席中のフックが回答待ちを記録した質問は再起動後�
   restored.addEvent(progress('Stop', NOW + 200));
   restored.addEvent(progress('PreToolUse', NOW + 300));
   assert.equal(decision(restored).state, 'waiting');
-  away.enabled = false;
-  assert.equal(delivery.finishAsk({ sessionId: 'session-a', toolUseId: 'ask-1' }).outcome, 'released');
-  state.addEvent(progress('Stop', NOW + 400));
-  assert.equal(decision(state).state, 'waiting');
+});
+
+test('再起動後に同じ質問の開始が届き直しても、離席中のフックが記録した回答待ちを取り下げない', async () => {
+  const state = new DashboardState();
+  const away = { snapshot: () => ({ enabled: true }) };
+  const options = { away, now: () => NOW + 1000, setTimeoutImpl: () => 1, clearTimeoutImpl: () => {} };
+  new DecisionAnswerDelivery({ state, ...options, now: () => NOW }).registerAsk({ sessionId: 'session-a', toolUseId: 'ask-1', questions: QUESTIONS });
+  const restored = await restart(state);
+  const delivery = new DecisionAnswerDelivery({ state: restored, ...options });
+  for (const event of [ask('ask-1', NOW + 100), progress('Stop', NOW + 200)]) {
+    restored.addEvent(event);
+    delivery.afterEvent(event);
+  }
+  assert.equal(decision(restored).state, 'waiting');
+});
+
+test('再起動後に前の呼び出しの開始が遅れて届いても、新しい呼び出しの回答待ちを消さない', async () => {
+  const state = new DashboardState();
+  state.addEvent(ask('ask-1', NOW));
+  const restored = await restart(state);
+  const away = { snapshot: () => ({ enabled: true }) };
+  const delivery = new DecisionAnswerDelivery({ state: restored, away, now: () => NOW + 1000, setTimeoutImpl: () => 1, clearTimeoutImpl: () => {} });
+  delivery.registerAsk({ sessionId: 'session-a', toolUseId: 'ask-2', questions: QUESTIONS });
+  const decisionId = restored.decisionIdForToolUse('session-a', 'ask-2');
+  const lateStart = ask('ask-1', NOW + 500);
+  restored.addEvent(lateStart);
+  delivery.afterEvent(lateStart);
+  assert.ok(restored.decisionFor('session-a', decisionId).awaitingAnswerUntil);
 });
 
 test('離席中にフックが却下した質問と送信済みの回答は後続イベントで取り下げない', async () => {
