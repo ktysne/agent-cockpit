@@ -44,6 +44,7 @@ const {
 
 const { isStoredSessionId } = require('./session-ids');
 const { isRecord } = require('./value-utils');
+const { readWithRetry, storageFailure } = require('./read-retry');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null, periods: Object.freeze([]) });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
@@ -569,19 +570,28 @@ class AwayState {
     this.pending = Promise.resolve();
   }
 
-  static async load(homeDir, fileSystem = fs, writer = null) {
+  static async load(homeDir, fileSystem = fs, writer = null, readRetryOptions = {}) {
+    let contents;
     try {
-      const value = JSON.parse(await fileSystem.readFile(path.join(homeDir, 'away.json'), 'utf8'));
-      const normalized = normalizeAwayState(value);
-      if (normalized) {
-        const away = new AwayState(homeDir, normalized, fileSystem, writer);
-        if (JSON.stringify(value) !== JSON.stringify(away.value)) await away.persistCurrent();
-        await away.prune([], Date.now());
-        return away;
-      }
-    } catch {
+      contents = await readWithRetry(() => fileSystem.readFile(path.join(homeDir, 'away.json'), 'utf8'), readRetryOptions);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw storageFailure(error, 'away.json', 'read');
+      return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
     }
-    return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
+
+    let value;
+    try {
+      value = JSON.parse(contents);
+    } catch {
+      return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
+    }
+    const normalized = normalizeAwayState(value);
+    if (!normalized) return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
+
+    const away = new AwayState(homeDir, normalized, fileSystem, writer);
+    if (JSON.stringify(value) !== JSON.stringify(away.value)) await away.persistCurrent();
+    await away.prune([], Date.now());
+    return away;
   }
 
   snapshot(deadline) {
@@ -714,9 +724,9 @@ class DashboardState {
     if (!state.storeWriter) state.storeWriter = new AtomicJsonWriter(homeDir, { fileSystem: state.fileSystem });
     let contents;
     try {
-      contents = await state.fileSystem.readFile(path.join(homeDir, 'store.json'), 'utf8');
+      contents = await readWithRetry(() => state.fileSystem.readFile(path.join(homeDir, 'store.json'), 'utf8'), options.readRetryOptions);
     } catch (error) {
-      if (error.code !== 'ENOENT') await state.quarantineStore(options.now ?? Date.now());
+      if (error.code !== 'ENOENT') throw storageFailure(error, 'store.json', 'read');
       state.restoreSessionCleanupPending = true;
       return state;
     }
@@ -738,7 +748,11 @@ class DashboardState {
   async quarantineStore(now) {
     const stamp = new Date(now).toISOString().replace(/[:.]/g, '-');
     const target = path.join(this.homeDir, `store.json.broken-${stamp}`);
-    await this.fileSystem.rename(path.join(this.homeDir, 'store.json'), target).catch(() => {});
+    try {
+      await this.fileSystem.rename(path.join(this.homeDir, 'store.json'), target);
+    } catch (error) {
+      throw storageFailure(error, 'store.json', 'quarantine');
+    }
   }
 
   restoreStore(store, now) {

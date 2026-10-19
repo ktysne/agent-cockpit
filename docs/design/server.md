@@ -26,7 +26,7 @@
 | ファイル | 中身 |
 |---|---|
 | `server.json` | `{pid, port, secret, uiSecret, startedAt}` |
-| `away.json` | `{enabled, since, periods}` |
+| `away.json` | `{enabled, since, periods}`。不在、解析失敗、形式不一致は既定値で開始する。その他の読み取りエラーは数回読み直し、それでも読めなければ起動を失敗させる |
 | `server.log` | 起動、停止、エラー。追記する。ツールの入力の要約は書かない |
 | `server.log.1` | 1 つ前の `server.log`。常駐サーバーを起動するとき、`server.log` が 1 MB を超えていればこの名前に移し、前の `server.log.1` を置き換える |
 | `diagnostics/<起動時刻>-<pid>.<区分番号>.jsonl` | 診断ログ。1 区分 2000 行、直近 10 起動、全体 30 区分まで |
@@ -34,12 +34,12 @@
 | `diagnostics/hooks-pending.jsonl.importing` | 取り込み中の `hooks-pending.jsonl`。この名前に移してから読み、読み終えたら消す。残っていれば次の取り込みで先に読む |
 | `diagnostics/hooks-pending.lock` | `hooks-pending.jsonl` の追記と取り込みの排他。中身は持ち主の pid で、取り込む側は、持ち主が終わっているか、pid の無いまま 10 秒たったロックを消して取り直す |
 | `start.lock` | 常駐サーバーの起動の排他。10 秒で失効する |
-| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、削除済みセッションの時刻、PR の記録、Codex のセッションの復旧の記録 |
-| `store.json.broken-<時刻>` | 読み込めなかった `store.json` の退避先。時刻は ISO 形式の `:` と `.` を `-` に置き換えたもの。退避した後は保存の無い状態で動く |
+| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、削除済みセッションの時刻、PR の記録、Codex のセッションの復旧の記録。不在は既定値で開始し、その他の読み取りエラーは数回再試行しても読めなければ起動を失敗させる |
+| `store.json.broken-<時刻>` | 解析または形式が壊れた `store.json` の退避先。時刻は ISO 形式の `:` と `.` を `-` に置き換えたもの。退避に成功すれば保存の無い状態で起動し、失敗すれば起動を失敗させる |
 | `tray.json` | タスクトレイの設定 `{notifyPendingCounts}`。許可待ちと判断待ちが増えたときに Windows の通知を出すかを持つ |
 | `browser/` | タスクトレイがダッシュボードを Edge のアプリのウィンドウで開くときのプロファイル(`--user-data-dir`) |
 | `agent-cockpit.ico` | ショートカットのアイコン。`src/tray/install-shortcut.ps1` がタスクトレイのスクリプトから書き出す |
-| `routing.json` | 経路の設定 |
+| `routing.json` | 経路の設定。不在、破損、無効な値は既定値で開始し、その他の読み取りエラーは数回再試行しても読めなければ起動を失敗させる |
 | `route-agents/*.json` | サブエージェント開始時の経路記録。24 時間使われていない記録は次の開始時に削除する |
 
 ## 起動と寿命
@@ -756,12 +756,14 @@ MCP が渡す `ppid` と `CLAUDE_CODE_SESSION_ID` のうち、常駐サーバー
 
 ## 経路の設定
 
-`routing.json` に `{agents, review}` を保存し、値は `default`、`codex`、`claude` のいずれかとする。欠落、破損、無効な値の場合は両方を `default` として読む。
+`routing.json` に `{agents, review}` を保存し、値は `default`、`codex`、`claude` のいずれかとする。欠落、破損、無効な値の場合は両方を `default` として読む。読み取りエラーは数回読み直し、それでも読めなければ常駐サーバーの起動を失敗させる。
 書き込みは `POST /api/routing` だけで受け付け、画面用秘密値と `validRequiredUiOrigin` を照合する。
 ファイルは `AtomicJsonWriter` が一時ファイルから rename して保存する。
 
 `GET /api/state` は現在の経路を返す。`event.js` は Claude セッションの `SubagentStart` で bridge の有無を確認し、bridge がある場合は `route-agents/` の記録があればその値を、記録がなければ現在の `agents` を `route` として送る。route.js を登録していない環境でも現在の設定値を送るため、画面の札を登録漏れの診断に使える。bridge が無ければ `route` を送らない。`event.js` は記録を書き換えない。画面は起動時の値と現在値が異なる稼働中の行に「変更前」を表示する。
 同期フック `route.js` は `SubagentStart` 時点の `agents` を `route-agents/` に記録し、指定がある場合は `additionalContext` へ差し込む。記録名は session ID と agent ID を小文字の 16 進数文字列にして作り、一時ファイルから rename して保存する。`PreToolUse` はこの記録を参照するため、起動後に設定を変えても稼働中の経路は変わらない。Claude 経路では `codex-agent.sh` 呼び出しを拒否し、Codex と既定の経路は拒否しない。同じサブエージェントの `SubagentStart` が再び届いても記録は上書きせず、終了時にも消さない。再開したサブエージェントの経路を初回のまま保つためである。`route.js` が記録を読むたびに更新時刻を進め、開始時に 24 時間使われていない記録を削除する。記録の読み書きに失敗したフックは応答を返さない。
+
+同期フックは `routing.json` の読み取りエラーを数回再試行し、合計 200ms 未満で打ち切る。それでも読めなければ `SubagentStart` に応答せず、`route-agents/` に経路記録を作らない。
 `review` の値は ai-cross-review がレビューを回す直前に `node tools/cross-review.js route` で読む。agent-cockpit 側は保存するだけで、セッションへ差し込まない。
 
 サブエージェントの経路は claude-codex-bridge の `codex-agent.sh` があるときだけ意味を持つ。`GET /api/state` は Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)か `~/.claude` のどちらかに `tools/codex-agent.sh` があるかを `integrations.codexAgent` で返し、画面は無ければサブエージェントの段と経路の札を出さない。`route.js` も同じ場所を確かめ、無ければ `SubagentStart` で何も差し込まない。`~/.claude` も見るのは、bridge が `CLAUDE_CONFIG_DIR` を見ずに `~/.claude/tools/` へ置く作りだからである。

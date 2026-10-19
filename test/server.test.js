@@ -19,6 +19,16 @@ const startServer = options => startRealServer({ readSourceCommit: async () => n
 const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
+function storageFileSystem(overrides) {
+  return new Proxy(fs, {
+    get(target, property) {
+      if (Object.hasOwn(overrides, property)) return overrides[property];
+      const value = target[property];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 test('Claude の SessionStart と Stop の後にモデルを読み、読めないときは前の札を保つ', async (t) => {
   const state = new DashboardState();
   const reads = [];
@@ -2762,6 +2772,122 @@ test('server.json は待ち受け成功後にだけ書く', async (t) => {
   const runtime = await starting;
   t.after(() => runtime.close());
   assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'server.json'), 'utf8')).port, runtime.info.port);
+});
+
+test('store.json を読み直しても EBUSY なら起動に失敗し、保存と server.json を保つ', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const storePath = path.join(homeDir, 'store.json');
+  const serverInfoPath = path.join(homeDir, 'server.json');
+  const storeContents = '{"version":1}';
+  const serverInfoContents = '{"previous":"server"}\n';
+  await fs.writeFile(storePath, storeContents);
+  await fs.writeFile(serverInfoPath, serverInfoContents);
+  const readFile = fs.readFile.bind(fs);
+  let attempts = 0;
+  const fileSystem = storageFileSystem({
+    readFile: async (filePath, ...args) => {
+      if (path.basename(filePath) === 'store.json') {
+        attempts += 1;
+        throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      }
+      return readFile(filePath, ...args);
+    },
+  });
+
+  await assert.rejects(startServer({ homeDir, claudeHome, port: 0, storageOptions: {
+    fileSystem, readRetryOptions: { retryDelaysMs: [0, 0] },
+  } }), (error) => error.code === 'EBUSY');
+
+  assert.equal(attempts, 3);
+  assert.equal(await fs.readFile(storePath, 'utf8'), storeContents);
+  assert.equal((await fs.readdir(homeDir)).some((name) => name.startsWith('store.json.broken-')), false);
+  assert.match(await fs.readFile(path.join(homeDir, 'server.log'), 'utf8'), /store\.json read failed \(EBUSY\)/);
+  assert.equal(await fs.readFile(serverInfoPath, 'utf8'), serverInfoContents);
+});
+
+test('store.json の一時的な EBUSY 後に記録を復元して起動する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const saved = new DashboardState({ homeDir });
+  saved.setTasks('recovered-session', [{ title: '保存済みタスク', state: 'doing', criteria: [{ text: '復元する', met: false }] }]);
+  await saved.flushPersistence();
+  const readFile = fs.readFile.bind(fs);
+  let attempts = 0;
+  const fileSystem = storageFileSystem({
+    readFile: async (filePath, ...args) => {
+      if (path.basename(filePath) === 'store.json' && attempts++ === 0) {
+        throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      }
+      return readFile(filePath, ...args);
+    },
+  });
+
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, storageOptions: {
+    fileSystem, readRetryOptions: { retryDelaysMs: [0] },
+  } });
+  t.after(() => runtime.close());
+
+  assert.equal(attempts, 2);
+  assert.equal(runtime.state.planSummary('recovered-session').tasks[0].title, '保存済みタスク');
+});
+
+test('壊れた store.json の退避に失敗すると起動に失敗する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const storePath = path.join(homeDir, 'store.json');
+  await fs.writeFile(storePath, '{invalid');
+  const rename = fs.rename.bind(fs);
+  const fileSystem = storageFileSystem({
+    rename: async (source, destination) => {
+      if (path.basename(source) === 'store.json') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return rename(source, destination);
+    },
+  });
+
+  await assert.rejects(startServer({ homeDir, claudeHome, port: 0, storageOptions: { fileSystem } }),
+    (error) => error.code === 'EACCES');
+
+  assert.equal(await fs.readFile(storePath, 'utf8'), '{invalid');
+  assert.equal((await fs.readdir(homeDir)).some((name) => name.startsWith('store.json.broken-')), false);
+  assert.match(await fs.readFile(path.join(homeDir, 'server.log'), 'utf8'), /store\.json quarantine failed \(EACCES\)/);
+});
+
+test('away.json の読み取りが続けて EBUSY なら起動に失敗し、壊れた JSON は既定値で起動する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const awayPath = path.join(homeDir, 'away.json');
+  await fs.writeFile(awayPath, JSON.stringify({ enabled: false, since: null, periods: [] }));
+  const readFile = fs.readFile.bind(fs);
+  const fileSystem = storageFileSystem({
+    readFile: async (filePath, ...args) => {
+      if (path.basename(filePath) === 'away.json') throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return readFile(filePath, ...args);
+    },
+  });
+
+  await assert.rejects(startServer({ homeDir, claudeHome, port: 0, storageOptions: {
+    fileSystem, readRetryOptions: { retryDelaysMs: [0, 0] },
+  } }), (error) => error.code === 'EBUSY');
+  assert.match(await fs.readFile(path.join(homeDir, 'server.log'), 'utf8'), /away\.json read failed \(EBUSY\)/);
+
+  await fs.writeFile(awayPath, '{invalid');
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+  assert.deepEqual(runtime.away.snapshot(), { enabled: false, since: null, periods: [] });
+});
+
+test('routing.json の読み取りが続けて EBUSY なら常駐サーバーの起動に失敗する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'claude', review: 'default' }));
+  const readFile = fs.readFile.bind(fs);
+  const fileSystem = storageFileSystem({
+    readFile: async (filePath, ...args) => {
+      if (path.basename(filePath) === 'routing.json') throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return readFile(filePath, ...args);
+    },
+  });
+
+  await assert.rejects(startServer({ homeDir, claudeHome, port: 0, storageOptions: {
+    fileSystem, readRetryOptions: { retryDelaysMs: [0, 0] },
+  } }), (error) => error.code === 'EBUSY');
+  assert.match(await fs.readFile(path.join(homeDir, 'server.log'), 'utf8'), /routing\.json read failed \(EBUSY\)/);
 });
 
 test('EADDRINUSE で負けた同時起動は server.json に触れない', async (t) => {
