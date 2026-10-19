@@ -2016,6 +2016,26 @@ test('複数の gh pr create は順番と推定した product でサーバーへ
   ]);
 });
 
+test('ヒアドキュメント本文の引用符の後で Bash の PR を登録し push を取り直す', async (t) => {
+  const calls = { fresh: [] };
+  const pullRequestTracker = { start() {}, close() {}, snapshot: () => [],
+    refreshRepo() { return Promise.resolve(); },
+    refreshRepoFresh(owner, repo) { calls.fresh.push(`${owner}/${repo}`); return Promise.resolve(); },
+    refreshAfterCommand() { return Promise.resolve(); } };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  const cwd = path.join(runtime.homeDir, 'bash-heredoc-product', '.claude', 'worktrees', 'session');
+  const command = "git commit -F - <<'EOF'\nfix today's thing\nEOF\ngit push && gh pr create --title t --body b";
+  const event = makeHookEvent({ session_id: 'bash-heredoc-pr', hook_event_name: 'PostToolUse', cwd,
+    tool_name: 'Bash', tool_use_id: 'create-heredoc', tool_input: { command },
+    tool_response: { stdout: 'https://github.com/example/project/pull/71' } });
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event) });
+
+  assert.equal(response.status, 202);
+  assert.ok(runtime.state.pullRequestRegistrations().some((record) => record.number === 71));
+  assert.deepEqual(calls.fresh, ['example/project']);
+});
+
 test('Bash の push は cwd の product に PR を登録したリポジトリだけを取り直す', async (t) => {
   const calls = { fresh: [], all: 0 };
   const pullRequestTracker = {
@@ -2134,6 +2154,22 @@ test('PowerShell の PostToolUse 自身の作成判定で PR を登録する', a
   assert.ok(registered);
   assert.equal(registered.cwd, cwd);
   assert.equal(registered.product.key, productFromCwd(cwd).key);
+});
+
+test('ヒア文字列本文の引用符に続く PowerShell の PR 作成を登録する', async (t) => {
+  const pullRequestTracker = { start() {}, close() {}, snapshot: () => [],
+    refreshRepo() { return Promise.resolve(); }, refreshAfterCommand() { return Promise.resolve(); } };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  const cwd = path.join(runtime.homeDir, 'powershell-heredoc-product', '.claude', 'worktrees', 'session');
+  const command = "@'\nfix today's thing\n'@ | gh pr create --title t --body-file -";
+  const event = makeHookEvent({ session_id: 'powershell-heredoc-pr', hook_event_name: 'PostToolUse', cwd,
+    tool_name: 'PowerShell', tool_use_id: 'create-heredoc', tool_input: { command },
+    tool_response: { stdout: 'https://github.com/example/project/pull/72' } });
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event) });
+
+  assert.equal(response.status, 202);
+  assert.ok(runtime.state.pullRequestRegistrations().some((record) => record.number === 72));
 });
 
 test('PowerShell の push は refreshScopeUnknown から全体を取り直す', async (t) => {
