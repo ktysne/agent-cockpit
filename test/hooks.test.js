@@ -739,10 +739,11 @@ test('クロスレビューの fix 起動と node 起動から定義名を選ぶ
     ['node tools/cross-review.js codex\nnode tools/cross-review.js codex --help', 'codex-review'],
     ['node tools/cross-review.js codex\nnode tools/cross-review.js codex --no-codex-agent', 'codex-review'],
     ['node tools/cross-review.js codex\nnpm run review:codex -- --fix', 'codex-review'],
+    ['bash -c "echo `"review start`"; npm run review:codex"', 'codex-review', 'PowerShell'],
   ];
-  for (const [command, definition] of commands) {
+  for (const [command, definition, tool_name = 'Bash'] of commands) {
     const event = makeHookEvent({
-      session_id: 'codex-review-hook', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: command,
+      session_id: 'codex-review-hook', hook_event_name: 'PreToolUse', tool_name, tool_use_id: command,
       tool_input: { command },
     });
     assert.equal(event.codexReviewDefinition, definition, command);
