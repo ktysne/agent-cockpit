@@ -257,7 +257,10 @@ async function requestFromServer(info, requestPath, init, {
       }),
     );
     return result;
-  } catch {
+  } catch (error) {
+    if (error?.code === 'ATTEMPT_TIMEOUT' || error?.code === 'DEADLINE_TIMEOUT') {
+      return { ok: false, status: null, json: null, timedOut: true };
+    }
     return { ok: false, status: null, json: null };
   }
 }
