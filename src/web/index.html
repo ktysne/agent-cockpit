@@ -101,7 +101,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .away-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; white-space: nowrap; }
 .away-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--warn); }
-.away-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.away-toggle:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-button:focus-visible, .settings-dialog button:focus-visible, .settings-dialog select:focus-visible, .settings-dialog input[type="number"]:focus-visible, .settings-dialog .settings-manual-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-dialog { width: min(440px, calc(100vw - 32px)); max-width: calc(100vw - 32px); padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
 .settings-dialog::backdrop { background: rgb(0 0 0 / 55%); }
@@ -117,7 +117,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .settings-mergeable-condition label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 8px; align-items: start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); cursor: pointer; }
 .settings-mergeable-condition input { grid-row: span 2; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
 .settings-mergeable-condition small { color: var(--text-2); font-size: 12px; }
-.settings-mergeable-condition label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-mergeable-condition label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-section-order { margin-top: 14px; }
 .settings-section-order h4 { margin: 0 0 4px; font-size: 13px; }
 .section-order-list { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
@@ -344,7 +344,7 @@ h3.sub .count { font-weight: normal; }
 .merge-btn:disabled, .merge-btn[aria-disabled="true"] { cursor: default; opacity: .55; }
 .reservation-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: var(--text-2); font-size: 12px; cursor: pointer; white-space: nowrap; }
 .reservation-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
-.reservation-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.reservation-toggle:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .reservation-toggle.disabled { cursor: wait; opacity: .65; }
 .merge-confirm { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--ok); border-radius: 8px; background: var(--surface); font-size: 13px; }
 .conflict-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 1px solid var(--danger); border-radius: 8px; background: transparent; color: var(--danger); cursor: pointer; }
@@ -4161,6 +4161,9 @@ function rememberActionFocus(key, button) {
   const focusData = focusDataFor(button);
   if (focusData) actionFocusRestores.set(key, focusData);
 }
+
+// 応答待ちの間に利用者が別の場所を押したら、応答後の再描画で操作した部品へフォーカスを奪い返さない。
+document.addEventListener('pointerdown', () => actionFocusRestores.clear(), true);
 
 function render(state) {
   if (answerNoteComposing) {
