@@ -58,7 +58,9 @@ function segmentStartsWithEnv(segment) {
 function codexAgentInvocations(command, isScript, prepare = (text) => [text], depth = 0, toolName = 'Bash') {
   if (typeof command !== 'string') return [];
   if (depth >= 8) return [];
-  return prepare(command).flatMap((text) => commandSegments(text, toolName)).flatMap((segment) => {
+  // PowerShell の行継続(逆引用符と改行)は、語の解析で引数として残らないよう空白にする。
+  const joined = toolName === 'PowerShell' ? command.replace(/`\r?\n/g, ' ') : command;
+  return prepare(joined).flatMap((text) => commandSegments(text, toolName)).flatMap((segment) => {
     let ungrouped = segment.trim();
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();

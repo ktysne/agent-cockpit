@@ -40,6 +40,7 @@ test('PowerShell の開始イベントから Codex 起動、待機、レビュ�
     ['npm run review:codex', 'codexReviewDefinition', 'codex-review', 'codexDefinition', 'codex-review'],
     ['Set-Location "D:\\repo\\"; bash "$HOME/.claude/tools/codex-agent.sh" impl-hard',
       'codexLaunchDefinition', 'impl-hard', 'codexDefinition', 'impl-hard'],
+    ['bash `\n  "$HOME/.claude/tools/codex-agent.sh" impl-light', 'codexLaunchDefinition', 'impl-light', 'codexDefinition', 'impl-light'],
   ];
   for (const [command, field, expected, sanitizedField, sanitizedExpected] of cases) {
     const event = makeHookEvent({ session_id: 'powershell-codex', hook_event_name: 'PreToolUse',
