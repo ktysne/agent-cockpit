@@ -103,7 +103,7 @@ function fakeRepository(overrides = {}) {
   return { repo, dependencies, log };
 }
 
-// 版を手で上げた main を表す。
+// バージョンを手で上げた main を表す。
 function handBumped() {
   return fakeRepository({
     files: {
@@ -114,12 +114,12 @@ function handBumped() {
   });
 }
 
-test('版は 1.0.2 と v1.0.2 の両方を受け、X.Y.Z とタグに正規化する', () => {
+test('バージョンは 1.0.2 と v1.0.2 の両方を受け、X.Y.Z とタグに正規化する', () => {
   assert.deepEqual(parseVersion('1.0.2'), { version: '1.0.2', tag: 'v1.0.2' });
   assert.deepEqual(parseVersion('v1.0.2'), { version: '1.0.2', tag: 'v1.0.2' });
 });
 
-test('形式に合わない版は、git を呼ばずに拒否する', () => {
+test('形式に合わないバージョンは、git を呼ばずに拒否する', () => {
   for (const input of ['1.0', 'v1.0', '01.0.1', '1.0.1-rc.1', 'vv1.0.1', '', undefined]) {
     const { repo, dependencies } = fakeRepository();
     assert.throws(() => inspectRelease(input, dependencies), /バージョンは 1\.2\.3 または v1\.2\.3 の形式/);
@@ -142,17 +142,17 @@ test('新規のリリースで HEAD が origin/main と違えば拒否する', (
   assert.throws(() => inspectRelease('1.0.2', dependencies), /origin\/main と同じコミットではありません/);
 });
 
-test('origin の最新の版以下の版は拒否する', () => {
+test('origin の最新のバージョン以下は拒否する', () => {
   const { dependencies } = fakeRepository({ remoteTags: { 'v1.0.5': OTHER } });
   assert.throws(() => inspectRelease('1.0.4', dependencies), /最新のバージョン v1\.0\.5 以下です/);
 });
 
-test('package.json の現在の版以下の版は拒否する', () => {
+test('package.json の現在のバージョン以下は拒否する', () => {
   const { dependencies } = fakeRepository();
   assert.throws(() => inspectRelease('1.0.0', dependencies), /現在のバージョン 1\.0\.1 以下です/);
 });
 
-test('版の大小は 3 つの整数で比べ、1.0.10 は 1.0.9 より新しいと扱う', () => {
+test('バージョンの大小は 3 つの整数で比べ、1.0.10 は 1.0.9 より新しいと扱う', () => {
   const { dependencies } = fakeRepository({ remoteTags: { 'v1.0.9': OTHER } });
   assert.equal(inspectRelease('1.0.10', dependencies).tag, 'v1.0.10');
   assert.throws(() => inspectRelease('1.0.9', fakeRepository({ remoteTags: { 'v1.0.10': OTHER } }).dependencies), /最新のバージョン v1\.0\.10 以下です/);
@@ -205,7 +205,7 @@ test('LF の package.json は LF のまま、末尾の改行が無ければ無�
   assert.equal(rewriteVersion('{\n  "version": "1.0.1"\n}', '1.0.2', false), '{\n  "version": "1.0.2"\n}');
 });
 
-test('コミットが失敗したら、版のファイルを元に戻して止まる', () => {
+test('コミットが失敗したら、バージョンのファイルを元に戻して止まる', () => {
   const { repo, dependencies } = fakeRepository({ commitFails: true });
 
   assert.throws(() => runRelease('1.0.2', dependencies), /git commit .*が失敗しました: hook failed/);
@@ -215,7 +215,7 @@ test('コミットが失敗したら、版のファイルを元に戻して止�
   assert.equal(repo.calls.some(call => call.startsWith('push')), false);
 });
 
-test('版のコミットだけが未 push の再実行では、test を流してから push-commit 以降へ進む', () => {
+test('バージョンのコミットだけが未 push の再実行では、test を流してから push-commit 以降へ進む', () => {
   const { repo, dependencies } = fakeRepository({
     head: RELEASE_COMMIT,
     originMain: HEAD,
@@ -234,7 +234,7 @@ test('版のコミットだけが未 push の再実行では、test を流して
   assert.equal(repo.remoteTags['v1.0.2'], RELEASE_COMMIT);
 });
 
-test('未 push のコミットが版の更新以外のファイルを含めば拒否する', () => {
+test('未 push のコミットがバージョンの更新以外のファイルを含めば拒否する', () => {
   const { dependencies } = fakeRepository({
     head: RELEASE_COMMIT,
     parents: [HEAD],
@@ -244,7 +244,7 @@ test('未 push のコミットが版の更新以外のファイルを含めば�
   assert.throws(() => inspectRelease('1.0.2', dependencies), /バージョンを上げるコミットでもありません/);
 });
 
-test('未 push のコミットが package.json の版以外の項目も変えていれば拒否する', () => {
+test('未 push のコミットが package.json のバージョン以外の項目も変えていれば拒否する', () => {
   const bumped = PACKAGE_JSON.replace('1.0.1', '1.0.2');
   const { dependencies } = fakeRepository({
     head: RELEASE_COMMIT,
@@ -280,7 +280,7 @@ test('注釈つきタグは、実体のコミットを見て済みと判定す�
   assert.deepEqual(inspectRelease('1.0.2', dependencies).steps, []);
 });
 
-test('版を手で上げた main では、test、tag、push-tag が残る', () => {
+test('バージョンを手で上げた main では、test、tag、push-tag が残る', () => {
   const { dependencies } = handBumped();
 
   assert.deepEqual(inspectRelease('1.0.2', dependencies).steps, ['test', 'tag', 'push-tag']);
@@ -300,7 +300,7 @@ test('ローカルの同名タグが HEAD 以外を指せば拒否する', () =>
   assert.throws(() => inspectRelease('1.0.2', dependencies), /ローカルの v1\.0\.2 は HEAD 以外を指しています/);
 });
 
-test('plan は残りの手順を番号つきで表示し、更新手順の節が無い版では追加作業の案内を出す', () => {
+test('plan は残りの手順を番号つきで表示し、更新手順の節が無いバージョンでは追加作業の案内を出す', () => {
   const { dependencies, log } = fakeRepository();
 
   planRelease('1.0.2', dependencies);
@@ -340,7 +340,7 @@ test('run は plan の後に状態が変わって手順が済んでいたら、�
   assert.equal(tests, 1);
 });
 
-test('origin の版タグのうち最大の版を、注釈つきタグの実体を見て求める', () => {
+test('origin のバージョンのタグのうち最大のバージョンを、注釈つきタグの実体を見て求める', () => {
   const { dependencies } = fakeRepository({
     remoteLines: [
       `${OTHER}\trefs/tags/v1.0.9`,
@@ -354,7 +354,7 @@ test('origin の版タグのうち最大の版を、注釈つきタグの実体�
   assert.equal(latestReleaseTag(dependencies), 'v1.0.10');
 });
 
-test('origin に版タグが 1 つも無いときは、最新の版を無しとして返す', () => {
+test('origin にバージョンのタグが 1 つも無いときは、最新のバージョンを無しとして返す', () => {
   const { dependencies } = fakeRepository({ remoteLines: `${OTHER}\trefs/tags/nightly\n` });
 
   assert.equal(latestReleaseTag(dependencies), null);
@@ -370,7 +370,7 @@ test('report はサーバーが無いか health を取得できなければ停�
   }
 });
 
-test('report は版とタグのコミットが一致する稼働中サーバーを公開した版と案内する', async () => {
+test('report はバージョンとタグのコミットが一致する稼働中サーバーを公開したバージョンと案内する', async () => {
   const lines = [];
   const info = { port: 47821, pid: 123, startedAt: 'now' };
   await main(['report', 'v1.0.2'], { log: line => lines.push(line),
@@ -410,7 +410,7 @@ test('report は release と確認できないソース状態では同じコー�
   }
 });
 
-test('report は版またはコミットが違うサーバーを切り替えず再起動を案内する', async () => {
+test('report はバージョンまたはコミットが違うサーバーを切り替えず再起動を案内する', async () => {
   for (const changes of [{ version: '1.0.1' }, { commit: OTHER }]) {
     const lines = [];
     const info = { port: 47821, pid: 123, startedAt: 'now' };

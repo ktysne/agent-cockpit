@@ -377,7 +377,7 @@ async function loadDiagnosticRun(run) {
   return response.json();
 }
 
-// 一覧の取得後にソースの状態が確定することがあるため、起動ごとの取得で版を差し替える。
+// 一覧の取得後にソースの状態が確定することがあるため、起動ごとの取得でバージョンを差し替える。
 function withLoadedRuntime(run, data) {
   return data.runtime !== undefined ? { ...run, runtime: data.runtime } : run;
 }

@@ -156,7 +156,7 @@ async function startDemoServer(options = {}) {
       codexHome,
       userHome,
       port: options.port ?? 0,
-      // 画像がリリースごとに変わらないよう、実行環境の版を使わない。
+      // 画像がリリースごとに変わらないよう、実行環境のバージョンを使わない。
       appVersion: null,
       readSourceCommit: async () => null,
       readSourceState: () => 'unknown',

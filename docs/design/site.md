@@ -7,7 +7,7 @@ https://ktysne.info/agent-cockpit/ に置く紹介ページの構成と、画面
 
 - **説明の正本は README と `docs/setup.md`**:ページには、README にある導入の依頼文と、README と手順書へのリンクだけを置く。導入の手順、連携ツールの設定、確認の方法をページに写すと、片方だけが直って食い違うためである。
 - **ダウンロードの導線は置かない**:Agent Cockpit は zip で配らず、リポジトリを置いて AI に導入させる。ほかの紹介ページのダウンロードの欄は、導入の依頼文をコピーする欄に置き換える。
-- **版の差し込みは無い**:版ごとの値を持たないので、テンプレートではなく `site/index.html` をそのまま配る。
+- **バージョンの差し込みは無い**:バージョンごとの値を持たないので、テンプレートではなく `site/index.html` をそのまま配る。
 - **ライセンス**:ほかのアプリと同じく、紹介ページの横に `license.html` を置き、本体のライセンスと、同梱する第三者のソフトウェアを書く。本体は MIT License で、`license.html` には、リポジトリ直下の `LICENSE` と同じ全文を載せる。利用者は公開リポジトリのソースを取得して使うので、利用、改変、再配布の許可をはっきりさせるためである。Agent Cockpit は外部パッケージを使わないので、同梱は無い。外部パッケージを足したら、このページに足す。開発用の依存である `basic-ftp` は配布物に含めないため、このページには載せない。
 - **配色**:ダッシュボードのダークの配色トークン(`src/web/index.html` の `:root[data-theme="dark"]`)を使う。画面の画像がダークで撮られているためである。
 
@@ -79,9 +79,9 @@ Claude Code のメインは Opus 5.5(`claude-opus-5-5`)、Codex のメインは 
 
 1. 初回だけ、`tools/deploy.config.example.json` を `tools/deploy.config.json` にコピーし、接続情報を書く。このファイルは認証情報を含むので、Git で管理しない。ファイルの代わりに、環境変数 `AGENT_COCKPIT_FTP_HOST`、`AGENT_COCKPIT_FTP_USER`、`AGENT_COCKPIT_FTP_PASSWORD`、`AGENT_COCKPIT_FTP_REMOTE_ROOT` でも設定できる。
 2. `npm install` で開発用の依存を入れる。
-3. リポジトリ直下の `deploy-site.bat` をダブルクリックする。送る前の検査と、送るファイルとリモートのパスの表示が済んだ後に、送るかを尋ねられるので、`y` を入力する。リリースに合わせて版を入れて送るときは、`release.bat` を使う(「版とタグ」を参照)。
+3. リポジトリ直下の `deploy-site.bat` をダブルクリックする。送る前の検査と、送るファイルとリモートのパスの表示が済んだ後に、送るかを尋ねられるので、`y` を入力する。リリースに合わせてバージョンを入れて送るときは、`release.bat` を使う(「バージョンとタグ」を参照)。
 
-`deploy-site.bat` は、Node.js の版、`basic-ftp` の有無、コミットしていない変更が無いことを確かめてから送る。
+`deploy-site.bat` は、Node.js のバージョン、`basic-ftp` の有無、コミットしていない変更が無いことを確かめてから送る。
 main 以外のブランチでは警告を出す。
 `deploy-site.bat --dry-run` は、コミットしていない変更があっても警告だけで進み、送らずに終わる。
 bat を使わないときは、`npm run site:deploy:dry` で確かめてから `npm run site:deploy` で送る。
@@ -96,16 +96,16 @@ bat を使わないときは、`npm run site:deploy:dry` で確かめてから `
 同じファイルで 4 回切れたときと、通信以外の理由で止まったときは、もう一度送れば揃う。
 置き換えの途中で止まると、配信先に `.uploading` や `.previous` の付いたファイルが残ることがあるが、公開するファイルは次の配信で置かれる。
 
-### 版とタグ
+### バージョンとタグ
 
-紹介ページの「AI に導入を頼む」ボタンの中の `data-site-version` の要素に、版を入れて送る。
-版は `vX.Y.Z` の形式で、`tools/site-deploy.js` の `--version` で指定する。
-指定が無いときは、`git ls-remote --tags origin` の正式な版タグの最大を使う。版タグが 1 つも無いときは、版を空にして警告を出す。
+紹介ページの「AI に導入を頼む」ボタンの中の `data-site-version` の要素に、バージョンを入れて送る。
+バージョンは `vX.Y.Z` の形式で、`tools/site-deploy.js` の `--version` で指定する。
+指定が無いときは、`git ls-remote --tags origin` の正式なバージョンのタグの最大を使う。バージョンのタグが 1 つも無いときは、バージョンを空にして警告を出す。
 リポジトリの `site/index.html` は書き換えず、送る内容だけを一時ファイルで置き換える。要素がちょうど 1 個でなければ、何も送らずに止まる。
 
-`deploy-site.bat` は `--version` を渡さず、origin の最新の版タグを入れて、配信だけを行う。
-版を上げてタグを作る処理は、リポジトリ直下の `release.bat` が行う。
-`release.bat` は、版を尋ね、`tools/release.js plan <版>` で残りの手順を表示し、確認の後に `tools/release.js run <版>` を実行し、続けて `--version vX.Y.Z` を渡して配信する。
+`deploy-site.bat` は `--version` を渡さず、origin の最新のバージョンのタグを入れて、配信だけを行う。
+バージョンを上げてタグを作る処理は、リポジトリ直下の `release.bat` が行う。
+`release.bat` は、バージョンを尋ね、`tools/release.js plan <バージョン>` で残りの手順を表示し、確認の後に `tools/release.js run <バージョン>` を実行し、続けて `--version vX.Y.Z` を渡して配信する。
 
 `tools/release.js` の手順は、次の 5 つである。
 
@@ -116,17 +116,17 @@ bat を使わないときは、`npm run site:deploy:dry` で確かめてから `
 5. `push-tag`: `vX.Y.Z` を origin へ push する。
 
 `plan` と `run` は、同じ判定で今の git の状態から残りの手順を求める。`run` は手順の直前に状態を求め直し、予定した手順が残っているときだけ実行する。
-実行の記録は持たないので、同じ版でもう一度実行すれば、済んだ手順を飛ばして続きから進む。
+実行の記録は持たないので、同じバージョンでもう一度実行すれば、済んだ手順を飛ばして続きから進む。
 
 - ブランチが `main` でないとき、コミットしていない変更があるときは、止まる。
-- `package.json` の `version` が指定の版と違う新規のリリースでは、HEAD が `origin/main` と同じで、指定の版が origin の最新の版と現在の版より新しいことを確かめる。残りは `test` から `push-tag` までのすべてである。
-- 指定の版と `version` が同じときは、再実行か、版を手で上げた `main` として扱う。HEAD が `origin/main` の 1 コミット先で、そのコミットが `package.json` と `package-lock.json` だけを変えているなら、`push-commit` が残る。それ以外のずれは止まる。
+- `package.json` の `version` が指定のバージョンと違う新規のリリースでは、HEAD が `origin/main` と同じで、指定のバージョンが origin の最新のバージョンと現在のバージョンより新しいことを確かめる。残りは `test` から `push-tag` までのすべてである。
+- 指定のバージョンと `version` が同じときは、再実行か、バージョンを手で上げた `main` として扱う。HEAD が `origin/main` の 1 コミット先で、そのコミットが `package.json` と `package-lock.json` だけを変えているなら、`push-commit` が残る。それ以外のずれは止まる。
 - origin の同名タグが HEAD を指していれば、タグは済みとする。別のコミットを指していれば止まる。ローカルの同名タグが HEAD を指していれば `tag` は済みで、別のコミットを指していれば止まる。
 - `test` は、タグがローカルにも origin にも無いときに必ず最初に実行する。未 push のコミットを誰が作ったかは git の状態から分からないためである。
-- 未 push のコミットは、`package.json` と `package-lock.json` の版の項目だけを変えたときに限って受け付ける。
-- `bump` のコミットが失敗したら、版のファイルを元に戻して止まる。書き換えたまま残すと、再実行が未コミットの変更で止まるためである。
+- 未 push のコミットは、`package.json` と `package-lock.json` のバージョンの項目だけを変えたときに限って受け付ける。
+- `bump` のコミットが失敗したら、バージョンのファイルを元に戻して止まる。書き換えたまま残すと、再実行が未コミットの変更で止まるためである。
 
-`docs/update.md` に `### vX.Y.Z` の節が無い版では、追加作業の手順を先に書くよう案内を表示する。
+`docs/update.md` に `### vX.Y.Z` の節が無いバージョンでは、追加作業の手順を先に書くよう案内を表示する。
 `main` の ruleset で直接の push を拒否すると、`push-commit` が失敗する。
 
 ### 送る対象

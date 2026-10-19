@@ -76,7 +76,7 @@ test('ensure-server は空きポートでサーバーを起動し、ポートだ
   assert.ok(!result.stdout.includes('secret'));
 });
 
-test('ensure-server --verify は照合結果と版だけを JSON で出力し、mismatch でも起動情報があれば成功する', async () => {
+test('ensure-server --verify は照合結果とバージョンだけを JSON で出力し、mismatch でも起動情報があれば成功する', async () => {
   for (const [result, running, expectedLine] of [
     ['mismatch', { version: '1.3.0', commit: 'private', sourceState: 'dirty' },
       '{"port":47821,"pid":456,"result":"mismatch","expected":{"version":"1.4.0"},"running":{"version":"1.3.0"}}\n'],

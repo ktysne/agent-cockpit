@@ -46,7 +46,7 @@ function runStartedAt(run) {
   return `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(9, 11)}:${stamp.slice(11, 13)}:${stamp.slice(13, 15)}.${stamp.slice(15, -1) || '000'}Z`;
 }
 
-// 起動時の区分は保持上限で消えることがあるため、区分の切り替えの mark も版の出どころにする。
+// 起動時の区分は保持上限で消えることがあるため、区分の切り替えの mark もバージョンの出どころにする。
 function runtimeRecords(entries) {
   const identity = entries.find(entry => ['server.start', 'diagnostics.rotate'].includes(entry.msg)
     && (entry.data.version || entry.data.commit));
@@ -251,13 +251,13 @@ class Diagnostics {
     });
   }
 
-  // 過去の起動に現在のサーバーの版を補わない。記録が無ければ null(版不明)とする。
+  // 過去の起動に現在のサーバーのバージョンを補わない。記録が無ければ null(バージョン不明)とする。
   runRuntime(run, runtime, sourceState) {
     if (run === this.run && this.runtime) return { ...this.runtime };
     return runtime ? { ...runtime, sourceState: sourceState || 'unknown' } : null;
   }
 
-  /** 起動の記録から、その起動を書いたサーバーの版を求める。 */
+  /** 起動の記録から、その起動を書いたサーバーのバージョンを求める。 */
   runtimeOfEntries(run, entries) {
     const { runtime, sourceState } = runtimeRecords(entries);
     return this.runRuntime(run, runtime, sourceState);

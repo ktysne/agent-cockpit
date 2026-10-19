@@ -46,7 +46,7 @@ Codex から呼ばれた MCP の書き込み先を、フックで登録したセ
 - Codex の `hooks.json` に、`node "<リポジトリ>/src/hooks/event.js" codex` を同期のフックとして登録する。登録するイベントは `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PermissionRequest`、`PostToolUse`、`Stop`、`Interrupt`、`SessionEnd`、`SubagentStart`、`SubagentStop` である。
   - 開発者が Codex の `/hooks` で信頼するまで、フックは動かない。
   - 非同期(`async: true`)にしない。PoC #157 で、非同期のフックは短い実行で 1 件も記録されなかったためである。
-- provider は引数 `codex` で決める。入力の形から推測しない。Claude と Codex の入力は項目がほぼ同じで、推測は版の変更で静かに外れるためである。
+- provider は引数 `codex` で決める。入力の形から推測しない。Claude と Codex の入力は項目がほぼ同じで、推測はバージョンの変更で静かに外れるためである。
   - フックは引数を `event.provider` に載せて送る。常駐サーバーは `claude` と `codex` 以外を捨て、無ければ `claude` とみなす。Claude の既存のフックは引数を渡さないので、今の挙動が変わらない。
 - MCP は Codex の `config.toml` に `[mcp_servers.agent-cockpit]` として、Claude と同じ `src/mcp/server.js` を登録する。
 
