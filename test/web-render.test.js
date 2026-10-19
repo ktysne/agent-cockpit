@@ -4175,12 +4175,15 @@ function renderFocusHarness() {
   return {
     context,
     draw(active, nextControls, remembered = null, nextModeControls = []) {
+      context.actionFocusRestores?.clear();
+      if (remembered) context.rememberFocus(remembered);
+      return this.paint(active, nextControls, nextModeControls);
+    },
+    paint(active, nextControls, nextModeControls = []) {
       activeElement = active;
       controls = nextControls;
       modeControls = nextModeControls;
       [...controls, ...modeControls].forEach((control) => { control.onFocus = (target) => { activeElement = target; }; });
-      context.actionFocusRestores?.clear();
-      if (remembered) context.rememberFocus(remembered);
       context.render(context.lastState);
       return activeElement;
     },
@@ -4234,6 +4237,22 @@ test('マージ確認は disabled の戻し先を飛ばし、キャンセルと�
   assert.equal(harness.draw(focusControl({ mergeCancel: key, mergeKey: key }, { 'data-merge-cancel': '' }), [disabledCancel, availableOpener, alternativeMethod]), availableOpener);
   assert.equal(harness.draw(focusControl({ mergeCancel: key, mergeKey: key }, { 'data-merge-cancel': '' }), [disabledCancel, opener, alternativeMethod]), alternativeMethod);
   assert.equal(harness.draw(harness.body, [go, cancel], { kind: 'merge-go', key }), cancel);
+});
+
+test('応答待ちの間に別の場所を押したら、応答後の再描画で操作した部品へフォーカスを戻さない', () => {
+  const harness = renderFocusHarness();
+  const listeners = {};
+  harness.context.document.addEventListener = (type, listener) => { listeners[type] = listener; };
+  vm.runInContext(pageHtml.match(/^document\.addEventListener\('pointerdown'.*$/m)[0], harness.context);
+  const key = 'merge-key';
+  const reservationToggle = () => focusControl({ mergeKey: key, reservationToggle: key }, { 'data-reservation-toggle': '' });
+
+  const restored = reservationToggle();
+  assert.equal(harness.draw(harness.body, [restored], { kind: 'merge-reservation-toggle', key }), restored);
+
+  harness.context.rememberFocus({ kind: 'merge-reservation-toggle', key });
+  listeners.pointerdown();
+  assert.equal(harness.paint(harness.body, [reservationToggle()]), harness.body);
 });
 
 test('既読、サブエージェント、キュー、PR リンクのフォーカスを再描画後も戻す', () => {
