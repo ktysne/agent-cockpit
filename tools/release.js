@@ -14,7 +14,7 @@ function isReleaseTag(value) {
   return typeof value === 'string' && RELEASE_TAG_PATTERN.test(value);
 }
 
-// 版は 3 つの整数で比べる。桁が増えても文字列の順にならないようにするため。
+// バージョンは 3 つの整数で比べる。桁が増えても文字列の順にならないようにするため。
 function compareReleaseTags(left, right) {
   const a = RELEASE_TAG_PATTERN.exec(left).slice(1).map(BigInt);
   const b = RELEASE_TAG_PATTERN.exec(right).slice(1).map(BigInt);
@@ -62,13 +62,13 @@ function gitRunner(dependencies = {}) {
   };
 }
 
-// site-deploy.js が紹介ページに入れる版にも使う。origin の正式な版タグの最大を返し、無ければ null を返す。
+// site-deploy.js が紹介ページに入れるバージョンにも使う。origin の正式なバージョンのタグの最大を返し、無ければ null を返す。
 function latestReleaseTag(dependencies = {}) {
   const git = gitRunner(dependencies);
   return latestOf(remoteTagCommits(git(['ls-remote', '--tags', 'origin'])).keys());
 }
 
-// `1.2.3` と `v1.2.3` を受け、版 `X.Y.Z` とタグ `vX.Y.Z` に正規化する。
+// `1.2.3` と `v1.2.3` を受け、バージョン `X.Y.Z` とタグ `vX.Y.Z` に正規化する。
 function parseVersion(input) {
   const text = String(input ?? '');
   const tag = text.startsWith('v') ? text : 'v' + text;
@@ -88,7 +88,7 @@ function packageVersion(dependencies) {
   return JSON.parse(read(path.join(ROOT, 'package.json'))).version;
 }
 
-// 版の更新は package.json と package-lock.json だけを変える。コミットがほかのファイルを含まないことを再実行の判定が頼りにする。
+// バージョンの更新は package.json と package-lock.json だけを変える。コミットがほかのファイルを含まないことを再実行の判定が頼りにする。
 function rewriteVersion(text, version, isLockfile) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const json = JSON.parse(text);
@@ -137,7 +137,7 @@ function withoutVersion(text) {
   return JSON.stringify(json);
 }
 
-// 未 push のコミットは、版の項目だけを変えたときに限って受け付ける。scripts や依存の変更が混ざったコミットを版の更新として push しないため。
+// 未 push のコミットは、バージョンの項目だけを変えたときに限って受け付ける。scripts や依存の変更が混ざったコミットをバージョンの更新として push しないため。
 function isVersionCommit(git, originMain) {
   const parents = git(['rev-list', '--parents', '-n', '1', 'HEAD']).trim().split(/\s+/).slice(1);
   if (parents.length !== 1 || parents[0] !== originMain) return false;
@@ -235,7 +235,7 @@ function executeStep(step, { version, tag }, dependencies) {
       (dependencies.runNpmTest ?? runNpmTest)();
       return;
     case 'bump':
-      // コミットまで済まなければ版のファイルを戻す。書き換えたまま残すと、再実行が未コミットの変更で止まるため。
+      // コミットまで済まなければバージョンのファイルを戻す。書き換えたまま残すと、再実行が未コミットの変更で止まるため。
       try {
         updateVersionFiles(version, dependencies);
         git(['add', ...VERSION_FILES]);

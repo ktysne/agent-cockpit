@@ -155,7 +155,7 @@ function projectCodexDirs(cwd, codexHome) {
 }
 
 // Codex に同梱されたマーケットプレイスのプラグインは Codex 本体の一部として扱う。
-// 同梱のフックは版の更新で増え、そのたびに信頼の記録が無い状態になるため。
+// 同梱のフックはバージョンの更新で増え、そのたびに信頼の記録が無い状態になるため。
 const BUNDLED_MARKETPLACES = new Set(['openai-bundled']);
 
 // --dangerously-bypass-hook-trust は有効なフックをすべて動かすので、信頼の記録が無い既存のフックがあれば起動しない。
@@ -178,7 +178,7 @@ function untrustedExistingHooks(codexHome, cwd) {
     const pluginDir = path.join(codexHome, 'plugins', 'cache', marketplace || '', name || '');
     let versions = [];
     try { versions = fs.readdirSync(pluginDir); } catch {}
-    // 実行時に選ばれる版を確かめる手段が無いので、キャッシュにあるすべての版を検査する。
+    // 実行時に選ばれるバージョンを確かめる手段が無いので、キャッシュにあるすべてのバージョンを検査する。
     for (const version of versions) entries.push(...pluginVersionEntries(path.join(pluginDir, version), plugin));
   }
   for (const entry of new Map(entries.map((item) => [item.key, item])).values()) {
