@@ -369,9 +369,10 @@ test('一覧にマージ可否の計算中のPRがあれば5秒後の取り直�
   github.openPullRequests.push(ghPullRequest(31, 'feature/31', 'main', { mergeable: 'UNKNOWN' }));
   const scheduled = [];
   const deferRefresh = tracker.deferRefresh.bind(tracker);
-  tracker.deferRefresh = (...args) => {
-    scheduled.push(args);
-    deferRefresh(...args);
+  // 負荷が高いと refreshRepo が 5 秒を超え、assert の前にタイマーが発火して予約が消えるため、待ちを延ばして予約する。
+  tracker.deferRefresh = (owner, repo, delayMs) => {
+    scheduled.push([owner, repo, delayMs]);
+    deferRefresh(owner, repo, 60 * 60_000);
   };
 
   try {

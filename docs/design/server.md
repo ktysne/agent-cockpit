@@ -775,7 +775,8 @@ items は 12 件、content は 200 文字までとし、不正な形や content 
 題は 200 文字、本文は 2,000 文字、タスクは 50 件、完了条件は 20 件、選択肢は 6 件までに制限する。
 
 MCP サーバーは `src/mcp/server.js` で、JSON-RPC を stdio の行単位で扱う。
-ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision`、`cockpit_add_pr`、`cockpit_skip_review` の 5 つである。
+ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision`、`cockpit_report_launch`、`cockpit_add_pr`、`cockpit_skip_review` の 6 つである。
+`cockpit_report_launch` は判断事項の `id` と、`url`(http か https)または `process` のどちらか一方を受け取る(扱いは「タスクと判断事項」の節)。
 `cockpit_add_pr` は PR の `url` に加え、任意の `cwd`(絶対パスの文字列、4096 文字まで)を受け取る。
 計画の変更は `ensureServerRunning` で常駐サーバーを確かめ、`secret` 付きで `/plan` に送る。PR の登録とクロスレビュー不要の記録は `/prs` に送る。
 MCP が渡す `ppid` と `CLAUDE_CODE_SESSION_ID` のうち、常駐サーバーはまず `ppid` から `~/.claude/sessions/*.json` に対応する session ID を探し、見つからない場合に環境変数の ID を使う。どちらも無ければ書き込みを拒否する。
