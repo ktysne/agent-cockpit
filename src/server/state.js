@@ -2204,7 +2204,8 @@ class DashboardState {
     const reclassifiedDelegatedThread = event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition
       ? this.reclassifyDelegatedThreads(event.session_id, event.hookAt) : false;
 
-    if (event.hook_event_name === 'SessionEnd') {
+    const ended = event.hook_event_name === 'SessionEnd' && nextSessions.length === 0;
+    if (ended) {
       this.diagnostics?.record('info', event.provider === 'codex' ? 'codex' : 'server', 'session.ended',
         { session: event.session_id.slice(0, 8), provider: event.provider, reason: 'SessionEnd' });
       this.endSession(event.session_id, event.hookAt);
@@ -2217,7 +2218,7 @@ class DashboardState {
       clearedClosedAgent || reclassifiedDelegatedThread || correctedAsk || withdrawnAsk || withdrawnLateAsk || endedFileOnlySession) this.touch();
     if (wasHidden) this.requestStoreWrite();
     if (askDecisionStateChanged || withdrawnAsk || withdrawnLateAsk || correctedAsk) this.requestStoreWrite();
-    return true;
+    return event.hook_event_name === 'SessionEnd' ? { ended } : true;
   }
 
   applyTaskNotifications(sessionId, notifications, now = Date.now()) {

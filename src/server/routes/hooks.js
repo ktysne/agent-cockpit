@@ -242,7 +242,8 @@ function createHookRoutes(ctx) {
     let rejected = false;
     const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata,
       diagnostics: ctx.diagnostics, onRejected: () => { rejected = true; } };
-    if (!state.addEvent(body, eventMetadata)) {
+    const eventResult = state.addEvent(body, eventMetadata);
+    if (!eventResult) {
       jsonResponse(response, 202, { accepted: true });
       return;
     }
@@ -259,7 +260,8 @@ function createHookRoutes(ctx) {
     if (event && !event.agent_id) state.noteHookCwd(event.session_id, body.cwd);
     // 終了通知はメインの記録に書かれるので、サブエージェントのイベントのたびには読まない。
     if (event && !event.agent_id) scheduleTaskNotifications(event.session_id);
-    if (event) scheduleSessionModel(event);
+    const lifecycleResult = { ended: eventResult.ended === true };
+    if (event) scheduleSessionModel(event, lifecycleResult);
     if (event && state.deletedSessions.has(event.session_id)
       && event.hookAt <= Date.parse(state.deletedSessions.get(event.session_id))) {
       jsonResponse(response, 202, { accepted: true });
@@ -295,7 +297,7 @@ function createHookRoutes(ctx) {
     if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (
       event.refreshPullRequests || state.wasPullRequestRefreshCommand(event.session_id, event.tool_use_id)
     )) refreshPullRequestsAfterCommand(event);
-    if (event) answerDelivery.afterEvent(event);
+    if (event) answerDelivery.afterEvent(event, lifecycleResult);
     jsonResponse(response, 202, { accepted: true });
   }
 

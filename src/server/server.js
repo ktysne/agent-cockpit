@@ -212,7 +212,7 @@ function createRequestHandler(options) {
     openExternalUrl,
     webPath,
     scheduleTaskNotifications: (sessionId) => options.scheduleTaskNotifications?.(sessionId),
-    scheduleSessionModel: (event) => options.scheduleSessionModel?.(event),
+    scheduleSessionModel: (event, result) => options.scheduleSessionModel?.(event, result),
   };
   const serverRestart = createServerRestart(ctx, options.serverRestart);
   ctx.restartAvailable = serverRestart.restartAvailable;
@@ -523,10 +523,10 @@ async function startServer(options = {}) {
   const observedModelSessions = new Map();
   const modelReader = options.readSessionModel || readSessionModel;
   const claudeSessionFileReader = options.readClaudeSessionFiles || listLiveSessionFiles;
-  function scheduleSessionModel(event) {
+  function scheduleSessionModel(event, { ended = true } = {}) {
     const sessionId = event.session_id;
     if (event.hook_event_name === 'SessionEnd') {
-      endSessionRuntimeCaches(sessionId);
+      if (ended) endSessionRuntimeCaches(sessionId);
       return;
     }
     const known = state.sessions.has(sessionId) || Boolean(state.sessionFileFor(sessionId));

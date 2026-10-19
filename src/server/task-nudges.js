@@ -35,10 +35,10 @@ class TaskNudges {
     return session;
   }
 
-  afterEvent(event) {
+  afterEvent(event, { ended = true } = {}) {
     if (!event || typeof event.session_id !== 'string') return;
     if (event.hook_event_name === 'SessionEnd' && !event.agent_id) {
-      this.sessionEnded(event.session_id);
+      if (ended) this.sessionEnded(event.session_id);
       return;
     }
     const session = this.sessionFor(event.session_id);

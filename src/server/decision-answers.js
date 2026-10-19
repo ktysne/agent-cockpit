@@ -632,13 +632,13 @@ class DecisionAnswerDelivery {
     this.endedSessions.delete(sessionId);
   }
 
-  afterEvent(event) {
+  afterEvent(event, { ended = true } = {}) {
     const { session_id: sessionId, hook_event_name: eventName, tool_use_id: toolUseId } = event;
     if (eventName === 'SessionEnd') {
-      this.sessionEnded(sessionId, event.hookAt);
+      if (ended) this.sessionEnded(sessionId, event.hookAt);
       return;
     }
-    this.taskNudges.afterEvent(event);
+    this.taskNudges.afterEvent(event, { ended });
     if (eventName === 'SessionStart') {
       this.sessionReopened(sessionId);
       if (['startup', 'resume', 'clear'].includes(event.source)) this.lastLifecycleAt.delete(sessionId);
