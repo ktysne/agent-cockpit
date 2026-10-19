@@ -131,7 +131,9 @@ test('待機中の Claude サブエージェントと背景 Codex があるセ�
     assert.equal(response.status, 202);
   };
   for (const id of ['waiting-claude', 'working-claude', 'ended-claude']) {
+    await send(id, { hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'background-call' });
     await send(id, { hook_event_name: 'SubagentStart', agent_id: 'claude-task' });
+    await send(id, { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_use_id: 'background-call' });
   }
   await send('ended-claude', { hook_event_name: 'SubagentStop', agent_id: 'claude-task' });
   await send('ended-claude', { hook_event_name: 'Stop' });
@@ -156,7 +158,9 @@ test('Claude サブエージェントだけが動いている間は空の通知�
   const sessionId = 'claude-only-agent';
   state.syncSessionFiles([{ session_id: sessionId, cwd: runtime.homeDir }]);
   for (const event of [
+    { hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'background-call' },
     { hook_event_name: 'SubagentStart', agent_id: 'claude-task' },
+    { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_use_id: 'background-call' },
     { hook_event_name: 'Stop' },
   ]) {
     const response = await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
@@ -256,6 +260,122 @@ async function interruptionCockpit(t, options = {}) {
   };
 }
 
+async function foregroundPermissionCockpit(t, options = {}) {
+  const c = await interruptionCockpit(t, options);
+  await c.hook('foreground', 'UserPromptSubmit', 0);
+  await c.hook('foreground', 'PreToolUse', 100, { tool_name: 'Agent', tool_use_id: 'call' });
+  await c.hook('foreground', 'SubagentStart', 200, { agent_id: 'child', agent_type: 'Explore' });
+  await c.hook('foreground', 'PreToolUse', 300, { agent_id: 'child', tool_name: 'Bash', tool_use_id: 'child-tool' });
+  await c.hook('foreground', 'Notification', 400, { agent_id: 'child', notification_type: 'permission_prompt', message: '許可してください' });
+  assert.equal(c.status('foreground').status, '許可待ち');
+  return c;
+}
+
+for (const nextTurn of [false, true]) {
+  test(nextTurn ? '前面の許可待ちを中断した次のターンは待機中になる' : 'メインの Interrupt は前面の許可待ちを消して終了未確認にする', async (t) => {
+    const c = await foregroundPermissionCockpit(t);
+    await c.transcript('foreground', [c.promptRow(0), c.interruptedRow(2000)]);
+    await c.sessionFile('foreground', 'idle', 5000);
+    await c.runtime.refreshSessionFiles();
+    if (nextTurn) {
+      await c.hook('foreground', 'UserPromptSubmit', 6000);
+      await c.hook('foreground', 'Stop', 7000);
+    }
+    const session = c.status('foreground');
+    assert.equal(session.status, nextTurn ? '待機中' : '中断');
+    assert.deepEqual(session.permissionWaits, []);
+    assert.deepEqual(session.tools, []);
+    assert.equal(session.agents[0].active, false);
+    assert.equal(session.agents[0].unconfirmed, true);
+    assert.equal(session.agents[0].closable, true);
+  });
+}
+
+test('Agent の中断失敗だけでも結び付いた前面のツールと許可待ちを消す', async (t) => {
+  const c = await foregroundPermissionCockpit(t);
+  await c.hook('foreground', 'PostToolUseFailure', 500, { tool_name: 'Agent', tool_use_id: 'call', isInterrupt: true });
+  const session = c.status('foreground');
+  assert.deepEqual(session.permissionWaits, []);
+  assert.deepEqual(session.tools, []);
+  assert.equal(session.agents[0].active, false);
+  assert.equal(session.agents[0].unconfirmed, true);
+  assert.equal(session.agents[0].closable, true);
+});
+
+test('重なった Agent 呼び出しの中断失敗では曖昧なサブエージェントを終了にしない', async (t) => {
+  const c = await interruptionCockpit(t);
+  await c.hook('ambiguous', 'PreToolUse', 100, { tool_name: 'Agent', tool_use_id: 'call-1' });
+  await c.hook('ambiguous', 'PreToolUse', 200, { tool_name: 'Agent', tool_use_id: 'call-2' });
+  await c.hook('ambiguous', 'SubagentStart', 300, { agent_id: 'child' });
+  await c.hook('ambiguous', 'PreToolUse', 400, { agent_id: 'child', tool_name: 'Bash', tool_use_id: 'child-tool' });
+  await c.hook('ambiguous', 'PermissionRequest', 500, { agent_id: 'child', tool_name: 'Bash', tool_use_id: 'child-tool' });
+  await c.hook('ambiguous', 'PostToolUseFailure', 600, { tool_name: 'Agent', tool_use_id: 'call-1', isInterrupt: true });
+  const session = c.status('ambiguous');
+  assert.equal(session.agents[0].active, true);
+  assert.equal(session.agents[0].unconfirmed, undefined);
+  assert.equal(session.permissionWaits.length, 1);
+  assert.ok(session.tools.some(tool => tool.tool_use_id === 'child-tool'));
+});
+
+test('SubagentStop 済みの行は Agent の中断失敗とメインの Stop で終了未確認にならない', async (t) => {
+  const c = await foregroundPermissionCockpit(t);
+  await c.hook('foreground', 'SubagentStop', 500, { agent_id: 'child' });
+  await c.hook('foreground', 'PostToolUseFailure', 600, { tool_name: 'Agent', tool_use_id: 'call', isInterrupt: true });
+  await c.hook('foreground', 'Stop', 700);
+  const agent = c.status('foreground').agents[0];
+  assert.equal(agent.active, false);
+  assert.equal(agent.unconfirmed, false);
+  assert.equal(agent.closable, undefined);
+});
+
+for (const delayed of [false, true]) {
+  test(delayed ? 'Stop より前の Agent 応答が遅れて届いても背景の稼働を保つ' : '背景のサブエージェントはメインの Stop 後も稼働を保つ', async (t) => {
+    const c = await foregroundPermissionCockpit(t);
+    const response = () => c.hook('foreground', 'PostToolUse', 500, { tool_name: 'Agent', tool_use_id: 'call' });
+    if (!delayed) await response();
+    await c.hook('foreground', 'Stop', 600);
+    if (delayed) await response();
+    const session = c.status('foreground');
+    assert.equal(session.agents[0].active, true);
+    assert.equal(session.agents[0].backgrounded, true);
+    assert.equal(session.permissionWaits.length, 1);
+    assert.ok(session.tools.some(tool => tool.tool_use_id === 'child-tool'));
+  });
+}
+
+test('背景の起動の応答が SubagentStart より先に届いてもメインの Stop 後も稼働を保つ', async (t) => {
+  const c = await interruptionCockpit(t);
+  await c.hook('early-response', 'UserPromptSubmit', 0);
+  await c.hook('early-response', 'PreToolUse', 100, { tool_name: 'Agent', tool_use_id: 'call' });
+  await c.hook('early-response', 'PostToolUse', 200, { tool_name: 'Agent', tool_use_id: 'call', agentId: 'child' });
+  await c.hook('early-response', 'SubagentStart', 220, { agent_id: 'child', agent_type: 'Explore' });
+  await c.hook('early-response', 'PreToolUse', 300, { agent_id: 'child', tool_name: 'Bash', tool_use_id: 'child-tool' });
+  await c.hook('early-response', 'Stop', 400);
+  const session = c.status('early-response');
+  assert.equal(session.status, '待機中(サブエージェント稼働中)');
+  assert.equal(session.agents[0].active, true);
+  assert.equal(session.agents[0].backgrounded, true);
+  assert.ok(session.tools.some(tool => tool.tool_use_id === 'child-tool'));
+});
+
+test('背景の許可待ちを画面から終了にするとツールと待ちを表示から除き状態を決め直す', async (t) => {
+  const c = await foregroundPermissionCockpit(t);
+  await c.hook('foreground', 'PostToolUse', 500, { tool_name: 'Agent', tool_use_id: 'call' });
+  await c.hook('foreground', 'Stop', 600);
+  const response = await request(c.runtime.info.port, {
+    method: 'POST', path: '/api/closed-agents',
+    headers: uiHeaders(c.runtime.info, `http://127.0.0.1:${c.runtime.info.port}`),
+    body: JSON.stringify({ session_id: 'foreground', agent_id: 'child' }),
+  });
+  assert.equal(response.status, 200);
+  const session = jsonBody(await request(c.runtime.info.port, { path: '/api/state' })).sessions[0];
+  assert.equal(session.status, '待機中');
+  assert.deepEqual(session.permissionWaits, []);
+  assert.deepEqual(session.tools, []);
+  assert.equal(session.agents[0].active, false);
+  assert.equal(session.agents[0].closable, undefined);
+});
+
 test('ファイルが idle になり transcript の最後が中断の行のセッションを、その行の時刻で中断にして解除まで保つ', async (t) => {
   const c = await interruptionCockpit(t);
   await c.hook('main', 'UserPromptSubmit', 0);
@@ -342,7 +462,9 @@ test('中断中のセッションも、稼働中のサブエージェントの�
     },
   });
   await c.hook('bg', 'UserPromptSubmit', 0);
+  await c.hook('bg', 'PreToolUse', 50, { tool_name: 'Agent', tool_use_id: 'background-call' });
   await c.hook('bg', 'SubagentStart', 100, { agent_id: 'bg-task', agent_type: 'impl' });
+  await c.hook('bg', 'PostToolUse', 150, { tool_name: 'Agent', tool_use_id: 'background-call' });
   await c.transcript('bg', [c.promptRow(0), c.interruptedRow(2000)]);
   await c.sessionFile('bg', 'idle', 5000);
   await c.runtime.refreshSessionFiles();

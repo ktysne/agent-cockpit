@@ -16,6 +16,7 @@ const {
   fileStatusDecidesState,
   claudeModelName,
   isClosableAgent,
+  sessionStatus,
   sameQuestionSet,
   isFinishedAskDecision,
   sessionStartFor,
@@ -2681,6 +2682,7 @@ class DashboardState {
     const decisions = this.decisionsFor(sessionId);
     const closedAgents = this.closedAgents.get(sessionId) || new Set();
     const isClosedByUser = (agent) => closedAgents.has(agent.agent_id) && isClosableAgent(agent);
+    const closedAgentIds = new Set(base.agents.filter(isClosedByUser).map((agent) => agent.agent_id));
     const updateTimestamps = [base.lastActivityAt, plan?.tasksUpdatedAt, ...decisions.map((decision) => decision.updatedAt)]
       .filter((timestamp) => Number.isFinite(Date.parse(timestamp || '')));
     const lastUpdatedAt = updateTimestamps.reduce((latest, timestamp) => (
@@ -2696,7 +2698,7 @@ class DashboardState {
       product: base.product ? { ...base.product } : null,
       sessionFileUpdatedAt: file?.updatedAt || null,
       lastUpdatedAt,
-      tools: base.tools.map((tool) => ({ ...tool })),
+      tools: base.tools.filter((tool) => !closedAgentIds.has(tool.agent_id)).map((tool) => ({ ...tool })),
       agents: base.agents.map((agent) => {
         const closedByUser = isClosedByUser(agent);
         const snapshotAgent = closedByUser ? { ...agent, active: false, unconfirmed: false } : agent;
@@ -2706,11 +2708,7 @@ class DashboardState {
           lastTool: agent.lastTool && { ...agent.lastTool },
         };
       }),
-      ...(base.status === '待機中(サブエージェント稼働中)'
-        && !base.agents.some((agent) => agent.active && !isClosedByUser(agent))
-        ? { status: '待機中' }
-        : {}),
-      permissionWaits: base.permissionWaits.map((wait) => ({ ...wait })),
+      permissionWaits: base.permissionWaits.filter((wait) => !closedAgentIds.has(wait.agent_id)).map((wait) => ({ ...wait })),
       decisions,
       tasks: (plan?.tasks || []).map((task) => {
         const closed = this.closedTasks.get(sessionId)?.get(task.title);
@@ -2724,6 +2722,7 @@ class DashboardState {
       tasksUpdatedAt: plan?.tasksUpdatedAt || null,
       ...(isNonInteractiveSessionFile(file) ? { nonInteractive: true } : {}),
     };
+    if (session) current.status = sessionStatus(current, session.lifecycle);
     const worktree = this.worktreeInfo.snapshot(this.transcriptCwdFor(sessionId),
       decisions.some(decision => decision.verify && ['waiting', 'provisional'].includes(decision.state)));
     if (worktree) current.worktree = worktree;
