@@ -1848,9 +1848,16 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
   assert.equal(added.status, 200);
   assert.deepEqual(jsonBody(added), {
     owner: 'example', repo: 'project', number: 46,
-    url: 'https://github.com/example/project/pull/46',
+    url: 'https://github.com/example/project/pull/46', created: true,
   });
   assert.equal(runtime.state.pullRequestRegistrations()[0].number, 46);
+  const addedAgain = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pr-session/prs', body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(addedAgain.status, 200);
+  assert.equal(jsonBody(addedAgain).created, false);
+  assert.equal(runtime.state.pullRequestRegistrations().length, 1);
 
   const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
   const hookCwd = path.join(runtime.homeDir, 'session-project', '.claude', 'worktrees', 'session');
