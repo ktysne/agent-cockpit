@@ -62,28 +62,37 @@ async function postHookRequest(body, options = {}) {
   if (!result.ok) return null;
   const response = result.json;
   if (typeof response?.deliveryId === 'string') {
-    try {
-      const acknowledgementDeadline = hasExternalDeadline
-        ? deadline
-        : Math.min(deadline + DELIVERY_ACK_TIMEOUT_MS, now() + DELIVERY_ACK_TIMEOUT_MS);
-      await postToServer('/api/hooks/answers', {
-        action: 'delivery-ack',
-        event_name: 'DeliveryAck',
-        session_id: body.session_id,
-        id: crypto.randomUUID(),
-        delivery_id: response.deliveryId,
-      }, {
-        homeDir,
-        fetchImpl,
-        cache: 'no-store',
-        deadline: acknowledgementDeadline,
-        attemptTimeoutMs: options.attemptTimeoutMs,
-        fileSystem: options.fileSystem,
-        readServerInfo: options.readServerInfo,
-        ensure: false,
-        now,
-      });
-    } catch {
+    const sendAcknowledgement = async () => {
+      try {
+        const acknowledgementDeadline = hasExternalDeadline
+          ? deadline
+          : Array.isArray(options.deferredAcknowledgements)
+            ? now() + DELIVERY_ACK_TIMEOUT_MS
+            : Math.min(deadline + DELIVERY_ACK_TIMEOUT_MS, now() + DELIVERY_ACK_TIMEOUT_MS);
+        await postToServer('/api/hooks/answers', {
+          action: 'delivery-ack',
+          event_name: 'DeliveryAck',
+          session_id: body.session_id,
+          id: crypto.randomUUID(),
+          delivery_id: response.deliveryId,
+        }, {
+          homeDir,
+          fetchImpl,
+          cache: 'no-store',
+          deadline: acknowledgementDeadline,
+          attemptTimeoutMs: options.attemptTimeoutMs,
+          fileSystem: options.fileSystem,
+          readServerInfo: options.readServerInfo,
+          ensure: false,
+          now,
+        });
+      } catch {
+      }
+    };
+    if (Array.isArray(options.deferredAcknowledgements)) {
+      options.deferredAcknowledgements.push(sendAcknowledgement);
+    } else {
+      await sendAcknowledgement();
     }
   }
   return response;
@@ -287,16 +296,32 @@ async function readStdin(stream = process.stdin) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+async function writeStream(stream, text) {
+  await new Promise((resolve, reject) => {
+    stream.write(text, (error) => error ? reject(error) : resolve());
+  });
+}
+
+async function runAnswerHookMain(input, outputStream = process.stdout, errorStream = process.stderr, options = {}) {
+  try {
+    const parsedInput = typeof input === 'string' ? JSON.parse(input) : input;
+    const deferredAcknowledgements = [];
+    const result = await runAnswerHook(parsedInput, { ...options, deferredAcknowledgements });
+    if (result.output) await writeStream(outputStream, `${JSON.stringify(result.output)}\n`);
+    if (result.stderrText) await writeStream(errorStream, result.stderrText);
+    for (const sendAcknowledgement of deferredAcknowledgements) await sendAcknowledgement();
+    return result.exitCode;
+  } catch {
+    return 0;
+  }
+}
+
 async function main() {
   try {
-    const input = JSON.parse(await readStdin());
-    const result = await runAnswerHook(input, {
+    process.exitCode = await runAnswerHookMain(await readStdin(), process.stdout, process.stderr, {
       provider: process.argv[2] === 'codex' ? 'codex' : 'claude',
       noninteractive: process.env.AGENT_COCKPIT_NONINTERACTIVE === '1',
     });
-    if (result.output) process.stdout.write(`${JSON.stringify(result.output)}\n`);
-    if (result.stderrText) process.stderr.write(result.stderrText);
-    process.exitCode = result.exitCode;
   } catch {
     process.exitCode = 0;
   }
@@ -315,4 +340,5 @@ module.exports = {
   runUserPromptSubmit,
   runStop,
   runAnswerHook,
+  runAnswerHookMain,
 };
