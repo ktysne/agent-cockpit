@@ -317,7 +317,8 @@ test('区切りで隠した起動は出力ファイルの run 行で戻り、結
 });
 
 for (const hookAt of [150, 230]) {
-  test(`区切り後に始まった子 thread は${hookAt < 200 ? '区切りより前' : '区切りより後'}の完了通知で委譲に分類し直す`, () => {
+  test(hookAt < 200 ? '区切りより前に終わった起動では、後に始まった子 thread を委譲に直さない'
+    : '区切りより後の完了通知では委譲に分類し直す', () => {
     for (const hook_event_name of ['PostToolUse', 'PostToolUseFailure']) {
       for (const agent_id of [null, 'window']) {
         const state = new DashboardState();
@@ -327,12 +328,79 @@ for (const hookAt of [150, 230]) {
         assert.equal(codexSessions(state).length, 1);
         state.addEvent(claudeEvent(hook_event_name, { agent_id, hookAt,
           tool_response: 'codex-agent: result=ok' }));
-        assert.deepEqual(codexSessions(state), []);
-        assert.equal(state.isDelegatedCodexThread('thread'), true);
+        assert.equal(codexSessions(state).length, hookAt < 200 ? 1 : 0);
+        assert.equal(state.isDelegatedCodexThread('thread'), hookAt >= 200);
       }
     }
   });
 }
+
+test('終了済みの実行の出力を読み直しても、終了後に始まった独立 thread は委譲に直らない', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1,
+    tool_response: `${missingRunLine}\ncodex-agent: result=ok` }));
+  state.addEvent(codexEvent('SessionStart', { hookAt: missingLaunchAt + 2 }));
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 3, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: `${missingRunLine}\ncodex-agent: result=ok` }));
+  assert.equal(codexSessions(state).length, 1);
+  assert.equal(state.isDelegatedCodexThread('thread'), false);
+});
+
+test('前の区切りで拒否した同じ定義の起動があっても、run 行では次の起動だけが戻る', () => {
+  const state = new DashboardState();
+  launch(state, 'rejected', { hookAt: missingLaunchAt - 10000 });
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: missingLaunchAt - 9000 }));
+  launch(state, 'accepted', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: missingLaunchAt + 1 }));
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 2, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: missingRunLine }));
+  assert.deepEqual(state.snapshot().sessions[0].agents.map(agent => agent.agent_id), ['codex:accepted']);
+  assert.equal(state.hasRunningDelegation(parentId), true);
+});
+
+test('隠した起動を --wait で引き継ぐと行と稼働判定が戻り、その間に始まった thread を委譲に直す', () => {
+  const state = new DashboardState();
+  launch(state, 'rejected', { agent_id: 'sub', hookAt: missingLaunchAt - 10000 });
+  state.addEvent(claudeEvent('PostToolBatch', { agent_id: 'sub', hookAt: missingLaunchAt - 9000 }));
+  missingLaunch(state);
+  state.addEvent(claudeEvent('PostToolBatch', { agent_id: 'sub', hookAt: missingLaunchAt + 1 }));
+  assert.equal(state.hasRunningDelegation(parentId), false);
+  state.addEvent(codexEvent('SessionStart', { hookAt: missingLaunchAt + 2 }));
+  assert.equal(codexSessions(state).length, 1);
+  state.addEvent(claudeEvent('PreToolUse', { agent_id: 'sub', hookAt: missingLaunchAt + 3, tool_use_id: 'wait',
+    tool_input: { command: `bash codex-agent.sh --wait ${missingRunId}` } }));
+  const [parent] = state.snapshot().sessions[0].agents;
+  assert.equal(parent.gpt?.active, true);
+  assert.equal(state.hasRunningDelegation(parentId), true);
+  assert.equal(state.isDelegatedCodexThread('thread'), true);
+  assert.deepEqual(codexSessions(state), []);
+  finish(state, { agent_id: 'sub', hookAt: missingLaunchAt + 4 });
+  assert.equal(state.snapshot().sessions[0].agents[0].gpt.active, false);
+});
+
+test('区切りより前の PostToolUse が遅れて届くと、見えるようになった起動の完了までの thread を委譲に直す', () => {
+  const state = new DashboardState();
+  launch(state);
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: 200 }));
+  state.addEvent(codexEvent('SessionStart', { hookAt: 140 }));
+  assert.equal(codexSessions(state).length, 1);
+  finish(state, { hookAt: 150 });
+  assert.equal(state.isDelegatedCodexThread('thread'), true);
+  assert.deepEqual(codexSessions(state), []);
+});
+
+test('背景へ移した PostToolUse が区切りと thread の開始後に届くと、通知時刻より後の thread も委譲に直す', () => {
+  const state = new DashboardState();
+  launch(state);
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: 200 }));
+  state.addEvent(codexEvent('SessionStart', { hookAt: 220 }));
+  assert.equal(codexSessions(state).length, 1);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: 150, tool_response: { backgroundTaskId: 'task-a' } }));
+  assert.equal(state.hasRunningDelegation(parentId), true);
+  assert.equal(state.isDelegatedCodexThread('thread'), true);
+  assert.deepEqual(codexSessions(state), []);
+});
 
 test('区切り後に始まった子 thread は出力の実行 ID で起動が戻ると委譲に分類し直す', () => {
   const state = new DashboardState();

@@ -60,7 +60,7 @@ function agentModelFromDefinition(agentType, definition) {
 /** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string, phase: 'checking'|'prompted', candidate_tool_use_ids?: string[]}} PermissionWait */
 
 /** @typedef {ReturnType<typeof agentModelFromDefinition> & {
- * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, deniedCandidate?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
+ * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, deniedCandidate?: boolean, deniedAt?: number, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
  * }} SessionAgent */
 
 /** @typedef {{session_id: string, provider: 'claude'|'codex', codex?: {model: string, resumes: number}, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, interrupted: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
@@ -246,12 +246,21 @@ function latestWaitableCodex(session, parentAgentId, definition, runId) {
     .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0] || null;
 }
 
-function pendingCodexLaunches(session, definition) {
+function deniedBeforeCodexRun(agent, runStartedAt) {
+  return agent.deniedCandidate && agent.deniedAt < runStartedAt - 1000;
+}
+
+function codexWaitRunStartedAt(runId) {
+  const match = runId.match(/-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-\d+$/);
+  return match ? Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`) : NaN;
+}
+
+function pendingCodexLaunches(session, definition, runStartedAt) {
   const agentIds = new Set(Object.entries(session.pendingCodex)
     .filter(([toolUseId]) => !session.pendingCodexWait[toolUseId])
     .map(([, agentId]) => agentId));
   return session.agents.filter((agent) => agentIds.has(agent.agent_id) && agent.isCodex &&
-    !agent.resultReceived && !agent.runId && agent.agent_type === definition);
+    !agent.resultReceived && !agent.runId && agent.agent_type === definition && !deniedBeforeCodexRun(agent, runStartedAt));
 }
 
 function isFinishedAskDecision(decision) {
@@ -370,10 +379,11 @@ function sessionSnapshot(session) {
   // 表示側が終了にした行を除いて状態を決め直す入力。親の行へまとめた Codex も稼働の判定に含めるため、まとめる前の行で持つ。
   // 画面へ送らないよう列挙しない。
   Object.defineProperty(snapshot, 'lifecycle', { value: lifecycle });
-  // 親の行にまとめた Codex も遅延した完了通知と照合するため、画面へ送らない起動情報を持つ。
+  // 親の行にまとめた Codex も再分類に使うため、起動情報は画面へ送らずに持つ。
   Object.defineProperty(snapshot, 'codexLaunches', {
     value: visibleAgents.filter((agent) => agent.isCodex)
-      .map(({ agent_id, runId, startedAt }) => ({ agent_id, runId, startedAt })),
+      .map(({ agent_id, runId, startedAt, active, unconfirmed, resultReceived }) =>
+        ({ agent_id, runId, startedAt, active, unconfirmed, resultReceived })),
   });
   // 完了通知の照合だけに使う。親の行にまとめた Codex も含むので表示の形に出さず、画面へ送らないよう列挙しない。
   Object.defineProperty(snapshot, 'backgroundCodex', {
@@ -505,7 +515,10 @@ function applyCodexLaunchCompletion(session, event) {
   const toolUseId = event.tool_use_id || null;
   if (isPullRequestShellTool(event.tool_name) && toolUseId) {
     const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
-    if (placeholder) delete placeholder.deniedCandidate;
+    if (placeholder) {
+      delete placeholder.deniedCandidate;
+      delete placeholder.deniedAt;
+    }
     if (placeholder) session.codexLaunchToolIds.add(toolUseId);
     if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
     if (placeholder && event.codexResult &&
@@ -565,14 +578,16 @@ function applyCodexResult(session, event) {
   if (!outputCodex && !isCodexLaunch && event.tool_name !== 'Agent' && event.codexRunId && event.codexRunStartedAt &&
     !session.agents.some((agent) => agent.runId === event.codexRunId)) {
     const definition = event.codexRunId.replace(/-\d{8}-\d{6}-\d+$/, '');
-    const pending = pendingCodexLaunches(session, definition);
+    const runStartedAt = Date.parse(event.codexRunStartedAt);
+    const pending = pendingCodexLaunches(session, definition, runStartedAt);
     const candidates = session.agents.filter((agent) => agent.isCodex && !agent.resultReceived && !agent.runId &&
       agent.agent_type === definition && (pending.includes(agent) || agent.backgrounded) &&
-      Date.parse(event.codexRunStartedAt) >= Date.parse(agent.startedAt) - 1000);
+      runStartedAt >= Date.parse(agent.startedAt) - 1000 && !deniedBeforeCodexRun(agent, runStartedAt));
     if (candidates.length === 1 && pending.includes(candidates[0])) {
       const agent = candidates[0];
       agent.runId = event.codexRunId;
       delete agent.deniedCandidate;
+      delete agent.deniedAt;
       agent.backgrounded = true;
       if (event.backgroundOutputTaskId && !agent.backgroundTaskId) agent.backgroundTaskId = event.backgroundOutputTaskId;
     }
@@ -829,6 +844,7 @@ function applyToolBatch(session, event) {
       if (!agent || agent.backgrounded || agent.backgroundTaskId || !sameAgent(agent.parent_agent_id, agentId)
         || Date.parse(agent.startedAt) >= event.hookAt) continue;
       agent.deniedCandidate = true;
+      agent.deniedAt ??= event.hookAt;
     }
     session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
     // メインの待ちの一括解除は、背景ツールの区切りで並列の待ちを巻き込むため避ける。
@@ -964,12 +980,14 @@ function applyCodexWaitStart(session, event) {
   // 実行 ID は一意なので親を問わずに探し、待ちを引き継いだ親の下へ付け替える。
   const codexForRun = session.agents.find((candidate) => candidate.isCodex && candidate.runId === event.codexWaitRunId);
   if (codexForRun?.resultReceived) {
+    delete codexForRun.deniedCandidate;
+    delete codexForRun.deniedAt;
     // 取り出し直しの出力の結果行を、背景で動いている別の行へ流さないため、終わった行に結び付けておく。
     session.pendingCodex[toolUseId] = codexForRun.agent_id;
   } else {
     let agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition, event.codexWaitRunId);
     if (!agent) {
-      const pending = pendingCodexLaunches(session, event.codexWaitDefinition)
+      const pending = pendingCodexLaunches(session, event.codexWaitDefinition, codexWaitRunStartedAt(event.codexWaitRunId))
         .filter((candidate) => sameAgent(candidate.parent_agent_id, agentId));
       if (pending.length === 1) {
         agent = pending[0];
@@ -977,6 +995,8 @@ function applyCodexWaitStart(session, event) {
       }
     }
     if (agent) {
+      delete agent.deniedCandidate;
+      delete agent.deniedAt;
       agent.parent_agent_id = agentId;
       agent.active = true;
       agent.unconfirmed = false;
