@@ -72,7 +72,7 @@ function codexAgentInvocationDetails(command, isScript, prepare = (text) => [tex
     let ungrouped = segment.trim();
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
-    const words = withoutCommandPrefixes(commandWords(ungrouped), segmentStartsWithEnv(ungrouped));
+    const words = withoutCommandPrefixes(commandWords(ungrouped, toolName), segmentStartsWithEnv(ungrouped));
     if (isScript(words[0] || '')) return invocation(words.slice(1));
     if (['source', '.'].includes(words[0])) return isScript(words[1] || '') ? invocation(words.slice(2)) : [];
     const shell = commandName(words[0]);
