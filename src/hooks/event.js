@@ -21,11 +21,15 @@ const {
   serverIsHealthy,
 } = require('../client/server-connection');
 const {
+  countGhPrCreateCommands,
   firstPullRequestUrl,
+  hasGhCommandOtherThanPrCreate,
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
   isPullRequestShellTool,
+  pullRequestCreateCommandCwd,
   pullRequestCommandCwd,
+  pullRequestUrls,
   pullRequestRefreshScope,
   shouldRefreshPullRequests,
 } = require('../server/pull-request-utils');
@@ -367,6 +371,22 @@ function addPullRequestRefreshScope(event, command, cwd, toolName = 'Bash') {
   if (scope.unknown) event.refreshScopeUnknown = true;
 }
 
+function pullRequestCommandResults(command, cwd, toolName, response) {
+  const pullRequest = firstPullRequestUrl(response);
+  const commandCount = countGhPrCreateCommands(command, toolName);
+  if (commandCount < 2 || hasGhCommandOtherThanPrCreate(command, toolName)) return { pullRequest, additionalPullRequests: [] };
+  // URL と gh pr create の対応は出た順でしか決められないので、数が一致しないときは作っていない PR を登録しないよう 2 件目以降を送らない。
+  const urls = pullRequestUrls(response, commandCount + 1);
+  if (urls.length !== commandCount) return { pullRequest, additionalPullRequests: [] };
+  const additionalPullRequests = urls.slice(1).map((item, index) => {
+    const commandCwd = toolName === 'Bash'
+      ? pullRequestCreateCommandCwd(command, cwd, index + 2, toolName)
+      : null;
+    return { ...item, ...(commandCwd ? { commandCwd } : {}) };
+  });
+  return { pullRequest, additionalPullRequests };
+}
+
 function makeHookEvent(input, now = Date.now(), options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const eventName = pickString(input.hook_event_name);
@@ -449,12 +469,16 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
         event.refreshPullRequests = true;
         addPullRequestRefreshScope(event, command, input.cwd);
       }
-      const pullRequest = eventName === 'PostToolUse' ? firstPullRequestUrl(input.tool_response) : null;
+      const pullRequests = eventName === 'PostToolUse'
+        ? pullRequestCommandResults(command, input.cwd, event.tool_name, input.tool_response)
+        : { pullRequest: null, additionalPullRequests: [] };
+      const pullRequest = pullRequests.pullRequest;
       if (pullRequest) {
         event.pullRequest = pullRequest;
         const commandCwd = pullRequestCommandCwd(command, input.cwd);
         if (commandCwd) event.commandCwd = commandCwd;
       }
+      if (pullRequests.additionalPullRequests.length) event.additionalPullRequests = pullRequests.additionalPullRequests;
     }
   } else if (eventName === 'PreToolUse') {
     event.tool_name = pickString(input.tool_name);
@@ -492,12 +516,16 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
         event.refreshPullRequests = true;
         addPullRequestRefreshScope(event, command, input.cwd, event.tool_name);
       }
-      const pullRequest = eventName === 'PostToolUse' ? firstPullRequestUrl(input.tool_response) : null;
+      const pullRequests = eventName === 'PostToolUse'
+        ? pullRequestCommandResults(command, input.cwd, event.tool_name, input.tool_response)
+        : { pullRequest: null, additionalPullRequests: [] };
+      const pullRequest = pullRequests.pullRequest;
       if (pullRequest) {
         event.pullRequest = pullRequest;
         const commandCwd = event.tool_name === 'Bash' ? pullRequestCommandCwd(command, input.cwd) : null;
         if (commandCwd) event.commandCwd = commandCwd;
       }
+      if (pullRequests.additionalPullRequests.length) event.additionalPullRequests = pullRequests.additionalPullRequests;
     } else if (eventName === 'PostToolUse' && isGithubCreatePullRequestTool(event.tool_name)) {
       const pullRequest = firstPullRequestUrl(input.tool_response);
       if (pullRequest) event.pullRequest = pullRequest;

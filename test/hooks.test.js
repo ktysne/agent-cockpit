@@ -343,6 +343,104 @@ test('PowerShell の gh pr create は URL を送り、cd 先を commandCwd に�
   assert.equal(Object.hasOwn(sanitizeEvent(post), 'commandCwd'), false);
 });
 
+test('複数の gh pr create は URL を出た順に送り、各 Bash cd を対応させる', () => {
+  const sessionCwd = path.resolve(os.tmpdir(), 'session-product', '.claude', 'worktrees', 'session');
+  const firstCwd = path.resolve(os.tmpdir(), 'first-product', '.claude', 'worktrees', 'feature');
+  const secondCwd = path.resolve(os.tmpdir(), 'second-product', '.claude', 'worktrees', 'feature');
+  const quoted = value => `"${value.replaceAll('\\', '/')}"`;
+  const command = `cd ${quoted(firstCwd)} && gh pr create && cd ${quoted(secondCwd)} && gh pr create`;
+  const response = { stdout: [
+    'https://github.com/example/first/pull/1',
+    'https://github.com/EXAMPLE/FIRST/pull/1',
+    'https://github.com/example/second/pull/2',
+    'https://github.com/example/first/pull/new/main',
+  ].join('\n') };
+
+  for (const provider of ['claude', 'codex']) {
+    const event = makeHookEvent({ session_id: 'multiple-prs', hook_event_name: 'PostToolUse', cwd: sessionCwd,
+      tool_name: 'Bash', tool_use_id: 'create-multiple', tool_input: { command }, tool_response: response }, 1, { provider });
+    assert.equal(event.pullRequest.number, 1);
+    assert.equal(event.commandCwd, path.resolve(firstCwd));
+    assert.deepEqual(event.additionalPullRequests, [{
+      owner: 'example', repo: 'second', number: 2,
+      url: 'https://github.com/example/second/pull/2', commandCwd: path.resolve(secondCwd),
+    }]);
+    assert.deepEqual(sanitizeEvent(event).additionalPullRequests, event.additionalPullRequests);
+  }
+
+  const oneCreate = makeHookEvent({ session_id: 'one-pr', hook_event_name: 'PostToolUse', cwd: sessionCwd,
+    tool_name: 'Bash', tool_input: { command: 'gh pr create' },
+    tool_response: 'https://github.com/example/first/pull/1 https://github.com/example/second/pull/2' });
+  assert.equal(oneCreate.pullRequest.number, 1);
+  assert.equal(Object.hasOwn(oneCreate, 'additionalPullRequests'), false);
+
+  const powershell = makeHookEvent({ session_id: 'powershell-multiple-prs', hook_event_name: 'PostToolUse', cwd: sessionCwd,
+    tool_name: 'PowerShell', tool_input: { command: 'gh pr create && gh pr create' },
+    tool_response: 'https://github.com/example/first/pull/1 https://github.com/example/second/pull/2' });
+  assert.equal(powershell.additionalPullRequests.length, 1);
+  assert.equal(Object.hasOwn(powershell.additionalPullRequests[0], 'commandCwd'), false);
+  assert.equal(Object.hasOwn(sanitizeEvent(powershell).additionalPullRequests[0], 'commandCwd'), false);
+
+  const continued = makeHookEvent({ session_id: 'continued-prs', hook_event_name: 'PostToolUse', cwd: sessionCwd,
+    tool_name: 'Bash', tool_input: { command: `gh pr create && cd ${quoted(secondCwd)} &&\n  gh pr create` },
+    tool_response: 'https://github.com/example/first/pull/1\nhttps://github.com/example/second/pull/2' });
+  assert.equal(continued.additionalPullRequests[0].commandCwd, path.resolve(secondCwd));
+});
+
+test('複数の gh pr create でも、URL の数が作成回数と違うか gh pr create 以外の gh があれば 2 件目以降を送らない', () => {
+  const sessionCwd = path.resolve(os.tmpdir(), 'session-product', '.claude', 'worktrees', 'session');
+  const secondCwd = path.resolve(os.tmpdir(), 'second-product', '.claude', 'worktrees', 'feature');
+  const create = (command, stdout) => makeHookEvent({ session_id: 'mismatched-prs', hook_event_name: 'PostToolUse',
+    cwd: sessionCwd, tool_name: 'Bash', tool_input: { command }, tool_response: { stdout } });
+  const twoCreates = `gh pr create && cd "${secondCwd.replaceAll('\\', '/')}" && gh pr create`;
+
+  const extra = create(twoCreates, ['1', '99', '2'].map(number => `https://github.com/example/project/pull/${number}`).join('\n'));
+  assert.equal(extra.pullRequest.number, 1);
+  assert.equal(Object.hasOwn(extra, 'additionalPullRequests'), false);
+
+  const missing = create(twoCreates, 'https://github.com/example/project/pull/2');
+  assert.equal(Object.hasOwn(missing, 'additionalPullRequests'), false);
+
+  const viewed = create(`gh pr create && gh pr view 99 --json url --jq .url && cd "${secondCwd.replaceAll('\\', '/')}" && gh pr create`,
+    'https://github.com/example/project/pull/1\nhttps://github.com/example/project/pull/2');
+  assert.equal(Object.hasOwn(viewed, 'additionalPullRequests'), false);
+});
+
+test('additionalPullRequests は URL と番号を検査し、重複、上限超過、PowerShell の cwd を除く', () => {
+  const main = { owner: 'example', repo: 'project', number: 1, url: 'https://github.com/example/project/pull/1' };
+  const makePullRequest = number => ({ owner: 'example', repo: 'project', number,
+    url: `https://github.com/example/project/pull/${number}` });
+  const base = { session_id: 'sanitize-prs', hook_event_name: 'PostToolUse', tool_name: 'Bash', pullRequest: main };
+  const additionalPullRequests = [
+    makePullRequest(1),
+    { ...makePullRequest(2), number: 3 },
+    { ...makePullRequest(4), owner: 'other' },
+    makePullRequest(2),
+    makePullRequest(2),
+  ];
+  const sanitized = sanitizeEvent({ ...base, additionalPullRequests });
+  assert.deepEqual(sanitized.additionalPullRequests.map(item => item.number), [2]);
+
+  const overLimit = sanitizeEvent({ ...base, additionalPullRequests:
+    Array.from({ length: 11 }, (_, index) => makePullRequest(index + 10)) });
+  assert.deepEqual(overLimit.additionalPullRequests.map(item => item.number), [10, 11, 12, 13, 14, 15, 16, 17, 18]);
+
+  const powershell = sanitizeEvent({ ...base, tool_name: 'PowerShell', additionalPullRequests: [
+    { ...makePullRequest(2), commandCwd: path.resolve(os.tmpdir(), 'other-product') },
+  ] });
+  assert.deepEqual(powershell.additionalPullRequests, [makePullRequest(2)]);
+
+  const bash = sanitizeEvent({ ...base, additionalPullRequests: [
+    { ...makePullRequest(2), commandCwd: 'relative/path' },
+    { ...makePullRequest(3), commandCwd: `${path.parse(path.resolve(os.tmpdir())).root}${'a'.repeat(4097)}` },
+    { ...makePullRequest(4), commandCwd: path.resolve(os.tmpdir(), 'valid-product') },
+  ] });
+  assert.deepEqual(bash.additionalPullRequests, [
+    makePullRequest(2), makePullRequest(3),
+    { ...makePullRequest(4), commandCwd: path.resolve(os.tmpdir(), 'valid-product') },
+  ]);
+});
+
 test('PowerShell の push は未知スコープとして取り直し、cd 先を送らない', () => {
   const commandCwd = path.resolve(os.tmpdir(), 'powershell-push-repo', 'worktree');
   const command = `cd "${commandCwd.replaceAll('\\', '/')}" && git push`;
