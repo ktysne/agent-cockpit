@@ -189,6 +189,93 @@ function commandSegments(command, toolName = 'Bash') {
   return commandSegmentParts(command, toolName).map((part) => part.command);
 }
 
+function bashHereDocumentAt(command, start) {
+  // <<< はヒア文字列で本文の行を持たないので、2 文字目の < からも << と読まない。
+  if (command[start - 1] === '<' || command[start] !== '<' || command[start + 1] !== '<' || command[start + 2] === '<') return null;
+  let index = start + 2;
+  let stripTabs = false;
+  if (command[index] === '-') {
+    stripTabs = true;
+    index += 1;
+  }
+  while (command[index] === ' ' || command[index] === '\t') index += 1;
+
+  let delimiter = '';
+  let quote = '';
+  let escaped = false;
+  while (index < command.length) {
+    const character = command[index];
+    if (escaped) {
+      delimiter += character;
+      escaped = false;
+    } else if (quote === "'") {
+      if (character === quote) quote = '';
+      else delimiter += character;
+    } else if (character === '\\') {
+      escaped = true;
+    } else if (quote) {
+      if (character === quote) quote = '';
+      else delimiter += character;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (/[\s;&|()<>]/.test(character)) {
+      break;
+    } else {
+      delimiter += character;
+    }
+    index += 1;
+  }
+  return delimiter ? { delimiter, stripTabs } : null;
+}
+
+function skipBashHereDocuments(command, start, documents) {
+  let lineStart = start;
+  let terminatorLineEnding = -1;
+  for (const document of documents) {
+    let found = false;
+    while (lineStart <= command.length) {
+      const lineEnding = command.indexOf('\n', lineStart);
+      const lineEnd = lineEnding === -1 ? command.length : lineEnding;
+      let line = command.slice(lineStart, lineEnd).replace(/\r$/, '');
+      if (document.stripTabs) line = line.replace(/^\t+/, '');
+      if (line === document.delimiter) {
+        if (lineEnding === -1) return command.length;
+        terminatorLineEnding = lineEnding;
+        lineStart = lineEnding + 1;
+        found = true;
+        break;
+      }
+      if (lineEnding === -1) return command.length;
+      lineStart = lineEnding + 1;
+    }
+    if (!found) return command.length;
+  }
+  return terminatorLineEnding;
+}
+
+function powerShellHereStringAtLineEnd(command, start) {
+  const quote = command[start + 1];
+  if (command[start] !== '@' || (quote !== '"' && quote !== "'")) return null;
+  const lineEnd = command.indexOf('\n', start);
+  const end = lineEnd === -1 ? command.length : lineEnd;
+  if (!/^[\t ]*\r?$/.test(command.slice(start + 2, end))) return null;
+  return { quote, lineEnd: end };
+}
+
+function skipPowerShellHereString(command, start, quote) {
+  const terminator = quote === "'" ? "'@" : '"@';
+  let lineStart = start;
+  while (lineStart <= command.length) {
+    const lineEnding = command.indexOf('\n', lineStart);
+    const lineEnd = lineEnding === -1 ? command.length : lineEnding;
+    // 終わりの '@ の後ろにはパイプなどのコマンドが続くことがあるので、その直後から分割を再開する。
+    if (command.startsWith(terminator, lineStart)) return lineStart + terminator.length;
+    if (lineEnding === -1) return command.length;
+    lineStart = lineEnding + 1;
+  }
+  return command.length;
+}
+
 function commandSegmentParts(command, toolName = 'Bash') {
   if (typeof command !== 'string') return [];
   // PowerShell は \ ではなく逆引用符でエスケープするので、"D:\repo\" の末尾の \ で引用符を閉じ損ねないようにする。
@@ -198,8 +285,23 @@ function commandSegmentParts(command, toolName = 'Bash') {
   let quote = '';
   let escaped = false;
   let separatorBefore = null;
+  const hereDocuments = [];
+  let hereStringQuote = '';
   for (let index = 0; index < command.length; index += 1) {
     const character = command[index];
+    if (!escaped && !quote && toolName === 'PowerShell' && character === '@') {
+      const hereString = powerShellHereStringAtLineEnd(command, index);
+      if (hereString) {
+        segment += command.slice(index, hereString.lineEnd);
+        hereStringQuote = hereString.quote;
+        index = hereString.lineEnd - 1;
+        continue;
+      }
+    }
+    if (!escaped && !quote && toolName !== 'PowerShell' && character === '<') {
+      const hereDocument = bashHereDocumentAt(command, index);
+      if (hereDocument) hereDocuments.push(hereDocument);
+    }
     if (escaped) {
       segment += character;
       escaped = false;
@@ -219,6 +321,15 @@ function commandSegmentParts(command, toolName = 'Bash') {
       segment = '';
       separatorBefore = character === '&' && command[index + 1] === '&' ? '&&' : character;
       if (separatorBefore === '&&') index += 1;
+      if (character === '\n' && hereStringQuote) {
+        const resumeAt = skipPowerShellHereString(command, index + 1, hereStringQuote);
+        hereStringQuote = '';
+        index = resumeAt === command.length ? command.length : resumeAt - 1;
+      } else if (character === '\n' && hereDocuments.length) {
+        const resumeAt = skipBashHereDocuments(command, index + 1, hereDocuments);
+        hereDocuments.length = 0;
+        index = resumeAt === command.length ? command.length : resumeAt - 1;
+      }
     } else {
       segment += character;
     }
