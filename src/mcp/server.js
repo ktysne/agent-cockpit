@@ -1,4 +1,5 @@
 const readline = require('node:readline');
+const path = require('node:path');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { readSourceCommit } = require('../server/source-revision');
 const { postToServer, requestFromServer } = require('../client/server-connection');
@@ -166,7 +167,10 @@ const TOOL_DEFINITIONS = [
     description: 'このセッションが作成した GitHub のプルリクエストをダッシュボードに登録します。',
     inputSchema: {
       type: 'object',
-      properties: { url: { type: 'string', maxLength: 2000 } },
+      properties: {
+        url: { type: 'string', maxLength: 2000 },
+        cwd: { type: 'string', maxLength: 4096, description: 'PR のリポジトリの checkout の絶対パス' },
+      },
       required: ['url'],
       additionalProperties: false,
     },
@@ -310,6 +314,9 @@ async function postPlan(toolName, args, options = {}) {
 async function postPullRequest(args, options = {}) {
   const pullRequest = parsePullRequestUrl(args.url);
   if (!pullRequest) return { errorMessage: PR_ERROR_MESSAGES.get(400) };
+  if (args.cwd !== undefined && (typeof args.cwd !== 'string' || args.cwd.length > 4096 || !path.isAbsolute(args.cwd))) {
+    return { errorMessage: PR_ERROR_MESSAGES.get(400) };
+  }
   const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
   const identity = writerIdentity(options);
   const routeSessionId = identity.routeSessionId;
@@ -318,6 +325,7 @@ async function postPullRequest(args, options = {}) {
     url: pullRequest.url,
     ...identity.body,
     cwd: options.cwd === undefined ? process.cwd() : options.cwd,
+    ...(args.cwd !== undefined ? { prCwd: args.cwd } : {}),
   };
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
   if (result.ok) return result.json;

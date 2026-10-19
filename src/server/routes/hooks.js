@@ -1,3 +1,4 @@
+const path = require('node:path');
 const EVENT_DELAY_THRESHOLD_MS = 5000;
 const { recordClientEntries } = require('../../client/diagnostic-events');
 const { jsonResponse } = require('../http-helpers');
@@ -8,6 +9,7 @@ const { claudeAgentDefinition, codexAgentDefinition } = require('../session-file
 const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, isPullRequestShellTool, repositoryKey, validRepositoryPart } = require('../pull-request-utils');
 const { applyReviewSkip } = require('./review-skip');
 const { keepImportedCriteria } = require('../plan-updates');
+const { matchingRepositoryCheckout } = require('../pull-requests');
 
 const CODEX_SESSION_DELEGATED = 'Codex session delegated';
 // 委譲した thread への案内は配信の記録に載せない。載せると ACK で、届けていない回答と通知まで配信済みになる。
@@ -397,6 +399,7 @@ function createHookRoutes(ctx) {
       isCompleteCommitSha(body.headRefOid) && validText(body.reason, 2000);
     if ((!pullRequest && !validSkipReview) || (!isCodex && (!Number.isInteger(body.ppid) || body.ppid < 1)) ||
       (body.cwd !== undefined && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) ||
+      (body.prCwd !== undefined && (typeof body.prCwd !== 'string' || body.prCwd.length > 4096 || !path.isAbsolute(body.prCwd))) ||
       (body.claudeCodeSessionId !== undefined && body.claudeCodeSessionId !== null && typeof body.claudeCodeSessionId !== 'string')) {
       jsonResponse(response, 400, { error: 'Invalid request' });
       return;
@@ -436,9 +439,13 @@ function createHookRoutes(ctx) {
       }
       return;
     }
-    const product = productFromCwd(body.cwd, { codexHome });
+    const checkout = body.prCwd === undefined ? null : await matchingRepositoryCheckout(body.prCwd, pullRequest, {
+      fileSystem: pullRequestTracker?.fileSystem, execFileImpl: pullRequestTracker?.gitExecFileImpl,
+    });
+    const cwd = checkout ? body.prCwd : body.cwd;
+    const product = productFromCwd(cwd, { codexHome });
     const alreadyRegistered = Boolean(state.pullRequestRegistrationForSession(sessionId, pullRequest.owner, pullRequest.repo, pullRequest.number));
-    const registered = state.registerPullRequest(sessionId, pullRequest, { cwd: body.cwd, product, preserveLocation: true });
+    const registered = state.registerPullRequest(sessionId, pullRequest, { cwd, product, preserveLocation: !checkout });
     if (!registered) {
       jsonResponse(response, 400, { error: 'Invalid request' });
       return;
