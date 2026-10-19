@@ -415,7 +415,7 @@ PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツ�
 常駐サーバーは `gh` の保存済み認証を使い、60 秒ごとにリポジトリの状態を取得する。
 レビュー状態と PR 群の再計算はリポジトリごとに直列化し、実行中の要求は次の 1 回にまとめる。
 各要求は、要求後に開始する再計算の完了を待ち、その回の例外は待機した呼び出し元へ伝えるが、次の再計算は止めない。
-レビュー記録の `lastReviewedSha`（無ければ `lastTriage.sha`）が PR の base に含まれる場合は、前の PR の記録として未実施扱いにし、診断に `stale-record` を残す。
+レビュー記録の `lastReviewedSha` と `lastTriage.sha` のうち、ある SHA がすべて PR の base に含まれる場合は、前の PR の記録として未実施扱いにし、診断に `stale-record` を残す。`--uncommitted` のレビューは `lastReviewedSha` を据え置くので、片方だけでは判断しない。
 base は PR のリポジトリに対応する remote の追跡ブランチを優先し、追跡 ref が無ければローカルの base を使う。
 祖先関係の照合結果は 1 回の再計算で共有し、base を確認できない場合や記録の SHA が base に含まれない場合は記録を維持する。
 squash マージでは元の SHA が base に残らないため、前の PR の記録を識別できない。

@@ -855,10 +855,14 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
     const lastTriage = branchState.lastTriage;
     const triageSha = lastTriage?.sha;
     const triageOutcome = lastTriage?.outcome;
-    const recordedSha = lastReviewedSha || triageSha;
-    if (isCompleteCommitSha(recordedSha) && await reviewAlreadyInBase(
-      root, recordedSha, pullRequest.baseRefName, baseRemoteNames, execFileImpl, baseAncestorCache,
-    )) {
+    // --uncommitted のレビューは lastReviewedSha を据え置くので、記録の SHA がすべて base に入っているときだけ前の PR の記録とみなす。
+    const recordedShas = [lastReviewedSha, triageSha].filter(isCompleteCommitSha);
+    let staleRecord = recordedShas.length > 0;
+    for (const sha of recordedShas) {
+      if (!staleRecord) break;
+      staleRecord = await reviewAlreadyInBase(root, sha, pullRequest.baseRefName, baseRemoteNames, execFileImpl, baseAncestorCache);
+    }
+    if (staleRecord) {
       report('present', 'mismatch', 'stale-record');
       return null;
     }

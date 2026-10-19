@@ -1969,6 +1969,26 @@ test('base に含まれないか Git が照合できないレビュー記録は�
   }
 });
 
+test('--uncommitted のレビューで lastReviewedSha が base に残っていても、今の head の収束は記録として残す', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: {
+    'feat/open': { round: 2, dismissed: [], lastReviewedSha: 'a'.repeat(40),
+      lastTriage: { round: 2, sha: 'c'.repeat(40), outcome: 'converged' } },
+  } }));
+  const review = await readCrossReviewState({ cwd: root, number: 31 }, {
+    url: 'https://github.com/example/project/pull/31', headRefName: 'feat/open',
+    baseRefName: 'main', headRefOid: 'c'.repeat(40),
+  }, { execFileImpl: (_file, args, _options, callback) => {
+    if (args[2] === 'config') callback(null, 'remote.origin.url https://github.com/example/project.git\n');
+    else if (args[2] === 'rev-parse') callback(null, 'b'.repeat(40));
+    else if (args[2] === 'merge-base') callback(args[4] === 'a'.repeat(40) ? null : Object.assign(new Error('not ancestor'), { code: 1 }), '');
+    else callback(new Error('unexpected git call'));
+  } });
+  assert.deepEqual(review.triage, { round: 2, sha: 'c'.repeat(40), outcome: 'converged' });
+});
+
 for (const merged of [true, false]) {
   test(`別 worktree のレビュー記録は統合済みなら未実施にし、rebase した同じ PR なら残す (統合済み: ${merged})`, async (t) => {
     const root = await temporaryDirectory(t);
