@@ -145,7 +145,7 @@ async function runAskQuestion(input, options = {}) {
   return timeout?.hookOutput || fallbackOutput;
 }
 
-async function runPostToolBatch(input, options) {
+async function runPostToolBatch(input, options = {}) {
   if (!validSessionId(input.session_id)) return null;
   // サブエージェントの区切りは、拒否されて PostToolUse の来ないツールを片付けるために送る。回答はメインにだけ渡す。
   if (input.agent_id) {
@@ -157,6 +157,7 @@ async function runPostToolBatch(input, options) {
   }
   const result = await postHookRequest({
     action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: input.session_id, id: crypto.randomUUID(),
+    ...(options.noninteractive ? { suppress_task_reminder: true } : {}),
   }, { ...options, timeoutMs: POST_TOOL_BATCH_TIMEOUT_MS, attemptTimeoutMs: 750 });
   return result?.hookOutput || null;
 }

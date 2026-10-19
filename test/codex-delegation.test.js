@@ -464,6 +464,33 @@ test('委譲した Codex の UserPromptSubmit は配信として記録せずに�
   assert.match(additionalContext, /cockpit_\*/);
   assert.equal(delegated.deliveryId, undefined);
   assert.equal((await submitPrompt('independent-thread')).hookOutput, null);
+
+  const delegatedContext = jsonBody(await request(c.info.port, { path: '/api/sessions/thread/context' }));
+  const independentContext = jsonBody(await request(c.info.port, { path: '/api/sessions/independent-thread/context' }));
+  assert.equal(delegatedContext.delegated, true);
+  assert.equal(independentContext.delegated, false);
+});
+
+test('委譲した Codex の PostToolUse は配信処理を呼ばない', async (t) => {
+  const c = await startTestServer(t);
+  const post = (url, body) => request(c.info.port, { method: 'POST', path: url,
+    headers: hookHeaders(c.info.secret), body: JSON.stringify(body) });
+  await post('/api/events', claudeEvent('PreToolUse'));
+  await post('/api/events', codexEvent('SessionStart'));
+
+  let deliveryCalls = 0;
+  const deliverPostToolBatch = c.runtime.answerDelivery.deliverPostToolBatch.bind(c.runtime.answerDelivery);
+  c.runtime.answerDelivery.deliverPostToolBatch = (...args) => {
+    deliveryCalls += 1;
+    return deliverPostToolBatch(...args);
+  };
+  const response = await post('/api/hooks/answers', {
+    action: 'post-tool-use', event_name: 'PostToolUse', provider: 'codex', session_id: 'thread', id: 'thread-post-tool-use',
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(jsonBody(response).hookOutput, null);
+  assert.equal(deliveryCalls, 0);
 });
 
 test('Codex のフックは親の ID だけを送信し Claude のフックには付けない', async () => {

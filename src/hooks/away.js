@@ -22,14 +22,18 @@ function sessionSummary(snapshot) {
   return lines.join('\n');
 }
 
-function outputForAway(input, away, snapshot = null, provider = 'claude') {
+function outputForAway(input, away, snapshot = null, provider = 'claude', noninteractive = false, launchedFromClaude = false) {
   const hookEventName = input.hook_event_name;
   if (hookEventName === 'PreToolUse') return null;
   const context = [];
   if (snapshot && hookEventName === 'SessionStart' && ['compact', 'resume'].includes(input.source)) {
     context.push(sessionSummary(snapshot));
   }
-  if (!input.agent_id && ['SessionStart', 'UserPromptSubmit'].includes(hookEventName)) {
+  // Claude のツールから起動した Codex のタスクは起動元の Claude が記録する。委譲の分類は親の非同期の起動イベントが
+  // 届くまで決まらず、常駐サーバーも独立した起動を確定できないので、分類を待たずに案内しない。
+  const shouldAddTaskContext = !input.agent_id && snapshot?.delegated !== true && !noninteractive && !launchedFromClaude &&
+    ['SessionStart', 'UserPromptSubmit'].includes(hookEventName);
+  if (shouldAddTaskContext) {
     const importAppTasks = typeof away.importAppTasks === 'boolean' ? away.importAppTasks
       : typeof snapshot?.importAppTasks === 'boolean' ? snapshot.importAppTasks : false;
     context.push(provider === 'codex' || !importAppTasks ? SET_TASKS_CONTEXT : TASK_CONTEXT);
@@ -51,17 +55,21 @@ async function runAwayHook(input, options = {}) {
   const hookEventName = input.hook_event_name;
   if (!['PreToolUse', 'UserPromptSubmit', 'SessionStart'].includes(hookEventName)) return null;
   const provider = options.provider === 'codex' ? 'codex' : 'claude';
+  const noninteractive = options.noninteractive === true;
+  const launchedFromClaude = provider === 'codex' && isHookSessionId(options.claudeParentSessionId);
+  const output = (response, snapshot = null) => outputForAway(input, response, snapshot, provider, noninteractive, launchedFromClaude);
   if (hookEventName === 'PreToolUse' && !isQuestionTool(provider, input.tool_name)) return null;
   if (hookEventName === 'PreToolUse') return runAskQuestion(input, { ...options, provider, toolName: input.tool_name });
 
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const info = await readServerInfo(homeDir);
-  if (!info || info.port < 1 || info.port > 65535) return outputForAway(input, { enabled: false }, null, provider);
+  if (!info || info.port < 1 || info.port > 65535) return output({ enabled: false });
 
   const fetchImpl = options.fetchImpl || fetch;
   const wantsSummary = hookEventName === 'SessionStart' && ['compact', 'resume'].includes(input.source) &&
     isHookSessionId(input.session_id);
-  const endpoint = wantsSummary
+  const wantsSessionContext = ['SessionStart', 'UserPromptSubmit'].includes(hookEventName) && isHookSessionId(input.session_id);
+  const endpoint = wantsSummary || wantsSessionContext
     ? `/api/sessions/${encodeURIComponent(input.session_id)}/context`
     : '/api/away';
   try {
@@ -71,13 +79,13 @@ async function runAwayHook(input, options = {}) {
       attemptTimeoutMs: HOOK_TIMEOUT_MS,
     });
     const response = result.ok ? result.json : null;
-    if (!response || typeof response !== 'object') return outputForAway(input, { enabled: false }, null, provider);
+    if (!response || typeof response !== 'object') return output({ enabled: false });
     if (response.enabled === true && (!Number.isFinite(response.since) || !Number.isFinite(new Date(response.since).getTime()))) {
-      return outputForAway(input, { enabled: false }, null, provider);
+      return output({ enabled: false });
     }
-    return outputForAway(input, response, wantsSummary ? response : null, provider);
+    return output(response, wantsSessionContext ? response : null);
   } catch {
-    return outputForAway(input, { enabled: false }, null, provider);
+    return output({ enabled: false });
   }
 }
 
@@ -90,7 +98,11 @@ async function readStdin(stream = process.stdin) {
 async function main() {
   try {
     const input = JSON.parse(await readStdin());
-    const output = await runAwayHook(input, { provider: process.argv[2] === 'codex' ? 'codex' : 'claude' });
+    const output = await runAwayHook(input, {
+      provider: process.argv[2] === 'codex' ? 'codex' : 'claude',
+      noninteractive: process.env.AGENT_COCKPIT_NONINTERACTIVE === '1',
+      claudeParentSessionId: process.env.CLAUDE_CODE_SESSION_ID,
+    });
     if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
   } catch {
     process.exitCode = 0;

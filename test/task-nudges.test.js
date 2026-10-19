@@ -12,6 +12,7 @@ const {
   SET_TASKS_STALE_TASKS_REMINDER,
   TaskNudges,
 } = require('../src/server/task-nudges');
+const { makeHookEvent } = require('../src/hooks/event');
 const { startTestServer, request, hookHeaders, uiHeaders, jsonBody } = require('./support/server');
 
 const START = Date.UTC(2026, 9, 2, 1, 2, 3);
@@ -354,6 +355,36 @@ test('取り込みオフの Claude セッションに届いた PostToolBatch は
     body: JSON.stringify({ action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: 'claude-nudge', id: 'batch' }),
   });
   assert.equal(jsonBody(batch).hookOutput.hookSpecificOutput.additionalContext, SET_TASKS_NO_TASKS_REMINDER);
+});
+
+test('委譲した Codex のツール使用は PostToolBatch のタスク催促に数えない', async (t) => {
+  const c = await startTestServer(t);
+  const post = (url, body) => request(c.info.port, { method: 'POST', path: url,
+    headers: hookHeaders(c.info.secret), body: JSON.stringify(body) });
+  const parentId = 'nudge-parent';
+  const threadId = 'nudge-delegated-thread';
+  const launchAt = Date.now();
+  await post('/api/events', makeHookEvent({
+    session_id: parentId, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'launch',
+    tool_input: { command: 'bash codex-agent.sh impl-hard' },
+  }, launchAt, { environment: {} }));
+  await post('/api/events', makeHookEvent({ session_id: threadId, hook_event_name: 'SessionStart' }, launchAt + 1, {
+    provider: 'codex', environment: { CLAUDE_CODE_SESSION_ID: parentId },
+  }));
+  await post('/api/events', { session_id: threadId, hook_event_name: 'UserPromptSubmit', hookAt: launchAt + 2 });
+  for (let index = 0; index < 5; index += 1) {
+    await post('/api/events', {
+      session_id: threadId, hook_event_name: 'PreToolUse', hookAt: launchAt + 3 + index, tool_name: 'Read',
+    });
+  }
+  assert.equal(c.runtime.answerDelivery.taskNudges.sessions.has(threadId), false);
+
+  const batch = await post('/api/hooks/answers', {
+    action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: threadId, id: 'delegated-batch',
+  });
+
+  assert.equal(jsonBody(batch).hookOutput, null);
+  assert.equal(c.runtime.answerDelivery.taskNudges.sessions.has(threadId), false);
 });
 
 test('取り込み設定がオフの Claude セッションにはサブエージェント終了後も一覧全体を書き直すよう促す', () => {
