@@ -59,6 +59,14 @@ test('遅延した開始と質問の完了を含む四千イベントの表示�
   assert.equal(state.wasPullRequestRefreshCommand('compact', 'pr'), true);
 });
 
+test('PowerShell の PR 作成と取り直し判定が索引と全件照合に一致する', () => {
+  const state = new DashboardState({ verifyEntries: true });
+  state.addEvent({ session_id: 'powershell-index', hook_event_name: 'PreToolUse', hookAt: 1000,
+    tool_name: 'PowerShell', tool_use_id: 'powershell-pr', ghPrCreateCommand: true, refreshPullRequestsCommand: true });
+  assert.equal(state.wasPullRequestCreate('powershell-index', 'powershell-pr'), true);
+  assert.equal(state.wasPullRequestRefreshCommand('powershell-index', 'powershell-pr'), true);
+});
+
 test('同じ一万イベントの先頭と末尾の処理時間が大幅に増加しない', (t) => {
   const state = new DashboardState({ verifyEntries: false });
   const events = syntheticEvents();

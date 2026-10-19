@@ -278,7 +278,7 @@ agent-cockpit 側で追加する設定はありません。次の 2 点だけ確
 - 常駐サーバーは、自分を起動したプロセス(フックを実行した Claude Code か Codex、またはタスクトレイ)の `PATH` から `gh` を探します。Claude Code と Codex を起動する環境で `gh` が見つかるようにしてください。
 - 常駐サーバーは `gh` を呼ぶときに、環境変数 `GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN` を外します。セッションの環境に入ったトークンで GitHub を操作しないためです。そのため、`gh auth login` で保存した認証情報が必要です。
 
-PR は、セッションが `gh pr create` を実行したときに自動で登録されます。ほかの方法で作った PR は、セッションから MCP ツール `cockpit_add_pr` に URL を渡して登録します。
+PR は、セッションが Bash または PowerShell ツールで `gh pr create` を実行したときに自動で登録されます。ほかの方法で作った PR は、セッションから MCP ツール `cockpit_add_pr` に URL を渡して登録します。
 
 ### 確認
 

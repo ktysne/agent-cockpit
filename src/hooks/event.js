@@ -24,6 +24,7 @@ const {
   firstPullRequestUrl,
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
+  isPullRequestShellTool,
   pullRequestCommandCwd,
   pullRequestRefreshScope,
   shouldRefreshPullRequests,
@@ -353,7 +354,12 @@ function taskNotificationValue(block, tagName) {
   return block.match(new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`))?.[1]?.trim() || '';
 }
 
-function addPullRequestRefreshScope(event, command, cwd) {
+function addPullRequestRefreshScope(event, command, cwd, toolName = 'Bash') {
+  // PowerShell は引用符とエスケープの規則が Bash と違い、Bash 用の解析では別のディレクトリを推定しうるため、全体の取り直しに回す。
+  if (toolName !== 'Bash') {
+    event.refreshScopeUnknown = true;
+    return;
+  }
   const commandCwd = pullRequestCommandCwd(command, cwd);
   if (commandCwd) event.commandCwd = commandCwd;
   const scope = pullRequestRefreshScope(command, cwd);
@@ -462,10 +468,13 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
       if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
       const codexReviewDefinition = extractCodexReviewDefinition(command);
       if (codexReviewDefinition) event.codexReviewDefinition = codexReviewDefinition;
-      if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
-      if (shouldRefreshPullRequests(command)) {
+    }
+    if (isPullRequestShellTool(event.tool_name)) {
+      const command = pickString(input.tool_input?.command);
+      if (isGhPrCreateCommand(command, event.tool_name)) event.ghPrCreateCommand = true;
+      if (shouldRefreshPullRequests(command, event.tool_name)) {
         event.refreshPullRequestsCommand = true;
-        addPullRequestRefreshScope(event, command, input.cwd);
+        addPullRequestRefreshScope(event, command, input.cwd, event.tool_name);
       }
     }
     if (event.tool_name === 'Agent') event.description = pickString(input.tool_input?.description).slice(0, 200);
@@ -476,17 +485,17 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
     if (eventName === 'PostToolUseFailure' && input.is_interrupt === true) event.isInterrupt = true;
-    if (event.tool_name === 'Bash') {
+    if (isPullRequestShellTool(event.tool_name)) {
       const command = pickString(input.tool_input?.command);
-      if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
-      if (shouldRefreshPullRequests(command)) {
+      if (isGhPrCreateCommand(command, event.tool_name)) event.ghPrCreateCommand = true;
+      if (shouldRefreshPullRequests(command, event.tool_name)) {
         event.refreshPullRequests = true;
-        addPullRequestRefreshScope(event, command, input.cwd);
+        addPullRequestRefreshScope(event, command, input.cwd, event.tool_name);
       }
       const pullRequest = eventName === 'PostToolUse' ? firstPullRequestUrl(input.tool_response) : null;
       if (pullRequest) {
         event.pullRequest = pullRequest;
-        const commandCwd = pullRequestCommandCwd(command, input.cwd);
+        const commandCwd = event.tool_name === 'Bash' ? pullRequestCommandCwd(command, input.cwd) : null;
         if (commandCwd) event.commandCwd = commandCwd;
       }
     } else if (eventName === 'PostToolUse' && isGithubCreatePullRequestTool(event.tool_name)) {
