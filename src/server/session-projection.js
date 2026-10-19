@@ -1,6 +1,7 @@
 // イベント列からセッションを組み立てる。hookAt と sequence の順に、applyCommonEventStart → 種類別の処理 → applyCommonEventEnd の順で適用する。
 // 副作用は渡されたセッションにだけ及び、保存要求は出さない。
 const { isQuestionTool } = require('./events');
+const { isPullRequestShellTool } = require('./pull-request-utils');
 
 const CODEX_UNKNOWN_ANSWER_NOTE = '元の画面で回答済み(内容は不明)';
 // 次の入力は質問への回答とは限らないので、回答を確かめたと読めない言い方にする。
@@ -66,7 +67,7 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{tools: SessionTool[], completedToolIds: Set<string>, agentToolBindings: Object<string, string|symbol|null>}} SessionTools */
 
-/** @typedef {{agents: SessionAgent[], stoppedAgentIds: Set<string>}} SessionAgents */
+/** @typedef {{agents: SessionAgent[], stoppedAgentIds: Set<string>, launchedAgentIds: Set<string>}} SessionAgents */
 
 /** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>, codexReviewAgentIds: Set<string>}} SessionCodex */
 
@@ -90,6 +91,7 @@ function newSession(event, askDecisionState = {}) {
     tools: [],
     completedToolIds: new Set(),
     stoppedAgentIds: new Set(),
+    launchedAgentIds: new Set(),
     codexLaunchToolIds: new Set(),
     agents: [],
     permissionWaits: [],
@@ -155,6 +157,16 @@ function deactivatePendingCodex(session, parentAgentId) {
       agent.unconfirmed = true;
     }
   }
+}
+
+// 前面のサブエージェントは呼び出し元のターンより長く続かないため、停止の通知が無くても終了未確認にする。
+function deactivateForegroundAgent(session, agent) {
+  if (!agent || agent.isCodex || !agent.active || agent.backgrounded) return;
+  agent.active = false;
+  agent.unconfirmed = true;
+  session.tools = session.tools.filter((tool) => tool.agent_id !== agent.agent_id);
+  session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agent.agent_id);
+  deactivatePendingCodex(session, agent.agent_id);
 }
 
 function stopAgent(session, agentId, stoppedAgentIds) {
@@ -284,6 +296,23 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   };
 }
 
+// 許可待ち、ターンの状態、稼働中のエージェントの有無から表示の状態を決める。スナップショットと表示側で同じ規則を使う。
+function sessionStatus({ permissionWaits, agentActive, turnKnown, interrupted, stopped }) {
+  return permissionWaits.some((wait) => wait.phase === 'prompted')
+    ? '許可待ち'
+    : permissionWaits.length
+      ? '許可確認中'
+      : !turnKnown
+        ? '不明'
+        : interrupted
+          ? '中断'
+          : stopped && agentActive
+            ? '待機中(サブエージェント稼働中)'
+            : stopped
+              ? '待機中'
+              : '作業中';
+}
+
 /**
  * @param {DerivedSession} session
  */
@@ -315,19 +344,13 @@ function sessionSnapshot(session) {
       };
     });
   const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
-  const status = permissionWaits.some((wait) => wait.phase === 'prompted')
-    ? '許可待ち'
-    : permissionWaits.length
-      ? '許可確認中'
-      : !session.turnKnown
-        ? '不明'
-        : session.interrupted
-          ? '中断'
-          : session.stopped && session.agents.some((agent) => agent.active)
-            ? '待機中(サブエージェント稼働中)'
-            : session.stopped
-              ? '待機中'
-              : '作業中';
+  const lifecycle = {
+    turnKnown: session.turnKnown,
+    interrupted: session.interrupted,
+    stopped: session.stopped,
+    activeAgentIds: session.agents.filter((agent) => agent.active).map((agent) => agent.agent_id),
+  };
+  const status = sessionStatus({ ...lifecycle, permissionWaits, agentActive: lifecycle.activeAgentIds.length > 0 });
 
   const snapshot = {
     session_id: session.session_id,
@@ -343,6 +366,9 @@ function sessionSnapshot(session) {
     decisions: session.decisions.map(cloneDecision),
     decisionBindings: { ...session.decisionBindings },
   };
+  // 表示側が終了にした行を除いて状態を決め直す入力。親の行へまとめた Codex も稼働の判定に含めるため、まとめる前の行で持つ。
+  // 画面へ送らないよう列挙しない。
+  Object.defineProperty(snapshot, 'lifecycle', { value: lifecycle });
   // 完了通知の照合だけに使う。親の行にまとめた Codex も含むので表示の形に出さず、画面へ送らないよう列挙しない。
   Object.defineProperty(snapshot, 'backgroundCodex', {
     value: session.agents
@@ -425,18 +451,26 @@ function applyAskQuestionStart(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'agentToolBindings'|'tools'> & Pick<SessionAgents, 'agents'>} session
+ * @param {Pick<SessionTools, 'agentToolBindings'|'tools'> & Pick<SessionAgents, 'agents'> & SessionPermissions & SessionCodex} session
  */
 function applyAgentToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
+  if (eventName === 'PostToolUseFailure' && event.tool_name === 'Agent' && event.isInterrupt) {
+    deactivateForegroundAgent(session, agentFor(session, session.agentToolBindings[toolUseId]));
+  }
   if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
     const boundAgent = agentFor(session, session.agentToolBindings[toolUseId]);
     const responseAgent = agentFor(session, event.agentId);
     const targetAgent = responseAgent && !responseAgent.isCodex
       ? responseAgent
       : boundAgent && !boundAgent.isCodex ? boundAgent : null;
-    if (!targetAgent) return;
+    if (!targetAgent) {
+      // 背景の起動の応答は SubagentStart より先に届くことがあるので、後から作る行を背景にするため覚えておく。
+      // 前面の応答は SubagentStop の後に届くので、停止済みの agentId は覚えない。
+      if (event.agentId && !session.stoppedAgentIds.has(event.agentId)) session.launchedAgentIds.add(event.agentId);
+      return;
+    }
     if (targetAgent === responseAgent) {
       // 同じ行を指す別の呼び出しの結び付けは到着順の誤りなので、agentId の無い応答で使わせない。
       for (const [otherToolUseId, boundAgentId] of Object.entries(session.agentToolBindings)) {
@@ -463,7 +497,7 @@ function applyAgentToolCompletion(session, event) {
 function applyCodexLaunchCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
-  if (event.tool_name === 'Bash' && toolUseId) {
+  if (isPullRequestShellTool(event.tool_name) && toolUseId) {
     const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
     if (placeholder) session.codexLaunchToolIds.add(toolUseId);
     if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
@@ -624,7 +658,7 @@ function applyCommonEventStart(session, event) {
     const agent = agentModelFromDefinition(event.agent_type, event.agentDefinition || {});
     agent.agent_id = agentId;
     agent.startedAt = isoTime(event.hookAt);
-    if (session.provider === 'codex') agent.backgrounded = true;
+    if (session.provider === 'codex' || session.launchedAgentIds.has(agentId)) agent.backgrounded = true;
     session.agents.push(agent);
   }
 }
@@ -697,7 +731,7 @@ function applySubagentStart(session, event) {
       if (event.route) agent.route = event.route;
       session.agents.push(agent);
     }
-    if (session.provider === 'codex') agent.backgrounded = true;
+    if (session.provider === 'codex' || session.launchedAgentIds.has(agentId)) agent.backgrounded = true;
     const unboundAgentCalls = unboundAgentCallsOf(session);
     if (unboundAgentCalls.length === 1) {
       const tool = unboundAgentCalls[0];
@@ -876,6 +910,9 @@ function applySessionLifecycle(session, event) {
   // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
   const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
   if (!agentId && (startsIdle || eventName === 'Stop')) deactivatePendingCodex(session, null);
+  if (!agentId && eventName === 'Stop') {
+    for (const agent of session.agents) deactivateForegroundAgent(session, agent);
+  }
   if (startsIdle || eventName === 'UserPromptSubmit' || eventName === 'Stop') session.turnKnown = true;
   if (startsIdle) {
     session.permissionBoundaries.add(null);
@@ -930,7 +967,7 @@ function applyCodexWaitStart(session, event) {
       agent.unconfirmed = false;
       agent.runId = event.codexWaitRunId;
       delete agent.waitEnded;
-      agent.lastTool = { tool_name: 'Bash', summary: event.summary };
+      agent.lastTool = { tool_name: event.tool_name, summary: event.summary };
       session.pendingCodex[toolUseId] = agent.agent_id;
     } else {
       const agentIdForCall = `codex:${toolUseId}`;
@@ -945,7 +982,7 @@ function applyCodexWaitStart(session, event) {
         backgrounded: true,
         runId: event.codexWaitRunId,
         startedAt: isoTime(event.hookAt),
-        lastTool: { tool_name: 'Bash', summary: event.summary },
+        lastTool: { tool_name: event.tool_name, summary: event.summary },
       });
       session.agents.push(waitAgent);
       session.pendingCodex[toolUseId] = agentIdForCall;
@@ -970,7 +1007,7 @@ function applyCodexLaunchStart(session, event) {
     codex_home: '',
     unavailable: '',
     startedAt: isoTime(event.hookAt),
-    lastTool: { tool_name: 'Bash', summary: event.summary },
+    lastTool: { tool_name: event.tool_name, summary: event.summary },
   });
   const existingIndex = session.agents.findIndex((item) => item.agent_id === agentIdForCall);
   if (existingIndex >= 0) session.agents.splice(existingIndex, 1, agent);
@@ -1084,6 +1121,7 @@ module.exports = {
   fileStatusDecidesState,
   claudeModelName,
   isClosableAgent,
+  sessionStatus,
   sameQuestionSet,
   isFinishedAskDecision,
   sessionStartFor,

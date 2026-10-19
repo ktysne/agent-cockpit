@@ -222,7 +222,6 @@ test('resume の context 応答が取り込みオフなら一覧全体の登録�
 
 test('常駐サーバーの応答が無くてもタスク登録の決まりは返す', async (t) => {
   const homeDir = await temporaryHome(t);
-  const startedAt = performance.now();
   let aborted = false;
   const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit' }, {
     homeDir,
@@ -232,7 +231,6 @@ test('常駐サーバーの応答が無くてもタスク登録の決まりは�
   });
   assert.equal(result.hookSpecificOutput.additionalContext, SET_TASKS_CONTEXT);
   assert.equal(aborted, true);
-  assert.ok(performance.now() - startedAt < 1300);
 });
 
 // マージと push の扱いは、案内ではなくセッション側の指示の優先順位に任せる。

@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('../server/identity');
 const { ROUTE_VALUES, readRoutingSync } = require('../server/routing');
-const { commandSegments, commandWords } = require('../server/pull-request-utils');
+const { commandSegments, commandWords, isPullRequestShellTool } = require('../server/pull-request-utils');
 const { atomicWriteJsonSync } = require('../server/json-storage');
 
 const ROUTE_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -53,11 +53,14 @@ function segmentStartsWithEnv(segment) {
 /**
  * 前置きとシェルの起動をたどり、isScript に合う語で始まる起動ごとに、その後ろの語の列を返す。
  * prepare は、各コマンドの文字列(シェルの -c の文字列を含む)を、探す範囲の文字列の列に変える。
+ * toolName は区切りの規則だけに使い、シェルの -c の文字列は Bash として分ける。
  */
-function codexAgentInvocations(command, isScript, prepare = (text) => [text], depth = 0) {
+function codexAgentInvocations(command, isScript, prepare = (text) => [text], depth = 0, toolName = 'Bash') {
   if (typeof command !== 'string') return [];
   if (depth >= 8) return [];
-  return prepare(command).flatMap((text) => commandSegments(text)).flatMap((segment) => {
+  // PowerShell の行継続(逆引用符と改行)は、語の解析で引数として残らないよう空白にする。
+  const joined = toolName === 'PowerShell' ? command.replace(/`\r?\n/g, ' ') : command;
+  return prepare(joined).flatMap((text) => commandSegments(text, toolName)).flatMap((segment) => {
     let ungrouped = segment.trim();
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
@@ -85,8 +88,8 @@ function codexAgentInvocations(command, isScript, prepare = (text) => [text], de
   });
 }
 
-function commandInvokesCodexAgent(command) {
-  return codexAgentInvocations(command, (word) => CODEX_AGENT_SCRIPT.test(word)).length > 0;
+function commandInvokesCodexAgent(command, toolName = 'Bash') {
+  return codexAgentInvocations(command, (word) => CODEX_AGENT_SCRIPT.test(word), undefined, 0, toolName).length > 0;
 }
 
 function routeRecordPath(input, homeDir) {
@@ -164,14 +167,14 @@ function effectiveRouteForSubagentStart(input, options = {}) {
   const homeDir = cockpitHomeFromOptions(options);
   const recordPath = routeRecordPath(input, homeDir);
   if (!recordPath) return null;
-  return readRouteRecordValue(recordPath, fileSystem) || readRouting(homeDir, fileSystem)?.agents || null;
+  return readRouteRecordValue(recordPath, fileSystem) || readRouting(homeDir, fileSystem, options.readRetryOptions)?.agents || null;
 }
 
 function outputForRoute(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const isStart = input.hook_event_name === 'SubagentStart';
-  const isBashUse = input.hook_event_name === 'PreToolUse' && input.tool_name === 'Bash';
-  if (!isStart && !isBashUse) return null;
+  const isShellToolUse = input.hook_event_name === 'PreToolUse' && isPullRequestShellTool(input.tool_name);
+  if (!isStart && !isShellToolUse) return null;
 
   const homeDir = cockpitHomeFromOptions(options);
   const fileSystem = options.fileSystem || fs;
@@ -189,7 +192,7 @@ function outputForRoute(input, options = {}) {
     // 再開や SubagentStop の後の続きでも初回の経路を保つため、既にある記録は上書きせず、終了時にも消さない。
     let route = readRouteRecord(recordPath, fileSystem);
     if (!route) {
-      const routing = readRouting(homeDir, fileSystem);
+      const routing = readRouting(homeDir, fileSystem, options.readRetryOptions);
       if (!routing || !writeRouteRecord(recordPath, routing.agents, fileSystem)) return null;
       route = routing.agents;
     }
@@ -199,7 +202,7 @@ function outputForRoute(input, options = {}) {
   }
   const route = readRouteRecord(routeRecordPath(input, homeDir), fileSystem);
   if (route !== 'claude' ||
-    !commandInvokesCodexAgent(input.tool_input?.command)) return null;
+    !commandInvokesCodexAgent(input.tool_input?.command, input.tool_name)) return null;
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',

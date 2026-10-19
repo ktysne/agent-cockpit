@@ -15,7 +15,7 @@ const UNRECORDED_DELIVERY = Symbol('unrecorded delivery');
 const DELEGATED_CODEX_PROMPT_CONTEXT ='Agent Cockpit: タスク、判断事項、PR は委譲元の Claude のセッションが記録する。この実行は Claude のセッションから委譲された Codex なので、Agent Cockpit の MCP ツール(cockpit_*)を呼ばない。';
 
 function createHookRoutes(ctx) {
-  const { state, answerDelivery, claudeHome, userHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
+  const { state, answerDelivery, claudeHome, codexHome, userHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications, scheduleSessionModel } = ctx;
 
   function refreshPullRequestsAfterCommand(event) {
     const registrations = state.readOnlyPullRequestRegistrations();
@@ -27,7 +27,7 @@ function createHookRoutes(ctx) {
       const key = repositoryKey(owner, repo);
       scopedRegistrations = registrations.filter((record) => repositoryKey(record.owner, record.repo) === key);
     } else {
-      const product = event.commandCwd ? productFromCwd(event.commandCwd) : event.product || productFromCwd(event.cwd);
+      const product = event.commandCwd ? productFromCwd(event.commandCwd, { codexHome }) : event.product || productFromCwd(event.cwd, { codexHome });
       if (product) scopedRegistrations = registrations.filter((record) => record.product?.key === product.key);
     }
 
@@ -218,7 +218,7 @@ function createHookRoutes(ctx) {
     recordClientEntries(ctx.diagnostics, body?.diagnostics, 'hook');
     const receivedAt = Date.now();
     state.captureFieldNames(body);
-    const product = productFromCwd(body.cwd);
+    const product = productFromCwd(body.cwd, { codexHome });
     const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
     const eventName = body.hook_event_name;
     const sessionName = sessionId ? state.sessionNameFor(sessionId) : null;
@@ -242,7 +242,8 @@ function createHookRoutes(ctx) {
     let rejected = false;
     const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata,
       diagnostics: ctx.diagnostics, onRejected: () => { rejected = true; } };
-    if (!state.addEvent(body, eventMetadata)) {
+    const eventResult = state.addEvent(body, eventMetadata);
+    if (!eventResult) {
       jsonResponse(response, 202, { accepted: true });
       return;
     }
@@ -259,7 +260,8 @@ function createHookRoutes(ctx) {
     if (event && !event.agent_id) state.noteHookCwd(event.session_id, body.cwd);
     // 終了通知はメインの記録に書かれるので、サブエージェントのイベントのたびには読まない。
     if (event && !event.agent_id) scheduleTaskNotifications(event.session_id);
-    if (event) scheduleSessionModel(event);
+    const lifecycleResult = { ended: eventResult.ended === true };
+    if (event) scheduleSessionModel(event, lifecycleResult);
     if (event && state.deletedSessions.has(event.session_id)
       && event.hookAt <= Date.parse(state.deletedSessions.get(event.session_id))) {
       jsonResponse(response, 202, { accepted: true });
@@ -281,7 +283,7 @@ function createHookRoutes(ctx) {
     )) {
       const registerPullRequest = (pullRequest, commandCwd) => {
         const registrationCwd = commandCwd || body.cwd;
-        const registrationProduct = commandCwd ? productFromCwd(commandCwd) : product;
+        const registrationProduct = commandCwd ? productFromCwd(commandCwd, { codexHome }) : product;
         const registered = state.registerPullRequest(event.session_id, pullRequest, {
           cwd: registrationCwd, product: registrationProduct,
         }, event.hookAt);
@@ -295,7 +297,7 @@ function createHookRoutes(ctx) {
     if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (
       event.refreshPullRequests || state.wasPullRequestRefreshCommand(event.session_id, event.tool_use_id)
     )) refreshPullRequestsAfterCommand(event);
-    if (event) answerDelivery.afterEvent(event);
+    if (event) answerDelivery.afterEvent(event, lifecycleResult);
     jsonResponse(response, 202, { accepted: true });
   }
 
@@ -422,11 +424,11 @@ function createHookRoutes(ctx) {
         jsonResponse(response, 200, { ...result.saved });
       } catch (error) {
         request?.setDiagnosticError?.(error);
-        jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
+        jsonResponse(response, 502, { error: 'PR の状態を取り直せませんでした' });
       }
       return;
     }
-    const product = productFromCwd(body.cwd);
+    const product = productFromCwd(body.cwd, { codexHome });
     const alreadyRegistered = Boolean(state.pullRequestRegistrationForSession(sessionId, pullRequest.owner, pullRequest.repo, pullRequest.number));
     const registered = state.registerPullRequest(sessionId, pullRequest, { cwd: body.cwd, product, preserveLocation: true });
     if (!registered) {

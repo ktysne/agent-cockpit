@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { startTestServer, request, jsonBody, hookHeaders, uiHeaders } = require('./support/server');
+const { ghPullRequest } = require('./support/github');
 
 async function cacheServer(t, options = {}) {
   let now = Date.now();
@@ -99,6 +100,38 @@ test('PR の初回取得の開始と完了を条件付き取得で返す', async
   await fetching;
   const completed = await expectChanged(server, loading);
   assert.equal(jsonBody(completed).pullRequests.some(group => group.loading), false);
+});
+
+test('/api/state は再計算後にレビュー不要の表示を返す', async (t) => {
+  let readCount = 0;
+  let release;
+  let started;
+  const reading = new Promise(resolve => { started = resolve; });
+  const server = await cacheServer(t, { pullRequestOptions: { readCrossReviewStateAcrossWorktrees: async () => {
+    readCount += 1;
+    if (readCount === 2) { started(); await new Promise(resolve => { release = resolve; }); return { notRequired: true, source: 'recorded' }; }
+    return null;
+  } } });
+  server.runtime.state.registerPullRequest('cache-review', { url: 'https://github.com/example/project/pull/1' });
+  server.runtime.pullRequestTracker.repositories.set('example/project', { defaultBranch: 'main',
+    openPullRequests: [ghPullRequest(1, 'feat/open', 'main')], mergeMethods: ['merge'],
+    uninspectedNumbers: new Set(), restackResults: new Map(), liveMergedBranches: new Map(), listAvailable: true });
+  await server.runtime.pullRequestTracker.refreshReviewGroups('example', 'project');
+  const verifyCache = process.env.AGENT_COCKPIT_VERIFY_STATE_CACHE;
+  delete process.env.AGENT_COCKPIT_VERIFY_STATE_CACHE;
+  try {
+    const before = await server.get();
+    const recalculating = server.runtime.pullRequestTracker.refreshReviewGroups('example', 'project');
+    await reading;
+    const during = await server.get();
+    assert.equal(during.body, before.body);
+    release();
+    await recalculating;
+    const after = await server.get();
+    assert.deepEqual(jsonBody(after).pullRequests[0].trees[0].crossReview, { notRequired: true, source: 'recorded' });
+  } finally {
+    if (verifyCache !== undefined) process.env.AGENT_COCKPIT_VERIFY_STATE_CACHE = verifyCache;
+  }
 });
 
 test('画面ファイルの変更を 5 秒の確認期限後に条件付き取得で返す', async (t) => {

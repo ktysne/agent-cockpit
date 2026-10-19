@@ -26,7 +26,7 @@
 | ファイル | 中身 |
 |---|---|
 | `server.json` | `{pid, port, secret, uiSecret, startedAt}` |
-| `away.json` | `{enabled, since, periods}` |
+| `away.json` | `{enabled, since, periods}`。不在、解析失敗、形式不一致は既定値で開始する。その他の読み取りエラーは数回読み直し、それでも読めなければ起動を失敗させる |
 | `server.log` | 起動、停止、エラー。追記する。ツールの入力の要約は書かない |
 | `server.log.1` | 1 つ前の `server.log`。常駐サーバーを起動するとき、`server.log` が 1 MB を超えていればこの名前に移し、前の `server.log.1` を置き換える |
 | `diagnostics/<起動時刻>-<pid>.<区分番号>.jsonl` | 診断ログ。1 区分 2000 行、直近 10 起動、全体 30 区分まで |
@@ -34,12 +34,12 @@
 | `diagnostics/hooks-pending.jsonl.importing` | 取り込み中の `hooks-pending.jsonl`。この名前に移してから読み、読み終えたら消す。残っていれば次の取り込みで先に読む |
 | `diagnostics/hooks-pending.lock` | `hooks-pending.jsonl` の追記と取り込みの排他。中身は持ち主の pid で、取り込む側は、持ち主が終わっているか、pid の無いまま 10 秒たったロックを消して取り直す |
 | `start.lock` | 常駐サーバーの起動の排他。10 秒で失効する |
-| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、削除済みセッションの時刻、PR の記録、Codex のセッションの復旧の記録 |
-| `store.json.broken-<時刻>` | 読み込めなかった `store.json` の退避先。時刻は ISO 形式の `:` と `.` を `-` に置き換えたもの。退避した後は保存の無い状態で動く |
+| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、削除済みセッションの時刻、PR の記録、Codex のセッションの復旧の記録。不在は既定値で開始し、その他の読み取りエラーは数回再試行しても読めなければ起動を失敗させる |
+| `store.json.broken-<時刻>` | 解析または形式が壊れた `store.json` の退避先。時刻は ISO 形式の `:` と `.` を `-` に置き換えたもの。退避に成功すれば保存の無い状態で起動し、失敗すれば起動を失敗させる |
 | `tray.json` | タスクトレイの設定 `{notifyPendingCounts}`。許可待ちと判断待ちが増えたときに Windows の通知を出すかを持つ |
 | `browser/` | タスクトレイがダッシュボードを Edge のアプリのウィンドウで開くときのプロファイル(`--user-data-dir`) |
 | `agent-cockpit.ico` | ショートカットのアイコン。`src/tray/install-shortcut.ps1` がタスクトレイのスクリプトから書き出す |
-| `routing.json` | 経路の設定 |
+| `routing.json` | 経路の設定。不在、破損、無効な値は既定値で開始し、その他の読み取りエラーは数回再試行しても読めなければ起動を失敗させる |
 | `route-agents/*.json` | サブエージェント開始時の経路記録。24 時間使われていない記録は次の開始時に削除する |
 
 ## 起動と寿命
@@ -287,8 +287,8 @@ state が `merged` の登録は残す。
 | イベント | 送る項目 |
 |---|---|
 | 共通 | `session_id`、`hook_event_name`、`cwd`、`agent_id`、`agent_type`、`hookAt` |
-| PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで。切り詰めた場合は末尾に「…」を付ける)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る。Bash では、コマンドの全文から見つけた Codex の起動の定義名を `codexLaunchDefinition` として送る(見つけ方は「サブエージェントのモデルと effort」の節) |
-| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex の起動、クロスレビューの起動、`--wait` の Bash で、`tool_response.persistedOutputPath` が絶対パスでファイル名が `<英数字、_、->.txt` の形なら、出力の結果行の有無によらず、そのファイルの先頭と末尾の各 64KB から Codex の行を読み、出力から得た行より優先する。Claude Code は 30000 文字を超える出力の先頭だけを `stdout` に残して全文をこのファイルに置き、本物の結果行は出力の最後に出るためである(先頭に残った結果行は、最終報告に引用されたものでありうる)。`stderr` は見ない(bridge は Codex の行を標準出力へ出す)。PostToolUse の Codex の終了の判定は「サブエージェントのモデルと effort」の節に従う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash または PowerShell の PostToolUse では、`tool_response.stdout` などから URL を出た順に抽出する。1 つのコマンドに `gh pr create` が複数あり、抽出した URL の数が実行回数と同じで、`gh pr create` 以外の `gh` を含まない場合は、2 件目以降を最大 9 件の `additionalPullRequests` に載せる。URL と `gh pr create` の対応は出た順でしか決められず、数が違うと作っていない PR を登録しうるためである。Bash の `commandCwd` は、1 件目では先頭の `cd <パス> &&`、2 件目以降では直前の `cd <絶対パス> &&` から解決する(変数展開、`~`、引用符なしの `\` や glob 文字、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない)。PowerShell では `commandCwd` を送らない |
+| PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで。切り詰めた場合は末尾に「…」を付ける)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る。Bash と PowerShell では、コマンドの全文から見つけた Codex の起動の定義名を `codexLaunchDefinition` として送る(見つけ方は「サブエージェントのモデルと effort」の節) |
+| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash または PowerShell の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`Get-Content` などの PowerShell、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex の起動、クロスレビューの起動、`--wait` の Bash または PowerShell で、`tool_response.persistedOutputPath` が絶対パスでファイル名が `<英数字、_、->.txt` の形なら、出力の結果行の有無によらず、そのファイルの先頭と末尾の各 64KB から Codex の行を読み、出力から得た行より優先する。Claude Code は 30000 文字を超える出力の先頭だけを `stdout` に残して全文をこのファイルに置き、本物の結果行は出力の最後に出るためである(先頭に残った結果行は、最終報告に引用されたものでありうる)。`stderr` は見ない(bridge は Codex の行を標準出力へ出す)。PostToolUse の Codex の終了の判定は「サブエージェントのモデルと effort」の節に従う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る。PR の URL を得た Bash または PowerShell の PostToolUse では、`tool_response.stdout` などから URL を出た順に抽出する。1 つのコマンドに `gh pr create` が複数あり、抽出した URL の数が実行回数と同じで、`gh pr create` 以外の `gh` を含まない場合は、2 件目以降を最大 9 件の `additionalPullRequests` に載せる。URL と `gh pr create` の対応は出た順でしか決められず、数が違うと作っていない PR を登録しうるためである。Bash の `commandCwd` は、1 件目では先頭の `cd <パス> &&`、2 件目以降では直前の `cd <絶対パス> &&` から解決する(変数展開、`~`、引用符なしの `\` や glob 文字、二重引用符の中の `\` を含むもの、4096 文字を超えるものは送らない)。PowerShell では `commandCwd` を送らない |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。UserPromptSubmit では、`prompt` が `<task-notification>` で始まるときだけ通知を全件読み、`status` が終わり(`completed`、`failed`、`killed`、`stopped`)のものの `task-id` と `status` を `backgroundTaskEnds` に載せる。開発者が入力に引用した通知を、終了と取り違えないためである。出力ファイルの読み取りは 8 件までとし、`output-file` が絶対パスで、ファイル名が `<task-id>.output` と一致する場合は、先頭と末尾の各 64KB から Codex の監査行、結果行、実行 ID の行だけを `codexOutput` に載せる。128KB 以下のファイルは全体を読む。出力ファイルが無い通知には `outputMissing` を付け、Codex の行を終了未確認にする。上限を超えて読まなかった通知と、出力を読めなかった通知は送らず、記録ファイルを読み直すサーバーの照合に任せる。出力に `waiting` があれば行を閉じてはならないためである。サーバーの照合は、セッションの一覧から `cwd` を得られなければ、フックが最初に送った `cwd` で記録ファイルを探す。サーバーが受ける `backgroundTaskEnds` は最大 32 件とする。プロンプト本文と `summary` は送らない |
@@ -393,10 +393,10 @@ Windows のルート相対パスは `\` で始め、相対パスは実行環境�
 
 セッションごとに次を持つ。
 
-- プロダクト: 鍵はリポジトリのルートの絶対パス(Windows では小文字にする)、表示名はそのフォルダー名。`cwd` が `<ルート>/.claude/worktrees/<名前>` の下なら、`<ルート>` をリポジトリのルートとする。ブランチ名は `cwd` から上へ探した `.git/HEAD` から読む。`.git` が worktree のポインター ファイルなら `gitdir:` の場所にある `HEAD` を読む。`ref: refs/heads/<名前>` はブランチ名、detached HEAD は短い SHA とし、読めなければ `null` にする。子プロセスは起動せず、同じ `cwd` の結果を 10 秒間キャッシュする。読み取るファイルは `.git` のポインターと `HEAD` に限り、どちらも 4 KB を上限とする。
+- プロダクト: 鍵はリポジトリのルートの絶対パス(Windows では小文字にする)、表示名はそのフォルダー名。`cwd` が `<ルート>/.claude/worktrees/<名前>` の下なら、`<ルート>` をリポジトリのルートとする。Codex の worktree(`cwd` が `<Codex のホーム>/worktrees/` の下)は、上へ探した `.git` のポインターの `gitdir:` が `<元のルート>/.git/worktrees/<名前>` を指し、その場所があるときだけ `<元のルート>` をリポジトリのルートとする。Codex のホームはサーバーの `codexHome`、`CODEX_HOME`、`~/.codex` の順で決める。畳めた結果は `cwd` ごとに 256 件まで控えて読み直さないので、worktree が消えた後も同じ鍵になる。起動時には、保存済みの PR 登録の製品も登録自身の `cwd` で同じ規則により畳み直し、畳めて鍵が変わる登録だけ書き換えて保存する。ポインターを読めない、形が違うときは `cwd` を鍵にする。開発者が手で作ったリンクした worktree は畳まない。ブランチ名は `cwd` から上へ探した `.git/HEAD` から読む。`.git` が worktree のポインター ファイルなら `gitdir:` の場所にある `HEAD` を読む。`ref: refs/heads/<名前>` はブランチ名、detached HEAD は短い SHA とし、読めなければ `null` にする。子プロセスは起動せず、ブランチ名の結果を同じ `cwd` ごとに 10 秒間キャッシュする。ブランチ名の読み取り対象は `.git` のポインターと `HEAD` に限り、どちらも 4 KB を上限とする。
 - 最終イベント時刻: `lastActivityAt` にセッションの最新フック時刻を ISO 形式で持ち、メイン行の経過表示に使う。
 - セッションファイル: `~/.claude/sessions/*.json` の `name` を題名に使い、有限の数値 `updatedAt` は ISO 形式にして `sessionFileUpdatedAt` に載せる。状態不明のセッションを隠す判定に使う。`status` は文字列の場合だけ先頭 50 文字を読み、文字列でない値は捨てる。項目が無い場合やファイルを読めない場合も動作を続ける。
-- 状態: 作業中、待機中、待機中(サブエージェント稼働中)、中断、許可待ち、許可確認中、不明。ターンの状態は、agent_id の無い PreToolUse、PostToolUse、PostToolUseFailure、UserPromptSubmit、Stop、source が startup、resume、clear の SessionStart で確定する。許可待ち、許可確認中の順に優先し、それ以外で未確定なら「不明」にする。SessionStart の compact、Notification、サブエージェントのイベント、PostToolBatch では確定しない。イベント由来とセッションファイルだけの行のどちらも、「不明」でセッションファイルの status が idle なら待機中、対話セッションで busy なら作業中で補う。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。Interrupt(Codex のフックと、下の「中断の検出」が合成するもの)は Stop と同じ後始末をして、メインに中断の印を付け、状態を「中断」にする。稼働中のサブエージェントがあっても「中断」を優先し、許可待ちと許可確認中がそれより優先される。印は、後から届いたメインの UserPromptSubmit と、source が startup、resume、clear の SessionStart で外す。サブエージェントのイベントと、中断したツールの遅れた PostToolUseFailure などでは外さない。SessionStart の source が startup、resume、clear のときは、入力を待つ状態で始まるので待機中にし、メインの実行中のツールと許可待ちを外す。compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。SessionEnd を受けたら一覧から外す。一度生きている一覧に載ったセッションファイルが 60 秒以上一覧から消えた場合も、不在による終了として一覧から外す。不在による終了は、セッションファイルが再び一覧に載ったときに解除する。SessionStart と、それ以外のイベントは、hookAt が終了判定時刻より後なら終了扱いを解除して受け付ける。SessionEnd による終了は解除しない。
+- 状態: 作業中、待機中、待機中(サブエージェント稼働中)、中断、許可待ち、許可確認中、不明。ターンの状態は、agent_id の無い PreToolUse、PostToolUse、PostToolUseFailure、UserPromptSubmit、Stop、source が startup、resume、clear の SessionStart で確定する。許可待ち、許可確認中の順に優先し、それ以外で未確定なら「不明」にする。SessionStart の compact、Notification、サブエージェントのイベント、PostToolBatch では確定しない。イベント由来とセッションファイルだけの行のどちらも、「不明」でセッションファイルの status が idle なら待機中、対話セッションで busy なら作業中で補う。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。Interrupt(Codex のフックと、下の「中断の検出」が合成するもの)は Stop と同じ後始末をして、メインに中断の印を付け、状態を「中断」にする。稼働中のサブエージェントがあっても「中断」を優先し、許可待ちと許可確認中がそれより優先される。印は、後から届いたメインの UserPromptSubmit と、source が startup、resume、clear の SessionStart で外す。サブエージェントのイベントと、中断したツールの遅れた PostToolUseFailure などでは外さない。SessionStart の source が startup、resume、clear のときは、入力を待つ状態で始まるので待機中にし、メインの実行中のツールと許可待ちを外す。compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。SessionEnd を受けたら、hookAt 順に導出した結果に行が残らない場合だけ終了を記録して一覧から外す。SessionStart による再開より古い SessionEnd は捨て、回答と Stop の待ち、タスク催促の記録、実行時のキャッシュを終了の後始末で消さない。一度生きている一覧に載ったセッションファイルが 60 秒以上一覧から消えた場合も、不在による終了として一覧から外す。不在による終了は、セッションファイルが再び一覧に載ったときに解除する。SessionStart と、それ以外のイベントは、hookAt が終了判定時刻より後なら終了扱いを解除して受け付ける。SessionEnd による終了は解除しない。
 - 実行中のツール: PostToolUse が来ていない `tool_use_id` ごとの、ツール名と要約と開始時刻。メインの Stop と UserPromptSubmit ではメインのツールを消し、PostToolBatch ではその時刻より前に始まった、同じエージェント(メインかサブエージェント)のツールを消す。拒否されたツールには PostToolUse も PostToolUseFailure も届かないためである。サブエージェントの PostToolBatch では、そのサブエージェントの、その時刻より前に始まった許可待ちも消す。メインの許可待ちは PostToolBatch では消さず、Stop と UserPromptSubmit で消す。
 - サブエージェント: `agent_id` ごとに、`agent_type`、作業の説明、開始時刻、最後のツール、モデル、effort。
 - `SubagentStart` が記録されていなくても、`SubagentStop` 以外のイベントで初めて届いた `agent_id` から行を作る。
@@ -406,6 +406,12 @@ Windows のルート相対パスは `\` で始め、相対パスは実行環境�
 - サブエージェントを終了にするのは、`SubagentStop` を受けたとき、メインの `TaskStop` の `PostToolUse` の `tool_input.task_id`(無ければ非推奨の `shell_id`)が Claude のサブエージェントに一致したとき、終了通知から `SubagentStop` を合成したときである。
   どの場合も、そのサブエージェントの未完了のツールと許可待ちを消す。
   `SubagentStart` を受けたら稼働中に戻し、開始時刻をその時刻にする。
+- `Agent` の `PostToolUseFailure` が `isInterrupt` を持つときは、その呼び出しに一意に結び付いた、稼働中で背景に移っていない Claude のサブエージェントを終了未確認にする。
+  メインの `Stop` と `Interrupt` でも、行のある同じ条件のサブエージェントを終了未確認にする。
+  前面のサブエージェントは呼び出し元のターンより長く続かないためである。
+  対象の未完了のツールと許可待ちを消し、その行が前面で起動した Codex も終了未確認にする。
+  結び付けが無いか曖昧な呼び出し、行の無い agent_id、終了済みの行、背景の行は対象にしない。
+  遅れて届いた `Agent` の `PostToolUse` も hookAt 順で導出するため、`Stop` より前の応答なら背景の行として稼働を保つ。
 - タスク: `tasks` の全項目と、最後に書いた時刻 `tasksUpdatedAt`。
 - 判断事項: AskUserQuestion の記録と MCP から登録した項目を `decisions` に持つ。計画に記録した判断事項の仮適用時刻は `plans.decisions.provisionalAt` に、回答記録で仮適用になった時刻は `decisionLifecycles.provisionalAt` に保存する。
 
@@ -432,7 +438,7 @@ squash マージでは元の SHA が base に残らないため、前の PR の�
 指定したリポジトリ、またはその製品の `key` を持つ PR 登録があるリポジトリだけを `refreshRepoFresh` で取り直す。
 対象リポジトリの取得が先に動いていれば、その完了後にコマンド後の状態を取り直す。
 途中の `cd`、`git -C`、`--git-dir`、`--work-tree`、別々のリポジトリを指す複数の対象を含むコマンドは、フックが `refreshScopeUnknown` を付け、全体を取り直す。
-取り直すリポジトリが決まらないとき(製品は決まってもその `key` の登録が無いときを含む)も全体を `refreshAfterCommand` で取り直す。下位のフォルダーや `.claude/worktrees` 以外の worktree の `cwd` は、登録の製品と `key` がずれるためである。
+取り直すリポジトリが決まらないとき(製品は決まってもその `key` の登録が無いときを含む)も全体を `refreshAfterCommand` で取り直す。下位のフォルダーと、`.claude/worktrees` の規則にも Codex の worktree 条件にも当てはまらない worktree の `cwd` は、登録の製品と `key` がずれるためである。
 全体の取り直しは 5 秒に 1 回までにまとめ、その間に来た分は間隔の明けに 1 回だけ取る。先に動く取得は、終わるのを待ってから取り直す。
 全体の取り直しでは、開いている PR が無いリポジトリは 60 秒に 1 回まで間引き、間隔が足りずに飛ばしたリポジトリは間隔が明けた時点の取得を 1 回だけ予約する。
 確定操作の確かめ直しの取得は、その中で呼ぶ gh もすべて待ち行列で優先する。
@@ -441,6 +447,12 @@ squash マージでは元の SHA が base に残らないため、前の PR の�
 `PullRequestTracker.execute` を通る `gh` は表示設定 `display.ghConcurrencyLimit` の本数までとし、残りは待ち行列に入れる。上限は払い出しのたびに読み直す。下げても実行中の `gh` は止めず、実行数が新しい上限を下回ってから次を起動する。
 開発者が画面で確定したマージ、base の付け替え、ブランチの削除とその結果の確認は、定期取得より待ち行列で優先する。
 `gh` の 20 秒の期限は、待ち時間を含めず、起動してからの時間に掛ける。
+
+ダッシュボードでマージした後の取り直しも、先に動いている取得の完了後に新しく取得する。
+マージまたはクローズを登録に記録するたびに、メモリー上のリポジトリの世代を進め、その PR に記録した世代を保持する。
+取得開始時に控えた世代より後の記録がある PR を除いたオープン一覧を、登録の所属更新とリポジトリの状態の置き換えに使う。
+同じ取得で得たほかの PR の更新は反映する。
+
 base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha`、`triage` を設定する。`triage` は状態ファイルの `lastTriage` を `{round, sha, outcome}` に検証したもので、`sha` は 40 桁か 64 桁の小文字、`outcome` は `fixing`、`converged`、`halted` のいずれか。無いか形が合わなければ `null` とする。表示の規則は計画書の決定「クロスレビューの結論の表示」を正本とする。セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は、PR の head のコミットにも無いことを `git ls-tree` で確かめて「レビュー不要」とする。head のコミットにあれば、道具がある worktree と同じく状態ファイルを読む。worktree が道具の無い別のブランチへ切り替わっても、記録を「不要」で隠さないためである。head のコミットが手元に無いなどで確かめられないときは、PR の base ブランチを remote の追跡ブランチ(`<remote>/<base>`)のコミットで確かめ、どれかにあれば道具を使うリポジトリとする。見る remote は PR のリポジトリと一致する GitHub の remote で、GitHub の remote と判定できるものが無い(SSH の別名ホストなど)ときはすべての remote とする。ローカルの `<base>` は、PR のリポジトリと内容が違うことがあるので見ない。head と base のどちらでも確かめられないときは「確認できない」とする。状態ファイルの有無ではなく道具の有無で判定したまま、「レビュー不要」は道具が無いと確かめられたときだけにし、head を取り込んでいないだけで、使わないリポジトリの PR を「確認できない」にしないためである。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。
 状態ファイルは、登録の `cwd` の worktree に加えて、同じリポジトリのほかの worktree からも探す。PR の head のブランチをチェックアウトしている worktree は記録の有無を問わず候補にし、それ以外の worktree はそのブランチの記録を持つときだけ候補にする。スタックを 1 つの worktree で積むと、下の段のブランチはどこにもチェックアウトされないためである。
 登録の `cwd` が消えたときは、親へ上って見つかる worktree の根で下の remote の照合をしてから、PR の head のコミットに `tools/cross-review.js` があるかを確かめる。head のコミットを確かめられなければ、上と同じく base ブランチのコミットで確かめる。無ければ「レビュー不要」とし、あるか、どちらも確かめられなければ「確認できない」とする。消えた worktree の状態ファイルは読めないためである。このとき見つけた根も、ほかの worktree と同じ規則の候補にする。`git worktree list` で `prunable` の worktree(フォルダーが無い)は候補にしない。
@@ -497,6 +509,17 @@ compare の失敗や 250 件超で全件を確認できない場合はマージ�
 旧形式の GitHub 自動マージ予約は読み込み時に捨て、GitHub 側の取消 API は呼ばない。
 マージ履歴、予約、リポジトリごとの前回方式は `store.json` に保存し、マージ履歴は 24 時間で消す。予約取消の通知はメモリーに持ち、該当 PR グループの `reservationNotices` で画面へ配る。
 `delete_branch_on_merge` が有効なリポジトリではスナップショットに `autoDeleteBranch` を含め、確認欄に GitHub がブランチを削除することを示す。常駐サーバーによる削除では、マージした PR の head SHA とリモート ref を取得して照合し、一致する場合だけ GitHub GraphQL の `updateRefs` を `beforeOid` に期待 SHA、`afterOid` にゼロ SHA、`force` に `false` を指定して実行する。GitHub は参照の更新を原子的に適用し、`beforeOid` が一致しない場合は削除しない。ref が既に無い場合は削除済みとして扱い、警告を出さない。head SHA が変わった場合は削除を見送り、警告をマージ履歴・通知・画面へ残す。削除に失敗した場合も警告を残し、削除済みの場合だけ `branchDeleted` を真にする。
+マージ操作の意図は gh の起動前に保存する。
+gh が数値の終了コードを返し、強制終了もシグナルも無い場合、または gh の起動自体に失敗した場合は、意図を消して失敗を返す。
+期限切れ、シグナル停止、出力上限超過、分類できない例外と、成功後の状態取得失敗は結果不明とし、意図を残して「マージの結果を確認できませんでした。次の取得で確かめます」と返す。
+gh pr merge の呼び出しからマージ結果の処理完了までは専用の実行中の印を持ち、並行取得で同じ PR のマージを検出しても、登録の更新とマージ通知を行わず次の取得に委ねる。
+後の取得でマージを検出した場合、保存した意図の head がマージされた head と一致すれば、その意図を方式、削除、積み直し通知、予約マージ結果に使う。
+ブランチを削除する際は、リモート ref の head を照合する。
+取得のたびに、オープンの PR に残る意図を突き合わせる。
+このプロセスでマージを実行中でなく、取得開始時刻が意図の createdAt に gh の既定期限 20 秒を加えた時刻以降なら、意図を消す。
+消した操作について「前回のマージ操作の結果を確認できませんでした」を既存の PR 行通知に一度記録し、記録から 1 分で隠す。
+期限前に始まった取得では意図を消さず、マージキューの意図と予約の扱いは変えない。
+
 結果は PR を登録したセッションへ PostToolBatch、UserPromptSubmit、Stop の回答配信経路で知らせる。レビュー収束後マージの結果には、ブランチ削除、base の付け替え、警告を保存し、既存のマージ結果 1 行と同じ形式で画面へ配る。画面には `warning` が空でない文字列か `headMismatch` が真の結果だけを表示し、`閉じる` 操作まで残す。予約マージ結果の `mergeResultClosedAt` は `POST /api/pull-requests/merge-result/close` で記録し、旧形式で項目が無い結果は未閉鎖として扱う。閉鎖時刻はマージ履歴と同じ 24 時間の保持期限で整理する。
 gh の順序、失敗時の扱い、積み直し通知は[計画書のマージの手順](../handover/2026-10-02.md#マージの手順常駐サーバー)を正本とする。
 
@@ -519,9 +542,9 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - PostToolUse の `resolvedModel` は、その行のモデルに反映する。
 - Agent 呼び出しの説明は、PostToolUse で Agent の実行中ツールを消す前に、対象の行へ書く。SubagentStart の時点の結び付けは到着順で誤ることがあるので、既に説明があっても呼び出し自身の説明で上書きする。
 - Claude のモデル名は、画面では `claude-sonnet-5-5` を `Sonnet 5.5` のように読みやすく表示する。
-- Bash の PreToolUse では、コマンドの全文から、経路の判定(`route.js`)と同じ規則で `codex-agent.sh <定義名>` の起動を探す。区切り(`;`、`&&`、`||`、`|`、改行)ごとに、括弧と、先頭の代入、`env`、`timeout`、`nohup` などの前置きを外し、`bash` などのシェルの引数と `-c` の文字列もたどる。その前に、引用符の外のコメントと、引用符の外の `<<` から後(ヒアドキュメントの本文)を外し、コマンド置換 `$( )` の中身は二重引用符の中にあっても別のコマンドとして探す。シェルの `-c` の文字列にも同じ前処理を当てる。経路の判定はヒアドキュメントで `bash` に渡す起動も拒むため、この前処理を持たない。引数や文字列の中の `codex-agent.sh`(`git diff -- tools/codex-agent.sh` など)と、`--wait` などのオプションの呼び出しは起動として扱わない。要約は 80 字で切られ、引数に現れたパスと起動を区別できないためである。
+- Bash と PowerShell の PreToolUse では、コマンドの全文から、経路の判定(`route.js`)と同じ規則で `codex-agent.sh <定義名>` の起動を探す。区切り(`;`、`&&`、`||`、`|`、改行)ごとに、括弧と、先頭の代入、`env`、`timeout`、`nohup` などの前置きを外し、`bash` などのシェルの引数と `-c` の文字列もたどる。その前に、引用符の外のコメントと、引用符の外の `<<` から後(ヒアドキュメントの本文)を外し、コマンド置換 `$( )` の中身は二重引用符の中にあっても別のコマンドとして探す。シェルの `-c` の文字列にも同じ前処理を当てる。経路の判定はヒアドキュメントで `bash` に渡す起動も拒むため、この前処理を持たない。引数や文字列の中の `codex-agent.sh`(`git diff -- tools/codex-agent.sh` など)と、`--wait` などのオプションの呼び出しは起動として扱わない。要約は 80 字で切られ、引数に現れたパスと起動を区別できないためである。
 - 起動を見つけたら、Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)を先に、そこが `~/.claude` と異なる場合は後者も対象にして `gpt-agents/<定義名>.md` を探し、先に読めた定義の frontmatter から `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
-- Bash の PreToolUse では、要約の切り詰め前にコマンド位置にあるクロスレビュー起動も Codex 呼び出しとして扱う。
+- Bash と PowerShell の PreToolUse では、要約の切り詰め前にコマンド位置にあるクロスレビュー起動も Codex 呼び出しとして扱う。
 - `npm run review:codex` と `node tools/cross-review.js codex` は `codex-review`、`--fix` 付きと `npm run review:codex:fix` は `codex-subagent` の定義を使い、`--no-codex-agent` 付きは対象にしない。
 - `codex-agent.sh` の起動の PostToolUse は、結果行を受けたときに終了とし、結果行が無ければ背景で動いているものとして扱う。
 - 起動の PostToolUseFailure は、結果行が無い場合、`isInterrupt` が真なら終了未確認にし、それ以外は終了にする。Claude のフック入力の `is_interrupt === true` を `isInterrupt` として受け、保存後の作り直しでも保持する。合成の Interrupt との順序や error の文言には依存しない。別の出力で結果を受けた行は、遅れて届いた中断で終了未確認に戻さない。
@@ -540,7 +563,7 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
   記録ファイルから得た通知は、行の開始より古いものを使わない。
   出力ファイルは絶対パスでファイル名が `<task-id>.output` のものだけを読み、記録ファイルの経路では非同期に 1 回 8 件まで読む。
   先頭と末尾の各 64KB から結果行が得られれば既存の結果処理を適用し、結果行が無ければ監査行と実行 ID を反映して終了にする。
-  ただし、`--wait` の状態の行があれば下の `--wait` の規則に従う。無いときは、通知の status が `killed` か `stopped` のとき、出力ファイルが無いとき、行に背景タスク ID が無いときは終了未確認にする。bridge は Bash を止めても停止を Codex へ伝えず、Codex は動き続けるためである。
+  ただし、`--wait` の状態の行があれば下の `--wait` の規則に従う。無いときは、通知の status が `killed` か `stopped` のとき、出力ファイルが無いとき、行に背景タスク ID が無いときは終了未確認にする。bridge は起動元の Bash または PowerShell を止めても停止を Codex へ伝えず、Codex は動き続けるためである。
   記録ファイルの経路は内部イベント `BackgroundTaskEnd` を追加し、メインの状態、最終活動時刻、ターンの区切りを変えない。
   終了した行は次の読み取りの対象から外す。
   `BackgroundTaskEnd` と Claude の `Interrupt` は内部イベントとして、フックと `/api/events` からは受け付けない。
@@ -562,12 +585,14 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
   待っている起動の記録は遅れた PostToolUse のために残し、呼び出し元が止まったときの前面起動の後始末では、背景へ移った行を対象外にする。
 - 「終了にする」は、終了未確認の行、メイン直下で稼働中の背景 Codex の行、背景で起動した稼働中の Claude のサブエージェントと Codex のネイティブの子の行に表示する。
   `Agent` ツールの `PostToolUse` が届いた時点でサブエージェントが稼働中なら、背景で起動したものとみなす。
+  背景の起動の応答は `SubagentStart` より先に届くことがあるので、応答の `agentId` の行がまだ無く、停止済みでもなければ、その agentId で後から作る行を背景の行にする。
   provider が codex のセッションの子は、SubagentStart でも他のイベントから作る場合でも背景の行とする。spawn はすぐ戻り、子は親のターンより長く続きうるためである。
-- 閉じた行はスナップショットで終了として出し、セッションの稼働中エージェント数から除く。
+- 「終了にする」で閉じた行はスナップショットで終了として出し、未完了のツールと許可待ちを表示から除く。
+  閉じた行を除いた稼働状態と許可待ちでセッションの表示状態を決め直す。
 - 閉じた行の `agent_id` から `SubagentStop` 以外のイベントが届いたら、その行の閉じた記録を外す。
 - 結果行で終了した行や、状態から消えた行の記録は破棄する。
 - サブエージェントが `codex-agent.sh --wait <実行 ID>` を呼んだら、同じ Codex の実行が続いているものとして扱う。実行 ID は `<定義名>-YYYYMMDD-HHMMSS-<番号>` の形だけを受け、定義名は実行 ID の先頭から得る。同じ親の下で同じ定義の、背景へ移って(終了未確認を含む)結果行をまだ受けていない行のうち最も新しいものを稼働中に戻し、この呼び出しの結果行で終了にする。`--wait` が結果行なしで抜けたときは、最後の状態の行で扱いを分ける。`waiting`(上限までに終わらない)か状態の行が読めないときは、Codex が背景で動き続けている見込みなので稼働中に残す。`vanished` と `not-found` は終了、`orphaned` と `unverified` は終了未確認にする。結果行なしで失敗した起動は続きが無いので、候補にしない。背景へ移った候補が無いときは、同じ親の下で同じ定義の、待っている起動の記録に残る行(起動の PostToolUse が欠けた行)が一つだけならそれを背景へ移して引き取る。それも無ければ(常駐サーバーの再起動で起動のイベントが失われたときなど)、新しい行を作る。
-- Codex の行には、分かったときに実行 ID を持たせる。起動の Bash の出力の `codex-agent: run=<実行 ID>` の行と、`--wait` の実行 ID から得る。背景へ移った起動の出力には実行 ID が出ないことがあり、その行には `--wait` の時点で付く。背景へ移った起動の Bash の背景タスク ID は行に記録し、その背景タスクの出力を後で読んだ呼び出しの背景タスク ID と照合する。実行 ID を持たない背景 Codex が同じ親の下に複数あっても、どの行の出力かを区別できるためである。コマンドの全文から出力ファイルが複数見つかる Bash は、出力が混ざって照合できないので使わない。Codex を起動した Bash も、出力はその起動のものなので、引数に出力ファイルのパスがあっても照合に使わない。途中の出力に `run=` の行があれば、結果行が無くても同じ行へ実行 ID を記録する。`--wait` の実行 ID と同じ行があれば、親を問わず、親と定義による選び方より先にその行を使い、呼び出した親の下へ付け替える。その行が既に結果行を受けていれば、行を作りも戻しもしない。終わった実行の結果を取り出し直す呼び出しで、行が増えないためである。親と定義で選ぶときは、実行 ID が分かっていて別の値の行を候補にしない。後続のツールの出力に結果行が出たときも、`run=` の行があれば同じ実行 ID の行に結び付け(既に結果を受けていれば何もしない)、照合できずに選んだ行にはその実行 ID を記録する。常駐サーバーを再起動すると行そのものが消えるので、この照合で再起動後の `--wait` を取りこぼすことはない。
+- Codex の行には、分かったときに実行 ID を持たせる。起動時の Bash または PowerShell の出力にある `codex-agent: run=<実行 ID>` の行と、`--wait` の実行 ID から得る。背景へ移った起動の出力には実行 ID が出ないことがあり、その行には `--wait` の時点で付く。背景へ移った起動を実行した Bash または PowerShell の背景タスク ID は行に記録し、その背景タスクの出力を後で読んだ呼び出しの背景タスク ID と照合する。実行 ID を持たない背景 Codex が同じ親の下に複数あっても、どの行の出力かを区別できるためである。コマンドの全文から出力ファイルが複数見つかる Bash または PowerShell は、出力が混ざって照合できないので使わない。Codex を起動した Bash または PowerShell も、出力はその起動のものなので、引数に出力ファイルのパスがあっても照合に使わない。途中の出力に `run=` の行があれば、結果行が無くても同じ行へ実行 ID を記録する。`--wait` の実行 ID と同じ行があれば、親を問わず、親と定義による選び方より先にその行を使い、呼び出した親の下へ付け替える。その行が既に結果行を受けていれば、行を作りも戻しもしない。終わった実行の結果を取り出し直す呼び出しで、行が増えないためである。親と定義で選ぶときは、実行 ID が分かっていて別の値の行を候補にしない。後続のツールの出力に結果行が出たときも、`run=` の行があれば同じ実行 ID の行に結び付け(既に結果を受けていれば何もしない)、照合できずに選んだ行にはその実行 ID を記録する。常駐サーバーを再起動すると行そのものが消えるので、この照合で再起動後の `--wait` を取りこぼすことはない。
 - `--wait` は起動と同じ規則でコマンドの全文から探す(要約は 80 字で切られるため)。行継続を空白に置き換え、前置きとシェルの `-c` の文字列もたどり、起動の後ろの語が `--wait <実行 ID>` である最初の呼び出しから、実行 ID を 256 文字まで得る。ヒアドキュメントの本文、コメント、引数や文字列に書かれた手順は拾わない。同じ呼び出しで Codex を起動しているときは起動として扱い、`--wait` は見ない。
 - 親の行の GPT の札は、稼働中の Codex の行を優先し、その中で最も新しいものを出す。
 - メインセッションの `--wait` は、窓口の完了報告の後に最終報告を取り出す呼び出しなので、行を作りも戻しもしない。
@@ -756,12 +781,14 @@ MCP が渡す `ppid` と `CLAUDE_CODE_SESSION_ID` のうち、常駐サーバー
 
 ## 経路の設定
 
-`routing.json` に `{agents, review}` を保存し、値は `default`、`codex`、`claude` のいずれかとする。欠落、破損、無効な値の場合は両方を `default` として読む。
+`routing.json` に `{agents, review}` を保存し、値は `default`、`codex`、`claude` のいずれかとする。欠落、破損、無効な値の場合は両方を `default` として読む。読み取りエラーは数回読み直し、それでも読めなければ常駐サーバーの起動を失敗させる。
 書き込みは `POST /api/routing` だけで受け付け、画面用秘密値と `validRequiredUiOrigin` を照合する。
 ファイルは `AtomicJsonWriter` が一時ファイルから rename して保存する。
 
 `GET /api/state` は現在の経路を返す。`event.js` は Claude セッションの `SubagentStart` で bridge の有無を確認し、bridge がある場合は `route-agents/` の記録があればその値を、記録がなければ現在の `agents` を `route` として送る。route.js を登録していない環境でも現在の設定値を送るため、画面の札を登録漏れの診断に使える。bridge が無ければ `route` を送らない。`event.js` は記録を書き換えない。画面は起動時の値と現在値が異なる稼働中の行に「変更前」を表示する。
 同期フック `route.js` は `SubagentStart` 時点の `agents` を `route-agents/` に記録し、指定がある場合は `additionalContext` へ差し込む。記録名は session ID と agent ID を小文字の 16 進数文字列にして作り、一時ファイルから rename して保存する。`PreToolUse` はこの記録を参照するため、起動後に設定を変えても稼働中の経路は変わらない。Claude 経路では `codex-agent.sh` 呼び出しを拒否し、Codex と既定の経路は拒否しない。同じサブエージェントの `SubagentStart` が再び届いても記録は上書きせず、終了時にも消さない。再開したサブエージェントの経路を初回のまま保つためである。`route.js` が記録を読むたびに更新時刻を進め、開始時に 24 時間使われていない記録を削除する。記録の読み書きに失敗したフックは応答を返さない。
+
+同期フックは `routing.json` の読み取りエラーを数回再試行し、合計 200ms 未満で打ち切る。それでも読めなければ `SubagentStart` に応答せず、`route-agents/` に経路記録を作らない。
 `review` の値は ai-cross-review がレビューを回す直前に `node tools/cross-review.js route` で読む。agent-cockpit 側は保存するだけで、セッションへ差し込まない。
 
 サブエージェントの経路は claude-codex-bridge の `codex-agent.sh` があるときだけ意味を持つ。`GET /api/state` は Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)か `~/.claude` のどちらかに `tools/codex-agent.sh` があるかを `integrations.codexAgent` で返し、画面は無ければサブエージェントの段と経路の札を出さない。`route.js` も同じ場所を確かめ、無ければ `SubagentStart` で何も差し込まない。`~/.claude` も見るのは、bridge が `CLAUDE_CONFIG_DIR` を見ずに `~/.claude/tools/` へ置く作りだからである。

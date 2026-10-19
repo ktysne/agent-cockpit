@@ -37,15 +37,22 @@ function createPullRequestRoutes(ctx) {
       jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
       return;
     }
+    if (!pullRequestMergeManager?.reviewSkipCandidate) {
+      jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
+      return;
+    }
     try {
-      const refreshed = await pullRequestTracker.refreshRepoFresh(registration.owner, registration.repo, { priority: true });
-      const candidate = refreshed?.error ? null : pullRequestTracker.mergeCandidate(registration);
-      if (!candidate?.pullRequest) {
-        jsonResponse(response, 409, { error: 'Pull request is no longer open' });
+      const candidate = await pullRequestMergeManager.reviewSkipCandidate(registration);
+      if (candidate.refreshFailed) {
+        jsonResponse(response, 502, { error: 'PR の状態を取り直せませんでした' });
+        return;
+      }
+      if (candidate.error) {
+        jsonResponse(response, 409, { error: 'PR はオープンではありません' });
         return;
       }
       if (candidate.pullRequest.headRefOid.toLowerCase() !== body.headRefOid.toLowerCase()) {
-        jsonResponse(response, 409, { error: 'Pull request head has changed' });
+        jsonResponse(response, 409, { error: 'PR の head が変わりました。現在の状態を確認してください' });
         return;
       }
       if (!state.clearCrossReviewSkip(registration.owner, registration.repo, registration.number, candidate.pullRequest.headRefOid)) {
@@ -57,7 +64,7 @@ function createPullRequestRoutes(ctx) {
       jsonResponse(response, 200, { action: body.action, number: registration.number });
     } catch (error) {
       request?.setDiagnosticError?.(error);
-      jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
+      jsonResponse(response, 502, { error: 'PR の状態を取り直せませんでした' });
     }
   }
 

@@ -168,6 +168,7 @@ function createRequestHandler(options) {
   const {
     homeDir,
     claudeHome,
+    codexHome,
     userHome,
     state,
     away,
@@ -198,6 +199,7 @@ function createRequestHandler(options) {
     stateCacheNow: options.stateCacheNow,
     homeDir,
     claudeHome,
+    codexHome,
     userHome,
     state,
     away,
@@ -212,7 +214,7 @@ function createRequestHandler(options) {
     openExternalUrl,
     webPath,
     scheduleTaskNotifications: (sessionId) => options.scheduleTaskNotifications?.(sessionId),
-    scheduleSessionModel: (event) => options.scheduleSessionModel?.(event),
+    scheduleSessionModel: (event, result) => options.scheduleSessionModel?.(event, result),
   };
   const serverRestart = createServerRestart(ctx, options.serverRestart);
   ctx.restartAvailable = serverRestart.restartAvailable;
@@ -453,15 +455,37 @@ async function startServer(options = {}) {
     onFailure: (fileName) => logLine(homeDir, `${fileName} write failed`),
   });
   const perf = new PerfMetrics();
-  const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter, perf, worktreeOptions: options.worktreeOptions });
+  const storageFileSystem = options.storageOptions?.fileSystem || fs;
+  let state;
+  let away;
+  let routing;
+  try {
+    state = options.state || await DashboardState.load(homeDir, {
+      writer: storageWriter,
+      fileSystem: storageFileSystem,
+      readRetryOptions: options.storageOptions?.readRetryOptions,
+      perf,
+      worktreeOptions: options.worktreeOptions,
+      codexHome,
+    });
+    away = options.away || await AwayState.load(homeDir, storageFileSystem, storageWriter, options.storageOptions?.readRetryOptions);
+    routing = options.routing || await RoutingState.load(homeDir, {
+      writer: storageWriter,
+      fileSystem: storageFileSystem,
+      readRetryOptions: options.storageOptions?.readRetryOptions,
+    });
+  } catch (error) {
+    if (error.storageFileName) {
+      await logLine(homeDir, `${error.storageFileName} ${error.storageOperation} failed (${error.code || 'UNKNOWN'})`);
+    }
+    throw error;
+  }
   const diagnostics = new Diagnostics({ ...options.diagnosticsOptions, homeDir, userHome: options.userHome,
     getLevel: () => state.getDisplayPreferences?.()?.diagnosticsLevel || 'info' });
   state.diagnostics = diagnostics;
   const updateChecker = options.updateCheck ? new UpdateChecker({ diagnostics, ...options.updateCheck }) : null;
   state.attachWriter?.(storageWriter);
-  const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
   away.attachWriter?.(storageWriter);
-  const routing = options.routing || await RoutingState.load(homeDir, { writer: storageWriter });
   const pullRequestTracker = options.pullRequestTracker || new PullRequestTracker({ state, diagnostics, ...(options.pullRequestOptions || {}) });
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
@@ -502,10 +526,10 @@ async function startServer(options = {}) {
   const observedModelSessions = new Map();
   const modelReader = options.readSessionModel || readSessionModel;
   const claudeSessionFileReader = options.readClaudeSessionFiles || listLiveSessionFiles;
-  function scheduleSessionModel(event) {
+  function scheduleSessionModel(event, { ended = true } = {}) {
     const sessionId = event.session_id;
     if (event.hook_event_name === 'SessionEnd') {
-      endSessionRuntimeCaches(sessionId);
+      if (ended) endSessionRuntimeCaches(sessionId);
       return;
     }
     const known = state.sessions.has(sessionId) || Boolean(state.sessionFileFor(sessionId));
@@ -712,6 +736,7 @@ async function startServer(options = {}) {
     diagnostics,
     homeDir,
     claudeHome,
+    codexHome,
     state,
     away,
     routing,
@@ -790,7 +815,7 @@ async function startServer(options = {}) {
         return typeof name === 'string' ? { ...file, name } : file;
       });
       state.syncSessionFiles([...(files || []), ...codexFiles]
-        .map((file) => ({ ...file, product: productFromCwd(file.cwd) })), now, { codexOnly: files === null });
+        .map((file) => ({ ...file, product: productFromCwd(file.cwd, { codexHome }) })), now, { codexOnly: files === null });
       // Claude の一覧を読めないときは生死を保留し、保存の期限切れの片付けだけを進める。
       if (!files) state.pruneExpiredStoreRecords(now);
       const sessions = state.snapshot().sessions;

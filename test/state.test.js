@@ -802,6 +802,9 @@ test('メインの Stop と UserPromptSubmit はメインのツールだけを�
   for (const hook_event_name of ['Stop', 'UserPromptSubmit']) {
     const state = new DashboardState();
     state.addEvent({ session_id: 'tool-cleanup', hook_event_name: 'SessionStart', hookAt: 100 });
+    state.addEvent({ session_id: 'tool-cleanup', hook_event_name: 'PreToolUse', hookAt: 150, tool_name: 'Agent', tool_use_id: 'background-call' });
+    state.addEvent({ session_id: 'tool-cleanup', hook_event_name: 'SubagentStart', hookAt: 160, agent_id: 'agent-1', agent_type: 'Explore' });
+    state.addEvent({ session_id: 'tool-cleanup', hook_event_name: 'PostToolUse', hookAt: 170, tool_name: 'Agent', tool_use_id: 'background-call' });
     state.addEvent({ session_id: 'tool-cleanup', hook_event_name: 'PreToolUse', hookAt: 200, tool_name: 'Bash', tool_use_id: 'main-tool' });
     state.addEvent({ session_id: 'tool-cleanup', hook_event_name: 'PreToolUse', hookAt: 210, agent_id: 'agent-1', tool_name: 'Read', tool_use_id: 'agent-tool' });
 
@@ -993,7 +996,9 @@ test('Stop 時にサブエージェントが稼働中なら待機中として区
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'stopped', hook_event_name: 'SessionStart', hookAt: 100 });
+  state.addEvent({ session_id: 'stopped', hook_event_name: 'PreToolUse', hookAt: 150, tool_name: 'Agent', tool_use_id: 'agent-call' });
   state.addEvent({ session_id: 'stopped', hook_event_name: 'SubagentStart', hookAt: 200, agent_id: 'agent-1', agent_type: 'Explore' });
+  state.addEvent({ session_id: 'stopped', hook_event_name: 'PostToolUse', hookAt: 250, tool_name: 'Agent', tool_use_id: 'agent-call' });
   state.addEvent({ session_id: 'stopped', hook_event_name: 'Stop', hookAt: 300 });
   assert.equal(state.snapshot().sessions[0].status, '待機中(サブエージェント稼働中)');
 });
@@ -2250,7 +2255,9 @@ test('メインの Stop の後のサブエージェントの活動では、メ�
   await temporaryHome(t);
   const state = new DashboardState();
   const status = () => state.snapshot().sessions[0].status;
+  state.addEvent({ session_id: 'bg-agent', hook_event_name: 'PreToolUse', hookAt: 0, tool_name: 'Agent', tool_use_id: 'background-call' });
   state.addEvent({ session_id: 'bg-agent', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'Explore' });
+  state.addEvent({ session_id: 'bg-agent', hook_event_name: 'PostToolUse', hookAt: 1.5, tool_name: 'Agent', tool_use_id: 'background-call' });
   state.addEvent({ session_id: 'bg-agent', hook_event_name: 'Stop', hookAt: 2 });
   state.addEvent({ session_id: 'bg-agent', hook_event_name: 'PreToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Read', tool_use_id: 'r-1' });
   state.addEvent({ session_id: 'bg-agent', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub-1', tool_name: 'Read', tool_use_id: 'r-1' });
@@ -2536,7 +2543,9 @@ function interruptedFixture(provider = 'claude') {
 test('Interrupt は Stop と同じ後始末をして中断にし、稼働中のサブエージェントがあっても中断を優先する', () => {
   const { add, session } = interruptedFixture();
   add({ hook_event_name: 'UserPromptSubmit', hookAt: 1000 });
+  add({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'background-call', hookAt: 1050 });
   add({ hook_event_name: 'SubagentStart', agent_id: 'worker', agent_type: 'impl', hookAt: 1100 });
+  add({ hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_use_id: 'background-call', hookAt: 1150 });
   add({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'main-tool', summary: 'npm test', hookAt: 1200 });
   add({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', summary: 'npm test', hookAt: 1300 });
   assert.equal(session().status, '許可確認中');

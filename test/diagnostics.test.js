@@ -142,11 +142,15 @@ test('届かないフックは安全な一行だけ退避し、走査は壊れ�
 test('期限切れのフックは、常駐サーバーの確認と送信のそれぞれにかかった時間を退避する', async t => {
   const { runtime } = await startTestServer(t);
   const ensureDelayMs = 60;
-  const hookAt = Date.now();
+  let clock = 100000;
+  const hookAt = clock;
   await runHook({ session_id: 'slow-session', hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read' }, {
-    homeDir: runtime.homeDir, now: hookAt, deadline: hookAt + 300,
-    ensureServerRunning: async () => { await new Promise(resolve => setTimeout(resolve, ensureDelayMs)); return runtime.info; },
-    fetchImpl: (_url, init) => new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason))),
+    homeDir: runtime.homeDir, now: hookAt, clock: () => clock, deadline: hookAt + 300,
+    ensureServerRunning: async () => { clock += ensureDelayMs; return runtime.info; },
+    fetchImpl: (_url, init) => {
+      clock = hookAt + 300;
+      return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason)));
+    },
   });
   const pending = JSON.parse(await fs.readFile(path.join(runtime.homeDir, 'diagnostics/hooks-pending.jsonl'), 'utf8'));
   assert.equal(pending.data.failure, 'timeout');

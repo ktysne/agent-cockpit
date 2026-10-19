@@ -20,7 +20,7 @@ Codex のフックとセッション行の扱いは [codex-registration.md](code
 
 ## 二重表示が起きる条件
 
-委譲した Codex は、Claude の `Bash` のフックが検出し、親の Claude のセッションに `isCodex` のエージェント行として出る。
+委譲した Codex は、Claude の `Bash` または `PowerShell` のフックが検出し、親の Claude のセッションに `isCodex` のエージェント行として出る。
 委譲した Codex が使う Codex のホームに cockpit の Codex のフックが入っていると、Codex のフックも発火し、同じ実行が Codex のセッション行としても出る。
 
 - 実装の委譲は `~/.codex-subagent` を使い、cockpit のフックを入れないので起きない。
@@ -29,7 +29,7 @@ Codex のフックとセッション行の扱いは [codex-registration.md](code
 ## 観測した入力
 
 - bridge は `CODEX_HOME` だけを付けて `codex exec` を起動し、実行 ID などを子に渡さない。
-- Claude の `Bash` から起動した Codex のフックのプロセスには、`CLAUDE_CODE_SESSION_ID` が引き継がれる。`CLAUDE_CODE_MESSAGING_TOKEN` も引き継がれる。
+- Claude の `Bash` または `PowerShell` から起動した Codex のフックのプロセスには、`CLAUDE_CODE_SESSION_ID` が引き継がれる。`CLAUDE_CODE_MESSAGING_TOKEN` も引き継がれる。
 - `codex-agent.sh --wait` は新しい Codex を起動しないので、新しい thread は生まれない。
 
 ## 決定

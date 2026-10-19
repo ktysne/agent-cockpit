@@ -10,12 +10,14 @@ const { recommendedOptionFor, sanitizeEvent } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, pullRequestKey, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { cloneDisplay, defaultDisplay, normalizeDisplay } = require('./display-preferences');
+const { codexWorktreeProduct } = require('./identity');
 const {
   isoTime,
   isNonInteractiveSessionFile,
   fileStatusDecidesState,
   claudeModelName,
   isClosableAgent,
+  sessionStatus,
   sameQuestionSet,
   isFinishedAskDecision,
   sessionStartFor,
@@ -44,6 +46,7 @@ const {
 
 const { isStoredSessionId } = require('./session-ids');
 const { isRecord } = require('./value-utils');
+const { readWithRetry, storageFailure } = require('./read-retry');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null, periods: Object.freeze([]) });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
@@ -419,7 +422,8 @@ function normalizeStore(value) {
       if (!isRecord(lifecycle) || (lifecycle.answer !== null && !isRecord(lifecycle.answer)) ||
         (lifecycle.state !== null && typeof lifecycle.state !== 'string') ||
         (lifecycle.awaitingAnswerUntil != null && !validTimestamp(lifecycle.awaitingAnswerUntil)) ||
-        (lifecycle.updatedAt !== undefined && lifecycle.updatedAt !== null && !validTimestamp(lifecycle.updatedAt))) {
+        (lifecycle.updatedAt !== undefined && lifecycle.updatedAt !== null && !validTimestamp(lifecycle.updatedAt)) ||
+        (lifecycle.askToolUseId !== undefined && typeof lifecycle.askToolUseId !== 'string')) {
         throw new Error('Invalid decision lifecycle');
       }
       const legacyAnswer = lifecycle.answer?.choice === 'hold';
@@ -431,6 +435,7 @@ function normalizeStore(value) {
         updatedAt: lifecycle.updatedAt ?? null,
         ...(validTimestamp(lifecycle.provisionalAt) ? { provisionalAt: lifecycle.provisionalAt } : {}),
         ...(validTimestamp(lifecycle.awaitingAnswerUntil) ? { awaitingAnswerUntil: lifecycle.awaitingAnswerUntil } : {}),
+        ...(lifecycle.askToolUseId ? { askToolUseId: lifecycle.askToolUseId.slice(0, 256) } : {}),
       });
     }
     decisionLifecycles.set(sessionId, lifecycles);
@@ -569,19 +574,28 @@ class AwayState {
     this.pending = Promise.resolve();
   }
 
-  static async load(homeDir, fileSystem = fs, writer = null) {
+  static async load(homeDir, fileSystem = fs, writer = null, readRetryOptions = {}) {
+    let contents;
     try {
-      const value = JSON.parse(await fileSystem.readFile(path.join(homeDir, 'away.json'), 'utf8'));
-      const normalized = normalizeAwayState(value);
-      if (normalized) {
-        const away = new AwayState(homeDir, normalized, fileSystem, writer);
-        if (JSON.stringify(value) !== JSON.stringify(away.value)) await away.persistCurrent();
-        await away.prune([], Date.now());
-        return away;
-      }
-    } catch {
+      contents = await readWithRetry(() => fileSystem.readFile(path.join(homeDir, 'away.json'), 'utf8'), readRetryOptions);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw storageFailure(error, 'away.json', 'read');
+      return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
     }
-    return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
+
+    let value;
+    try {
+      value = JSON.parse(contents);
+    } catch {
+      return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
+    }
+    const normalized = normalizeAwayState(value);
+    if (!normalized) return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
+
+    const away = new AwayState(homeDir, normalized, fileSystem, writer);
+    if (JSON.stringify(value) !== JSON.stringify(away.value)) await away.persistCurrent();
+    await away.prune([], Date.now());
+    return away;
   }
 
   snapshot(deadline) {
@@ -693,6 +707,7 @@ class DashboardState {
     this.pullRequestMergeReservationRecords = new Map();
     this.pullRequestMergeReservationNotices = new Map();
     this.pullRequestMergeIntentRecords = new Map();
+    this.pullRequestClosureGenerations = new Map();
     this.lastPullRequestMethods = new Map();
     this.seenAtByProduct = new Map();
     this.ciFailures = [];
@@ -714,9 +729,9 @@ class DashboardState {
     if (!state.storeWriter) state.storeWriter = new AtomicJsonWriter(homeDir, { fileSystem: state.fileSystem });
     let contents;
     try {
-      contents = await state.fileSystem.readFile(path.join(homeDir, 'store.json'), 'utf8');
+      contents = await readWithRetry(() => state.fileSystem.readFile(path.join(homeDir, 'store.json'), 'utf8'), options.readRetryOptions);
     } catch (error) {
-      if (error.code !== 'ENOENT') await state.quarantineStore(options.now ?? Date.now());
+      if (error.code !== 'ENOENT') throw storageFailure(error, 'store.json', 'read');
       state.restoreSessionCleanupPending = true;
       return state;
     }
@@ -726,6 +741,7 @@ class DashboardState {
       const before = stableStringify(parsed);
       const normalized = normalizeStore(parsed);
       state.restoreStore(normalized, options.now ?? Date.now());
+      state.repairCodexWorktreePullRequestProducts(options.codexHome);
       state.restoreSessionCleanupPending = true;
       if (stableStringify(state.serializeStore()) !== before) state.requestStoreWrite();
     } catch {
@@ -738,7 +754,11 @@ class DashboardState {
   async quarantineStore(now) {
     const stamp = new Date(now).toISOString().replace(/[:.]/g, '-');
     const target = path.join(this.homeDir, `store.json.broken-${stamp}`);
-    await this.fileSystem.rename(path.join(this.homeDir, 'store.json'), target).catch(() => {});
+    try {
+      await this.fileSystem.rename(path.join(this.homeDir, 'store.json'), target);
+    } catch (error) {
+      throw storageFailure(error, 'store.json', 'quarantine');
+    }
   }
 
   restoreStore(store, now) {
@@ -1079,6 +1099,24 @@ class DashboardState {
 
   invalidatePullRequestRegistrationCache() {
     this.pullRequestRegistrationCache = null;
+  }
+
+  // 保存済みの PR 登録の製品を、登録自身の cwd で Codex の worktree として畳み直す。
+  // セッションの cwd で一括に置き換えると、別のリポジトリから登録した PR の場所を失うため。
+  repairCodexWorktreePullRequestProducts(codexHome) {
+    for (const records of this.pullRequests.values()) {
+      for (const [key, record] of records) {
+        if (!record.cwd || !record.product) continue;
+        const product = codexWorktreeProduct(record.cwd, { codexHome });
+        if (!product || product.key === record.product.key) continue;
+        // 移行先の既読時刻は早いほうを採る。遅いほうを採ると、旧鍵で未読だった変化が既読になるため。
+        const previousSeenAt = this.seenAtByProduct.get(record.product.key);
+        const currentSeenAt = this.seenAtByProduct.get(product.key);
+        if (previousSeenAt && (!currentSeenAt || previousSeenAt < currentSeenAt)) this.seenAtByProduct.set(product.key, previousSeenAt);
+        records.set(key, { ...record, product });
+      }
+    }
+    this.invalidatePullRequestRegistrationCache();
   }
 
   pullRequestRegistrationForSession(sessionId, owner, repo, number) {
@@ -1477,6 +1515,7 @@ class DashboardState {
     const next = normalizeRelatedPullRequestRecord({ ...current, ...changes });
     if (!validRelatedPullRequestRecord(next) || stableStringify(current) === stableStringify(next)) return false;
     this.relatedPullRequests.set(key, next);
+    if (changes.state === 'merged' || changes.state === 'closed') this.recordPullRequestClosure(owner, repo, number);
     this.touch();
     this.requestStoreWrite();
     return true;
@@ -1576,10 +1615,27 @@ class DashboardState {
     }
     if (stableStringify(current) === stableStringify(next)) return false;
     records.set(key, next);
+    if (changes.state === 'merged' || changes.state === 'closed') this.recordPullRequestClosure(owner, repo, number);
     this.invalidatePullRequestRegistrationCache();
     this.touch();
     this.requestStoreWrite();
     return true;
+  }
+
+  recordPullRequestClosure(owner, repo, number) {
+    const key = pullRequestRepositoryKey(owner, repo);
+    let record = this.pullRequestClosureGenerations.get(key);
+    if (!record) {
+      record = { generation: 0, pullRequests: new Map() };
+      this.pullRequestClosureGenerations.set(key, record);
+    }
+    record.generation += 1;
+    record.pullRequests.set(number, record.generation);
+  }
+
+  pullRequestClosureGeneration(owner, repo, number = null) {
+    const record = this.pullRequestClosureGenerations.get(pullRequestRepositoryKey(owner, repo));
+    return (number === null ? record?.generation : record?.pullRequests.get(number)) || 0;
   }
 
   recordPullRequestRetarget(record) {
@@ -2188,7 +2244,8 @@ class DashboardState {
     const reclassifiedDelegatedThread = event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition
       ? this.reclassifyDelegatedThreads(event.session_id, event.hookAt) : false;
 
-    if (event.hook_event_name === 'SessionEnd') {
+    const ended = event.hook_event_name === 'SessionEnd' && nextSessions.length === 0;
+    if (ended) {
       this.diagnostics?.record('info', event.provider === 'codex' ? 'codex' : 'server', 'session.ended',
         { session: event.session_id.slice(0, 8), provider: event.provider, reason: 'SessionEnd' });
       this.endSession(event.session_id, event.hookAt);
@@ -2201,7 +2258,7 @@ class DashboardState {
       clearedClosedAgent || reclassifiedDelegatedThread || correctedAsk || withdrawnAsk || withdrawnLateAsk || endedFileOnlySession) this.touch();
     if (wasHidden) this.requestStoreWrite();
     if (askDecisionStateChanged || withdrawnAsk || withdrawnLateAsk || correctedAsk) this.requestStoreWrite();
-    return true;
+    return event.hook_event_name === 'SessionEnd' ? { ended } : true;
   }
 
   applyTaskNotifications(sessionId, notifications, now = Date.now()) {
@@ -2623,6 +2680,18 @@ class DashboardState {
     return this.decisionFor(sessionId, decisionId);
   }
 
+  deleteDecisionLifecycle(sessionId, decisionId, { exceptAskToolUseId = null, updatedBefore = Infinity } = {}) {
+    const lifecycles = this.decisionLifecycles.get(sessionId);
+    const lifecycle = lifecycles?.get(decisionId);
+    if (!lifecycle || (exceptAskToolUseId && lifecycle.askToolUseId === exceptAskToolUseId)) return false;
+    if (!(Date.parse(lifecycle.updatedAt) < updatedBefore)) return false;
+    lifecycles.delete(decisionId);
+    if (!lifecycles.size) this.decisionLifecycles.delete(sessionId);
+    this.touch();
+    this.requestStoreWrite(true);
+    return true;
+  }
+
   touch() {
     this.version += 1;
     this.generatedAt = new Date().toISOString();
@@ -2681,6 +2750,7 @@ class DashboardState {
     const decisions = this.decisionsFor(sessionId);
     const closedAgents = this.closedAgents.get(sessionId) || new Set();
     const isClosedByUser = (agent) => closedAgents.has(agent.agent_id) && isClosableAgent(agent);
+    const closedAgentIds = new Set(base.agents.filter(isClosedByUser).map((agent) => agent.agent_id));
     const updateTimestamps = [base.lastActivityAt, plan?.tasksUpdatedAt, ...decisions.map((decision) => decision.updatedAt)]
       .filter((timestamp) => Number.isFinite(Date.parse(timestamp || '')));
     const lastUpdatedAt = updateTimestamps.reduce((latest, timestamp) => (
@@ -2696,7 +2766,7 @@ class DashboardState {
       product: base.product ? { ...base.product } : null,
       sessionFileUpdatedAt: file?.updatedAt || null,
       lastUpdatedAt,
-      tools: base.tools.map((tool) => ({ ...tool })),
+      tools: base.tools.filter((tool) => !closedAgentIds.has(tool.agent_id)).map((tool) => ({ ...tool })),
       agents: base.agents.map((agent) => {
         const closedByUser = isClosedByUser(agent);
         const snapshotAgent = closedByUser ? { ...agent, active: false, unconfirmed: false } : agent;
@@ -2706,11 +2776,7 @@ class DashboardState {
           lastTool: agent.lastTool && { ...agent.lastTool },
         };
       }),
-      ...(base.status === '待機中(サブエージェント稼働中)'
-        && !base.agents.some((agent) => agent.active && !isClosedByUser(agent))
-        ? { status: '待機中' }
-        : {}),
-      permissionWaits: base.permissionWaits.map((wait) => ({ ...wait })),
+      permissionWaits: base.permissionWaits.filter((wait) => !closedAgentIds.has(wait.agent_id)).map((wait) => ({ ...wait })),
       decisions,
       tasks: (plan?.tasks || []).map((task) => {
         const closed = this.closedTasks.get(sessionId)?.get(task.title);
@@ -2724,6 +2790,13 @@ class DashboardState {
       tasksUpdatedAt: plan?.tasksUpdatedAt || null,
       ...(isNonInteractiveSessionFile(file) ? { nonInteractive: true } : {}),
     };
+    if (session) {
+      current.status = sessionStatus({
+        ...session.lifecycle,
+        permissionWaits: current.permissionWaits,
+        agentActive: session.lifecycle.activeAgentIds.some((agentId) => !closedAgentIds.has(agentId)),
+      });
+    }
     const worktree = this.worktreeInfo.snapshot(this.transcriptCwdFor(sessionId),
       decisions.some(decision => decision.verify && ['waiting', 'provisional'].includes(decision.state)));
     if (worktree) current.worktree = worktree;

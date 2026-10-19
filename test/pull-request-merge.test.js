@@ -8,7 +8,7 @@ const path = require('node:path');
 const { Diagnostics } = require('../src/server/diagnostics');
 const { DashboardState } = require('../src/server/state');
 const { PullRequestMergeManager } = require('../src/server/pull-request-merge');
-const { PullRequestTracker } = require('../src/server/pull-requests');
+const { PullRequestTracker, GH_TIMEOUT_MS } = require('../src/server/pull-requests');
 const { DecisionAnswerDelivery } = require('../src/server/decision-answers');
 const { temporaryDirectory } = require('./support/temp');
 const { ghPullRequest: createGhPullRequest } = require('./support/github');
@@ -169,7 +169,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
       control.beforeMerge?.(number);
       const complete = async () => {
         if (control.failMerge) {
-          finish(Object.assign(new Error('merge failed'), { code: 'EIO' }));
+          finish(Object.assign(new Error('merge failed'), { code: 1 }));
           return;
         }
         if (control.queueMerge) {
@@ -180,8 +180,8 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
           if (current) github.views.set(number, mergedView(current));
           github.openPullRequests = github.openPullRequests.filter((item) => item.number !== number);
         }
-        control.afterMerge?.();
-        finish(null);
+        await control.afterMerge?.();
+        finish(control.mergeError || null);
       };
       if (control.waitForMerge) void control.waitForMerge().then(complete);
       else void complete();
@@ -196,7 +196,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
 
   const diagnostics = new Diagnostics({ homeDir, getLevel: () => 'debug' });
   tracker = new PullRequestTracker({
-    state, diagnostics, now: () => NOW, execFileImpl, gitExecFileImpl,
+    state, diagnostics, now: options.now || (() => NOW), execFileImpl, gitExecFileImpl,
     readCrossReviewStateAcrossWorktrees: async (registration, pullRequest) => control.crossReviewReader
       ? control.crossReviewReader(registration, pullRequest)
       : control.crossReviews.get(pullRequest.number) || null,
@@ -218,6 +218,52 @@ function mergeInput(number = 1, changes = {}) {
     method: 'squash',
     deleteBranch: false,
     ...changes,
+  };
+}
+
+function holdNextOpenList(fixture) {
+  const original = fixture.tracker.execFileImpl;
+  let release;
+  let listed;
+  const started = new Promise((resolve) => { listed = resolve; });
+  fixture.tracker.execFileImpl = (file, args, options, callback) => {
+    if (args[0] === 'pr' && args[1] === 'list' && args.includes('open') && !release) {
+      const stdout = JSON.stringify(fixture.github.openPullRequests);
+      release = () => callback(null, stdout, '');
+      listed();
+    } else original(file, args, options, callback);
+  };
+  return { started, release: () => release() };
+}
+
+async function mergeDuringOpenList(t, pullRequests, beforeList = () => {}) {
+  const fixture = await mergeFixture(t, pullRequests);
+  let staleList;
+  let fetching;
+  fixture.control.waitForMerge = async () => {
+    beforeList(fixture);
+    staleList = holdNextOpenList(fixture);
+    fetching = fixture.tracker.refreshRepo('example', 'project');
+    await staleList.started;
+  };
+  const notify = fixture.answerDelivery.notifySessions.bind(fixture.answerDelivery);
+  const recorded = new Promise((resolve) => {
+    fixture.answerDelivery.notifySessions = (...args) => { notify(...args); resolve(); };
+  });
+  const merging = fixture.manager.merge(mergeInput());
+  await recorded;
+  const freshList = holdNextOpenList(fixture);
+  staleList.release();
+  await fetching;
+  return { fixture, merging, freshList };
+}
+
+function savedMergeIntent(pr, changes = {}) {
+  return {
+    session_id: `session-${pr.number}`, owner: 'example', repo: 'project', number: pr.number,
+    url: pr.url, headRefOid: pr.headRefOid, headRefName: pr.headRefName, defaultBranch: 'main',
+    method: 'squash', deleteBranch: true, automatic: false,
+    createdAt: new Date(NOW).toISOString(), stackedPullRequests: [], ...changes,
   };
 }
 
@@ -1566,7 +1612,7 @@ test('マージの意図を保存し終えてから gh pr merge を呼び、保�
   assert.equal(failing.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
 });
 
-test('キューに入れた後に状態を取り直せず意図が残っても、後のマージは方式不明でブランチを消さない', async (t) => {
+test('状態を取り直せず意図が残ったときは後のマージで方式と削除を復元する', async (t) => {
   const lower = ghPullRequest(1, 'feature/one', 'main');
   const fixture = await mergeFixture(t, [lower]);
   fixture.control.queueMerge = true;
@@ -1581,8 +1627,8 @@ test('キューに入れた後に状態を取り直せず意図が残っても�
   fixture.github.views.set(1, mergedView(lower));
   await fixture.tracker.refreshRepo('example', 'project');
 
-  assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].method, null);
-  assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
+  assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].method, 'squash');
+  assert.equal(fixture.calls.some(isBranchDeleteCall), true);
 });
 
 test('親のマージで base が付け替わっても予約の最終マージ先が同じなら実行する', async (t) => {
@@ -1839,7 +1885,7 @@ test('マージの gh 失敗と成功は結果分類と PR 番号を残す', asy
   fixture.control.failMerge = false;
   await fixture.manager.merge(mergeInput(1));
   const entries = (await fixture.diagnostics.readRun(fixture.diagnostics.run)).filter(entry => entry.msg === 'merge.result');
-  assert.deepEqual(entries.map(entry => entry.data.result), ['gh-failed', 'gh-success', 'merged']);
+  assert.deepEqual(entries.map(entry => entry.data.result), ['gh-exit', 'gh-success', 'merged']);
   assert.ok(entries.every(entry => entry.data.number === 1));
   assert.doesNotMatch(JSON.stringify(entries), /merge failed|message|stderr|--match-head-commit/);
 });
@@ -1851,5 +1897,236 @@ test('halted の後に次の往復が始まった PR の予約は取り消さず
   await fixture.tracker.refreshRepo('example', 'project');
   assert.ok(fixture.state.pullRequestMergeReservation('example', 'project', 1));
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+  assert.deepEqual(fixture.tracker.snapshot()[0].reservationNotices, []);
+});
+
+test('gh が SIGTERM で止まっても次の取得で保存した方式と削除を使う', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main'), ghPullRequest(2, 'feature/two', 'feature/one')]);
+  fixture.control.mergeError = Object.assign(new Error('terminated'), { code: null, killed: true, signal: 'SIGTERM' });
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
+  assert.equal(result.error, 'マージの結果を確認できませんでした。次の取得で確かめます');
+  assert.ok(fixture.state.pullRequestMergeIntent('example', 'project', 1));
+  const results = (await fixture.diagnostics.readRun(fixture.diagnostics.run)).filter((entry) => entry.msg === 'merge.result');
+  assert.equal(results[0].data.result, 'merge-unconfirmed');
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.equal(fixture.state.pullRequestMergeIntent('example', 'project', 1), null);
+  assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].method, 'squash');
+  assert.ok(fixture.calls.some(isBranchDeleteCall));
+  assert.match(fixture.notices[0].message, /git rebase --onto main feature\/one/);
+});
+
+test('gh の数値終了コードと起動失敗だけが意図を消してマージ失敗を返す', async (t) => {
+  for (const error of [Object.assign(new Error('exit'), { code: 1 }),
+    Object.assign(new Error('spawn'), { code: 'EPERM', syscall: 'spawn gh' })]) {
+    const fixture = await mergeFixture(t);
+    const original = fixture.tracker.execFileImpl;
+    fixture.tracker.execFileImpl = (file, args, options, callback) => args[1] === 'merge'
+      ? callback(error) : original(file, args, options, callback);
+    const result = await fixture.manager.merge(mergeInput());
+    assert.match(result.error, /マージできませんでした/);
+    assert.equal(fixture.state.pullRequestMergeIntent('example', 'project', 1), null);
+  }
+});
+
+test('停止や出力超過など結果を確定できない例外では意図を残す', async (t) => {
+  for (const details of [{ code: 1, signal: 'SIGINT' }, { code: 'ETIMEDOUT' },
+    { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }, {}]) {
+    const fixture = await mergeFixture(t);
+    fixture.control.mergeError = Object.assign(new Error('unknown'), details);
+    const result = await fixture.manager.merge(mergeInput());
+    assert.equal(result.error, 'マージの結果を確認できませんでした。次の取得で確かめます');
+    assert.ok(fixture.state.pullRequestMergeIntent('example', 'project', 1));
+  }
+});
+
+test('マージ実行中の取得は登録と通知を変えず実行側が方式と削除を確定する', async (t) => {
+  const fixture = await mergeFixture(t);
+  fixture.control.afterMerge = async () => {
+    await fixture.tracker.refreshRepo('example', 'project');
+    assert.notEqual(fixture.state.pullRequestRegistrationForSession('session-1', 'example', 'project', 1).state, 'merged');
+    assert.equal(fixture.notices.length, 0);
+    assert.ok(fixture.state.pullRequestMergeIntent('example', 'project', 1));
+  };
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
+  assert.equal(result.branchDeleted, true);
+  assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].method, 'squash');
+  assert.equal(fixture.notices.length, 1);
+});
+
+test('実行中に取得がマージを検出しても確認失敗後の取得で処理し直せる', async (t) => {
+  const fixture = await mergeFixture(t);
+  fixture.control.afterMerge = async () => {
+    await fixture.tracker.refreshRepo('example', 'project');
+    fixture.control.failView = true;
+  };
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
+  assert.match(result.error, /次の取得で確かめます/);
+  fixture.control.failView = false;
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.ok(fixture.calls.some(isBranchDeleteCall));
+  assert.equal(fixture.notices.length, 1);
+});
+
+test('保存した意図は検出したマージと head が一致するときだけ削除と方式に使う', async (t) => {
+  for (const matches of [true, false]) {
+    const pr = ghPullRequest(1, 'feature/one', 'main');
+    const fixture = await mergeFixture(t, [pr]);
+    await fixture.tracker.refreshRepo('example', 'project');
+    fixture.state.setPullRequestMergeIntent(savedMergeIntent(pr, { headRefOid: matches ? pr.headRefOid : sha(9), automatic: true }));
+    fixture.github.openPullRequests = [];
+    fixture.github.views.set(1, mergedView(pr));
+    await fixture.tracker.refreshRepo('example', 'project');
+    const history = fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0];
+    assert.equal(history.method, matches ? 'squash' : null);
+    assert.equal(fixture.calls.some(isBranchDeleteCall), matches);
+    assert.equal(history.automatic, matches);
+    if (matches) assert.equal(history.automaticResult.branchDeleted, true);
+  }
+});
+
+test('再起動後のオープン PR の意図は取得開始が期限後なら消し一度だけ通知する', async (t) => {
+  let now = NOW;
+  const pr = ghPullRequest(1, 'feature/one', 'main');
+  const fixture = await mergeFixture(t, [pr], { now: () => now });
+  fixture.state.setPullRequestMergeIntent(savedMergeIntent(pr));
+  await fixture.state.flushPersistence();
+  const restored = await DashboardState.load(fixture.homeDir, { now });
+  fixture.tracker.state = restored;
+  t.after(() => restored.flushPersistence());
+  now = NOW + GH_TIMEOUT_MS - 1;
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.ok(restored.pullRequestMergeIntent('example', 'project', 1));
+  now = NOW + GH_TIMEOUT_MS + 1;
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.equal(restored.pullRequestMergeIntent('example', 'project', 1), null);
+  const group = fixture.tracker.snapshot()[0];
+  assert.equal(group.trees[0].mergeIntent, null);
+  assert.equal(group.reservationNotices[0].message, '前回のマージ操作の結果を確認できませんでした');
+  now += 61_000;
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.deepEqual(fixture.tracker.snapshot()[0].reservationNotices, []);
+});
+
+test('期限前に始まったオープン一覧の取得は期限後に終わっても意図を消さない', async (t) => {
+  let now = NOW + GH_TIMEOUT_MS - 1;
+  const pr = ghPullRequest(1, 'feature/one', 'main');
+  const fixture = await mergeFixture(t, [pr], { now: () => now });
+  fixture.state.setPullRequestMergeIntent(savedMergeIntent(pr));
+  const original = fixture.tracker.execFileImpl;
+  let release;
+  let started;
+  const fetching = new Promise((resolve) => { started = resolve; });
+  fixture.tracker.execFileImpl = (file, args, options, callback) => {
+    if (args[0] === 'pr' && args[1] === 'list' && args.includes('open')) {
+      release = () => original(file, args, options, callback);
+      started();
+    } else original(file, args, options, callback);
+  };
+  const pending = fixture.tracker.refreshRepo('example', 'project');
+  await fetching;
+  now += GH_TIMEOUT_MS;
+  release();
+  await pending;
+  assert.ok(fixture.state.pullRequestMergeIntent('example', 'project', 1));
+  assert.deepEqual(fixture.tracker.snapshot()[0].reservationNotices, []);
+});
+
+test('gh の実行中は期限を過ぎたオープン一覧の取得でも意図を残す', async (t) => {
+  let now = NOW;
+  const fixture = await mergeFixture(t, undefined, { now: () => now });
+  fixture.control.waitForMerge = async () => {
+    now += GH_TIMEOUT_MS + 1;
+    await fixture.tracker.refreshRepo('example', 'project');
+    assert.ok(fixture.state.pullRequestMergeIntent('example', 'project', 1));
+    assert.deepEqual(fixture.tracker.snapshot()[0].reservationNotices, []);
+  };
+  assert.equal((await fixture.manager.merge(mergeInput(1, { deleteBranch: true }))).branchDeleted, true);
+});
+
+test('マージの記録後に古いオープン一覧が届いても登録とマージ操作を復活させない', async (t) => {
+  const { fixture, merging, freshList } = await mergeDuringOpenList(t);
+  try {
+    assert.equal(fixture.state.pullRequestRegistrationsForRepo('example', 'project')[0].state, 'merged');
+    assert.deepEqual(fixture.tracker.repositoryState('example', 'project').openPullRequests, []);
+    assert.equal(findPullRequestInTrees(fixture.tracker.snapshot()[0].trees, 1), null);
+  } finally {
+    await freshList.started;
+    freshList.release();
+    assert.equal((await merging).ok, true);
+  }
+});
+
+test('マージ後は実行中の取得の完了を待って新しいオープン一覧を取得する', async (t) => {
+  const { merging, freshList } = await mergeDuringOpenList(t);
+  await freshList.started;
+  freshList.release();
+  assert.equal((await merging).ok, true);
+});
+
+test('古い取得でもマージと無関係な PR の題と head の更新は反映する', async (t) => {
+  const other = ghPullRequest(2, 'feature/two', 'main', { sha: sha(3), fields: { title: '更新した題' } });
+  const { fixture, merging, freshList } = await mergeDuringOpenList(t, [
+    ghPullRequest(1, 'feature/one', 'main'), ghPullRequest(2, 'feature/two', 'main'),
+  ], (fixture) => { fixture.github.openPullRequests[1] = other; });
+  try {
+    const pr = findPullRequestInTrees(fixture.tracker.snapshot()[0].trees, 2);
+    assert.equal(pr.title, other.title);
+    assert.equal(pr.headRefOid, other.headRefOid);
+    assert.equal(fixture.state.pullRequestRegistrationsForRepo('example', 'project').find((record) => record.number === 2).lastOpen.headRefOid, other.headRefOid);
+  } finally {
+    await freshList.started;
+    freshList.release();
+    await merging;
+  }
+});
+
+test('取得開始後にクローズを検出した PR は古い一覧で登録と行を復活させない', async (t) => {
+  const fixture = await mergeFixture(t);
+  await fixture.tracker.refreshRepo('example', 'project');
+  fixture.state.rememberRelatedPullRequest(fixture.state.pullRequestRegistrationsForRepo('example', 'project')[0], NOW);
+  const held = holdNextOpenList(fixture);
+  const fetching = fixture.tracker.refreshRepo('example', 'project');
+  await held.started;
+  const pr = fixture.github.openPullRequests[0];
+  fixture.github.openPullRequests = [];
+  fixture.github.views.set(1, { ...pr, state: 'CLOSED', mergedAt: null });
+  const detector = new PullRequestTracker({ state: fixture.state, now: () => NOW, execFileImpl: fixture.execFileImpl });
+  t.after(() => detector.close());
+  await detector.refreshRepo('example', 'project');
+  held.release();
+  await fetching;
+  assert.equal(fixture.state.pullRequestRegistrationsForRepo('example', 'project')[0].state, 'closed');
+  assert.equal(fixture.state.relatedPullRequestRegistrationsForRepo('example', 'project')[0].state, 'closed');
+  assert.deepEqual(fixture.tracker.repositoryState('example', 'project').openPullRequests, []);
+  assert.equal(findPullRequestInTrees(fixture.tracker.snapshot()[0].trees, 1), null);
+});
+
+test('gh の実行中に始まった取得は実行が結果不明で終わった後に届いても意図を残す', async (t) => {
+  let now = NOW;
+  const fixture = await mergeFixture(t, undefined, { now: () => now });
+  const original = fixture.tracker.execFileImpl;
+  let release;
+  let listed;
+  const listing = new Promise((resolve) => { listed = resolve; });
+  let fetching;
+  fixture.control.waitForMerge = async () => {
+    now += GH_TIMEOUT_MS + 1;
+    fixture.tracker.execFileImpl = (file, args, options, callback) => {
+      if (args[0] === 'pr' && args[1] === 'list' && args.includes('open') && !release) {
+        const stdout = JSON.stringify(fixture.github.openPullRequests);
+        release = () => callback(null, stdout, '');
+        listed();
+      } else original(file, args, options, callback);
+    };
+    fetching = fixture.tracker.refreshRepo('example', 'project');
+    await listing;
+    fixture.control.failView = true;
+  };
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /マージの結果を確認できませんでした/);
+  release();
+  await fetching;
+  assert.ok(fixture.state.pullRequestMergeIntent('example', 'project', 1));
   assert.deepEqual(fixture.tracker.snapshot()[0].reservationNotices, []);
 });

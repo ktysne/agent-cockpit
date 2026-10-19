@@ -85,6 +85,28 @@ test('Claude 経路ではサブエージェントの codex-agent.sh 呼び出し
       permissionDecisionReason: CLAUDE_ROUTE_CONTEXT,
     },
   });
+  const powerShellInput = {
+    ...input,
+    tool_name: 'PowerShell',
+    tool_input: { command: '& "$HOME\\.claude\\tools\\codex-agent.sh" impl-standard' },
+  };
+  assert.deepEqual(outputForRoute(powerShellInput, { homeDir }), {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: CLAUDE_ROUTE_CONTEXT,
+    },
+  });
+  assert.equal(outputForRoute({
+    ...powerShellInput, tool_input: { command: 'Set-Location "D:\\repo\\"; bash "$HOME/.claude/tools/codex-agent.sh" impl-standard' },
+  }, { homeDir })?.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(outputForRoute({
+    ...powerShellInput, tool_input: { command: 'Write-Output "codex-agent.sh impl-standard"' },
+  }, { homeDir }), null);
+  assert.equal(outputForRoute({
+    ...powerShellInput,
+    tool_input: { command: "@'\nDon't run: bash ~/.claude/tools/codex-agent.sh impl-standard\n'@ | Set-Content notes.md" },
+  }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, agent_id: undefined }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, tool_input: { command: 'npm test' } }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, tool_name: 'Read' }, { homeDir }), null);
@@ -247,4 +269,31 @@ test('routing.json を読めない場合はフック出力を返さない', asyn
 
   await fs.writeFile(path.join(homeDir, 'routing.json'), '{invalid');
   assert.equal(outputForRoute({ hook_event_name: 'SubagentStart' }, { homeDir, claudeHome: homeDir }), null);
+});
+
+test('routing.json の EBUSY が続く SubagentStart は応答も経路記録も作らない', async (t) => {
+  const homeDir = await temporaryHome(t, { agents: 'codex', review: 'default' });
+  let attempts = 0;
+  const delays = [];
+  const fileSystem = new Proxy(fsSync, {
+    get(target, property) {
+      if (property === 'readFileSync') return (filePath, ...args) => {
+        if (path.basename(filePath) === 'routing.json') {
+          attempts += 1;
+          throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+        }
+        return target.readFileSync.call(target, filePath, ...args);
+      };
+      const value = target[property];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+
+  assert.equal(outputForRoute({ hook_event_name: 'SubagentStart', session_id: 'busy-session', agent_id: 'busy-agent' }, {
+    homeDir, fileSystem, readRetryOptions: { delaySync: (milliseconds) => delays.push(milliseconds) },
+  }), null);
+
+  assert.equal(attempts, 5);
+  assert.ok(delays.reduce((sum, milliseconds) => sum + milliseconds, 0) <= 200);
+  assert.deepEqual(await fs.readdir(path.join(homeDir, 'route-agents')), []);
 });

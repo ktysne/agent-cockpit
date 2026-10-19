@@ -204,16 +204,16 @@ function isCodexAgent(word) {
 }
 
 // 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
-function extractCodexLaunchDefinition(command) {
-  for (const [argument = ''] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts)) {
+function extractCodexLaunchDefinition(command, toolName = 'Bash') {
+  for (const [argument = ''] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
     const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
     if (definition) return definition;
   }
   return '';
 }
 
-function extractCodexWaitRunId(command) {
-  for (const [argument, runId] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts)) {
+function extractCodexWaitRunId(command, toolName = 'Bash') {
+  for (const [argument, runId] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
     if (argument === '--wait' && runId) return runId.slice(0, 256);
   }
   return '';
@@ -342,7 +342,7 @@ function backgroundOutputTaskIdOf(toolName, toolInput) {
     const match = pickString(toolInput.file_path).match(/(?:^|[\\/])([A-Za-z0-9_-]{1,64})\.output$/);
     return match ? match[1] : '';
   }
-  if (toolName === 'Bash') {
+  if (isPullRequestShellTool(toolName)) {
     const ids = new Set();
     for (const match of pickString(toolInput.command).matchAll(/[\\/]([A-Za-z0-9_-]{1,64})\.output(?![A-Za-z0-9_.-])/g)) ids.add(match[1]);
     return ids.size === 1 ? [...ids][0] : '';
@@ -484,11 +484,11 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
     event.summary = inputSummary(event.tool_name, input.tool_input);
-    if (event.tool_name === 'Bash') {
+    if (isPullRequestShellTool(event.tool_name)) {
       const command = pickString(input.tool_input?.command);
-      const codexLaunchDefinition = extractCodexLaunchDefinition(command);
+      const codexLaunchDefinition = extractCodexLaunchDefinition(command, event.tool_name);
       if (codexLaunchDefinition) event.codexLaunchDefinition = codexLaunchDefinition;
-      const codexWaitRunId = extractCodexWaitRunId(command);
+      const codexWaitRunId = extractCodexWaitRunId(command, event.tool_name);
       if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
       const codexReviewDefinition = extractCodexReviewDefinition(command);
       if (codexReviewDefinition) event.codexReviewDefinition = codexReviewDefinition;
@@ -540,7 +540,7 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
         if (typeof response.resolvedModel === 'string') event.resolvedModel = response.resolvedModel.slice(0, 160);
       }
     }
-    const backgroundTaskId = event.tool_name === 'Bash' ? input.tool_response?.backgroundTaskId : null;
+    const backgroundTaskId = isPullRequestShellTool(event.tool_name) ? input.tool_response?.backgroundTaskId : null;
     if (typeof backgroundTaskId === 'string' && BACKGROUND_TASK_ID.test(backgroundTaskId)) event.backgroundTaskId = backgroundTaskId;
     // TaskStop は非推奨の shell_id でも止める対象を受け付ける。
     const stoppedTaskId = eventName === 'PostToolUse' && event.tool_name === 'TaskStop'
@@ -552,10 +552,11 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     // 終了コードが 0 以外の Bash は PostToolUseFailure の error に出力が載ることがある。
     const codexOutput = { ...codexOutputLines(input.error), ...codexOutputLines(input.tool_response) };
     // Claude Code は 30000 文字を超える出力の先頭だけを stdout に残すので、出力の最後に出る結果行は全文のファイルから読む。
-    if (event.tool_name === 'Bash') {
+    if (isPullRequestShellTool(event.tool_name)) {
       const command = pickString(input.tool_input?.command);
       const outputPath = persistedOutputPath(input.tool_response?.persistedOutputPath);
-      if (outputPath && (extractCodexLaunchDefinition(command) || extractCodexReviewDefinition(command) || extractCodexWaitRunId(command))) {
+      if (outputPath && (extractCodexLaunchDefinition(command, event.tool_name) || extractCodexReviewDefinition(command) ||
+        extractCodexWaitRunId(command, event.tool_name))) {
         let output = null;
         try { output = (options.readTaskOutput || readTaskOutputFile)(outputPath); } catch {}
         if (typeof output === 'string') Object.assign(codexOutput, codexOutputLines(output));
@@ -577,9 +578,10 @@ async function postEvent(event, options = {}) {
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   event.diagnostics ||= [];
   const startServer = options.startServer || ((args) => launchServer(args));
-  const deadline = options.deadline || Date.now() + HOOK_TIMEOUT_MS;
+  const now = options.now || Date.now;
+  const deadline = options.deadline || now() + HOOK_TIMEOUT_MS;
   // 期限切れのとき、常駐サーバーの確認と送信のどちらで時間を使ったかを診断記録に残す。
-  const startedAt = Date.now();
+  const startedAt = now();
   let ensureMs = options.ensureMs || 0;
   const ensure = options.ensureServerRunning || ensureServerRunning;
   const result = await postToServer('/api/events', event, {
@@ -593,13 +595,14 @@ async function postEvent(event, options = {}) {
     },
     environment: options.environment || process.env,
     deadline,
+    now,
     attemptTimeoutMs: 500,
     ensureServerRunning: async (args) => {
-      const ensureStartedAt = Date.now();
+      const ensureStartedAt = now();
       try {
         return await ensure(args);
       } finally {
-        ensureMs += Date.now() - ensureStartedAt;
+        ensureMs += now() - ensureStartedAt;
       }
     },
     readServerInfo: options.readServerInfo,
@@ -609,7 +612,7 @@ async function postEvent(event, options = {}) {
     ...(Object.hasOwn(options, 'initialInfo') ? { initialInfo: options.initialInfo } : {}),
   });
   if (!result.ok && result.status === null) {
-    const finishedAt = Date.now();
+    const finishedAt = now();
     await appendPendingHook(homeDir, { msg: 'hook.delivery', data: {
       failure: result.timedOut || finishedAt >= deadline ? 'timeout' : 'unreachable', at: new Date(finishedAt).toISOString(),
       event: event.hook_event_name, ensureMs, postMs: Math.max(0, finishedAt - startedAt - (ensureMs - (options.ensureMs || 0))),
@@ -660,7 +663,7 @@ async function runHook(input, options = {}) {
       ensureMs,
     });
   } else {
-    await postEvent(event, { ...options, homeDir });
+    await postEvent(event, { ...options, homeDir, now: options.clock });
   }
 
   return {
