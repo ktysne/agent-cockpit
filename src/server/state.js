@@ -707,6 +707,7 @@ class DashboardState {
     this.pullRequestMergeReservationRecords = new Map();
     this.pullRequestMergeReservationNotices = new Map();
     this.pullRequestMergeIntentRecords = new Map();
+    this.pullRequestClosureGenerations = new Map();
     this.lastPullRequestMethods = new Map();
     this.seenAtByProduct = new Map();
     this.ciFailures = [];
@@ -1514,6 +1515,7 @@ class DashboardState {
     const next = normalizeRelatedPullRequestRecord({ ...current, ...changes });
     if (!validRelatedPullRequestRecord(next) || stableStringify(current) === stableStringify(next)) return false;
     this.relatedPullRequests.set(key, next);
+    if (changes.state === 'merged' || changes.state === 'closed') this.recordPullRequestClosure(owner, repo, number);
     this.touch();
     this.requestStoreWrite();
     return true;
@@ -1613,10 +1615,27 @@ class DashboardState {
     }
     if (stableStringify(current) === stableStringify(next)) return false;
     records.set(key, next);
+    if (changes.state === 'merged' || changes.state === 'closed') this.recordPullRequestClosure(owner, repo, number);
     this.invalidatePullRequestRegistrationCache();
     this.touch();
     this.requestStoreWrite();
     return true;
+  }
+
+  recordPullRequestClosure(owner, repo, number) {
+    const key = pullRequestRepositoryKey(owner, repo);
+    let record = this.pullRequestClosureGenerations.get(key);
+    if (!record) {
+      record = { generation: 0, pullRequests: new Map() };
+      this.pullRequestClosureGenerations.set(key, record);
+    }
+    record.generation += 1;
+    record.pullRequests.set(number, record.generation);
+  }
+
+  pullRequestClosureGeneration(owner, repo, number = null) {
+    const record = this.pullRequestClosureGenerations.get(pullRequestRepositoryKey(owner, repo));
+    return (number === null ? record?.generation : record?.pullRequests.get(number)) || 0;
   }
 
   recordPullRequestRetarget(record) {
