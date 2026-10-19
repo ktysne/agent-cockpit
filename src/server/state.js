@@ -1107,6 +1107,10 @@ class DashboardState {
         if (!record.cwd || !record.product) continue;
         const product = codexWorktreeProduct(record.cwd, { codexHome });
         if (!product || product.key === record.product.key) continue;
+        // 移行先の既読時刻は早いほうを採る。遅いほうを採ると、旧鍵で未読だった変化が既読になるため。
+        const previousSeenAt = this.seenAtByProduct.get(record.product.key);
+        const currentSeenAt = this.seenAtByProduct.get(product.key);
+        if (previousSeenAt && (!currentSeenAt || previousSeenAt < currentSeenAt)) this.seenAtByProduct.set(product.key, previousSeenAt);
         records.set(key, { ...record, product });
       }
     }

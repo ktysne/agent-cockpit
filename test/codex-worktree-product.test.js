@@ -96,6 +96,8 @@ test('Codex worktree のプロダクトをイベント受付から判定する',
   });
 });
 
+const SAVED_WORKTREE_SEEN_AT = '2026-01-01T00:00:00.000Z';
+
 // 旧版が worktree の鍵のまま保存した PR 登録を用意する。片方は worktree が消えている。
 async function seedCodexWorktreeRegistrations({ homeDir, codexHome }) {
   const repositoryRoot = path.join(homeDir, 'source-repository');
@@ -108,6 +110,7 @@ async function seedCodexWorktreeRegistrations({ homeDir, codexHome }) {
       url: `https://github.com/example/source-repository/pull/${number}`,
     }, { cwd: worktreeRoot, product: { key: productKey(worktreeRoot), name: path.basename(worktreeRoot) } }, Date.now());
   }
+  state.seenAtByProduct.set(productKey(savedWorktree), SAVED_WORKTREE_SEEN_AT);
   await state.flushPersistence();
 }
 
@@ -133,6 +136,7 @@ test('保存済みの Codex worktree の PR 登録は、起動時に元のリポ
   const savedKeys = Object.fromEntries(saved.prs.map((record) => [record.session_id, record.product.key]));
   assert.equal(savedKeys['saved-codex'], savedKey);
   assert.equal(savedKeys['removed-codex'], removedKey);
+  assert.equal(saved.seenAtByProduct[savedKey], SAVED_WORKTREE_SEEN_AT);
 
   while (c.runtime.pullRequestTracker.inFlight.size) {
     for (const done of callbacks.splice(0)) done(Object.assign(new Error('unavailable'), { code: 'ENOENT' }));
