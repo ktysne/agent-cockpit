@@ -1,5 +1,7 @@
 # Codex の行の検出の不具合 4 件の計画(2026-10-19)
 
+2026-10-20 に完了した。
+
 2026-10-19 に起票された #633〜#636 を直す計画である。
 起点のコミットは main の 02487e17 である。
 4 件とも、Issue に書かれた原因をコードで確かめた。
@@ -7,9 +9,7 @@
 
 ## 現在地と次にやること
 
-4 件のうち 2 件(#636、#633)が main に入った。
-#635 はクロスレビューの往復中で、2 往復目の指摘 3 件に対応している。
-#634 は #636 の上で実装し、PR を作ってクロスレビューに回す。#636 が main に入ったので base は main にする。
+4 件すべてが main に入り、この計画の作業は終わった。
 
 ## 決定済みの判断
 
@@ -18,6 +18,7 @@
 | 進め方 | #636 と #634 はスタックで積み、#633 と #635 は main から別の worktree で並行に進める | #636 と #634 は `src/hooks/event.js` の起動の判定と結果行の取り出しを続けて触る。#633 は `src/hooks/route.js`、#635 は `src/server/session-projection.js` の区切りの処理だけを触り、ほかと重ならない |
 | 各 Issue の対応 | Issue の「どう対応する」に従う | 原因と対応の案をコードで確かめ、食い違いが無かった |
 | #635 の拒否の扱い | 区切りで完了を受けていない前面の起動は消さずに隠し、完了通知、run 行、`--wait` の引き継ぎで戻す。戻した起動の時刻で委譲した thread を付け直す | PostToolUse は非同期で欠けることがあり、消すと後の run 行から起動を引き取る既存の回復ができないため |
+| #635 の再分類の上限 | 戻した起動が終わっていれば、終了を確かめたイベントの時刻を上限にする。終了未確認にしたイベントは終わりに数えない。`--wait` の実行 ID の時刻はローカル時刻として読む | 処理中のイベントの時刻や終了未確認の時刻を上限にすると、遅れて届いた通知で上限が早まり、実行中に始まった thread が独立のまま残るため。bridge は実行 ID をローカル時刻で付けるため |
 | #634 の割り当ての条件 | 実行 ID の無い結果行は、出力ファイルを読んだ応答(背景タスク ID の印がある)に限って背景の行へ割り当てる | 実行 ID も出所の印も無い結果行は、文書の引用と区別できないため。`--wait` とラッパーの全文の出力には run 行が入るので、実行 ID の経路で割り当てられる |
 
 ## 対応順序、ブランチ、PR
@@ -25,9 +26,9 @@
 | 順 | Issue | 主な変更先 | 区分 | ブランチ | base | 状態 |
 |---|---|---|---|---|---|---|
 | 1 | #636 | `src/hooks/event.js` の `extractCodexLaunchDefinition`、`extractCodexReviewDefinition` | standard | `claude/fix-636-launch-detection` | main | PR #638 でマージ済み |
-| 2 | #634 | `src/server/session-projection.js` の結果行の割り当て | hard | `claude/fix-634-result-origin` | main | 実装済み、レビュー前 |
+| 2 | #634 | `src/server/session-projection.js` の結果行の割り当て | hard | `claude/fix-634-result-origin` | main | PR #641 でマージ済み |
 | - | #633 | `src/hooks/route.js` | standard | `claude/fix-633-route-scope` | main | PR #640 でマージ済み |
-| - | #635 | `src/server/session-projection.js` の `applyToolBatch` | hard | `claude/fix-635-denied-launch` | main | PR #639 でレビュー中 |
+| - | #635 | `src/server/session-projection.js` の `applyToolBatch` | hard | `claude/fix-635-denied-launch` | main | PR #639 でマージ済み(2026-10-20 確認) |
 
 ## 判断待ち
 
