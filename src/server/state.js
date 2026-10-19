@@ -2249,7 +2249,8 @@ class DashboardState {
       const launches = nextSessions[0]?.codexLaunches || [];
       for (const launch of launches) {
         if (previousLaunchIds.has(launch.agent_id)) continue;
-        const endedAt = launch.resultReceived || !(launch.active || launch.unconfirmed) ? event.hookAt : Infinity;
+        const endedAt = launch.resultReceived || !(launch.active || launch.unconfirmed)
+          ? launch.endedAt ?? event.hookAt : Infinity;
         reclassifiedDelegatedThread = this.reclassifyDelegatedThreads(event.session_id, Date.parse(launch.startedAt), endedAt)
           || reclassifiedDelegatedThread;
       }

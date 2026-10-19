@@ -292,7 +292,14 @@ test('中断の印が無い起動の Failure は終了にする', () => {
   }
 });
 
-const missingRunId = 'impl-hard-20261019-031058-1234';
+function localRunId(started, pid) {
+  const pad = value => String(value).padStart(2, '0');
+  const date = `${started.getFullYear()}${pad(started.getMonth() + 1)}${pad(started.getDate())}`;
+  const time = `${pad(started.getHours())}${pad(started.getMinutes())}${pad(started.getSeconds())}`;
+  return `impl-hard-${date}-${time}-${pid}`;
+}
+
+const missingRunId = localRunId(new Date('2026-10-19T03:10:58Z'), 1234);
 const missingRunLine = `codex-agent: run=${missingRunId} pid=1234 started=2026-10-19T03:10:58Z`;
 const missingLaunchAt = Date.parse('2026-10-19T03:10:58.900Z');
 
@@ -377,6 +384,39 @@ test('隠した起動を --wait で引き継ぐと行と稼働判定が戻り、
   assert.deepEqual(codexSessions(state), []);
   finish(state, { agent_id: 'sub', hookAt: missingLaunchAt + 4 });
   assert.equal(state.snapshot().sessions[0].agents[0].gpt.active, false);
+});
+
+test('ローカル時刻の実行 ID の --wait は拒否の候補にした起動を引き継ぐ', (t) => {
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = 'Asia/Tokyo';
+  t.after(() => {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+  });
+  const started = new Date(2026, 9, 19, 11, 0, 0);
+  const runId = localRunId(started, 7);
+  const state = new DashboardState();
+  state.addEvent(claudeEvent('SubagentStart', { hookAt: started.getTime() - 1, agent_id: 'sub' }));
+  launch(state, 'launch', { agent_id: 'sub', hookAt: started.getTime() });
+  state.addEvent(claudeEvent('PostToolBatch', { agent_id: 'sub', hookAt: started.getTime() + 1000 }));
+  state.addEvent(claudeEvent('PreToolUse', { agent_id: 'sub', hookAt: started.getTime() + 2000, tool_use_id: 'wait',
+    tool_input: { command: `bash codex-agent.sh --wait ${runId}` } }));
+  assert.equal(state.snapshot().sessions[0].agents[0].gpt.active, true);
+  finish(state, { agent_id: 'sub', hookAt: started.getTime() + 3000 });
+  assert.equal(state.hasRunningDelegation(parentId), false);
+});
+
+test('結果行の取得後に背景化の通知が遅れて届いても、実行中に始まった thread を委譲に直す', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: 1000 });
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: 2100 }));
+  state.addEvent(codexEvent('SessionStart', { hookAt: 2500 }));
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: 3000, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: 'codex-agent: result=ok' }));
+  assert.equal(codexSessions(state).length, 1);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: 2000, tool_response: { backgroundTaskId: 'task-a' } }));
+  assert.equal(state.isDelegatedCodexThread('thread'), true);
+  assert.deepEqual(codexSessions(state), []);
 });
 
 test('区切りより前の PostToolUse が遅れて届くと、見えるようになった起動の完了までの thread を委譲に直す', () => {

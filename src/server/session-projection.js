@@ -60,7 +60,7 @@ function agentModelFromDefinition(agentType, definition) {
 /** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string, phase: 'checking'|'prompted', candidate_tool_use_ids?: string[]}} PermissionWait */
 
 /** @typedef {ReturnType<typeof agentModelFromDefinition> & {
- * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, deniedCandidate?: boolean, deniedAt?: number, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
+ * agent_id: string, startedAt: string|null, endedAt?: number, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, deniedCandidate?: boolean, deniedAt?: number, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
  * }} SessionAgent */
 
 /** @typedef {{session_id: string, provider: 'claude'|'codex', codex?: {model: string, resumes: number}, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, interrupted: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
@@ -137,10 +137,11 @@ function sameQuestionSet(left, right) {
   return left.every((question, index) => question.question === right[index]?.question);
 }
 
-function deactivateBackgroundedCodex(session, parentAgentId) {
+function deactivateBackgroundedCodex(session, parentAgentId, hookAt) {
   for (const agent of session.agents) {
     if (agent.backgrounded && agent.active && sameAgent(agent.parent_agent_id, parentAgentId)) {
       agent.active = false;
+      agent.endedAt ??= hookAt;
       agent.unconfirmed = true;
     }
   }
@@ -148,36 +149,38 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
 
 // 前面のツールは呼び出し元のターンより長く続かないので、PostToolUse を受けないまま呼び出し元が止まった起動は終了未確認にする。
 // 記録は遅れた PostToolUse の判定のために残す。
-function deactivatePendingCodex(session, parentAgentId) {
+function deactivatePendingCodex(session, parentAgentId, hookAt) {
   for (const [toolUseId, agentId] of Object.entries(session.pendingCodex)) {
     if (session.pendingCodexWait[toolUseId]) continue;
     const agent = agentFor(session, agentId);
     if (agent?.active && !agent.deniedCandidate && !agent.backgrounded && sameAgent(agent.parent_agent_id, parentAgentId)) {
       agent.active = false;
+      agent.endedAt ??= hookAt;
       agent.unconfirmed = true;
     }
   }
 }
 
 // 前面のサブエージェントは呼び出し元のターンより長く続かないため、停止の通知が無くても終了未確認にする。
-function deactivateForegroundAgent(session, agent) {
+function deactivateForegroundAgent(session, agent, hookAt) {
   if (!agent || agent.isCodex || !agent.active || agent.backgrounded) return;
   agent.active = false;
   agent.unconfirmed = true;
   session.tools = session.tools.filter((tool) => tool.agent_id !== agent.agent_id);
   session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agent.agent_id);
-  deactivatePendingCodex(session, agent.agent_id);
+  deactivatePendingCodex(session, agent.agent_id, hookAt);
 }
 
-function stopAgent(session, agentId, stoppedAgentIds) {
+function stopAgent(session, agentId, stoppedAgentIds, hookAt) {
   const agent = agentFor(session, agentId);
   if (agent) {
     agent.active = false;
     agent.unconfirmed = false;
+    if (agent.isCodex) agent.endedAt ??= hookAt;
   }
   stoppedAgentIds.add(agentId);
-  deactivateBackgroundedCodex(session, agentId);
-  deactivatePendingCodex(session, agentId);
+  deactivateBackgroundedCodex(session, agentId, hookAt);
+  deactivatePendingCodex(session, agentId, hookAt);
   session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
   session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
 }
@@ -223,6 +226,7 @@ function completeCodexAgent(agent, event) {
   agent.active = false;
   agent.unconfirmed = false;
   agent.resultReceived = true;
+  agent.endedAt ??= event.hookAt;
 }
 
 // --wait で続きに戻った古い行も札に出すため、稼働中の行を優先する。
@@ -252,7 +256,8 @@ function deniedBeforeCodexRun(agent, runStartedAt) {
 
 function codexWaitRunStartedAt(runId) {
   const match = runId.match(/-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-\d+$/);
-  return match ? Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`) : NaN;
+  return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]),
+    Number(match[4]), Number(match[5]), Number(match[6])).getTime() : NaN;
 }
 
 function pendingCodexLaunches(session, definition, runStartedAt) {
@@ -332,7 +337,7 @@ function sessionSnapshot(session) {
     .filter((agent) => !(
       agent.isCodex && agent.parent_agent_id && session.agents.some((parent) => parent.agent_id === agent.parent_agent_id)
     ))
-    .map((agent) => {
+    .map(({ endedAt, ...agent }) => {
       const gptAgent = agent.isCodex ? null : latestCodexForParent(visibleAgents, agent.agent_id);
       const childUnconfirmed = !agent.isCodex && !agent.active && visibleAgents.some((child) => (
         child.isCodex && child.unconfirmed && child.parent_agent_id === agent.agent_id
@@ -382,8 +387,8 @@ function sessionSnapshot(session) {
   // 親の行にまとめた Codex も再分類に使うため、起動情報は画面へ送らずに持つ。
   Object.defineProperty(snapshot, 'codexLaunches', {
     value: visibleAgents.filter((agent) => agent.isCodex)
-      .map(({ agent_id, runId, startedAt, active, unconfirmed, resultReceived }) =>
-        ({ agent_id, runId, startedAt, active, unconfirmed, resultReceived })),
+      .map(({ agent_id, runId, startedAt, endedAt, active, unconfirmed, resultReceived }) =>
+        ({ agent_id, runId, startedAt, endedAt, active, unconfirmed, resultReceived })),
   });
   // 完了通知の照合だけに使う。親の行にまとめた Codex も含むので表示の形に出さず、画面へ送らないよう列挙しない。
   Object.defineProperty(snapshot, 'backgroundCodex', {
@@ -473,7 +478,7 @@ function applyAgentToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUseFailure' && event.tool_name === 'Agent' && event.isInterrupt) {
-    deactivateForegroundAgent(session, agentFor(session, session.agentToolBindings[toolUseId]));
+    deactivateForegroundAgent(session, agentFor(session, session.agentToolBindings[toolUseId]), event.hookAt);
   }
   if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
     const boundAgent = agentFor(session, session.agentToolBindings[toolUseId]);
@@ -527,21 +532,27 @@ function applyCodexLaunchCompletion(session, event) {
     } else if (placeholder && session.pendingCodexWait[toolUseId]) {
       // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
       applyCodexAudit(placeholder, event);
-      if (['vanished', 'not-found'].includes(event.codexWaitStatus)) placeholder.active = false;
+      if (['vanished', 'not-found'].includes(event.codexWaitStatus)) {
+        placeholder.active = false;
+        placeholder.endedAt ??= event.hookAt;
+      }
       if (['orphaned', 'unverified'].includes(event.codexWaitStatus)) {
         placeholder.active = false;
         placeholder.unconfirmed = true;
         placeholder.waitEnded = true;
+        placeholder.endedAt ??= event.hookAt;
       }
     } else if (placeholder && eventName === 'PostToolUseFailure') {
       applyCodexAudit(placeholder, event);
       placeholder.active = false;
+      placeholder.endedAt ??= event.hookAt;
       if (event.isInterrupt && !placeholder.resultReceived) placeholder.unconfirmed = true;
     } else if (placeholder && session.codexReviewAgentIds.has(placeholder.agent_id) && !event.backgroundTaskId) {
       // クロスレビューの CLI はレビュアーの終了まで戻らず、差分が無いときと直接起動では結果行を出さない。
       applyCodexAudit(placeholder, event);
       placeholder.active = false;
       placeholder.unconfirmed = false;
+      placeholder.endedAt ??= event.hookAt;
     } else if (placeholder) {
       applyCodexAudit(placeholder, event);
       // 合成の Interrupt は記録ファイルの時刻で並ぶので、終了未確認にした後に背景へ移った知らせが並ぶことがある。
@@ -549,6 +560,7 @@ function applyCodexLaunchCompletion(session, event) {
       if (placeholder.unconfirmed && !session.stoppedAgentIds.has(placeholder.parent_agent_id)) {
         placeholder.active = true;
         placeholder.unconfirmed = false;
+        delete placeholder.endedAt;
       }
       placeholder.backgrounded = true;
       if (event.backgroundTaskId) placeholder.backgroundTaskId = event.backgroundTaskId;
@@ -617,13 +629,14 @@ function applyBackgroundTaskEnds(session, event) {
     if (!agent) continue;
     if (!agent.runId && end.codexRunId) agent.runId = end.codexRunId;
     if (end.codexResult && !ignoresReviewResult(session, agent, end.codexResult, end.status === 'failed')) {
-      completeCodexAgent(agent, end);
+      completeCodexAgent(agent, { ...end, hookAt: event.hookAt });
       continue;
     }
     // --wait が待機の上限で返っただけなら、Codex は背景で動き続けている。
     if (end.codexWaitStatus === 'waiting') continue;
     applyCodexAudit(agent, end);
     agent.active = false;
+    agent.endedAt ??= event.hookAt;
     // 終わったのが Codex 本体だと確かめられないときは、終了未確認にする。待機状態の行があればそれに従う。
     // 出力ファイルが消えた通知は、--wait が待機の上限で返っただけかを確かめられない。
     // killed と stopped はラッパーの停止であり、子の Codex の終了を保証しない。
@@ -771,11 +784,11 @@ function applySubagentStop(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   if (eventName === 'SubagentStop' && agentId) {
-    stopAgent(session, agentId, session.stoppedAgentIds);
+    stopAgent(session, agentId, session.stoppedAgentIds, event.hookAt);
   }
   if (eventName === 'PostToolUse' && event.tool_name === 'TaskStop' && event.stoppedTaskId) {
     const agent = agentFor(session, event.stoppedTaskId);
-    if (agent && !agent.isCodex) stopAgent(session, agent.agent_id, session.stoppedAgentIds);
+    if (agent && !agent.isCodex) stopAgent(session, agent.agent_id, session.stoppedAgentIds, event.hookAt);
   }
 }
 
@@ -940,9 +953,9 @@ function applySessionLifecycle(session, event) {
 
   // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
   const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
-  if (!agentId && (startsIdle || eventName === 'Stop')) deactivatePendingCodex(session, null);
+  if (!agentId && (startsIdle || eventName === 'Stop')) deactivatePendingCodex(session, null, event.hookAt);
   if (!agentId && eventName === 'Stop') {
-    for (const agent of session.agents) deactivateForegroundAgent(session, agent);
+    for (const agent of session.agents) deactivateForegroundAgent(session, agent, event.hookAt);
   }
   if (startsIdle || eventName === 'UserPromptSubmit' || eventName === 'Stop') session.turnKnown = true;
   if (startsIdle) {
@@ -1002,6 +1015,7 @@ function applyCodexWaitStart(session, event) {
       agent.unconfirmed = false;
       agent.runId = event.codexWaitRunId;
       delete agent.waitEnded;
+      delete agent.endedAt;
       agent.lastTool = { tool_name: event.tool_name, summary: event.summary };
       session.pendingCodex[toolUseId] = agent.agent_id;
     } else {
