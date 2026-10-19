@@ -666,8 +666,9 @@ class DecisionAnswerDelivery {
     if (eventName === 'PreToolUse' && event.tool_name === 'AskUserQuestion' && toolUseId && !event.agent_id) {
       const key = keyFor(sessionId, toolUseId);
       const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
+      // 再起動で askWaits を失った回答待ちに同じ開始が届き直しても、記録はその開始より後に作られているので残る。
       if (decisionId && !this.askWaits.has(key)) {
-        this.state.deleteDecisionLifecycle(sessionId, decisionId);
+        this.state.deleteDecisionLifecycle(sessionId, decisionId, event.hookAt);
       }
       return;
     }

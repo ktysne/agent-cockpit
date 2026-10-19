@@ -2623,9 +2623,11 @@ class DashboardState {
     return this.decisionFor(sessionId, decisionId);
   }
 
-  deleteDecisionLifecycle(sessionId, decisionId) {
+  deleteDecisionLifecycle(sessionId, decisionId, updatedBefore = Infinity) {
     const lifecycles = this.decisionLifecycles.get(sessionId);
-    if (!lifecycles?.delete(decisionId)) return false;
+    const lifecycle = lifecycles?.get(decisionId);
+    if (!lifecycle || !(Date.parse(lifecycle.updatedAt) < updatedBefore)) return false;
+    lifecycles.delete(decisionId);
     if (!lifecycles.size) this.decisionLifecycles.delete(sessionId);
     this.touch();
     this.requestStoreWrite(true);

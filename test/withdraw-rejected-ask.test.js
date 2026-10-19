@@ -194,6 +194,20 @@ test('離席中のフックが回答待ちを記録した質問は再起動後�
   assert.equal(decision(restored).state, 'waiting');
 });
 
+test('再起動後に同じ質問の開始が届き直しても、離席中のフックが記録した回答待ちを取り下げない', async () => {
+  const state = new DashboardState();
+  const away = { snapshot: () => ({ enabled: true }) };
+  const options = { away, now: () => NOW + 1000, setTimeoutImpl: () => 1, clearTimeoutImpl: () => {} };
+  new DecisionAnswerDelivery({ state, ...options, now: () => NOW }).registerAsk({ sessionId: 'session-a', toolUseId: 'ask-1', questions: QUESTIONS });
+  const restored = await restart(state);
+  const delivery = new DecisionAnswerDelivery({ state: restored, ...options });
+  for (const event of [ask('ask-1', NOW), progress('Stop', NOW + 200)]) {
+    restored.addEvent(event);
+    delivery.afterEvent(event);
+  }
+  assert.equal(decision(restored).state, 'waiting');
+});
+
 test('離席中にフックが却下した質問と送信済みの回答は後続イベントで取り下げない', async () => {
   const state = new DashboardState();
   const delivery = new DecisionAnswerDelivery({ state, away: { snapshot: () => ({ enabled: true }) },
