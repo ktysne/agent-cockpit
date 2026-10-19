@@ -137,11 +137,10 @@ function sameQuestionSet(left, right) {
   return left.every((question, index) => question.question === right[index]?.question);
 }
 
-function deactivateBackgroundedCodex(session, parentAgentId, hookAt) {
+function deactivateBackgroundedCodex(session, parentAgentId) {
   for (const agent of session.agents) {
     if (agent.backgrounded && agent.active && sameAgent(agent.parent_agent_id, parentAgentId)) {
       agent.active = false;
-      agent.endedAt ??= hookAt;
       agent.unconfirmed = true;
     }
   }
@@ -149,26 +148,25 @@ function deactivateBackgroundedCodex(session, parentAgentId, hookAt) {
 
 // 前面のツールは呼び出し元のターンより長く続かないので、PostToolUse を受けないまま呼び出し元が止まった起動は終了未確認にする。
 // 記録は遅れた PostToolUse の判定のために残す。
-function deactivatePendingCodex(session, parentAgentId, hookAt) {
+function deactivatePendingCodex(session, parentAgentId) {
   for (const [toolUseId, agentId] of Object.entries(session.pendingCodex)) {
     if (session.pendingCodexWait[toolUseId]) continue;
     const agent = agentFor(session, agentId);
     if (agent?.active && !agent.deniedCandidate && !agent.backgrounded && sameAgent(agent.parent_agent_id, parentAgentId)) {
       agent.active = false;
-      agent.endedAt ??= hookAt;
       agent.unconfirmed = true;
     }
   }
 }
 
 // 前面のサブエージェントは呼び出し元のターンより長く続かないため、停止の通知が無くても終了未確認にする。
-function deactivateForegroundAgent(session, agent, hookAt) {
+function deactivateForegroundAgent(session, agent) {
   if (!agent || agent.isCodex || !agent.active || agent.backgrounded) return;
   agent.active = false;
   agent.unconfirmed = true;
   session.tools = session.tools.filter((tool) => tool.agent_id !== agent.agent_id);
   session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agent.agent_id);
-  deactivatePendingCodex(session, agent.agent_id, hookAt);
+  deactivatePendingCodex(session, agent.agent_id);
 }
 
 function stopAgent(session, agentId, stoppedAgentIds, hookAt) {
@@ -179,8 +177,8 @@ function stopAgent(session, agentId, stoppedAgentIds, hookAt) {
     if (agent.isCodex) agent.endedAt ??= hookAt;
   }
   stoppedAgentIds.add(agentId);
-  deactivateBackgroundedCodex(session, agentId, hookAt);
-  deactivatePendingCodex(session, agentId, hookAt);
+  deactivateBackgroundedCodex(session, agentId);
+  deactivatePendingCodex(session, agentId);
   session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
   session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
 }
@@ -478,7 +476,7 @@ function applyAgentToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUseFailure' && event.tool_name === 'Agent' && event.isInterrupt) {
-    deactivateForegroundAgent(session, agentFor(session, session.agentToolBindings[toolUseId]), event.hookAt);
+    deactivateForegroundAgent(session, agentFor(session, session.agentToolBindings[toolUseId]));
   }
   if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
     const boundAgent = agentFor(session, session.agentToolBindings[toolUseId]);
@@ -540,13 +538,12 @@ function applyCodexLaunchCompletion(session, event) {
         placeholder.active = false;
         placeholder.unconfirmed = true;
         placeholder.waitEnded = true;
-        placeholder.endedAt ??= event.hookAt;
       }
     } else if (placeholder && eventName === 'PostToolUseFailure') {
       applyCodexAudit(placeholder, event);
       placeholder.active = false;
-      placeholder.endedAt ??= event.hookAt;
       if (event.isInterrupt && !placeholder.resultReceived) placeholder.unconfirmed = true;
+      else placeholder.endedAt ??= event.hookAt;
     } else if (placeholder && session.codexReviewAgentIds.has(placeholder.agent_id) && !event.backgroundTaskId) {
       // クロスレビューの CLI はレビュアーの終了まで戻らず、差分が無いときと直接起動では結果行を出さない。
       applyCodexAudit(placeholder, event);
@@ -636,7 +633,6 @@ function applyBackgroundTaskEnds(session, event) {
     if (end.codexWaitStatus === 'waiting') continue;
     applyCodexAudit(agent, end);
     agent.active = false;
-    agent.endedAt ??= event.hookAt;
     // 終わったのが Codex 本体だと確かめられないときは、終了未確認にする。待機状態の行があればそれに従う。
     // 出力ファイルが消えた通知は、--wait が待機の上限で返っただけかを確かめられない。
     // killed と stopped はラッパーの停止であり、子の Codex の終了を保証しない。
@@ -645,6 +641,7 @@ function applyBackgroundTaskEnds(session, event) {
       : ['killed', 'stopped'].includes(end.status) || !agent.backgroundTaskId);
     agent.unconfirmed = unconfirmed;
     if (unconfirmed) agent.waitEnded = true;
+    else agent.endedAt ??= event.hookAt;
   }
 }
 
@@ -953,9 +950,9 @@ function applySessionLifecycle(session, event) {
 
   // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
   const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
-  if (!agentId && (startsIdle || eventName === 'Stop')) deactivatePendingCodex(session, null, event.hookAt);
+  if (!agentId && (startsIdle || eventName === 'Stop')) deactivatePendingCodex(session, null);
   if (!agentId && eventName === 'Stop') {
-    for (const agent of session.agents) deactivateForegroundAgent(session, agent, event.hookAt);
+    for (const agent of session.agents) deactivateForegroundAgent(session, agent);
   }
   if (startsIdle || eventName === 'UserPromptSubmit' || eventName === 'Stop') session.turnKnown = true;
   if (startsIdle) {

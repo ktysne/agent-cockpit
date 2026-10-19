@@ -454,6 +454,19 @@ test('区切り後に始まった子 thread は出力の実行 ID で起動が�
   assert.equal(state.isDelegatedCodexThread('thread'), true);
 });
 
+test('親の Stop で終了未確認にした起動も、結果行で戻ればその間に始まった子 thread を委譲に直す', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('Stop', { hookAt: missingLaunchAt + 1 }));
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: missingLaunchAt + 2 }));
+  state.addEvent(codexEvent('SessionStart', { hookAt: missingLaunchAt + 3 }));
+  assert.equal(codexSessions(state).length, 1);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 4, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: `${missingRunLine}\ncodex-agent: result=ok` }));
+  assert.equal(state.isDelegatedCodexThread('thread'), true);
+  assert.deepEqual(codexSessions(state), []);
+});
+
 test('区切りで隠した起動と回復した起動の snapshot に拒否候補や照合情報を出さない', () => {
   const state = new DashboardState();
   launch(state, 'launch', { hookAt: missingLaunchAt });
