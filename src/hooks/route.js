@@ -53,11 +53,12 @@ function segmentStartsWithEnv(segment) {
 /**
  * 前置きとシェルの起動をたどり、isScript に合う語で始まる起動ごとに、その後ろの語の列を返す。
  * prepare は、各コマンドの文字列(シェルの -c の文字列を含む)を、探す範囲の文字列の列に変える。
+ * toolName は区切りの規則だけに使い、シェルの -c の文字列は Bash として分ける。
  */
-function codexAgentInvocations(command, isScript, prepare = (text) => [text], depth = 0) {
+function codexAgentInvocations(command, isScript, prepare = (text) => [text], depth = 0, toolName = 'Bash') {
   if (typeof command !== 'string') return [];
   if (depth >= 8) return [];
-  return prepare(command).flatMap((text) => commandSegments(text)).flatMap((segment) => {
+  return prepare(command).flatMap((text) => commandSegments(text, toolName)).flatMap((segment) => {
     let ungrouped = segment.trim();
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
@@ -85,8 +86,8 @@ function codexAgentInvocations(command, isScript, prepare = (text) => [text], de
   });
 }
 
-function commandInvokesCodexAgent(command) {
-  return codexAgentInvocations(command, (word) => CODEX_AGENT_SCRIPT.test(word)).length > 0;
+function commandInvokesCodexAgent(command, toolName = 'Bash') {
+  return codexAgentInvocations(command, (word) => CODEX_AGENT_SCRIPT.test(word), undefined, 0, toolName).length > 0;
 }
 
 function routeRecordPath(input, homeDir) {
@@ -199,7 +200,7 @@ function outputForRoute(input, options = {}) {
   }
   const route = readRouteRecord(routeRecordPath(input, homeDir), fileSystem);
   if (route !== 'claude' ||
-    !commandInvokesCodexAgent(input.tool_input?.command)) return null;
+    !commandInvokesCodexAgent(input.tool_input?.command, input.tool_name)) return null;
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',

@@ -38,6 +38,8 @@ test('PowerShell の開始イベントから Codex 起動、待機、レビュ�
     ['& "$HOME\\.claude\\tools\\codex-agent.sh" impl-standard', 'codexLaunchDefinition', 'impl-standard', 'codexDefinition', 'impl-standard'],
     ['& "$HOME\\.claude\\tools\\codex-agent.sh" --wait ' + runId, 'codexWaitRunId', runId, 'codexWaitDefinition', 'impl-standard'],
     ['npm run review:codex', 'codexReviewDefinition', 'codex-review', 'codexDefinition', 'codex-review'],
+    ['Set-Location "D:\\repo\\"; bash "$HOME/.claude/tools/codex-agent.sh" impl-hard',
+      'codexLaunchDefinition', 'impl-hard', 'codexDefinition', 'impl-hard'],
   ];
   for (const [command, field, expected, sanitizedField, sanitizedExpected] of cases) {
     const event = makeHookEvent({ session_id: 'powershell-codex', hook_event_name: 'PreToolUse',

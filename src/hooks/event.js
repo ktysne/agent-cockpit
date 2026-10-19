@@ -204,16 +204,16 @@ function isCodexAgent(word) {
 }
 
 // 経路の判定(route.js)と同じ規則で起動を探す。シェルの -c の文字列にも同じ前処理を当てる。
-function extractCodexLaunchDefinition(command) {
-  for (const [argument = ''] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts)) {
+function extractCodexLaunchDefinition(command, toolName = 'Bash') {
+  for (const [argument = ''] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
     const definition = argument.match(/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?=$|[<>)"'])/)?.[0];
     if (definition) return definition;
   }
   return '';
 }
 
-function extractCodexWaitRunId(command) {
-  for (const [argument, runId] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts)) {
+function extractCodexWaitRunId(command, toolName = 'Bash') {
+  for (const [argument, runId] of codexAgentInvocations(pickString(command).replace(/\\\r?\n/g, ' '), isCodexAgent, launchCommandTexts, 0, toolName)) {
     if (argument === '--wait' && runId) return runId.slice(0, 256);
   }
   return '';
@@ -486,9 +486,9 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     event.summary = inputSummary(event.tool_name, input.tool_input);
     if (isPullRequestShellTool(event.tool_name)) {
       const command = pickString(input.tool_input?.command);
-      const codexLaunchDefinition = extractCodexLaunchDefinition(command);
+      const codexLaunchDefinition = extractCodexLaunchDefinition(command, event.tool_name);
       if (codexLaunchDefinition) event.codexLaunchDefinition = codexLaunchDefinition;
-      const codexWaitRunId = extractCodexWaitRunId(command);
+      const codexWaitRunId = extractCodexWaitRunId(command, event.tool_name);
       if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
       const codexReviewDefinition = extractCodexReviewDefinition(command);
       if (codexReviewDefinition) event.codexReviewDefinition = codexReviewDefinition;
@@ -555,7 +555,8 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
     if (isPullRequestShellTool(event.tool_name)) {
       const command = pickString(input.tool_input?.command);
       const outputPath = persistedOutputPath(input.tool_response?.persistedOutputPath);
-      if (outputPath && (extractCodexLaunchDefinition(command) || extractCodexReviewDefinition(command) || extractCodexWaitRunId(command))) {
+      if (outputPath && (extractCodexLaunchDefinition(command, event.tool_name) || extractCodexReviewDefinition(command) ||
+        extractCodexWaitRunId(command, event.tool_name))) {
         let output = null;
         try { output = (options.readTaskOutput || readTaskOutputFile)(outputPath); } catch {}
         if (typeof output === 'string') Object.assign(codexOutput, codexOutputLines(output));

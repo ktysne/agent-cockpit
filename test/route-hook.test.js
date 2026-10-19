@@ -98,7 +98,14 @@ test('Claude 経路ではサブエージェントの codex-agent.sh 呼び出し
     },
   });
   assert.equal(outputForRoute({
+    ...powerShellInput, tool_input: { command: 'Set-Location "D:\\repo\\"; bash "$HOME/.claude/tools/codex-agent.sh" impl-standard' },
+  }, { homeDir })?.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(outputForRoute({
     ...powerShellInput, tool_input: { command: 'Write-Output "codex-agent.sh impl-standard"' },
+  }, { homeDir }), null);
+  assert.equal(outputForRoute({
+    ...powerShellInput,
+    tool_input: { command: "@'\nDon't run: bash ~/.claude/tools/codex-agent.sh impl-standard\n'@ | Set-Content notes.md" },
   }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, agent_id: undefined }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, tool_input: { command: 'npm test' } }, { homeDir }), null);
