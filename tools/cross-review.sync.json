@@ -3,7 +3,7 @@
     "repo": "https://github.com/ktysne/ai-cross-review.git",
     "ref": "main"
   },
-  "lastSyncedCommit": "c34ada25cd58cc138ffa38c25a04741892bb20d3",
+  "lastSyncedCommit": "7a13a043b7f97aa345e215463b6356eecfd47d05",
   "shownMigrations": [
     "2026-09-global-skill-codex-subagent.md",
     "2026-09-phase1-review-rules.md",
@@ -39,5 +39,5 @@
       "to": ".claude/skills/cross-review/SKILL.md"
     }
   ],
-  "lastSyncedRef": "c34ada25cd58cc138ffa38c25a04741892bb20d3"
+  "lastSyncedRef": "main"
 }
