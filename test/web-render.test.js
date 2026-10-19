@@ -3754,6 +3754,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     applyAppVersion() {},
     updateConnectionNote() {},
     isAwaitingDecision: () => false,
+    pruneStaleConfirmations() {},
     render() { renders += 1; },
     header: { dataset: { away: 'false' } },
     awayToggle: { disabled: false, checked: false },
@@ -4723,6 +4724,7 @@ test('離席の切り替えだけでは一覧を描き直さない', async () =>
       applyAppVersion() {},
       updateConnectionNote() {},
       isPendingDecision: () => false,
+      pruneStaleConfirmations() {},
       render() { renders += 1; },
       header: { dataset: { away: 'false' } },
       awayToggle: { disabled: false, checked: false },
@@ -5880,3 +5882,100 @@ for (const scenario of [
     assert.ok(flatten(root).some((node) => node.dataset.openMerge === 'key'));
   });
 }
+
+test('前提が消えた衝突の確認欄と登録を外す確認は、条件が再びそろっても閉じた状態で出る', async () => {
+  const html = readWebPage();
+  const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
+  const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
+  const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
+  assert.ok(helpers && component && action);
+  class FakeElement {
+    constructor(tagName) {
+      Object.assign(this, { tagName, children: [], dataset: {}, attributes: {}, handlers: {}, className: '', textContent: '', disabled: false });
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    addEventListener(name, handler) { this.handlers[name] = handler; }
+  }
+  const flatten = (node) => [node, ...(node.children || []).flatMap(flatten)];
+  const uiKey = 'example/project#42';
+  const pullRequestWith = (conflict) => ({
+    mergeSessionId: null, number: 42, title: 'Feature PR', url: 'https://github.com/example/project/pull/42',
+    conflictRequestKey: 'a'.repeat(64), headRefOid: 'b'.repeat(40), headRefName: 'feature/conflict',
+    effectiveBase: 'main', baseRefName: 'main', conflict, canMerge: false, children: [],
+    conflictRequestTargets: [{ sessionId: 'session-pr', alive: true }],
+  });
+  const groupWith = ({ conflict = true, listed = true, error = null } = {}) => ({
+    owner: 'example', repo: 'project', defaultBranch: 'main', mergeMethods: [], error, unregisterableCount: error ? 1 : 0,
+    trees: listed ? [pullRequestWith(conflict)] : [],
+  });
+  const states = [];
+  let etag = 0;
+  let rendered = [];
+  const conflictInFlight = new Set();
+  const context = pageContext(html, {
+    document: { createElement: (tagName) => new FakeElement(tagName), createTextNode: (text) => ({ textContent: text }), addEventListener() {} },
+    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(),
+    queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(), pullRequestResultUnconfirmed: () => false, pullRequestUnconfirmedResults: new Map(),
+    pullRequestReservationPending: new Map(), actionFocusRestores: new Map(), rememberActionFocus() {},
+    pullRequestConflictConfirmations: new Set(), pullRequestConflictMessages: new Map(), pullRequestConflictInFlight: conflictInFlight,
+    repositoryUnregisterConfirmations: new Map(), focusRepositoryUnregister() {},
+    appendPullRequestBadges() {}, crossReviewState: () => ({}), pullRequestTransientNoticeExpired: () => false,
+    fetchUi: async () => {
+      const state = states.shift();
+      etag += 1;
+      return { ok: true, status: 200, headers: { get: () => `"${etag}"` }, json: async () => state };
+    },
+    checkUiVersion: () => false, syncDisplayPreferences: async () => {}, updateConnectionNote() {}, hasUnsentAnswerDraft: () => false,
+    applyAwayState() {}, applyUpdateState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyAppVersion() {},
+    refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pendingStateReads: 0,
+    pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
+    lastVersion: 1, lastState: null, lastStateEtag: null, liveStatus: { textContent: '' }, reportWebFailure() {}, hasRenderedState: true, connectionLost: false, lastStateAt: null,
+    render(state) {
+      const root = new FakeElement('div');
+      for (const group of state.pullRequests) {
+        context.appendPullRequestError(root, group);
+        for (const pullRequest of group.trees) context.appendPullRequestTree(root, group, pullRequest);
+      }
+      rendered = flatten(root);
+    },
+  });
+  context.AbortSignal = { timeout: () => ({}) };
+  vm.runInContext([helpers, component, action, functionSource(html, 'appendPullRequestError'), functionSource(html, 'refresh')].join('\n'), context);
+  const showState = async (group) => {
+    states.push({ version: 1, sessions: [{ session_id: 'session-pr', title: 'worker' }], pullRequests: [group] });
+    assert.equal(await context.refresh(), true);
+  };
+  const conflictOpen = () => rendered.find((node) => node.dataset?.conflictOpen === uiKey);
+  const conflictConfirmationShown = () => rendered.some((node) => node.dataset?.conflictGo === uiKey);
+  const unregisterOpen = () => rendered.find((node) => node.dataset?.repoUnregister === 'example/project' && node.dataset.repoUnregisterAction === 'open');
+
+  for (const lost of [{ conflict: false }, { listed: false }]) {
+    await showState(groupWith());
+    context.pullRequestConflictConfirmations.add(uiKey);
+    context.pullRequestConflictMessages.set(uiKey, { message: '依頼のエラー', shownAt: Date.now() });
+    await showState(groupWith());
+    assert.equal(conflictConfirmationShown(), true);
+    await showState(groupWith(lost));
+    await showState(groupWith());
+    assert.equal(conflictConfirmationShown(), false, JSON.stringify(lost));
+    assert.equal(conflictOpen().disabled, false, JSON.stringify(lost));
+    assert.equal(context.pullRequestConflictMessages.has(uiKey), false);
+  }
+
+  context.pullRequestConflictConfirmations.add(uiKey);
+  conflictInFlight.add(uiKey);
+  await showState(groupWith({ conflict: false }));
+  assert.equal(context.pullRequestConflictConfirmations.has(uiKey), true);
+  conflictInFlight.delete(uiKey);
+  await showState(groupWith({ conflict: false }));
+  assert.equal(context.pullRequestConflictConfirmations.has(uiKey), false);
+
+  await showState(groupWith({ error: '取得できません' }));
+  unregisterOpen().handlers.click();
+  await showState(groupWith({ error: '取得できません' }));
+  assert.equal(unregisterOpen(), undefined);
+  await showState(groupWith());
+  await showState(groupWith({ error: '取得できません' }));
+  assert.ok(unregisterOpen());
+});

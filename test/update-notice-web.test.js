@@ -114,7 +114,7 @@ test('refresh は状態の version が同じでも新しい通知を描き直す
     applyAwayState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyUpdateState: value => notices.push(value), applyAppVersion() {}, refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pullRequestUnconfirmedResults: new Map(),
     pendingStateReads: 0, AbortSignal: { timeout: () => ({}) },
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
-    lastVersion: 1, lastStateEtag: 'same', liveStatus: {}, render: () => assert.fail('状態全体は描き直さない'),
+    lastVersion: 1, lastStateEtag: 'same', liveStatus: {}, pruneStaleConfirmations() {}, render: () => assert.fail('状態全体は描き直さない'),
   });
   vm.runInContext(functionSource(html, 'refresh'), context);
   await context.refresh();
@@ -135,7 +135,7 @@ function refreshContext(fetch, syncDisplayPreferences = async () => {}) {
     AbortSignal: { timeout: (milliseconds) => ({ timeoutMs: milliseconds }) },
     sinceSeenMode: 'off', pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastState: state, lastStateEtag: '"first"', connectionLost: true, lastStateAt: null,
-    liveStatus: {}, hasRenderedState: true, render: value => renders.push(value),
+    liveStatus: {}, hasRenderedState: true, pruneStaleConfirmations() {}, render: value => renders.push(value),
     countJudgments: () => ({ permission: 0, decisions: 0 }), isIdleHiddenSession: () => false,
   });
   vm.runInContext(['fetchUi', 'pollRefresh', 'checkUiVersion', 'refresh'].map(name => functionSource(html, name)).join('\n'), context);
