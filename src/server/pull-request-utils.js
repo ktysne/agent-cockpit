@@ -212,6 +212,8 @@ function commandSegmentParts(command, toolName = 'Bash') {
     } else if (character === '"' || character === "'") {
       segment += character;
       quote = character;
+    } else if (character === '\n' && !segment.trim() && ['&&', '|'].includes(separatorBefore)) {
+      // && や | の直後の改行は行の継続なので、次のコマンドとの区切りを && のまま保つ。
     } else if (';&|\n'.includes(character)) {
       parts.push({ command: segment, separatorBefore });
       segment = '';
@@ -259,6 +261,12 @@ function isGhPrCreateCommand(command, toolName = 'Bash') {
 
 function countGhPrCreateCommands(command, toolName = 'Bash') {
   return commandSegments(command, toolName).filter((segment) => isGhPrCreateCommand(segment, toolName)).length;
+}
+
+function hasGhCommandOtherThanPrCreate(command, toolName = 'Bash') {
+  return commandSegments(command, toolName).some((segment) => (
+    commandWords(segment)[0] === 'gh' && !isGhPrCreateCommand(segment, toolName)
+  ));
 }
 
 function pullRequestCreateCommandCwd(command, cwd, commandNumber, toolName = 'Bash') {
@@ -336,6 +344,7 @@ module.exports = {
   commandWords,
   countGhPrCreateCommands,
   findPullRequestUrl,
+  hasGhCommandOtherThanPrCreate,
   firstPullRequestUrl,
   isCompleteCommitSha,
   isSha256Digest,

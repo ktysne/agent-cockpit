@@ -23,6 +23,7 @@ const {
 const {
   countGhPrCreateCommands,
   firstPullRequestUrl,
+  hasGhCommandOtherThanPrCreate,
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
   isPullRequestShellTool,
@@ -373,9 +374,11 @@ function addPullRequestRefreshScope(event, command, cwd, toolName = 'Bash') {
 function pullRequestCommandResults(command, cwd, toolName, response) {
   const pullRequest = firstPullRequestUrl(response);
   const commandCount = countGhPrCreateCommands(command, toolName);
-  if (commandCount < 2) return { pullRequest, additionalPullRequests: [] };
-  // gh pr view などの出力に含まれた PR を登録しないよう、作成回数で上限を付ける。
-  const additionalPullRequests = pullRequestUrls(response, commandCount).slice(1).map((item, index) => {
+  if (commandCount < 2 || hasGhCommandOtherThanPrCreate(command, toolName)) return { pullRequest, additionalPullRequests: [] };
+  // URL と gh pr create の対応は出た順でしか決められないので、数が一致しないときは作っていない PR を登録しないよう 2 件目以降を送らない。
+  const urls = pullRequestUrls(response, commandCount + 1);
+  if (urls.length !== commandCount) return { pullRequest, additionalPullRequests: [] };
+  const additionalPullRequests = urls.slice(1).map((item, index) => {
     const commandCwd = toolName === 'Bash'
       ? pullRequestCreateCommandCwd(command, cwd, index + 2, toolName)
       : null;

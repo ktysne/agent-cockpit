@@ -343,7 +343,7 @@ test('PowerShell の gh pr create は URL を送り、cd 先を commandCwd に�
   assert.equal(Object.hasOwn(sanitizeEvent(post), 'commandCwd'), false);
 });
 
-test('複数の gh pr create は URL を実行回数まで出た順に送り、各 Bash cd を対応させる', () => {
+test('複数の gh pr create は URL を出た順に送り、各 Bash cd を対応させる', () => {
   const sessionCwd = path.resolve(os.tmpdir(), 'session-product', '.claude', 'worktrees', 'session');
   const firstCwd = path.resolve(os.tmpdir(), 'first-product', '.claude', 'worktrees', 'feature');
   const secondCwd = path.resolve(os.tmpdir(), 'second-product', '.claude', 'worktrees', 'feature');
@@ -353,7 +353,6 @@ test('複数の gh pr create は URL を実行回数まで出た順に送り、�
     'https://github.com/example/first/pull/1',
     'https://github.com/EXAMPLE/FIRST/pull/1',
     'https://github.com/example/second/pull/2',
-    'https://github.com/example/third/pull/3',
     'https://github.com/example/first/pull/new/main',
   ].join('\n') };
 
@@ -381,6 +380,30 @@ test('複数の gh pr create は URL を実行回数まで出た順に送り、�
   assert.equal(powershell.additionalPullRequests.length, 1);
   assert.equal(Object.hasOwn(powershell.additionalPullRequests[0], 'commandCwd'), false);
   assert.equal(Object.hasOwn(sanitizeEvent(powershell).additionalPullRequests[0], 'commandCwd'), false);
+
+  const continued = makeHookEvent({ session_id: 'continued-prs', hook_event_name: 'PostToolUse', cwd: sessionCwd,
+    tool_name: 'Bash', tool_input: { command: `gh pr create && cd ${quoted(secondCwd)} &&\n  gh pr create` },
+    tool_response: 'https://github.com/example/first/pull/1\nhttps://github.com/example/second/pull/2' });
+  assert.equal(continued.additionalPullRequests[0].commandCwd, path.resolve(secondCwd));
+});
+
+test('複数の gh pr create でも、URL の数が作成回数と違うか gh pr create 以外の gh があれば 2 件目以降を送らない', () => {
+  const sessionCwd = path.resolve(os.tmpdir(), 'session-product', '.claude', 'worktrees', 'session');
+  const secondCwd = path.resolve(os.tmpdir(), 'second-product', '.claude', 'worktrees', 'feature');
+  const create = (command, stdout) => makeHookEvent({ session_id: 'mismatched-prs', hook_event_name: 'PostToolUse',
+    cwd: sessionCwd, tool_name: 'Bash', tool_input: { command }, tool_response: { stdout } });
+  const twoCreates = `gh pr create && cd "${secondCwd.replaceAll('\\', '/')}" && gh pr create`;
+
+  const extra = create(twoCreates, ['1', '99', '2'].map(number => `https://github.com/example/project/pull/${number}`).join('\n'));
+  assert.equal(extra.pullRequest.number, 1);
+  assert.equal(Object.hasOwn(extra, 'additionalPullRequests'), false);
+
+  const missing = create(twoCreates, 'https://github.com/example/project/pull/2');
+  assert.equal(Object.hasOwn(missing, 'additionalPullRequests'), false);
+
+  const viewed = create(`gh pr create && gh pr view 99 --json url --jq .url && cd "${secondCwd.replaceAll('\\', '/')}" && gh pr create`,
+    'https://github.com/example/project/pull/1\nhttps://github.com/example/project/pull/2');
+  assert.equal(Object.hasOwn(viewed, 'additionalPullRequests'), false);
 });
 
 test('additionalPullRequests は URL と番号を検査し、重複、上限超過、PowerShell の cwd を除く', () => {

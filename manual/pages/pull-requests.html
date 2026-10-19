@@ -33,7 +33,8 @@
   既定では終わった PR を隠すため、登録があっても表示対象が無いことがあります(<a href="settings.html#settings-hide-finished">終わったものを非表示にする</a>)。</p>
   <details class="more">
     <summary>登録の詳細</summary>
-    <p>1 つのコマンドで <code>gh pr create</code> を複数回実行した場合は、出力に現れた順に実行回数までの PR を登録します。
+    <p>1 つのコマンドで <code>gh pr create</code> を複数回実行した場合は、出力の PR の URL の数が実行回数と同じなら、出た順にすべて登録します。
+    URL の数が実行回数と違うときと、コマンドに <code>gh pr create</code> 以外の <code>gh</code> があるときは、作っていない PR を登録しないよう、最初の 1 件だけを登録します。
     2 件目以降は、Bash で直前に <code>cd &lt;絶対パス&gt; &amp;&amp;</code> があれば移動先のプロダクトに登録し、移動先を推定できなければセッションの作業ディレクトリのプロダクトに登録します。
     <code>gh pr create</code> が 1 回のコマンドと GitHub MCP ツールの応答では、URL が複数あっても最初の 1 件を登録します。
     登録は常駐サーバーの保存先に保存するので、常駐サーバーを再起動しても残ります。</p>
