@@ -180,9 +180,17 @@ function parseGitHubRepositoryRemote(remoteUrl) {
   return validRepositoryPart(owner) && validRepositoryPart(repo) ? { owner, repo } : null;
 }
 
-function shellTokens(segment) {
-  return (segment.match(/"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s]+/g) || [])
-    .map((token) => token.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_match, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted));
+function shellTokens(segment, toolName = 'Bash') {
+  const expression = toolName === 'PowerShell'
+    ? /"(?:[^"`]|`[\s\S])*"|'[^']*'|[^\s]+/g
+    : /"(?:[^"\\]|\\(?:\r?\n|[\s\S]))*"|'[^']*'|\\(?:\r?\n|[\s\S])|[^\s]+/g;
+  return (segment.match(expression) || []).map((token) => {
+    const match = token.match(/^(?:"([\s\S]*)"|'([\s\S]*)')$/);
+    if (!match) return token;
+    const [, doubleQuoted, singleQuoted] = match;
+    if (doubleQuoted === undefined || toolName === 'PowerShell') return doubleQuoted ?? singleQuoted;
+    return doubleQuoted.replace(/\\(["\\$`])|\\\r?\n/g, (_match, escaped) => escaped ?? '');
+  });
 }
 
 function commandSegments(command, toolName = 'Bash') {
@@ -366,15 +374,15 @@ function commandSegmentParts(command, toolName = 'Bash') {
   return parts;
 }
 
-function commandWords(segment) {
-  const words = shellTokens(segment.trim());
+function commandWords(segment, toolName = 'Bash') {
+  const words = shellTokens(segment.trim(), toolName);
   let index = 0;
   while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index] || '')) index += 1;
   if (words[index] === 'env') {
     index += 1;
     while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index] || '')) index += 1;
   }
-  return words.slice(index).map((word) => word.replace(/^\\(["'\\])/, '$1'));
+  return words.slice(index).map((word) => toolName === 'PowerShell' ? word : word.replace(/^\\(["'\\])/, '$1'));
 }
 
 function subcommandIndex(words, command) {
@@ -392,7 +400,7 @@ function subcommandIndex(words, command) {
 
 function isGhPrCreateCommand(command, toolName = 'Bash') {
   return commandSegments(command, toolName).some((segment) => {
-    const words = commandWords(segment);
+    const words = commandWords(segment, toolName);
     const subcommand = subcommandIndex(words, 'gh');
     return words[0] === 'gh' && words[subcommand] === 'pr' && words[subcommand + 1] === 'create';
   });
@@ -404,7 +412,7 @@ function countGhPrCreateCommands(command, toolName = 'Bash') {
 
 function hasGhCommandOtherThanPrCreate(command, toolName = 'Bash') {
   return commandSegments(command, toolName).some((segment) => (
-    commandWords(segment)[0] === 'gh' && !isGhPrCreateCommand(segment, toolName)
+    commandWords(segment, toolName)[0] === 'gh' && !isGhPrCreateCommand(segment, toolName)
   ));
 }
 
@@ -418,7 +426,7 @@ function pullRequestCreateCommandCwd(command, cwd, commandNumber, toolName = 'Ba
     if (found !== commandNumber) continue;
     if (index === 0 || parts[index].separatorBefore !== '&&') return null;
     const previousCommand = parts[index - 1].command.trim();
-    const words = commandWords(previousCommand);
+    const words = commandWords(previousCommand, toolName);
     if (words.length !== 2 || words[0] !== 'cd') return null;
     return resolvePullRequestCommandCwd(`${previousCommand} &&`, cwd, true);
   }
@@ -427,7 +435,7 @@ function pullRequestCreateCommandCwd(command, cwd, commandNumber, toolName = 'Ba
 
 function shouldRefreshPullRequests(command, toolName = 'Bash') {
   return commandSegments(command, toolName).some((segment) => {
-    const words = commandWords(segment);
+    const words = commandWords(segment, toolName);
     if (words[0] === 'git') return words[subcommandIndex(words, 'git')] === 'push';
     if (words[0] === 'gh') return words[subcommandIndex(words, 'gh')] === 'pr';
     return false;

@@ -52,6 +52,25 @@ test('Codex ラッパーの -C と --effort の値を除いて定義名を検出
   }
 });
 
+test('二重引用符の bash -c 内でエスケープした引用符を使っても Codex の定義名を検出する', () => {
+  const command = String.raw`bash -c "bash ~/.claude/tools/codex-agent.sh -C \"/mnt/work tree\" impl-hard < p.md"`;
+  const event = makeHookEvent({ session_id: 'codex-launch-double-quote', hook_event_name: 'PreToolUse',
+    tool_name: 'Bash', tool_use_id: command, tool_input: { command } });
+  assert.equal(event.codexLaunchDefinition, 'impl-hard', command);
+});
+
+test('Codex の -C にあるエスケープ空白は引用符の位置ごとに従来どおり定義名を検出する', () => {
+  for (const command of [
+    String.raw`bash ~/.claude/tools/codex-agent.sh -C /mnt/work\ tree impl-hard`,
+    String.raw`bash -c "bash ~/.claude/tools/codex-agent.sh -C /mnt/work\ tree impl-hard"`,
+    String.raw`bash -c 'bash ~/.claude/tools/codex-agent.sh -C /mnt/work\ tree impl-hard'`,
+  ]) {
+    const event = makeHookEvent({ session_id: 'codex-launch-escaped-space', hook_event_name: 'PreToolUse',
+      tool_name: 'Bash', tool_use_id: command, tool_input: { command } });
+    assert.equal(event.codexLaunchDefinition, 'impl-hard', command);
+  }
+});
+
 test('Codex ラッパーの --new-prompt、--wait、--header-of は起動定義として検出しない', () => {
   for (const command of [
     'bash ~/.claude/tools/codex-agent.sh -C "D:/work" --new-prompt',
