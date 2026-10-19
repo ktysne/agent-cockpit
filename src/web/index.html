@@ -4124,7 +4124,7 @@ function render(state) {
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
          : active?.dataset?.showFinished ? { kind: 'show-finished', location: active.dataset.showFinished }
          : active?.dataset?.showIdle ? { kind: 'show-idle' }
-           : active?.dataset?.closeMergeResult ? { kind: 'merge-result-close', id: active.dataset.closeMergeResult }
+           : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
              : active?.dataset?.repoUnregister ? { kind: 'repo-unregister', key: active.dataset.repoUnregister, action: active.dataset.repoUnregisterAction }
              : active?.dataset?.closeTask ? { kind: 'close-task', key: active.dataset.closeTask }
                : active?.dataset?.cancelCloseTask ? { kind: 'cancel-close-task', key: active.dataset.cancelCloseTask }
@@ -4162,7 +4162,7 @@ function render(state) {
         || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]'))?.focus({ preventScroll: true });
     } else if (focusData?.kind === 'show-finished') {
       (document.querySelector('[data-show-finished="note"]') || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]'))?.focus({ preventScroll: true });
-    } else if (['show-idle', 'merge-result-close'].includes(focusData?.kind)) {
+    } else if (['show-idle', 'close-merge-result'].includes(focusData?.kind)) {
       document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
     }
     return;
@@ -4249,7 +4249,7 @@ function render(state) {
       if (focusData.kind === 'undo-hidden') return item.hasAttribute('data-undo-hidden-sessions');
       if (focusData.kind === 'show-finished') return item.dataset.showFinished === focusData.location;
       if (focusData.kind === 'show-idle') return item.hasAttribute('data-show-idle');
-      if (focusData.kind === 'merge-result-close') return item.dataset.closeMergeResult === focusData.id;
+      if (focusData.kind === 'close-merge-result') return item.dataset.closeMergeResult === focusData.id;
       if (focusData.kind === 'review-skip') return item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip === focusData.action;
       if (focusData.kind === 'repo-unregister') return item.dataset.repoUnregister === focusData.key && item.dataset.repoUnregisterAction === focusData.action;
       if (['close-task', 'cancel-close-task'].includes(focusData.kind)) {
@@ -4259,7 +4259,7 @@ function render(state) {
     });
     const fallback = focusData.kind === 'product' && focusData.action === 'move' && button?.disabled
       ? buttons.find((item) => item.dataset.productAction === 'move' && item.dataset.productKey === focusData.key && item.dataset.direction === String(-Number(focusData.direction)))
-      : ['show-finished', 'show-idle', 'merge-result-close'].includes(focusData.kind) && !button
+      : ['show-finished', 'show-idle', 'close-merge-result'].includes(focusData.kind) && !button
         ? document.querySelector('[data-close-merge-result]') || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')
       : focusData.kind === 'toggle' && focusData.attribute === 'data-hide-session' && !button
         ? buttons.find((item) => item.hasAttribute('data-clear-hidden-sessions'))
