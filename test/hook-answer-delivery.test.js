@@ -432,3 +432,38 @@ test('store 整理で期限切れ配信記録と14日を過ぎた通知だけの
   assert.equal(restored.pendingSessionNotifications.has(c.sessionId), false);
 });
 
+
+for (const kind of ['タスク未登録', 'サブエージェント報告', '全件完了']) {
+  test(`未 ACK の${kind}の催促は次の区切りで再配信し、ACK 後は繰り返さない`, async (t) => {
+    const c = await fixture(t, { answerNote: null, notify: false });
+    const now = Date.now();
+    const sendEvent = async (hook_event_name, hookAt, values = {}) => {
+      const response = await request(c.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(c.info.secret),
+        body: JSON.stringify({ session_id: c.sessionId, hook_event_name, hookAt, ...values }) });
+      assert.equal(response.status, 202);
+    };
+    if (kind !== 'タスク未登録') {
+      c.state.setTasks(c.sessionId, [{ title: '実装', state: kind === '全件完了' ? 'done' : 'doing', criteria: [] }], now - 700_000);
+      c.runtime.answerDelivery.afterTasksWrite(c.sessionId, now - 700_000);
+    }
+    await sendEvent('UserPromptSubmit', now - 650_000);
+    if (kind === 'サブエージェント報告') await sendEvent('SubagentStop', now - 640_000, { agent_id: 'worker' });
+    await sendEvent('PreToolUse', now - 1, { tool_name: 'Agent' });
+    const fetch = (id) => postHookRequest(c, { session_id: c.sessionId, action: 'post-tool-batch', event_name: 'PostToolBatch', id });
+    const first = await fetch('lost-reminder');
+    const text = first.json.hookOutput.hookSpecificOutput.additionalContext;
+    assert.match(text, /タスクが登録されていない|サブエージェントが終わった後|前のタスクがすべて完了/);
+    assert.deepEqual(await fetch('lost-reminder'), first);
+    await sendEvent('PreToolUse', now + 1, { tool_name: 'Read' });
+    const second = await fetch('next-reminder');
+    assert.equal(second.json.hookOutput.hookSpecificOutput.additionalContext, text);
+    const ack = (id, delivery_id) => postHookRequest(c, { session_id: c.sessionId, action: 'delivery-ack', id, delivery_id });
+    await ack('late-ack', first.json.deliveryId);
+    await sendEvent('PreToolUse', now + 2, { tool_name: 'Read' });
+    const third = await fetch('still-unacknowledged');
+    assert.equal(third.json.hookOutput.hookSpecificOutput.additionalContext, text);
+    await ack('ack-reminder', third.json.deliveryId);
+    await sendEvent('PreToolUse', now + 3, { tool_name: 'Read' });
+    assert.equal((await fetch('acknowledged')).json.hookOutput, null);
+  });
+}

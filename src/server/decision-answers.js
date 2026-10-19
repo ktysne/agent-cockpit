@@ -155,6 +155,8 @@ class DecisionAnswerDelivery {
     this.reviewReminderWaitMs = reviewReminderWaitMs;
     this.stopReviewReminders = new Map();
     this.remindedReviewHeads = new Map();
+    this.pendingHookReminders = new Map();
+    this.hookDeliveryReminders = new WeakMap();
     this.away = away;
     this.now = now;
     this.setTimeout = setTimeoutImpl;
@@ -432,6 +434,11 @@ class DecisionAnswerDelivery {
       : []);
   }
 
+  cancelHookReminders(sessionId) {
+    this.pendingHookReminders.delete(sessionId);
+    this.taskNudges.cancelReminder(sessionId);
+  }
+
   recordHookDelivery({ sessionId, action, requestId, response, requestGeneration = null, generation = null, decisionId = null }) {
     const requestKey = this.hookDeliveryRequestKey(action, requestId, requestGeneration);
     const existing = this.getHookDelivery(sessionId, action, requestId, requestGeneration);
@@ -466,6 +473,11 @@ class DecisionAnswerDelivery {
       expiresAt: new Date(now + HOOK_DELIVERY_TTL_MS).toISOString(),
       acknowledgedAt: null,
     };
+    this.hookDeliveryReminders.set(delivery, {
+      review: ['stop-check', 'stop-poll'].includes(action) ? this.pendingHookReminders.get(sessionId) : null,
+      taskNudge: ['post-tool-batch', 'post-tool-use'].includes(action)
+        ? this.taskNudges.sessions.get(sessionId)?.pendingNudge : null,
+    });
     records.set(requestKey, delivery);
     this.state.touch();
     this.state.requestStoreWrite(true);
@@ -497,6 +509,14 @@ class DecisionAnswerDelivery {
     if (record.overflowId && this.pendingSessionNotificationOverflow.get(sessionId)?.id === record.overflowId) {
       this.pendingSessionNotificationOverflow.delete(sessionId);
     }
+    const reminders = this.hookDeliveryReminders.get(record);
+    if (reminders?.review && this.pendingHookReminders.get(sessionId) === reminders.review) {
+      const seen = this.remindedReviewHeads.get(sessionId) || new Set();
+      for (const head of reminders.review.reviewHeads) seen.add(head);
+      this.remindedReviewHeads.set(sessionId, seen);
+      this.pendingHookReminders.delete(sessionId);
+    }
+    this.taskNudges.acknowledgeReminder(sessionId, reminders?.taskNudge);
     record.acknowledgedAt = acknowledgedAt;
     this.state.touch();
     this.state.requestStoreWrite(true);
@@ -571,11 +591,13 @@ class DecisionAnswerDelivery {
     const seen = this.remindedReviewHeads.get(sessionId) || new Set();
     const targets = candidates.filter(({ owner, repo, number, headRefOid }) => !seen.has(`${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`));
     if (!targets.length) return null;
-    for (const { owner, repo, number, headRefOid } of targets) {
-      seen.add(`${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`);
+    this.pendingHookReminders.set(sessionId, {
+      reviewHeads: targets.map(({ owner, repo, number, headRefOid }) =>
+        `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}:${headRefOid.toLowerCase()}`),
+    });
+    for (const { owner, repo, number } of targets) {
       this.diagnostics?.record('info', 'merge', 'review.reminder', { repository: `${owner}/${repo}`, number, session: sessionId.slice(0, 8) });
     }
-    this.remindedReviewHeads.set(sessionId, seen);
     return [
       '次の PR には、クロスレビューの記録もレビュー不要の記録もありません:',
       ...targets.map(({ owner, repo, number }) => `PR #${number} (${owner}/${repo})。`),
@@ -608,6 +630,7 @@ class DecisionAnswerDelivery {
     const key = sessionId;
     const previous = this.lastLifecycleAt.get(key) ?? -1;
     if (hookAt < previous) return;
+    this.cancelHookReminders(sessionId);
     this.lastLifecycleAt.set(key, hookAt);
     if (eventName === 'UserPromptSubmit') {
       this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
@@ -648,6 +671,7 @@ class DecisionAnswerDelivery {
       !event.agent_id && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName) &&
       event.hookAt > (this.lastLifecycleAt.get(sessionId) ?? -1)
     ) {
+      this.cancelHookReminders(sessionId);
       this.lastLifecycleAt.set(sessionId, event.hookAt);
       this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
       this.signal(sessionId);
