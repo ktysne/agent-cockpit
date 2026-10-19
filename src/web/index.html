@@ -5447,6 +5447,7 @@ async function refresh() {
     // 後に始めた取得の応答を反映済みなら、遅れて届いた古い応答で表示を戻さない。
     if (sequence < appliedRefreshSequence) return true;
     if (checkUiVersion(state)) return;
+    const displaySkipped = !unchanged && savesBeforeRequest !== completedDisplaySaves;
     if (!unchanged) await syncDisplayPreferences(state.display, savesBeforeRequest);
     if (sequence < appliedRefreshSequence) return true;
     lastStateAt = new Date();
@@ -5456,7 +5457,8 @@ async function refresh() {
     pruneStaleConfirmations(state.pullRequests || []);
     const stateEtag = unchanged ? lastStateEtag : response.headers.get('etag');
     const stateBodyChanged = !unchanged && stateEtag !== lastStateEtag;
-    lastStateEtag = stateEtag;
+    // 表示の設定を見送った応答の ETag を残すと次の取得が 304 になり、その応答にあった別の画面の変更を取り込めない。
+    lastStateEtag = displaySkipped ? null : stateEtag;
     appliedRefreshSequence = Math.max(appliedRefreshSequence, sequence);
     const hadUnconfirmedResults = pullRequestUnconfirmedResults.size > 0;
     if (refreshConfirmPending && !hasUnsentAnswerDraft(state)) setRefreshConfirmPending(false);

@@ -392,7 +392,7 @@ test('保存より前に送った取得の応答は、保存した表示の設�
     pendingDisplayRequests: 0, completedDisplaySaves: 0, displayWriteTail: Promise.resolve(), displayPreferenceSaveStates: new Map(),
     displayMigrationPending: false, displayMigrationData: null,
     postUiAction: async () => ({ ok: true }), normalizeDisplayPreferences: (value) => ({ ...value }),
-    renderSectionOrder() {}, renderDisplaySettings() {}, clearLegacyDisplayPreferences() {}, maybeAskImportAppTasks() {}, lastStateEtag: null,
+    renderSectionOrder() {}, renderDisplaySettings() {}, clearLegacyDisplayPreferences() {}, maybeAskImportAppTasks() {}, lastStateEtag: '"first"',
   });
   vm.runInContext(['syncDisplayPreferences', 'settleDisplaySaves', 'sendDisplayPatch', 'enqueueDisplayPatch', 'saveDisplayPreferences']
     .map(name => functionSource(html, name)).join('\n'), context);
@@ -408,7 +408,9 @@ test('保存より前に送った取得の応答は、保存した表示の設�
   assert.equal(context.displayPreferences.mode, 'kind');
 
   const sentAfterSave = context.refresh();
+  assert.equal(requests[1].options.headers['If-None-Match'], undefined);
   respond(1, 'product');
   await sentAfterSave;
   assert.equal(context.displayPreferences.mode, 'product');
+  assert.equal(context.lastStateEtag, '"1"');
 });
