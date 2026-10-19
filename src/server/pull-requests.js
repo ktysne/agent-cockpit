@@ -47,6 +47,9 @@ const INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const COMMAND_REFRESH_INACTIVE_INTERVAL_MS = 60_000;
 // 対象のリポジトリが決まらないコマンドの全体の取り直しは、この間隔に 1 回へまとめ、間に来た分は間隔の明けに 1 回取る。
 const COMMAND_REFRESH_COALESCE_MS = 5000;
+const UNKNOWN_MERGEABLE_REFRESH_MS = 5_000;
+// GitHub が計算中を返し続けても gh を呼び続けないよう、早めの取り直しは連続でこの回数までにする。
+const UNKNOWN_MERGEABLE_REFRESH_LIMIT = 3;
 // 開発者が確定した操作の確かめ直しの中で呼ぶ gh を、定期取得より先に実行するための印。
 const ghPriorityContext = new AsyncLocalStorage();
 
@@ -547,6 +550,7 @@ function assemblePullRequestStacks({
       return `積み直し待ち (#${value.restackPr.number} が ${mergeTarget} に入った後も、そのコミットが差分に残っている)`;
     }
     if (value.restackCheckUnknown) return '積み直しが必要か確かめられない';
+    if (pr.mergeable === 'UNKNOWN') return 'GitHub がマージできるかを計算中';
     if (pr.conflict) return 'コンフリクトあり';
     if (includeCi && pr.ci === 'fail') return 'CI が失敗';
     if (includeCi && pr.ci === 'pending') return 'CI 実行中';
@@ -1200,6 +1204,7 @@ class PullRequestTracker {
     this.priorityGhQueue = [];
     this.priorityRepositories = new Map();
     this.deferredRefreshes = new Map();
+    this.unknownMergeableRefreshCounts = new Map();
     this.lastCommandRefreshAt = -Infinity;
     this.commandRefreshTimer = null;
     this.initialFetchCompleted = new Set();
@@ -1314,6 +1319,17 @@ class PullRequestTracker {
       this.state.touch();
     }
     return deleted;
+  }
+
+  scheduleUnknownMergeableRefresh(owner, repo, openPullRequests) {
+    const key = repoKey(owner, repo);
+    if (!openPullRequests.some((pullRequest) => pullRequest.mergeable === 'UNKNOWN')) {
+      this.unknownMergeableRefreshCounts.delete(key);
+      return;
+    }
+    const count = (this.unknownMergeableRefreshCounts.get(key) || 0) + 1;
+    this.unknownMergeableRefreshCounts.set(key, count);
+    if (count <= UNKNOWN_MERGEABLE_REFRESH_LIMIT) this.deferRefresh(owner, repo, UNKNOWN_MERGEABLE_REFRESH_MS);
   }
 
   deferRefresh(owner, repo, delayMs) {
@@ -1722,6 +1738,7 @@ class PullRequestTracker {
       fetchedAt, listAvailable, errors, uninspectedNumbers } = interpretFetchResults({
       listResult, configResult, current, checkedAt,
     });
+    if (listAvailable) this.scheduleUnknownMergeableRefresh(owner, repo, openPullRequests);
     let mergedPullRequests = null;
     let mergedListComplete = false;
 
