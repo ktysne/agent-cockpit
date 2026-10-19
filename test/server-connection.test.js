@@ -291,14 +291,14 @@ test('試行の締切が応答本文の読み込みにも適用される', async
   assert.equal(requestSignal.aborted, true);
 });
 
-test('retryAfterTimeout が false のとき試行タイムアウトを再送せず timedOut を返す', async () => {
+test('retryAfterUnknownOutcome が false のとき試行タイムアウトを再送せず timedOut を返す', async () => {
   let ensureCalls = 0;
   let requests = 0;
   const result = await postToServer('/api/test', {}, {
     homeDir: 'unused',
     timeoutMs: 200,
     attemptTimeoutMs: 20,
-    retryAfterTimeout: false,
+    retryAfterUnknownOutcome: false,
     ensure: async () => {
       ensureCalls += 1;
       return serverInfo(41001, 'secret');
@@ -316,7 +316,7 @@ test('retryAfterTimeout が false のとき試行タイムアウトを再送せ�
   assert.equal(ensureCalls, 1);
 });
 
-test('既定の retryAfterTimeout はタイムアウト後に再送する', async () => {
+test('既定の retryAfterUnknownOutcome はタイムアウト後に再送する', async () => {
   let requests = 0;
   const result = await postToServer('/api/test', {}, {
     homeDir: 'unused',
@@ -340,19 +340,19 @@ test('既定の retryAfterTimeout はタイムアウト後に再送する', asyn
   assert.equal(requests, 2);
 });
 
-test('retryAfterTimeout が false でも接続拒否は再試行する', async () => {
+test('retryAfterUnknownOutcome が false でも接続拒否は再試行する', async () => {
   let ensureCalls = 0;
   let requests = 0;
   const result = await postToServer('/api/test', {}, {
     homeDir: 'unused',
-    retryAfterTimeout: false,
+    retryAfterUnknownOutcome: false,
     ensure: async () => {
       ensureCalls += 1;
       return serverInfo(41001, 'secret');
     },
     fetchImpl: async () => {
       requests += 1;
-      if (requests === 1) throw new Error('ECONNREFUSED');
+      if (requests === 1) throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
       return successResponse();
     },
   });
@@ -360,4 +360,61 @@ test('retryAfterTimeout が false でも接続拒否は再試行する', async (
   assert.deepEqual(result, { ok: true, status: 200, json: { accepted: true } });
   assert.equal(requests, 2);
   assert.equal(ensureCalls, 2);
+});
+
+test('retryAfterUnknownOutcome が false なら JSON 解析失敗を再送せず結果不明を返す', async () => {
+  let requests = 0;
+  const result = await postToServer('/api/test', {}, {
+    initialInfo: serverInfo(41001, 'secret'),
+    ensure: false,
+    retryAfterUnknownOutcome: false,
+    fetchImpl: async () => {
+      requests += 1;
+      return new Response('invalid JSON', { status: 200 });
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, status: null, json: null, outcomeUnknown: true });
+  assert.equal(requests, 1);
+});
+
+test('retryAfterUnknownOutcome が false なら切断や原因不明の例外を再送せず結果不明を返す', async () => {
+  for (const error of [
+    new TypeError('fetch failed', { cause: Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }) }),
+    new Error('connection closed'),
+  ]) {
+    let requests = 0;
+    const result = await postToServer('/api/test', {}, {
+      initialInfo: serverInfo(41001, 'secret'),
+      ensure: false,
+      retryAfterUnknownOutcome: false,
+      fetchImpl: async () => { requests += 1; throw error; },
+    });
+
+    assert.deepEqual(result, { ok: false, status: null, json: null, outcomeUnknown: true });
+    assert.equal(requests, 1);
+  }
+});
+
+test('retryAfterUnknownOutcome が false なら接続拒否や 401 の後の解析失敗も結果不明を返す', async () => {
+  for (const firstFailure of ['refused', 'unauthorized']) {
+    let requests = 0;
+    const result = await postToServer('/api/test', {}, {
+      initialInfo: serverInfo(41001, 'secret'),
+      ensure: false,
+      readServerInfo: async () => serverInfo(41002, 'new-secret'),
+      retryAfterUnknownOutcome: false,
+      fetchImpl: async () => {
+        requests += 1;
+        if (requests === 1) {
+          if (firstFailure === 'unauthorized') return new Response('{}', { status: 401 });
+          throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
+        }
+        return new Response('invalid JSON', { status: 200 });
+      },
+    });
+
+    assert.deepEqual(result, { ok: false, status: null, json: null, outcomeUnknown: true });
+    assert.equal(requests, 2);
+  }
 });

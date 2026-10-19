@@ -10,7 +10,7 @@ const CLIENT_EVENTS = Object.freeze({
   // 退避した行は常駐サーバーの次の起動まで取り込まれないことがあるため、発生時刻を持たせる。
   'hook.delivery': { tag: 'hook', level: 'warn', fields: { failure: ['unreachable', 'timeout'], at: 'timestamp',
     event: HOOK_EVENT_NAMES, ensureMs: 'number', postMs: 'number', sinceHookMs: 'number' } },
-  'mcp.write': { tag: 'mcp', level: 'info', fields: { tool: TOOL_NAMES, phase: ['attempt', 'result'], ok: 'boolean', failure: ['http', 'timeout', 'unreachable'], status: 'status', version: 'version', commit: 'commit' } },
+  'mcp.write': { tag: 'mcp', level: 'info', fields: { tool: TOOL_NAMES, phase: ['attempt', 'result'], ok: 'boolean', failure: ['http', 'timeout', 'unknown', 'unreachable'], status: 'status', version: 'version', commit: 'commit' } },
   'web.failed': { tag: 'web', level: 'warn', fields: { operation: ['fetch', 'save'], path: 'path', status: 'status' } },
 });
 const WEB_PATHS = ['/', '/api/state', '/api/diagnostics', '/api/diagnostics/delete', '/api/open-url', '/api/away', '/api/routing', '/api/display', '/api/record-deletions', '/api/hidden-sessions', '/api/seen', '/api/closed-tasks', '/api/closed-agents', '/api/pull-requests/review-skip', '/api/pull-requests/merge', '/api/pull-requests/reserve', '/api/pull-requests/cancel-reservation', '/api/pull-requests/conflict-request', '/api/pull-requests/merge-result/close', '/api/pull-requests/repository/unregister', '/api/sessions/:id/estimate', '/api/decisions/:id/answer', '/api/sessions/:id/context'];

@@ -196,6 +196,27 @@ test('MCP の入口は書き込みの試行と HTTP の結果を記録し、引�
   assert.doesNotMatch(JSON.stringify(entries), /private/);
 });
 
+test('MCP 書き込みの結果不明は診断に unknown として残す', async t => {
+  const { runtime, info } = await startTestServer(t);
+  const pending = [];
+  const result = await callTool('cockpit_set_tasks', { tasks: [] }, {
+    homeDir: runtime.homeDir, environment: { CLAUDE_CODE_SESSION_ID: 'mcp-diagnostic' },
+    ensureServerRunning: async () => info,
+    fetchImpl: async (url, init) => {
+      if (!url.endsWith('/api/diagnostics')) return new Response('invalid JSON', { status: 200 });
+      const operation = fetch(url, init);
+      pending.push(operation);
+      return operation;
+    },
+  });
+  await Promise.all(pending);
+  const entries = (await read(runtime)).filter(entry => entry.msg === 'mcp.write' && entry.data.phase === 'result');
+  assert.equal(result.isError, true);
+  assert.deepEqual(entries.map(entry => ({ level: entry.level, failure: entry.data.failure })), [
+    { level: 'error', failure: 'unknown' },
+  ]);
+});
+
 test('MCP の診断送信が失敗しても書き込みは完了し、診断を再送しない', async t => {
   const { runtime, info } = await startTestServer(t);
   const diagnostics = [];

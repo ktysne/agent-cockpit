@@ -271,7 +271,7 @@ async function postToServer(requestPath, body, options = {}) {
   const fileSystem = options.fileSystem || fsp;
   const readInfo = options.readServerInfo || readServerInfo;
   const ensureSetting = Object.hasOwn(options, 'ensure') ? options.ensure : true;
-  const retryAfterTimeout = options.retryAfterTimeout ?? true;
+  const retryAfterUnknownOutcome = options.retryAfterUnknownOutcome ?? true;
   const ensureServer = ensureSetting === false
     ? null
     : typeof ensureSetting === 'function'
@@ -330,8 +330,11 @@ async function postToServer(requestPath, body, options = {}) {
       const replacement = await readInfo(homeDir, fileSystem);
       info = replacement || (options.reuseInfoOnUnauthorized ? info : null);
     } catch (error) {
-      if (retryAfterTimeout === false && (error?.code === 'ATTEMPT_TIMEOUT' || error?.code === 'DEADLINE_TIMEOUT')) {
+      if (retryAfterUnknownOutcome === false && (error?.code === 'ATTEMPT_TIMEOUT' || error?.code === 'DEADLINE_TIMEOUT')) {
         return { ok: false, status: null, json: null, timedOut: true };
+      }
+      if (retryAfterUnknownOutcome === false && error?.cause?.code !== 'ECONNREFUSED') {
+        return { ok: false, status: null, json: null, outcomeUnknown: true };
       }
       if (attempt > 0) return { ok: false, status: null, json: null };
       try {
@@ -342,7 +345,7 @@ async function postToServer(requestPath, body, options = {}) {
       }
     }
   }
-  if (retryAfterTimeout === false && now() >= deadline) {
+  if (retryAfterUnknownOutcome === false && now() >= deadline) {
     return { ok: false, status: null, json: null, timedOut: true };
   }
   return { ok: false, status: null, json: null };
