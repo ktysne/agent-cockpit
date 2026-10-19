@@ -45,7 +45,7 @@ test('明示しない再起動と dev の再起動は利用できない', async 
   }
 });
 
-test('配置済みの版が同じなら再起動せず 409 を返す', async t => {
+test('配置済みのバージョンが同じなら再起動せず 409 を返す', async t => {
   const f = await restartFixture(t, { appVersion: require('../package.json').version });
   const response = await f.post();
   assert.equal(response.status, 409);

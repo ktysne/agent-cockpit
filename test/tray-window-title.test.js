@@ -12,7 +12,7 @@ function dashboardTitlePattern() {
   return new RegExp(`${unescape(match[1])}Agent Cockpit${unescape(match[2])}`);
 }
 
-test('トレイは件数と版の付いた画面のタイトルをダッシュボードとして見つける', () => {
+test('トレイは件数とバージョンの付いた画面のタイトルをダッシュボードとして見つける', () => {
   const pattern = dashboardTitlePattern();
   for (const title of ['Agent Cockpit', '(3) Agent Cockpit', 'Agent Cockpit v1.0.0', '(12) Agent Cockpit v1.10.3']) {
     assert.match(title, pattern);

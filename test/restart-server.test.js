@@ -23,7 +23,7 @@ function options(overrides = {}) {
   };
 }
 
-test('停止を待ってから起動し、版とコミットと起動情報が一致すれば成功する', async () => {
+test('停止を待ってから起動し、バージョンとコミットと起動情報が一致すれば成功する', async () => {
   const steps = [];
   let probes = 0;
   const result = await restartServer(options({
@@ -40,7 +40,7 @@ test('停止を待ってから起動し、版とコミットと起動情報が�
   assert.deepEqual(steps, ['wait', 'stop', 'wait', 'start']);
 });
 
-test('期待の版はディスクの package.json から読みコミットはチェックアウトのルートで取得する', async () => {
+test('期待のバージョンはディスクの package.json から読みコミットはチェックアウトのルートで取得する', async () => {
   const root = path.resolve(__dirname, '..');
   const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
   const result = await restartServer(options({ expectedVersion: undefined,
@@ -50,14 +50,14 @@ test('期待の版はディスクの package.json から読みコミットはチ
   assert.deepEqual(result.expected, { version, commit });
 });
 
-test('期待のコミットを取得できなくても版が一致すれば未照合の成功を返す', async () => {
+test('期待のコミットを取得できなくてもバージョンが一致すれば未照合の成功を返す', async () => {
   const result = await restartServer(options({ readSourceCommit: async () => null }));
   assert.equal(result.result, 'ok');
   assert.equal(result.expected.commit, null);
   assert.equal(result.commitVerified, false);
 });
 
-test('起動後の版やコミットが違うか版が無ければ期待値と実際を示して mismatch にする', async () => {
+test('起動後のバージョンやコミットが違うかバージョンが無ければ期待値と実際を示して mismatch にする', async () => {
   for (const changes of [{ version: '1.3.0' }, { commit: 'b'.repeat(40) }, { version: undefined }]) {
     await assert.rejects(restartServer(options({
       fetchImpl: health({ app: 'agent-cockpit', ...started, ...running, ...changes }),

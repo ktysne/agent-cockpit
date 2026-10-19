@@ -10,7 +10,7 @@ const { isReleaseTag, latestReleaseTag } = require('./release');
 const ROOT = path.resolve(__dirname, '..');
 const SITE_DIR = path.join(ROOT, 'site');
 const MANUAL_DIR = path.join(ROOT, 'manual');
-// 紹介ページの版を入れる要素。中身は配信のたびに版で置き換え、リポジトリの index.html は書き換えない。
+// 紹介ページのバージョンを入れる要素。中身は配信のたびにバージョンで置き換え、リポジトリの index.html は書き換えない。
 const SITE_VERSION_ELEMENT = /<([a-z][a-z\d]*)\b([^>]*\sdata-site-version(?=[\s>])[^>]*)>[^<]*<\/\1>/gi;
 const UPLOAD_MANIFEST_NAME = 'upload-manifest.json';
 const UPLOAD_MANIFEST_SCHEMA = 1;
@@ -494,7 +494,7 @@ function printUsage() {
   ].join('\n'));
 }
 
-// --version が無いときは origin の最新の版タグを使う。版タグが 1 つも無いときは空にする。
+// --version が無いときは origin の最新のバージョンのタグを使う。バージョンのタグが 1 つも無いときは空にする。
 function siteVersion(opt, dependencies) {
   if (opt.version !== undefined) {
     if (!isReleaseTag(opt.version)) throw new Error('--version は v1.2.3 の形式で指定してください: ' + opt.version);
@@ -502,7 +502,7 @@ function siteVersion(opt, dependencies) {
   }
   const latest = latestReleaseTag(dependencies);
   if (latest === null) {
-    console.warn('警告: origin に版タグが無いため、紹介ページの版は空のまま送ります。');
+    console.warn('警告: origin にバージョンのタグが無いため、紹介ページのバージョンは空のまま送ります。');
     return '';
   }
   return latest;
@@ -531,7 +531,7 @@ async function cmdUpload(opt, dependencies = {}) {
     } catch (error) {
       configProblem = error.message;
     }
-    console.log('埋め込む紹介ページの版: ' + (version || '(版のタグが無いため空)'));
+    console.log('埋め込む紹介ページのバージョン: ' + (version || '(バージョンのタグが無いため空)'));
     console.log('差分は送信時にサーバーの upload-manifest.json と比べて決めます。');
     console.log('FTPS 送信計画 (remoteRoot: ' + (remoteRoot ?? '(未設定)') + '):');
     for (const item of items) {

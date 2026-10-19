@@ -178,7 +178,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text x="460" y="298">・PR の状態取得・マージ・予約</text>
       <text x="460" y="320">・経路と表示の設定を保存</text>
       <text x="460" y="342">・診断ログを記録</text>
-      <text x="460" y="364">・新しい版のタグを確認</text>
+      <text x="460" y="364">・新しいバージョンのタグを確認</text>
       <text x="460" y="386">・URL を既定のブラウザーで開く</text>
       <text class="sub" x="460" y="424">書き込みは起動ごとの秘密値と</text>
       <text class="sub" x="460" y="442">Origin を照合する</text>
@@ -198,7 +198,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text x="808" y="276">・判断事項と回答欄</text>
       <text x="808" y="298">・PR スタックとマージ確認・予約</text>
       <text x="808" y="320">・離席中 / 経路 / 表示の設定</text>
-      <text x="808" y="342">・新しい版の通知と診断ログ</text>
+      <text x="808" y="342">・新しいバージョンの通知と診断ログ</text>
       <text x="808" y="364">・マニュアルへの入口</text>
       <text class="sub" x="808" y="424">Claude は橙、Codex は青紫の色帯で</text>
       <text class="sub" x="808" y="442">見分ける</text>
@@ -260,7 +260,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text class="sub" x="896" y="602">gh で PR と CI の状態を</text>
       <text class="sub" x="896" y="620">60 秒ごとに取得</text>
       <text class="sub" x="896" y="642">確認済みの最下段だけマージ</text>
-      <text class="sub" x="896" y="660">git で新しい版のタグを確認</text>
+      <text class="sub" x="896" y="660">git で新しいバージョンのタグを確認</text>
 
       <path class="ln gray" d="M120,550 L120,515 L470,515 L470,460" marker-end="url(#m-gray)"/>
       <path class="ln gray" d="M335,550 L335,515"/>
@@ -281,7 +281,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
     <li><b>計画・PR（MCP → サーバー）</b>：メインセッションが MCP ツールを呼ぶと、MCP サーバーが計画（タスク、完了条件、判断事項）、PR、クロスレビュー不要の記録を常駐サーバーへ送る。</li>
     <li><b>状態の表示（サーバー → ダッシュボード）</b>：ダッシュボードは <code>GET /api/state</code> を 2 秒ごとに取得して画面を描き直す。</li>
     <li><b>回答・操作（ダッシュボード → サーバー）</b>：回答、離席中の切り替え、経路と表示の設定、PR のマージ確認と予約、衝突の解消の依頼、診断ログの削除などを送る。回答と依頼はサーバーの配信待ちに置かれ、②で届く。マニュアルと外部のページ（PR など）は、サーバーに頼んで既定のブラウザーで開く。</li>
-    <li><b>GitHub（サーバー ⇄ GitHub）</b>：<code>gh</code> CLI で PR と CI の状態を 60 秒ごとに取得する。マージできるのは、開発者が画面で確認したスタック最下段の PR だけで、画面で見た head の SHA を照合する。レビュー収束後マージの予約は、クロスレビューの収束を記録した head の SHA で照合する。新しい版のタグは <code>git ls-remote</code> で 6 時間ごとに確かめ、画面で知らせる。</li>
+    <li><b>GitHub（サーバー ⇄ GitHub）</b>：<code>gh</code> CLI で PR と CI の状態を 60 秒ごとに取得する。マージできるのは、開発者が画面で確認したスタック最下段の PR だけで、画面で見た head の SHA を照合する。レビュー収束後マージの予約は、クロスレビューの収束を記録した head の SHA で照合する。新しいバージョンのタグは <code>git ls-remote</code> で 6 時間ごとに確かめ、画面で知らせる。</li>
     <li><b>読み取り（ファイル → サーバー）</b>：<code>~/.claude</code> と <code>~/.codex</code> を 10 秒ごとに読み、稼働中のセッション、利用者の中断、Codex のスレッド名と会話の終了を拾う。どちらも公開仕様ではないので、読めなくても本体は動く。</li>
   </ol>
 
@@ -290,7 +290,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
     <div class="card"><h3>フック</h3><p>Claude Code と Codex の設定に登録するスクリプト群。イベントを送り、回答と知らせをセッションへ渡す。<code>route.js</code> は Claude だけに登録し、経路の設定をサブエージェントへ伝え、Claude を選んだ担当が Codex を起動しようとしたら止める。</p></div>
     <div class="card"><h3>MCP サーバー</h3><p>セッションが計画、判断事項、PR を書き込むための窓口。常駐サーバーへ HTTP で転送する。Codex からの呼び出しはクライアント名で見分け、記録先のセッションを要求に付いた ID で決める。</p></div>
     <div class="card"><h3>常駐サーバー</h3><p>すべての情報が集まる中心。127.0.0.1 にだけ待ち受け、外部パッケージを使わず Node.js で動く。30 分要求が無く、セッションも無いと終了し、次のフックが起動し直す。Claude Code の無い環境でも同じ条件で終了する。</p></div>
-    <div class="card"><h3>ダッシュボード</h3><p>常駐サーバーが配信する画面。状態の表示と、回答やマージ確認の入力を担う。見出しに版を出し、新しい版があれば更新の依頼文を渡す。</p></div>
+    <div class="card"><h3>ダッシュボード</h3><p>常駐サーバーが配信する画面。状態の表示と、回答やマージ確認の入力を担う。見出しにバージョンを出し、新しいバージョンがあれば更新の依頼文を渡す。</p></div>
     <div class="card"><h3>タスクトレイ</h3><p>Windows 用の常駐アイコン。サーバーの起動と再起動、ダッシュボードを開く操作、離席中の切り替え、待ち件数の通知を担う。</p></div>
     <div class="card"><h3>診断ログ</h3><p>常駐サーバー、フック、MCP、画面の出来事を <code>~/.agent-cockpit/diagnostics/</code> に記録する。会話、質問と回答、ツールの入出力、秘密値は残さない。設定画面の入口から読み、書き出し、削除できる。</p></div>
     <div class="card"><h3>マニュアル</h3><p><code>manual/</code> で組み立てた利用者向けの説明。紹介ページと一緒に https://ktysne.info/agent-cockpit/manual/ へ配信し、設定画面の入口から既定のブラウザーで開く。</p></div>

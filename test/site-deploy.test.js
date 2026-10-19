@@ -426,7 +426,7 @@ test('一覧のダウンロード中に接続が切れたらつなぎ直して�
   ]);
 });
 
-test('紹介ページの埋め込み版が変わると他の一致ファイルを保って index.html を送る', async t => {
+test('紹介ページに埋め込むバージョンが変わると他の一致ファイルを保って index.html を送る', async t => {
   const { directory } = temporaryDirectory(t);
   const { siteDir, manualDir } = createSite(directory);
   write(siteDir, 'index.html', SITE_VERSION_HTML);
@@ -565,7 +565,7 @@ function recordingFtpServer() {
   return { server, sent, createClient };
 }
 
-test('紹介ページの版の要素に指定した版を入れて送り、リポジトリの index.html は書き換えない', async t => {
+test('紹介ページのバージョンの要素に指定したバージョンを入れて送り、リポジトリの index.html は書き換えない', async t => {
   const { directory } = temporaryDirectory(t);
   const { siteDir, manualDir } = createSite(directory);
   write(siteDir, 'index.html', SITE_VERSION_HTML);
@@ -583,7 +583,7 @@ test('紹介ページの版の要素に指定した版を入れて送り、リ�
   assert.equal(fs.readFileSync(path.join(siteDir, 'index.html'), 'utf8'), SITE_VERSION_HTML);
 });
 
-test('紹介ページに版の要素が無いときは、何も送らずに止まる', async t => {
+test('紹介ページにバージョンの要素が無いときは、何も送らずに止まる', async t => {
   const { directory } = temporaryDirectory(t);
   const { siteDir, manualDir } = createSite(directory);
   write(siteDir, 'index.html', '<p>導入</p>');
@@ -598,7 +598,7 @@ test('紹介ページに版の要素が無いときは、何も送らずに止�
   assert.equal(server.clientCount(), 0);
 });
 
-test('--version が無いときは origin の最新の版タグを紹介ページに入れる', async t => {
+test('--version が無いときは origin の最新のバージョンのタグを紹介ページに入れる', async t => {
   const { directory } = temporaryDirectory(t);
   const { siteDir, manualDir } = createSite(directory);
   write(siteDir, 'index.html', SITE_VERSION_HTML);
@@ -627,10 +627,10 @@ test('--version が無いときは origin の最新の版タグを紹介ペー�
   }
 
   assert.deepEqual(lsRemoteCalls, ['ls-remote --tags origin']);
-  assert.ok(output.includes('埋め込む紹介ページの版: v1.0.10'));
+  assert.ok(output.includes('埋め込む紹介ページのバージョン: v1.0.10'));
 });
 
-test('origin の版タグを取得できないときは、版を決めずに止まる', async t => {
+test('origin のバージョンのタグを取得できないときは、バージョンを決めずに止まる', async t => {
   const { directory } = temporaryDirectory(t);
   const { siteDir, manualDir } = createSite(directory);
   const execFileSync = () => { throw new Error('fatal: unable to access'); };

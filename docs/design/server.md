@@ -62,19 +62,19 @@
 
 ## 更新の確認
 
-公開する版の正本は `vX.Y.Z` 形式の Git タグとし、リリース時に `package.json` の `version` を合わせる。
-手元の版は `package.json` から読む。
-ブランチや worktree の HEAD に依存せず、稼働中のコードに付いた版を確認できるためである。
+公開するバージョンの正本は `vX.Y.Z` 形式の Git タグとし、リリース時に `package.json` の `version` を合わせる。
+手元のバージョンは `package.json` から読む。
+ブランチや worktree の HEAD に依存せず、稼働中のコードに付いたバージョンを確認できるためである。
 固定の `https://github.com/ktysne/agent-cockpit.git` へ `git ls-remote --refs --tags` で問い合わせる。
-チェックアウトの remote が fork や別の URL でも、配布元の版を確認するためである。
-正式な版タグだけを拾い、3 つの整数で比較し、最大の版が手元より新しければ通知する。
+チェックアウトの remote が fork や別の URL でも、配布元のバージョンを確認するためである。
+正式なバージョンのタグだけを拾い、3 つの整数で比較し、最大のバージョンが手元より新しければ通知する。
 `0.0.0` からの変更を見るリンクは、存在しないタグとの比較を避け、新しいタグの tree を指す。
 
 確認は起動 1 分後、その後 6 時間ごとに行う。
 git は対話を無効にし、15 秒の期限と 1MB の出力上限を設ける。
 タイマーは `unref()` し、終了時に解除し、確認中の処理が終わってから診断ログを閉じる。
 成功は結果を info で、失敗は分類だけを warn で診断ログに残す。
-`update` は `{current, latest, available, checkedAt, succeededAt, error}` を基本項目として持ち、新しい版がある場合は `prompt` と `compareUrl` も持つ。
+`update` は `{current, latest, available, checkedAt, succeededAt, error}` を基本項目として持ち、新しいバージョンがある場合は `prompt` と `compareUrl` も持つ。
 `checkedAt` は最後に試した時刻、`succeededAt` は最後に成功した時刻、`error` は最後に試した確認の失敗分類で、成功後は `error` を `null` にする。
 失敗時は前回成功した `latest`、`available`、`succeededAt` を残す。
 公開したタグは通常取り下げないため、一度見つけた更新候補は一時的な確認失敗の後も有効である。
@@ -83,7 +83,7 @@ git は対話を無効にし、15 秒の期限と 1MB の出力上限を設け�
 確認結果は `DashboardState` の snapshot に入れず、`/api/state` の `update` に並べる。
 セッションの状態が変わったわけではないため、状態の `version` を進めない。
 画面は版番号による描き直しの判定の外で、毎回通知を更新する。
-依頼文とリンクは新しい版がある場合だけサーバーが組み立て、依頼文の手順書の場所はサーバーのファイルの位置から求める。
+依頼文とリンクは新しいバージョンがある場合だけサーバーが組み立て、依頼文の手順書の場所はサーバーのファイルの位置から求める。
 
 画面の設定の「更新を確認」は `POST /api/update/check` で、定期の確認を待たずに今すぐ確かめる。
 本文は JSON のオブジェクトだけを受け付け、画面用の秘密値と Origin を照合する。
@@ -92,13 +92,13 @@ git は対話を無効にし、15 秒の期限と 1MB の出力上限を設け�
 確認を有効にしていないサーバー(`updateCheck` を渡していない場合)は `409` と `{"error":"update-check-disabled"}` を返す。
 定期の確認の時機は変えない。
 
-起動時の版は `/api/state` の `runtime: {version, commit, sourceState, startedAt}` で渡す。
+起動時のバージョンは `/api/state` の `runtime: {version, commit, sourceState, startedAt}` で渡す。
 互換のため `appVersion` も残す。
-画面のタイトルは `v1.4.0` の形で版だけを出し、commit は出さない。commit は利用者が読む情報ではないためである。
+画面のタイトルは `v1.4.0` の形でバージョンだけを出し、commit は出さない。commit は利用者が読む情報ではないためである。
 診断の記録は、sourceState が release 以外で commit があれば `v1.4.0+c933f60` の形にする。
 バージョンが無い場合は「バージョン不明」とする。
 runtime を返さない旧サーバーでは appVersion を使う。
-デモの常駐サーバーは `appVersion` を `null` にし、commit も読まずに版を出さない。マニュアルと紹介ページの画像が、版を上げるたびに変わらないためである。
+デモの常駐サーバーは `appVersion` を `null` にし、commit も読まずにバージョンを出さない。マニュアルと紹介ページの画像が、バージョンを上げるたびに変わらないためである。
 
 listen 前には `.git` のファイルから commit だけを読む。
 listen 後に info と同じ pid と startedAt で `{version, commit, pid, startedAt}` を確定し、以後変えない。
@@ -142,7 +142,7 @@ sourceState が無い応答は取り直さず、期限内に確定しない場�
 取り直し中に `/health` を取得できなくなった場合も最後の応答を返す。一時的な通信失敗で起動確認全体を失敗にしないためである。
 `releaseVerified` は `result` が `ok`、`commitVerified` が true、sourceState が release の場合だけ true とする。
 成功時は再起動したこととバージョンを出し、commit が未照合なら更新後のコードで動いているか確かめられないことを添える。
-失敗は `stop-timeout`（旧サーバーの終了未確認）、`start-failed`（起動失敗または起動後の health 取得失敗）、`stale`（旧起動の再利用）、`mismatch`（起動情報、版、コミットの不一致）に分ける。
+失敗は `stop-timeout`（旧サーバーの終了未確認）、`start-failed`（起動失敗または起動後の health 取得失敗）、`stale`（旧起動の再利用）、`mismatch`（起動情報、バージョン、コミットの不一致）に分ける。
 `--json` は人向けの文を付けずに `{result, stoppedPid, pid, expected: {version, commit}, running: {version, commit, sourceState} | null, commitVerified, releaseVerified}` を 1 行で出し、失敗時は終了コード 1 を返す。
 `restartServer` も成功時には同じ形を返し、失敗時の例外には分類を `result`、同じ形の情報を `details` に持たせる。
 更新用の再起動は `releaseVerified` を返すために sourceState の確定を待つが、タスクトレイの `ensure-server.js --verify` は待たない。
@@ -222,7 +222,7 @@ sourceState が dirty の場合は起動時に未コミットの変更があっ�
   メインのイベント(`agent_id` を持たないもの)を受けて約 500ms 後に 1 回読み、その状態が続く間は 60 秒ごとに読み直す。サブエージェントのイベントでは読まない。
 - 記録の場所と末尾 256KB の読み方は、状態不明の推定と同じとする。
 - 対象の行は、`type` が `queue-operation`、`operation` が `enqueue` で、`content` が `<task-notification>` で始まるものだけとする。ツールの入出力や会話の本文に写った通知の文字列を、終了と取り違えないためである。
-  enqueue の行を書かない古い版の Claude Code では、通知を読み取れないので、手で「終了にする」を使う。
+  enqueue の行を書かない古いバージョンの Claude Code では、通知を読み取れないので、手で「終了にする」を使う。
 - 通知から `<task-id>`(`[A-Za-z0-9_-]` の 1〜64 文字)と `<status>`(`completed`、`killed`、`failed`、`stopped`)を読む。`stopped` は前のプロセスで終わらなかった背景のエージェントの通知で、1 通に複数の `<task-id>` が並ぶので、すべてを読む。稼働中の Claude のサブエージェントに一致し、通知の時刻がそのサブエージェントの開始時刻より前でなければ、`SubagentStop` を合成して通常のイベントと同じ経路で処理する。
 
 ## 記録の削除
@@ -344,10 +344,10 @@ Windows のルート相対パスは `\` で始め、相対パスは実行環境�
   `--dev` では `uiVersion` を比較しない。
   再起動待ちの間、画面は再起動で更新が反映されることを通知欄に表示する。実行中と配置済みのバージョンが異なる場合は配置済みのバージョンを示し、それ以外の差は更新したファイルが配置されたことを示す。
   状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`GET /api/tray` はトレイ用に `{permissionKeys, decisionKeys, awayEnabled}` を返し、PR や「前回見てから」の情報を計算しない。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
-`POST /api/update/check` は今すぐの版の確認で、「更新の確認」の節に記す。
+`POST /api/update/check` は今すぐのバージョンの確認で、「更新の確認」の節に記す。
 - `GET /api/state` は計算済みの JSON 本文を、状態の指紋と有効期限が変わらない間だけ使い回す。
   指紋は `state.version`、PR の取得中の鍵の署名、整理後の離席状態、経路設定、更新確認の結果、画面の版、配置済みの状態、再起動待ちの判定、連携ツールの検出結果、ソースの状態から作る。
-  配置済みの HTML、パッケージの版、コミットは 5 秒、連携ツールは 10 秒を確認期限とし、状態の版が変わった場合も確認し直す。
+  配置済みの HTML、パッケージのバージョン、コミットは 5 秒、連携ツールは 10 秒を確認期限とし、状態の版が変わった場合も確認し直す。
   同時に要求が来たときは実行中の外部確認を共有する。確認中に版が変わっても待ち直さず、次の取得で確認し直す。イベントが続く間も応答を止めないためである。
   外部確認と離席期間の整理を済ませてから本文を同期で生成し、初回表示による既読時刻の初期化を含め、生成後の版で指紋を確定する。
 - 本文の有効期限は生成から 30 秒以内とし、予約通知の消失、マージ履歴の保持期限、開いた離席期間へ未来の記録が入る時刻、離席期間の保持期限が先に来れば、その時刻で失効する。

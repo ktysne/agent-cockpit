@@ -239,7 +239,7 @@ test('口の無い要求は、/api/ なら 405、それ以外は 404 を text �
   assertText(await send({ path: '/api/sessions/a/b/plan' }), 405, 'Method Not Allowed', '階層の多い plan');
 });
 
-test('/health は起動時の識別と版とソースの状態を返す', async (t) => {
+test('/health は起動時の識別とバージョンとソースの状態を返す', async (t) => {
   const { info } = await startTestServer(t);
   const response = await request(info.port, { path: '/health' });
   assert.equal(response.status, 200);

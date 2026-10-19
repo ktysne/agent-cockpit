@@ -388,7 +388,7 @@ test('コピーの代替要素と書き出しのリンクはモーダルの中�
   assert.equal(appended[1].removed, true);
 });
 
-test('書き出しは絞り込み前の記録と版とレベルと起動識別子を含む', async () => {
+test('書き出しは絞り込み前の記録とバージョンとレベルと起動識別子を含む', async () => {
   const { context, entries } = diagnosticPage();
   await context.refreshDiagnostics();
   const text = context.diagnosticExportText([{ id: 'run', startedAt: 1, entries }], vm.runInContext('diagnosticResponseRuntime', context));
@@ -463,7 +463,7 @@ test('削除の応答を待つ間に「やめる」を押しても、送った�
 });
 
 
-test('起動の選択肢と選択または全起動の書き出しは各起動の版を保つ', async () => {
+test('起動の選択肢と選択または全起動の書き出しは各起動のバージョンを保つ', async () => {
   const runs = [
     { id: 'current', current: true, runtime: { version: '1.4.0', commit: 'c933f60abcdef', sourceState: 'release' } },
     { id: 'older', runtime: { version: '1.3.0', commit: '9fa2714abcdef', sourceState: 'diverged' } },
@@ -482,7 +482,7 @@ test('起動の選択肢と選択または全起動の書き出しは各起動�
   assert.match(context.diagnosticExportText(runs, vm.runInContext('diagnosticResponseRuntime', context)), /## 起動 legacy .*バージョン不明/);
 });
 
-test('一覧の取得後にソースの状態が確定しても、選択と全起動の書き出しは起動ごとの取得で得た版を使う', async () => {
+test('一覧の取得後にソースの状態が確定しても、選択と全起動の書き出しは起動ごとの取得で得たバージョンを使う', async () => {
   const pendingRuntime = { version: '1.4.0', commit: 'c933f60abcdef', sourceState: 'pending' };
   const releaseRuntime = { ...pendingRuntime, sourceState: 'release' };
   const current = { id: '20261013T000000Z-1', current: true, startedAt: '2026-10-13T00:00:00Z', count: 1, sources: ['server'], runtime: pendingRuntime };
@@ -501,7 +501,7 @@ test('一覧の取得後にソースの状態が確定しても、選択と全�
   assert.match(exported, /## 起動 20261013T000000Z-1 .*v1.4.0 commit=c933f60abcdef state=release/);
 });
 
-test('モックと画面の版表示は release 以外で pending も短縮コミットを付ける', () => {
+test('モックと画面のバージョンの表示は release 以外で pending も短縮コミットを付ける', () => {
   for (const html of [web, mock]) {
     const context = vm.createContext({});
     vm.runInContext(functionSource(html, 'formatRuntime'), context);
