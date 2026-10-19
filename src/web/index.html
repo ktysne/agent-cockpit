@@ -1426,8 +1426,9 @@ function appendToolLine(target, tool) {
 
 function routeTag(agent) {
   if (!codexAgentAvailable || !agent.active || !ROUTE_VALUES.has(agent.route)) return null;
-  const stale = agent.route !== routing.agents;
-  const tag = element('span', `route-tag${stale ? ' stale' : ''}`, `経路: ${routeName('agents', agent.route)}${stale ? ' (変更前)' : ''}`);
+  const routeKey = agent.agent_type === 'codex-review' ? 'review' : 'agents';
+  const stale = agent.route !== routing[routeKey];
+  const tag = element('span', `route-tag${stale ? ' stale' : ''}`, `経路: ${routeName(routeKey, agent.route)}${stale ? ' (変更前)' : ''}`);
   tag.title = '起動時に効いていた経路の設定';
   return tag;
 }

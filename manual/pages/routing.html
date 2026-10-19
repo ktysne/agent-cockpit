@@ -67,7 +67,7 @@
   <details class="more">
     <summary>サブエージェントの経路の記録の詳細</summary>
     <ul>
-      <li>bridge の窓口は「サブエージェント」の値を、<code>codex-review</code> は「クロスレビュー」の値を開始時に読み、<code>route-agents/</code> に記録します。<code>codex-review</code> の値が「既定」の場合は記録しません</li>
+      <li>bridge の窓口は「サブエージェント」の値を、<code>codex-review</code> は「クロスレビュー」の値を開始時に読み、「既定」を含めて <code>route-agents/</code> に記録します。「既定」の場合は文脈を差し込まず、Codex の起動も拒否しません</li>
       <li>同じサブエージェントが再開したときも、最初の記録の経路のままです</li>
       <li>記録は、読むたびに更新時刻を進めます。24 時間使われていない記録は、新しいサブエージェントの開始時に削除します</li>
     </ul>

@@ -321,8 +321,8 @@ bridge は `CLAUDE_CONFIG_DIR` にかかわらず `~/.claude/tools/` に置く�
 ```
 
 `route.js` は同期フックです。`impl-hard`、`impl-standard`、`impl-light`、`codex-subagent` の開始時は「サブエージェント」の経路を、`codex-review` の開始時は「クロスレビュー」の経路を `AGENT_COCKPIT_HOME` の `route-agents/` に記録します。
-Codex か Claude を選んでいれば、対象の窓口へその経路を伝えます。
-`codex-review` でクロスレビューの経路が「既定」のときは記録も差し込みもしません。
+経路が「Codex」か「Claude」なら対象の窓口へ伝え、「既定」なら記録だけを行います。
+既定で始めたサブエージェントは、設定を後から変えて再開しても、Codex の起動や待機を拒否されません。
 Claude の経路を記録した窓口が `codex-agent.sh` を呼ぶと、`PreToolUse` で止めます。
 経路は起動時に決まり、稼働中のサブエージェントは設定を変えても切り替わりません。
 経路の設定が効くのは、Claude のセッションが起動する bridge の窓口だけです。`codex-review` はクロスレビューの経路に従います。Codex のセッション(パターン E)のサブエージェントには効かないので、Codex のフックに `route.js` は登録しません。

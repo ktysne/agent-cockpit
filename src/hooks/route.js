@@ -168,10 +168,6 @@ function routeKeyForAgentType(agentType) {
   return null;
 }
 
-function isSelectedReviewRoute(route) {
-  return ROUTE_VALUES.has(route) && route !== 'default';
-}
-
 function effectiveRouteForSubagentStart(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || input.hook_event_name !== 'SubagentStart') return null;
   const routeKey = routeKeyForAgentType(input.agent_type);
@@ -182,9 +178,7 @@ function effectiveRouteForSubagentStart(input, options = {}) {
   const recordPath = routeRecordPath(input, homeDir);
   if (!recordPath) return null;
   const recordedRoute = readRouteRecordValue(recordPath, fileSystem);
-  const route = recordedRoute || readRouting(homeDir, fileSystem, options.readRetryOptions)?.[routeKey] || null;
-  if (routeKey === 'review' && !isSelectedReviewRoute(route)) return null;
-  return route;
+  return recordedRoute || readRouting(homeDir, fileSystem, options.readRetryOptions)?.[routeKey] || null;
 }
 
 function outputForRoute(input, options = {}) {
@@ -210,11 +204,9 @@ function outputForRoute(input, options = {}) {
     if (!recordPath) return null;
     // 再開や SubagentStop の後の続きでも初回の経路を保つため、既にある記録は上書きせず、終了時にも消さない。
     let route = readRouteRecord(recordPath, fileSystem);
-    if (routeKey === 'review' && route && !isSelectedReviewRoute(route)) return null;
     if (!route) {
       const routing = readRouting(homeDir, fileSystem, options.readRetryOptions);
       route = routing?.[routeKey];
-      if (routeKey === 'review' && !isSelectedReviewRoute(route)) return null;
       if (!routing || !writeRouteRecord(recordPath, route, fileSystem)) return null;
     }
     if (route === 'claude') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT } };

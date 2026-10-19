@@ -77,7 +77,7 @@ test('SubagentStart は bridge の窓口種別ごとに経路を記録して差�
   }
 });
 
-test('codex-review は review 経路に従い、Claude の agents 設定でも Codex 起動を拒否しない', async (t) => {
+test('codex-review は review 経路に従い、既定も記録して Claude の agents 設定では Codex 起動を拒否しない', async (t) => {
   const homeDir = await temporaryHome(t, { agents: 'claude', review: 'codex' });
   const start = { hook_event_name: 'SubagentStart', session_id: 'session-review', agent_id: 'agent-codex-review', agent_type: 'codex-review' };
   assert.deepEqual(outputForRoute(start, { homeDir }), {
@@ -103,11 +103,30 @@ test('codex-review は review 経路に従い、Claude の agents 設定でも C
     await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify(routing));
     const unsetReviewStart = { ...start, agent_id: `agent-review-default-${index}` };
     assert.equal(outputForRoute(unsetReviewStart, { homeDir }), null);
-    assert.equal(effectiveRouteForSubagentStart(unsetReviewStart, { homeDir }), null);
+    assert.equal(effectiveRouteForSubagentStart(unsetReviewStart, { homeDir }), 'default');
     const recordPath = path.join(homeDir, 'route-agents',
       `${Buffer.from(unsetReviewStart.session_id).toString('hex')}.${Buffer.from(unsetReviewStart.agent_id).toString('hex')}.json`);
-    await assert.rejects(fs.access(recordPath), { code: 'ENOENT' });
+    assert.deepEqual(JSON.parse(await fs.readFile(recordPath, 'utf8')), { route: 'default' });
   }
+});
+
+test('既定で開始した codex-review は Claude に設定を変えて再開しても Codex 待機を拒否しない', async (t) => {
+  const homeDir = await temporaryHome(t, { agents: 'claude', review: 'default' });
+  const start = { hook_event_name: 'SubagentStart', session_id: 'session-review-resume', agent_id: 'agent-review-resume', agent_type: 'codex-review' };
+  assert.equal(outputForRoute(start, { homeDir }), null);
+  assert.equal(effectiveRouteForSubagentStart(start, { homeDir }), 'default');
+
+  const recordPath = path.join(homeDir, 'route-agents',
+    `${Buffer.from(start.session_id).toString('hex')}.${Buffer.from(start.agent_id).toString('hex')}.json`);
+  assert.deepEqual(JSON.parse(await fs.readFile(recordPath, 'utf8')), { route: 'default' });
+  await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'claude', review: 'claude' }));
+
+  assert.equal(outputForRoute(start, { homeDir }), null);
+  assert.equal(effectiveRouteForSubagentStart(start, { homeDir }), 'default');
+  assert.equal(outputForRoute({
+    ...start, hook_event_name: 'PreToolUse', tool_name: 'Bash',
+    tool_input: { command: 'bash ~/.claude/tools/codex-agent.sh --wait codex-review-run' },
+  }, { homeDir }), null);
 });
 
 test('対象外の agent_type は経路記録、差し込み、codex-agent.sh の拒否の対象外にする', async (t) => {

@@ -804,8 +804,8 @@ bridge が無ければ `route` を送らない。
 画面は起動時の値と現在値が異なる稼働中の行に「変更前」を表示する。
 
 同期フック `route.js` は `impl-hard`、`impl-standard`、`impl-light`、`codex-subagent` の開始時に `agents` の値を `route-agents/` へ記録し、`codex-review` の開始時には `review` の値を記録する。
-`codex-review` の `review` が `default` または取得できない値なら、記録も差し込みもしない。
-対象の開始時に Codex か Claude が選ばれていれば、値を `additionalContext` へ差し込む。
+どちらも `default` を含めて開始時の値を記録する。
+Codex または Claude が選ばれていれば、値に対応する文脈を `additionalContext` へ差し込む。`default` は記録だけを行い、差し込みも拒否もしない。
 そのほかの agent_type は記録も差し込みもしない。
 記録名は session ID と agent ID を小文字の 16 進数文字列にして作り、一時ファイルから rename して保存する。
 `PreToolUse` はこの記録を参照するため、起動後に設定を変えても稼働中の経路は変わらない。
@@ -817,7 +817,7 @@ bridge が無ければ `route` を送らない。
 
 同期フックは `routing.json` の読み取りエラーを数回再試行し、合計 200ms 未満で打ち切る。それでも読めなければ `SubagentStart` に応答せず、`route-agents/` に経路記録を作らない。
 `review` の値は ai-cross-review がレビューを回す直前に `node tools/cross-review.js route` で読む。
-`codex-review` の起動時にも同じ値を使い、`default` では agent-cockpit から差し込まない。
+`codex-review` は開始時の値を記録し、`default` では agent-cockpit から文脈を差し込まない。
 
 サブエージェントの経路は claude-codex-bridge の `codex-agent.sh` があるときだけ意味を持つ。`GET /api/state` は Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)か `~/.claude` のどちらかに `tools/codex-agent.sh` があるかを `integrations.codexAgent` で返し、画面は無ければサブエージェントの段と経路の札を出さない。`route.js` も同じ場所を確かめ、無ければ `SubagentStart` で何も差し込まない。`~/.claude` も見るのは、bridge が `CLAUDE_CONFIG_DIR` を見ずに `~/.claude/tools/` へ置く作りだからである。
 クロスレビューの経路は ai-cross-review を使うリポジトリでだけ意味を持つ。`GET /api/state` は、稼働中のセッション(セッションファイルの `cwd`)と PR を登録したセッション(登録の記録の `cwd`)から worktree の根を探し、そのどれかに `tools/cross-review.js` があるかを `integrations.crossReview` で返す。セッションファイルが読めない環境でも、PR の登録があれば判定できる。判定は、各 `cwd` から親へ上って見つかる worktree の根に `tools/cross-review.js` があるかで行う。画面は偽ならクロスレビューの段を出さず、2 つの連携がどちらも無ければ経路の欄を出さない。
