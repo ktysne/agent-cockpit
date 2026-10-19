@@ -2011,6 +2011,7 @@ class PullRequestTracker {
     }
     this.crossReviewByRepository.set(key, crossReviewByNumber);
     removeStaleProductViews(this.productViews, key, createdIdentities);
+    this.state.touch();
   }
 
   inFlightSignature() {
