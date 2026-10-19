@@ -452,6 +452,9 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   .task .line { flex-wrap: wrap; }
 }
 .app-icon { width: 28px; height: 28px; flex: none; }
+.xr-conflict { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.xr-conflict ul { margin: 0; padding-left: 20px; }
+.xr-conflict p { margin: 6px 0 0; }
 </style>
 </head>
 <body>
@@ -728,6 +731,11 @@ const DATA = {
           xr: { round: 2, reviewedSha: '5c8e1d0', dismissed: 1, triage: { round: 1, sha: '2f7a9c3', outcome: 'fixing' } } },
         { number: 143, title: '読み込み結果のプレビュー表示', head: 'feat/score-preview', base: 'feat/session-score-import', sha: 'e04f8aa', ci: 'pass', review: 'required', conflict: false, draft: true,
           xr: null },
+        { number: 144, title: 'レビュー記録の競合を確認する', head: 'feat/review-conflict', base: 'main', sha: 'f657abc', ci: 'pass', review: 'approved', conflict: false, draft: false,
+          xr: { round: 2, reviewedSha: 'f657abc', dismissed: 0, triage: { round: 2, sha: 'f657abc', outcome: 'halted' }, conflict: [
+            { worktree: 'D:/Develop/rec-studio/.claude/worktrees/current', round: 2, sha: 'f657abc', outcome: 'halted' },
+            { worktree: 'D:/Develop/rec-studio/.claude/worktrees/old', round: 1, sha: 'f657abc', outcome: 'converged' },
+          ] } },
       ],
       extraSessions: [
         {
@@ -2306,13 +2314,13 @@ const CROSS_REVIEW_MAX_ROUNDS = 3;
 function convergedAtHead(pr) {
   const review = pr.xr;
   const triage = review?.triage;
-  return Number.isSafeInteger(review?.round) && triage?.round === review.round &&
+  return !review?.conflict?.length && Number.isSafeInteger(review?.round) && triage?.round === review.round &&
     triage.outcome === 'converged' && triage.sha === pr.sha;
 }
 
 function pushedAfterConvergence(pr) {
   const triage = pr.xr?.triage;
-  return triage?.outcome === 'converged' && triage.sha !== pr.sha;
+  return !pr.xr?.conflict?.length && triage?.outcome === 'converged' && triage.sha !== pr.sha;
 }
 
 // 未収束の往復状態を優先し、収束済みなら収束 SHA、それ以外の比較可能な記録なら reviewed SHA を現在の head と比べる。
@@ -2320,6 +2328,7 @@ function crossReviewState(pr) {
   if (pr.xr === undefined) return { cls: 'mute', text: '', warn: null };
   if (pr.xr?.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null };
   if (!pr.xr) return { cls: 'warn', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  if (pr.xr.conflict?.length) return { cls: 'warn', text: '記録が食い違う', warn: 'クロスレビューの記録が食い違う' };
   if (pr.xr.unavailable === true) return { cls: 'warn', text: '状態を確認できない', warn: 'クロスレビューの状態を確認できない' };
   const t = pr.xr.triage && pr.xr.triage.round <= pr.xr.round ? pr.xr.triage : null;
   if (t && pr.xr.round > t.round) return { cls: 'warn', text: `${pr.xr.round} 往復目の結論待ち`, warn: `クロスレビューの ${pr.xr.round} 往復目の結論がまだ出ていない` };
@@ -2333,6 +2342,16 @@ function crossReviewState(pr) {
   }
   if (pr.xr.reviewedSha !== pr.sha) return { cls: 'warn', text: `レビューの後に変更あり (レビュー済み ${pr.xr.reviewedSha})`, warn: `head ${pr.sha} はクロスレビューの後に変更されている (レビュー済みは ${pr.xr.reviewedSha})` };
   return { cls: 'mute', text: 'この head をレビューに回した', warn: null };
+}
+
+function crossReviewConflictDetails(p, pr) {
+  if (!pr.xr?.conflict?.length) return '';
+  const labels = { halted: '開発者の判断待ち', fixing: '指摘の対応中', 'in-progress': '結論待ち', converged: '収束' };
+  const skipped = pr.xr.notRequired === true || ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha;
+  const sources = pr.xr.conflict.map(record => `<li><code>${esc(record.worktree)}</code> / ${esc(record.round)} 往復目 / <code>${esc(record.sha.slice(0, 7))}</code> / ${esc(labels[record.outcome] || record.outcome)}</li>`).join('');
+  return `<div class="xr-conflict"><ul>${sources}</ul><p>${skipped
+    ? 'レビュー不要として確定済みです。記録元の食い違いは残っています。'
+    : '古い worktree の記録を消すか、レビュー不要として確定してください'}</p></div>`;
 }
 
 function crossReviewLine(p, pr) {
@@ -2466,6 +2485,7 @@ function crossReviewSettled(p, pr) {
 function crossReviewWaitReason(p, pr) {
   const review = pr.xr;
   if (review?.notRequired === true || ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha) return null;
+  if (review?.conflict?.length) return 'クロスレビューの記録が食い違う';
   if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
   if (!review) return 'クロスレビュー未実施';
 
@@ -2479,7 +2499,8 @@ function crossReviewWaitReason(p, pr) {
 
 function reservationWaitReasons(p, pr, method = null) {
   const waiting = [];
-  if (pr.xr?.notRequired === true || !convergedAtHead(pr)) waiting.push(pushedAfterConvergence(pr)
+  if (pr.xr?.conflict?.length) waiting.push('クロスレビューの記録が食い違う');
+  else if (pr.xr?.notRequired === true || !convergedAtHead(pr)) waiting.push(pushedAfterConvergence(pr)
     ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
   if (pr.ci !== 'pass') waiting.push((CI_LABELS[pr.ci] || CI_LABELS.unknown).wait);
   const blocker = mergeOperationBlocker(p, pr);
@@ -2750,6 +2771,7 @@ function prItem(p, pr, showOriginBands = true) {
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${queued ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : mergeInProgress ? '<span class="badge accent">マージ処理中 (未マージ)</span>' : ''}${prBadges(p, pr)}</div>
     ${crossReviewLine(p, pr)}
+    ${pr.xr?.conflict?.length ? crossReviewConflictDetails(p, pr) : ''}
     ${rsv ? `<div class="badges"><span class="badge accent long">レビュー収束後にマージ予約中 (${METHOD_LABEL[rsv.method]}、予約時 ${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))}、${esc(reservationWait(p, pr, rsv.method).join('、'))})</span>
       <button type="button" class="link-btn" data-ready-merge="${k}">モック: 待機条件を満たす</button></div>` : ''}
     ${operationBlocker && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(operationBlocker)}

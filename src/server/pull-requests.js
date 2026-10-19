@@ -976,29 +976,29 @@ function listWorktrees(root, execFileImpl = execFile) {
 // PR は登録したセッションとは別の worktree で作られることがあり、フックの cwd はコマンド中の cd を反映しないため、
 // ほかの worktree の状態ファイルも候補にする。スタックを 1 つの worktree で積むと下の段のブランチはどこにもチェックアウトされないので、
 // チェックアウトしていない worktree は、そのブランチの記録を持つときだけ候補にする。読めない worktree で記録なしの表示を上書きしないため。
-async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, options = {}) {
+async function collectCrossReviewStatesAcrossWorktrees(registration, pullRequest, options = {}) {
   const fileSystem = options.fileSystem || fs;
-  let selected = await readCrossReviewState(registration, pullRequest, options);
+  const review = await readCrossReviewState(registration, pullRequest, options);
+  const { root } = await findWorktreeRoot(registration.cwd, fileSystem);
+  const candidates = [{ worktree: root || registration.cwd || '', review }];
   const branch = pullRequest?.headRefName;
-  if (selected === undefined || !branch) return selected;
-  if (selected?.reason === 'repository-mismatch') {
+  if (review === undefined || !branch) return candidates;
+  if (review?.reason === 'repository-mismatch') {
     const checkedRoots = new Set();
-    let matchingReview;
+    const matchingCandidates = [];
     for (const record of options.registrations || []) {
       if (!sameGitHubRepository(record, registration)) continue;
-      const root = await matchingRepositoryCheckout(record.cwd, registration, options);
-      if (!root || checkedRoots.has(root)) continue;
-      checkedRoots.add(root);
-      const candidate = await readCrossReviewStateAcrossWorktrees({ ...registration, cwd: root }, pullRequest, {
+      const checkout = await matchingRepositoryCheckout(record.cwd, registration, options);
+      if (!checkout || checkedRoots.has(checkout)) continue;
+      checkedRoots.add(checkout);
+      matchingCandidates.push(...await collectCrossReviewStatesAcrossWorktrees({ ...registration, cwd: checkout }, pullRequest, {
         ...options, registrations: [], requireMatchingRepository: true,
-      });
-      if (candidate?.reason === 'repository-mismatch') continue;
-      if (shouldReplaceCrossReview(matchingReview, candidate, pullRequest.headRefOid)) matchingReview = candidate;
+      }));
     }
-    return matchingReview === undefined ? selected : matchingReview;
+    const matching = matchingCandidates.filter(candidate => candidate.review?.reason !== 'repository-mismatch');
+    return matching.length ? matching : candidates;
   }
-  const { root } = await findWorktreeRoot(registration.cwd, fileSystem);
-  if (!root) return selected;
+  if (!root) return candidates;
   const sameRoot = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
   let cwdMissing = false;
   try {
@@ -1013,38 +1013,77 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
     if (candidate?.reason === 'repository-mismatch') continue;
     const hasRecord = Number.isSafeInteger(candidate?.round);
     if (worktree.branch !== branch && !hasRecord) continue;
-    if (shouldReplaceCrossReview(selected, candidate, pullRequest.headRefOid)) selected = candidate;
+    candidates.push({ worktree: worktree.path, review: candidate });
   }
-  return selected;
+  return candidates;
 }
 
-// レビュー記録、未実施、確認不能、道具なしの順で選ぶ(理由は docs/design/server.md の「PR の表示」)。
-// 同じ優先度なら今の head で収束した記録、次に今の head をレビューした記録を優先する。
-function shouldReplaceCrossReview(current, candidate, headSha) {
+async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, options = {}) {
+  const candidates = await collectCrossReviewStatesAcrossWorktrees(registration, pullRequest, options);
+  if (options.candidates) {
+    options.candidates.push(...candidates);
+    return undefined;
+  }
+  return selectCrossReview(candidates, pullRequest.headRefOid);
+}
+
+/** 今の head に対する往復の結論を分類する。 */
+function classifyReviewAtHead(review, headSha) {
+  if (!isCompleteCommitSha(headSha)) return 'stale';
+  const head = headSha.toLowerCase();
+  const triage = review?.triage;
+  if (triage?.round === review?.round) {
+    return triage?.sha?.toLowerCase() === head && ['converged', 'halted', 'fixing'].includes(triage.outcome)
+      ? triage.outcome : 'stale';
+  }
+  return review?.reviewedSha?.toLowerCase() === head ? 'in-progress' : 'stale';
+}
+
+function selectCrossReview(candidates, headSha) {
+  const pathKey = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
+  const comparePath = (left, right) => left < right ? -1 : left > right ? 1 : 0;
   const priority = (review) => review === undefined ? 0
     : review?.notRequired === true ? 1 : review === null ? 3 : review?.unavailable === true ? 2 : 4;
-  const currentPriority = priority(current);
-  const candidatePriority = priority(candidate);
-  if (candidatePriority !== currentPriority) return candidatePriority > currentPriority;
-  if (!current || !candidate || current.notRequired === true || candidate.notRequired === true
-    || !Number.isSafeInteger(current.round) || !Number.isSafeInteger(candidate.round)) return false;
-  const head = String(headSha || '').toLowerCase();
-  const convergedAtHead = (review) => review.triage?.round === review.round && review.triage.outcome === 'converged' &&
-    review.triage.sha === head.toLowerCase();
-  if (convergedAtHead(current) !== convergedAtHead(candidate)) return convergedAtHead(candidate);
-  return current.reviewedSha !== headSha;
+  const unique = new Map();
+  for (const candidate of candidates) {
+    const key = pathKey(candidate.worktree);
+    const current = unique.get(key);
+    if (!current || priority(candidate.review) > priority(current.review)) unique.set(key, candidate);
+  }
+  const entries = [...unique.values()].map(candidate => ({
+    ...candidate, outcome: classifyReviewAtHead(candidate.review, headSha),
+  }));
+  const converged = entries.filter(entry => entry.outcome === 'converged');
+  const conflicting = converged.length > 0 && entries.some(entry =>
+    ['halted', 'fixing'].includes(entry.outcome) || entry.outcome === 'in-progress'
+      && converged.some(done => entry.review.round > done.review.triage.round));
+  const outcomePriority = conflicting
+    ? { halted: 4, fixing: 3, 'in-progress': 2, converged: 1, stale: 0 }
+    : { converged: 2, halted: 1, fixing: 1, 'in-progress': 1, stale: 0 };
+  entries.sort((left, right) => priority(right.review) - priority(left.review)
+    || outcomePriority[right.outcome] - outcomePriority[left.outcome]
+    || (right.review?.round || 0) - (left.review?.round || 0)
+    || comparePath(pathKey(left.worktree), pathKey(right.worktree))
+    || comparePath(left.worktree, right.worktree));
+  const selected = entries[0]?.review;
+  if (!conflicting) return selected;
+  const conflict = entries.filter(entry => entry.outcome !== 'stale').map(({ worktree, review, outcome }) => ({
+    worktree, round: review.round,
+    sha: outcome === 'in-progress' ? review.reviewedSha : review.triage.sha,
+    outcome,
+  }));
+  return { ...selected, conflict };
 }
 
 function crossReviewConvergedAtHead(pullRequest) {
   if (pullRequest.crossReview?.notRequired === true) return true;
   const review = pullRequest.crossReview;
-  const triage = review?.triage && review.triage.round === review.round ? review.triage : null;
-  return triage?.outcome === 'converged' && isCompleteCommitSha(pullRequest.headRefOid) && isCompleteCommitSha(triage.sha) &&
-    triage.sha.toLowerCase() === pullRequest.headRefOid.toLowerCase();
+  return !review?.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'converged';
 }
 
 function crossReviewWaitReason(review, headSha) {
   if (review?.notRequired === true) return null;
+  if (review?.conflict?.length) return 'クロスレビューの記録が食い違う';
   if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
   if (!review) return 'クロスレビュー未実施';
 
@@ -1958,12 +1997,16 @@ class PullRequestTracker {
     const baseAncestorCache = new Map();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
+    const candidatesByNumber = new Map();
     this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);
     for (const registration of registrations) {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
       if (!pullRequest) continue;
+      const candidates = candidatesByNumber.get(registration.number) || [];
+      candidatesByNumber.set(registration.number, candidates);
+      const collected = [];
       const review = await this.readCrossReviewState(registration, pullRequest, {
-        registrations,
+        registrations, candidates: collected,
         fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache,
         observeReview: (record, result) => {
           const key = `${repositoryKey(owner, repo)}:${record.number}:${record.cwd}`;
@@ -1974,9 +2017,12 @@ class PullRequestTracker {
             { repository: safeRepo(owner, repo), number: record.number, session: record.session_id?.slice(0, 8), ...result });
         },
       });
-      const current = crossReviewByNumber.get(registration.number);
-      if (crossReviewByNumber.has(registration.number) && !shouldReplaceCrossReview(current, review, pullRequest.headRefOid)) continue;
-      crossReviewByNumber.set(registration.number, review && (review.notRequired
+      candidates.push(...(collected.length ? collected : [{ worktree: registration.cwd || '', review }]));
+    }
+    for (const [number, candidates] of candidatesByNumber) {
+      const pullRequest = repositoryState.openPullRequests.find(candidate => candidate.number === number);
+      const review = selectCrossReview(candidates, pullRequest.headRefOid);
+      crossReviewByNumber.set(number, review && (review.notRequired
         ? { notRequired: true, source: review.source }
         : review.unavailable
           ? { unavailable: true }
@@ -1986,15 +2032,17 @@ class PullRequestTracker {
           dismissed: review.dismissed,
           reviewedSha: review.reviewedSha,
           triage: review.triage,
+          ...(review.conflict ? { conflict: review.conflict } : {}),
         }));
     }
     for (const [number, review] of crossReviewByNumber) {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === number);
       const skip = this.state.crossReviewSkip?.(owner, repo, number);
       if (skip?.headRefOid !== pullRequest.headRefOid.toLowerCase()) continue;
-      const converged = review?.triage?.round === review?.round && review?.triage?.outcome === 'converged'
-        && review.triage.sha === pullRequest.headRefOid.toLowerCase();
-      if (!converged) crossReviewByNumber.set(number, { notRequired: true, source: 'recorded', reason: skip.reason });
+      const converged = !review?.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'converged';
+      if (!converged) crossReviewByNumber.set(number, { notRequired: true, source: 'recorded', reason: skip.reason,
+        ...(review?.conflict ? { conflict: review.conflict } : {}),
+      });
     }
     for (const [productKey, group] of productGroups) {
       const assembled = assemblePullRequestStacks({
@@ -2166,6 +2214,7 @@ module.exports = {
   matchingRepositoryCheckout,
   listWorktrees,
   gitRemotes,
+  classifyReviewAtHead,
   crossReviewConvergedAtHead,
   crossReviewWaitReason,
   runGh,

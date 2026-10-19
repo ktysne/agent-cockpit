@@ -710,6 +710,7 @@ class PullRequestMergeManager {
     if (!candidate?.repository?.listAvailable || !candidate.repository.configAvailable || !pullRequest) return waiting('repository-unavailable');
     const review = pullRequest.crossReview;
     const triage = review?.triage;
+    if (review?.conflict?.length) return waiting('review-conflict');
     if (triage?.outcome === 'halted' && triage.round === review.round) {
       waiting('review-halted');
       return { halted: true };

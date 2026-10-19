@@ -432,6 +432,9 @@ h3.sub .count { font-weight: normal; }
 .verify-steps { margin: 0; padding-left: 1.6em; display: grid; gap: 6px; font-size: 13px; }
 .verify-steps .why { display: block; color: var(--text-2); font-size: 12px; }
 .worktree-links { display: inline-flex; gap: 10px; }
+.xr-conflict { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.xr-conflict ul { margin: 0; padding-left: 20px; }
+.xr-conflict p { margin: 6px 0 0; }
 </style>
 </head>
 <body>
@@ -2092,14 +2095,14 @@ function convergedAtHead(pullRequest) {
   const review = pullRequest.crossReview;
   const triage = review?.triage;
   const head = pullRequest.headRefOid;
-  return Number.isSafeInteger(review?.round) && triage?.round === review.round && triage.outcome === 'converged' &&
+  return !review?.conflict?.length && Number.isSafeInteger(review?.round) && triage?.round === review.round && triage.outcome === 'converged' &&
     isCompleteCommitSha(triage.sha) && isCompleteCommitSha(head) && triage.sha.toLowerCase() === head.toLowerCase();
 }
 
 function pushedAfterConvergence(pullRequest) {
   const triage = pullRequest.crossReview?.triage;
   const head = pullRequest.headRefOid;
-  return triage?.outcome === 'converged' && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(head) &&
+  return !pullRequest.crossReview?.conflict?.length && triage?.outcome === 'converged' && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(head) &&
     triage.sha.toLowerCase() !== head.toLowerCase();
 }
 
@@ -2112,6 +2115,7 @@ function pullRequestCrossReviewSettled(pullRequest) {
 function pullRequestCrossReviewWaitReason(pullRequest) {
   const review = pullRequest.crossReview;
   if (review?.notRequired === true) return null;
+  if (review?.conflict?.length) return 'クロスレビューの記録が食い違う';
   if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
   if (!review) return 'クロスレビュー未実施';
 
@@ -2136,7 +2140,9 @@ function pullRequestMergeConditionWaits(pullRequest) {
 
 function pullRequestReservationWaitReasons(pullRequest, group = null, method = null) {
   const waiting = [];
-  if (pullRequest.crossReview?.notRequired === true || !convergedAtHead(pullRequest)) {
+  if (pullRequest.crossReview?.conflict?.length) {
+    waiting.push('クロスレビューの記録が食い違う');
+  } else if (pullRequest.crossReview?.notRequired === true || !convergedAtHead(pullRequest)) {
     waiting.push(pushedAfterConvergence(pullRequest) ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
   }
   if (pullRequest.ci !== 'pass') waiting.push((CI_LABELS[pullRequest.ci] || CI_LABELS.unknown).wait);
@@ -2185,6 +2191,7 @@ function crossReviewState(pullRequest) {
   if (review === undefined) return { cls: 'mute', text: '', warn: null };
   if (review === null) return { cls: 'warn', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
   if (review.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null };
+  if (review.conflict?.length) return { cls: 'warn', text: '記録が食い違う', warn: 'クロスレビューの記録が食い違う' };
   if (review.unavailable === true) return { cls: 'warn', text: '状態を確認できない', warn: 'クロスレビューの状態を確認できない' };
   const triage = review.triage && review.triage.round <= review.round ? review.triage : null;
   if (triage && review.round > triage.round) return { cls: 'warn', text: `${review.round} 往復目の結論待ち`, warn: `クロスレビューの ${review.round} 往復目の結論がまだ出ていない` };
@@ -2219,6 +2226,22 @@ function crossReviewState(pullRequest) {
     };
   }
   return { cls: 'mute', text: 'この head をレビューに回した', warn: null };
+}
+
+function crossReviewConflictDetails(review) {
+  const details = element('div', 'xr-conflict');
+  const sources = element('ul');
+  const labels = { halted: '開発者の判断待ち', fixing: '指摘の対応中', 'in-progress': '結論待ち', converged: '収束' };
+  for (const record of review.conflict) {
+    const source = element('li');
+    source.append(element('code', '', record.worktree), document.createTextNode(` / ${record.round} 往復目 / `),
+      shortShaElement(record.sha), document.createTextNode(` / ${labels[record.outcome] || record.outcome}`));
+    sources.append(source);
+  }
+  details.append(sources, element('p', '', review.notRequired === true
+    ? 'レビュー不要として確定済みです。記録元の食い違いは残っています。'
+    : '古い worktree の記録を消すか、レビュー不要として確定してください'));
+  return details;
 }
 
 function crossReviewLine(pullRequest) {
@@ -2595,6 +2618,7 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   }
   text.append(badges);
   if (pullRequest.crossReview !== undefined) text.append(crossReviewLine(pullRequest));
+  if (pullRequest.crossReview?.conflict?.length) text.append(crossReviewConflictDetails(pullRequest.crossReview));
   // クロスレビューの行が黄の札で同じ待ちを示すときは、待ちの行から外して二重に出さない。
   const crossReviewShownAsWait = pullRequest.crossReview !== undefined && crossReviewState(pullRequest).cls === 'warn';
   const shownWaits = crossReviewShownAsWait
