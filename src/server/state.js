@@ -1972,13 +1972,13 @@ class DashboardState {
   }
 
   // Claude の PreToolUse は非同期のフックで、子の Codex のイベントより後に届くことがある。
-  // 起動の時刻以降に始まった独立の thread を委譲に直し、起動より前に始まった thread は直さない。
-  reclassifyDelegatedThreads(parentSessionId, launchedAt) {
+  // 起動から終了までに始まった独立の thread だけを委譲に直す。
+  reclassifyDelegatedThreads(parentSessionId, launchedAt, endedAt = Infinity) {
     let changed = false;
     for (const [threadId, entries] of this.entries) {
       const first = entries[0]?.event;
       if (first?.provider !== 'codex' || first.delegatedFrom || first.claudeParentSessionId !== parentSessionId ||
-        first.hookAt < launchedAt) continue;
+        first.hookAt < launchedAt || first.hookAt > endedAt) continue;
       this.entries.delegate(threadId, parentSessionId);
       changed = this.sessions.delete(threadId) || changed;
       if (this.codexRecovery.delete(threadId)) this.requestStoreWrite();
@@ -2187,7 +2187,8 @@ class DashboardState {
     const endedByAbsenceAt = this.endedByAbsence.get(event.session_id);
     if (endedByAbsenceAt !== undefined && event.hookAt <= endedByAbsenceAt) return rejected('absent-stale', true);
 
-    const before = stableStringify(this.sessions.get(event.session_id) ?? null);
+    const previousSession = this.sessions.get(event.session_id);
+    const before = stableStringify(previousSession ?? null);
     const wasHidden = this.hiddenSessions.delete(event.session_id);
     if (wasHidden) this.hiddenSessionUpdatedAt.delete(event.session_id);
     if (endedAt !== undefined) {
@@ -2241,8 +2242,19 @@ class DashboardState {
     // 許可確認はターンの確定を待たずに優先して出るので、確認中と許可待ちでも残す。
     const derivedStatus = nextSessions[0]?.status;
     const hadEstimate = !['不明', '許可確認中', '許可待ち'].includes(derivedStatus) && this.estimates.delete(event.session_id);
-    const reclassifiedDelegatedThread = event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition
+    let reclassifiedDelegatedThread = event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition
       ? this.reclassifyDelegatedThreads(event.session_id, event.hookAt) : false;
+    if (event.provider === 'claude' && previousSession?.codexLaunches) {
+      const previousLaunchIds = new Set(previousSession.codexLaunches.map((launch) => launch.agent_id));
+      const launches = nextSessions[0]?.codexLaunches || [];
+      for (const launch of launches) {
+        if (previousLaunchIds.has(launch.agent_id)) continue;
+        const endedAt = launch.resultReceived || !(launch.active || launch.unconfirmed)
+          ? launch.endedAt ?? event.hookAt : Infinity;
+        reclassifiedDelegatedThread = this.reclassifyDelegatedThreads(event.session_id, Date.parse(launch.startedAt), endedAt)
+          || reclassifiedDelegatedThread;
+      }
+    }
 
     const ended = event.hook_event_name === 'SessionEnd' && nextSessions.length === 0;
     if (ended) {
