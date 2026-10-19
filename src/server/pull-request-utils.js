@@ -194,12 +194,21 @@ const HERE_DOCUMENT_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 // 標準入力をスクリプトとして読むシェルでは、ヒアドキュメントの本文が実行されるコマンドになる。
 function readsScriptFromStandardInput(segment) {
   const words = commandWords(segment);
-  return HERE_DOCUMENT_SHELLS.has(words[0]) &&
-    words.slice(1).every((word) => word.startsWith('-') && !/^-[^-]*c/.test(word));
+  if (!HERE_DOCUMENT_SHELLS.has(words[0])) return false;
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index];
+    if (/^[-+][^-]*c/.test(word)) return false;
+    // -s と -- の後ろは位置引数で、スクリプトは標準入力から読む。
+    if (word === '--' || /^-[^-]*s/.test(word)) return true;
+    if (/^[-+][oO]$/.test(word)) index += 1;
+    else if (!/^[-+]/.test(word)) return false;
+  }
+  return true;
 }
 
 function insideArithmetic(segment) {
-  return (segment.match(/\(\(/g) || []).length > (segment.match(/\)\)/g) || []).length;
+  const unquoted = segment.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, '');
+  return (unquoted.match(/\(\(/g) || []).length > (unquoted.match(/\)\)/g) || []).length;
 }
 
 function bashHereDocumentAt(command, start) {
