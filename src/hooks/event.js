@@ -577,9 +577,10 @@ async function postEvent(event, options = {}) {
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   event.diagnostics ||= [];
   const startServer = options.startServer || ((args) => launchServer(args));
-  const deadline = options.deadline || Date.now() + HOOK_TIMEOUT_MS;
+  const now = options.now || Date.now;
+  const deadline = options.deadline || now() + HOOK_TIMEOUT_MS;
   // 期限切れのとき、常駐サーバーの確認と送信のどちらで時間を使ったかを診断記録に残す。
-  const startedAt = Date.now();
+  const startedAt = now();
   let ensureMs = options.ensureMs || 0;
   const ensure = options.ensureServerRunning || ensureServerRunning;
   const result = await postToServer('/api/events', event, {
@@ -593,13 +594,14 @@ async function postEvent(event, options = {}) {
     },
     environment: options.environment || process.env,
     deadline,
+    now,
     attemptTimeoutMs: 500,
     ensureServerRunning: async (args) => {
-      const ensureStartedAt = Date.now();
+      const ensureStartedAt = now();
       try {
         return await ensure(args);
       } finally {
-        ensureMs += Date.now() - ensureStartedAt;
+        ensureMs += now() - ensureStartedAt;
       }
     },
     readServerInfo: options.readServerInfo,
@@ -609,7 +611,7 @@ async function postEvent(event, options = {}) {
     ...(Object.hasOwn(options, 'initialInfo') ? { initialInfo: options.initialInfo } : {}),
   });
   if (!result.ok && result.status === null) {
-    const finishedAt = Date.now();
+    const finishedAt = now();
     await appendPendingHook(homeDir, { msg: 'hook.delivery', data: {
       failure: result.timedOut || finishedAt >= deadline ? 'timeout' : 'unreachable', at: new Date(finishedAt).toISOString(),
       event: event.hook_event_name, ensureMs, postMs: Math.max(0, finishedAt - startedAt - (ensureMs - (options.ensureMs || 0))),
@@ -660,7 +662,7 @@ async function runHook(input, options = {}) {
       ensureMs,
     });
   } else {
-    await postEvent(event, { ...options, homeDir });
+    await postEvent(event, { ...options, homeDir, now: options.clock });
   }
 
   return {

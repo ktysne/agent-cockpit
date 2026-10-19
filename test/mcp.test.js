@@ -404,6 +404,7 @@ test('委譲した thread への MCP 書き込みは記録不要と返し、そ�
 });
 
 test('時間切れの add_pr、skip_review、plan は結果未確認の文を isError で返す', async () => {
+  const nowValue = 100000;
   const calls = [
     ['cockpit_set_tasks', { tasks: [] }],
     ['cockpit_add_pr', { url: 'https://github.com/example/project/pull/45' }],
@@ -421,7 +422,8 @@ test('時間切れの add_pr、skip_review、plan は結果未確認の文を is
     }], {
       homeDir: 'C:\\temporary-cockpit',
       environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
-      deadline: Date.now() + 100,
+      now: () => nowValue,
+      deadline: nowValue + 100,
       ensureServerRunning: async () => {
         ensureCalls += 1;
         return { port: 49124, secret: 'test-secret' };

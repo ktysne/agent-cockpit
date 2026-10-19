@@ -164,7 +164,7 @@ function effectiveRouteForSubagentStart(input, options = {}) {
   const homeDir = cockpitHomeFromOptions(options);
   const recordPath = routeRecordPath(input, homeDir);
   if (!recordPath) return null;
-  return readRouteRecordValue(recordPath, fileSystem) || readRouting(homeDir, fileSystem)?.agents || null;
+  return readRouteRecordValue(recordPath, fileSystem) || readRouting(homeDir, fileSystem, options.readRetryOptions)?.agents || null;
 }
 
 function outputForRoute(input, options = {}) {
@@ -189,7 +189,7 @@ function outputForRoute(input, options = {}) {
     // 再開や SubagentStop の後の続きでも初回の経路を保つため、既にある記録は上書きせず、終了時にも消さない。
     let route = readRouteRecord(recordPath, fileSystem);
     if (!route) {
-      const routing = readRouting(homeDir, fileSystem);
+      const routing = readRouting(homeDir, fileSystem, options.readRetryOptions);
       if (!routing || !writeRouteRecord(recordPath, routing.agents, fileSystem)) return null;
       route = routing.agents;
     }

@@ -199,19 +199,9 @@ class DecisionAnswerDelivery {
     if (!event.questions.length || !this.state.addEvent(event)) return { awaiting: false, hookOutput: null };
     const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
     if (!decisionId) return { awaiting: false, hookOutput: null };
-    this.state.setDecisionLifecycle(sessionId, decisionId, {
-      answer: null,
-      state: null,
-      awaitingAnswerUntil: null,
-    }, createdAt);
     if (hasDuplicateQuestions({ questions: event.questions })) {
       this.releaseAskWaitsForDecision(sessionId, decisionId);
-      // 同じ値でも lifecycle の更新時刻、状態版、保存要求を更新する。
-      this.state.setDecisionLifecycle(sessionId, decisionId, {
-        answer: null,
-        awaitingAnswerUntil: null,
-        state: null,
-      }, createdAt);
+      this.state.deleteDecisionLifecycle(sessionId, decisionId);
       return { awaiting: false, hookOutput: null };
     }
     const answerWaitMs = typeof this.answerWaitMs === 'function' ? this.answerWaitMs() : this.answerWaitMs;
@@ -224,6 +214,7 @@ class DecisionAnswerDelivery {
       answer: null,
       awaitingAnswerUntil: new Date(deadline).toISOString(),
       state: null,
+      askToolUseId: toolUseId,
     }, createdAt);
     return { awaiting: true, decisionId, deadline, fallbackOutput: record.fallbackOutput };
   }
@@ -280,7 +271,7 @@ class DecisionAnswerDelivery {
     const decision = this.state.decisionFor(sessionId, record.decisionId);
     const at = new Date(this.now()).toISOString();
     if (currentOutcome === 'released') {
-      this.state.setDecisionLifecycle(sessionId, record.decisionId, { answer: null, awaitingAnswerUntil: null, state: null }, this.now());
+      this.state.deleteDecisionLifecycle(sessionId, record.decisionId);
       this.clearAskWait(record);
       record.result = { outcome: 'released', hookOutput: null };
       return record.result;
@@ -666,12 +657,10 @@ class DecisionAnswerDelivery {
     if (eventName === 'PreToolUse' && event.tool_name === 'AskUserQuestion' && toolUseId && !event.agent_id) {
       const key = keyFor(sessionId, toolUseId);
       const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
+      // 開始の送信と回答待ちの登録は別のフックなので、時刻の前後では同じ呼び出しかを決められない。
+      // 記録より古い開始は、別の呼び出しのものでも記録を消す根拠にならない。
       if (decisionId && !this.askWaits.has(key)) {
-        this.state.setDecisionLifecycle(sessionId, decisionId, {
-          answer: null,
-          state: null,
-          awaitingAnswerUntil: null,
-        }, this.now());
+        this.state.deleteDecisionLifecycle(sessionId, decisionId, { exceptAskToolUseId: toolUseId, updatedBefore: event.hookAt });
       }
       return;
     }

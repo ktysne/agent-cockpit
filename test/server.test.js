@@ -19,6 +19,16 @@ const startServer = options => startRealServer({ readSourceCommit: async () => n
 const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
+function storageFileSystem(overrides) {
+  return new Proxy(fs, {
+    get(target, property) {
+      if (Object.hasOwn(overrides, property)) return overrides[property];
+      const value = target[property];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 test('Claude の SessionStart と Stop の後にモデルを読み、読めないときは前の札を保つ', async (t) => {
   const state = new DashboardState();
   const reads = [];
@@ -1223,6 +1233,57 @@ async function runningServer(t, options = {}) {
   return server.runtime;
 }
 
+function askQuestionEvent(sessionId, hookAt) {
+  return { session_id: sessionId, hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'ask-1',
+    questions: [{ question: '形式を選んでください', header: '形式', options: [{ label: 'JSON', description: 'JSON形式' }] }], hookAt };
+}
+
+async function sendHookEvent(runtime, event) {
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event) });
+  assert.equal(response.status, 202);
+}
+
+function askDecision(runtime, sessionId) {
+  return runtime.state.decisionsFor(sessionId).find(decision => decision.source === 'ask');
+}
+
+test('/api/events は AskUserQuestion 後の区切りで却下された判断を withdrawn にする', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'withdraw-after-ask';
+  const hookAt = Date.now();
+  await sendHookEvent(runtime, askQuestionEvent(sessionId, hookAt));
+  await sendHookEvent(runtime, { session_id: sessionId, hook_event_name: 'Stop', hookAt: hookAt + 1 });
+  assert.equal(askDecision(runtime, sessionId).state, 'withdrawn');
+});
+
+test('/api/events は先行した区切りより古い質問を withdrawn にする', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'withdraw-before-ask';
+  const hookAt = Date.now();
+  await sendHookEvent(runtime, { session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: hookAt + 1 });
+  await sendHookEvent(runtime, askQuestionEvent(sessionId, hookAt));
+  assert.equal(askDecision(runtime, sessionId).state, 'withdrawn');
+});
+
+test('/api/events は離席解除で待ちが解放された質問を区切りで withdrawn にする', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'withdraw-released-ask';
+  const awayHeaders = uiHeaders(runtime.info);
+  await request(runtime.info.port, { method: 'POST', path: '/api/away', headers: awayHeaders, body: JSON.stringify({ enabled: true }) });
+  const registered = jsonBody(await request(runtime.info.port, { method: 'POST', path: '/api/hooks/answers',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify({ action: 'ask-register', event_name: 'PreToolUse',
+      session_id: sessionId, id: 'ask-1', tool_name: 'AskUserQuestion', questions: askQuestionEvent(sessionId, Date.now()).questions }) }));
+  assert.equal(registered.awaiting, true);
+  await request(runtime.info.port, { method: 'POST', path: '/api/away', headers: awayHeaders, body: JSON.stringify({ enabled: false }) });
+  const released = jsonBody(await request(runtime.info.port, { method: 'POST', path: '/api/hooks/answers',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify({ action: 'ask-finish', event_name: 'PreToolUse',
+      session_id: sessionId, id: 'ask-1', decision_id: registered.decisionId, outcome: 'released' }) }));
+  assert.equal(released.outcome, 'released');
+  await sendHookEvent(runtime, { session_id: sessionId, hook_event_name: 'Stop', hookAt: Date.now() + 1 });
+  assert.equal(askDecision(runtime, sessionId).state, 'withdrawn');
+});
+
 test('ファイル不在から24時間以内の再開では、前のツール表示を復元する', async (t) => {
   const runtime = await runningServer(t);
   const sessionId = 'absent-recent-resume';
@@ -2006,6 +2067,26 @@ test('複数の gh pr create は順番と推定した product でサーバーへ
   ]);
 });
 
+test('ヒアドキュメント本文の引用符の後で Bash の PR を登録し push を取り直す', async (t) => {
+  const calls = { fresh: [] };
+  const pullRequestTracker = { start() {}, close() {}, snapshot: () => [],
+    refreshRepo() { return Promise.resolve(); },
+    refreshRepoFresh(owner, repo) { calls.fresh.push(`${owner}/${repo}`); return Promise.resolve(); },
+    refreshAfterCommand() { return Promise.resolve(); } };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  const cwd = path.join(runtime.homeDir, 'bash-heredoc-product', '.claude', 'worktrees', 'session');
+  const command = "git commit -F - <<'EOF'\nfix today's thing\nEOF\ngit push && gh pr create --title t --body b";
+  const event = makeHookEvent({ session_id: 'bash-heredoc-pr', hook_event_name: 'PostToolUse', cwd,
+    tool_name: 'Bash', tool_use_id: 'create-heredoc', tool_input: { command },
+    tool_response: { stdout: 'https://github.com/example/project/pull/71' } });
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event) });
+
+  assert.equal(response.status, 202);
+  assert.ok(runtime.state.pullRequestRegistrations().some((record) => record.number === 71));
+  assert.deepEqual(calls.fresh, ['example/project']);
+});
+
 test('Bash の push は cwd の product に PR を登録したリポジトリだけを取り直す', async (t) => {
   const calls = { fresh: [], all: 0 };
   const pullRequestTracker = {
@@ -2124,6 +2205,22 @@ test('PowerShell の PostToolUse 自身の作成判定で PR を登録する', a
   assert.ok(registered);
   assert.equal(registered.cwd, cwd);
   assert.equal(registered.product.key, productFromCwd(cwd).key);
+});
+
+test('ヒア文字列本文の引用符に続く PowerShell の PR 作成を登録する', async (t) => {
+  const pullRequestTracker = { start() {}, close() {}, snapshot: () => [],
+    refreshRepo() { return Promise.resolve(); }, refreshAfterCommand() { return Promise.resolve(); } };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  const cwd = path.join(runtime.homeDir, 'powershell-heredoc-product', '.claude', 'worktrees', 'session');
+  const command = "@'\nfix today's thing\n'@ | gh pr create --title t --body-file -";
+  const event = makeHookEvent({ session_id: 'powershell-heredoc-pr', hook_event_name: 'PostToolUse', cwd,
+    tool_name: 'PowerShell', tool_use_id: 'create-heredoc', tool_input: { command },
+    tool_response: { stdout: 'https://github.com/example/project/pull/72' } });
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(runtime.info.secret), body: JSON.stringify(event) });
+
+  assert.equal(response.status, 202);
+  assert.ok(runtime.state.pullRequestRegistrations().some((record) => record.number === 72));
 });
 
 test('PowerShell の push は refreshScopeUnknown から全体を取り直す', async (t) => {
@@ -2762,6 +2859,122 @@ test('server.json は待ち受け成功後にだけ書く', async (t) => {
   const runtime = await starting;
   t.after(() => runtime.close());
   assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'server.json'), 'utf8')).port, runtime.info.port);
+});
+
+test('store.json を読み直しても EBUSY なら起動に失敗し、保存と server.json を保つ', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const storePath = path.join(homeDir, 'store.json');
+  const serverInfoPath = path.join(homeDir, 'server.json');
+  const storeContents = '{"version":1}';
+  const serverInfoContents = '{"previous":"server"}\n';
+  await fs.writeFile(storePath, storeContents);
+  await fs.writeFile(serverInfoPath, serverInfoContents);
+  const readFile = fs.readFile.bind(fs);
+  let attempts = 0;
+  const fileSystem = storageFileSystem({
+    readFile: async (filePath, ...args) => {
+      if (path.basename(filePath) === 'store.json') {
+        attempts += 1;
+        throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      }
+      return readFile(filePath, ...args);
+    },
+  });
+
+  await assert.rejects(startServer({ homeDir, claudeHome, port: 0, storageOptions: {
+    fileSystem, readRetryOptions: { retryDelaysMs: [0, 0] },
+  } }), (error) => error.code === 'EBUSY');
+
+  assert.equal(attempts, 3);
+  assert.equal(await fs.readFile(storePath, 'utf8'), storeContents);
+  assert.equal((await fs.readdir(homeDir)).some((name) => name.startsWith('store.json.broken-')), false);
+  assert.match(await fs.readFile(path.join(homeDir, 'server.log'), 'utf8'), /store\.json read failed \(EBUSY\)/);
+  assert.equal(await fs.readFile(serverInfoPath, 'utf8'), serverInfoContents);
+});
+
+test('store.json の一時的な EBUSY 後に記録を復元して起動する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const saved = new DashboardState({ homeDir });
+  saved.setTasks('recovered-session', [{ title: '保存済みタスク', state: 'doing', criteria: [{ text: '復元する', met: false }] }]);
+  await saved.flushPersistence();
+  const readFile = fs.readFile.bind(fs);
+  let attempts = 0;
+  const fileSystem = storageFileSystem({
+    readFile: async (filePath, ...args) => {
+      if (path.basename(filePath) === 'store.json' && attempts++ === 0) {
+        throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      }
+      return readFile(filePath, ...args);
+    },
+  });
+
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, storageOptions: {
+    fileSystem, readRetryOptions: { retryDelaysMs: [0] },
+  } });
+  t.after(() => runtime.close());
+
+  assert.equal(attempts, 2);
+  assert.equal(runtime.state.planSummary('recovered-session').tasks[0].title, '保存済みタスク');
+});
+
+test('壊れた store.json の退避に失敗すると起動に失敗する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const storePath = path.join(homeDir, 'store.json');
+  await fs.writeFile(storePath, '{invalid');
+  const rename = fs.rename.bind(fs);
+  const fileSystem = storageFileSystem({
+    rename: async (source, destination) => {
+      if (path.basename(source) === 'store.json') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return rename(source, destination);
+    },
+  });
+
+  await assert.rejects(startServer({ homeDir, claudeHome, port: 0, storageOptions: { fileSystem } }),
+    (error) => error.code === 'EACCES');
+
+  assert.equal(await fs.readFile(storePath, 'utf8'), '{invalid');
+  assert.equal((await fs.readdir(homeDir)).some((name) => name.startsWith('store.json.broken-')), false);
+  assert.match(await fs.readFile(path.join(homeDir, 'server.log'), 'utf8'), /store\.json quarantine failed \(EACCES\)/);
+});
+
+test('away.json の読み取りが続けて EBUSY なら起動に失敗し、壊れた JSON は既定値で起動する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const awayPath = path.join(homeDir, 'away.json');
+  await fs.writeFile(awayPath, JSON.stringify({ enabled: false, since: null, periods: [] }));
+  const readFile = fs.readFile.bind(fs);
+  const fileSystem = storageFileSystem({
+    readFile: async (filePath, ...args) => {
+      if (path.basename(filePath) === 'away.json') throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return readFile(filePath, ...args);
+    },
+  });
+
+  await assert.rejects(startServer({ homeDir, claudeHome, port: 0, storageOptions: {
+    fileSystem, readRetryOptions: { retryDelaysMs: [0, 0] },
+  } }), (error) => error.code === 'EBUSY');
+  assert.match(await fs.readFile(path.join(homeDir, 'server.log'), 'utf8'), /away\.json read failed \(EBUSY\)/);
+
+  await fs.writeFile(awayPath, '{invalid');
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+  assert.deepEqual(runtime.away.snapshot(), { enabled: false, since: null, periods: [] });
+});
+
+test('routing.json の読み取りが続けて EBUSY なら常駐サーバーの起動に失敗する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'claude', review: 'default' }));
+  const readFile = fs.readFile.bind(fs);
+  const fileSystem = storageFileSystem({
+    readFile: async (filePath, ...args) => {
+      if (path.basename(filePath) === 'routing.json') throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return readFile(filePath, ...args);
+    },
+  });
+
+  await assert.rejects(startServer({ homeDir, claudeHome, port: 0, storageOptions: {
+    fileSystem, readRetryOptions: { retryDelaysMs: [0, 0] },
+  } }), (error) => error.code === 'EBUSY');
+  assert.match(await fs.readFile(path.join(homeDir, 'server.log'), 'utf8'), /routing\.json read failed \(EBUSY\)/);
 });
 
 test('EADDRINUSE で負けた同時起動は server.json に触れない', async (t) => {
