@@ -482,7 +482,7 @@ function applyCodexLaunchCompletion(session, event) {
     } else if (placeholder && eventName === 'PostToolUseFailure') {
       applyCodexAudit(placeholder, event);
       placeholder.active = false;
-      if (event.isInterrupt) placeholder.unconfirmed = true;
+      if (event.isInterrupt && !placeholder.resultReceived) placeholder.unconfirmed = true;
     } else if (placeholder && session.codexReviewAgentIds.has(placeholder.agent_id) && !event.backgroundTaskId) {
       // クロスレビューの CLI はレビュアーの終了まで戻らず、差分が無いときと直接起動では結果行を出さない。
       applyCodexAudit(placeholder, event);
@@ -520,8 +520,8 @@ function applyCodexResult(session, event) {
     : null;
   if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
   // 起動の PostToolUse が欠けた行は、後の出力の run 行で引き取る。実行 ID の付いていない背景の行の run 行を
-  // 吸い込まないよう、背景の行も候補に数え、一意のときだけにする。
-  if (!outputCodex && event.codexRunId && event.codexRunStartedAt &&
+  // 吸い込まないよう、背景の行も候補に数え、一意のときだけにする。Agent の報告は別の実行を引用しうるので使わない。
+  if (!outputCodex && !isCodexLaunch && event.tool_name !== 'Agent' && event.codexRunId && event.codexRunStartedAt &&
     !session.agents.some((agent) => agent.runId === event.codexRunId)) {
     const definition = event.codexRunId.replace(/-\d{8}-\d{6}-\d+$/, '');
     const pending = pendingCodexLaunches(session, definition);

@@ -270,6 +270,27 @@ test('run 行で背景へ移った欠落起動はメインの Stop で終了未�
   assert.equal(agent.backgroundTaskId, 'task-a');
 });
 
+test('Agent の報告に引用された run 行は欠落した起動へ付けない', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1, tool_name: 'Agent', tool_use_id: 'agent',
+    tool_input: { prompt: '依頼' }, tool_response: missingRunLine }));
+  const agent = state.sessions.get(parentId).agents.find(item => item.agent_id === 'codex:launch');
+  assert.equal(agent.runId, undefined);
+  assert.notEqual(agent.backgrounded, true);
+});
+
+test('結果を受け取った欠落起動は遅れて届いた中断で終了未確認に戻らない', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: `${missingRunLine}\ncodex-agent: result=ok` }));
+  state.addEvent(claudeEvent('PostToolUseFailure', { hookAt: missingLaunchAt + 2, is_interrupt: true }));
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.active, false);
+  assert.notEqual(agent.unconfirmed, true);
+});
+
 test('Codex の子は開始通知の有無によらず親の Stop の後も稼働し画面から閉じられる', () => {
   for (const name of ['SubagentStart', 'PreToolUse']) {
     const state = new DashboardState();
