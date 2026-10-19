@@ -38,6 +38,8 @@ test('Codex ラッパーの -C と --effort の値を除いて定義名を検出
     ['bash ~/.claude/tools/codex-agent.sh --effort high impl-hard', 'impl-hard'],
     ['bash ~/.claude/tools/codex-agent.sh --effort=high impl-standard', 'impl-standard'],
     ['bash ~/.claude/tools/codex-agent.sh -C "D:/work" --effort max impl-hard', 'impl-hard'],
+    ['bash ~/.claude/tools/codex-agent.sh -C D:/work\\ tree\\ dir impl-hard', 'impl-hard'],
+    ['bash ~/.claude/tools/codex-agent.sh -C D:/work\\\\ impl-light', 'impl-light'],
   ];
   for (const [command, definition] of commands) {
     const event = makeHookEvent({ session_id: 'codex-launch-options', hook_event_name: 'PreToolUse',

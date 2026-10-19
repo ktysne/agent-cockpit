@@ -208,7 +208,9 @@ function withoutCodexAgentOptions(argumentsList) {
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
     if (argument === '-C' || argument === '--effort') {
+      // shellTokens は引用符の外のエスケープした空白で語を分けるので、奇数個の \ で終わる語は次の語と続けて値として除く。
       index += 1;
+      while (/(?:^|[^\\])(?:\\\\)*\\$/.test(argumentsList[index] || '') && index + 1 < argumentsList.length) index += 1;
     } else if (!argument.startsWith('--effort=')) {
       remaining.push(argument);
     }
