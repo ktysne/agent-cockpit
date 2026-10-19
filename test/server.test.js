@@ -2504,13 +2504,84 @@ test('cwd の製品に PR 登録が無い取り直しは全体へ行う', async 
   assert.deepEqual(calls, { all: 1, scoped: 0 });
 });
 
+async function reviewSkipApi(t, { failOpenList = false } = {}) {
+  const headRefOid = 'a'.repeat(40);
+  const pullRequest = {
+    number: 602, title: 'PR 602', url: 'https://github.com/example/project/pull/602',
+    headRefName: 'feature/602', baseRefName: 'main', headRefOid,
+    isCrossRepository: false, isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
+    reviewDecision: '', statusCheckRollup: [], createdAt: '2026-10-01T00:00:00Z',
+  };
+  const execFileImpl = (_file, args, _options, callback) => {
+    if (args[0] === 'pr' && args[1] === 'list') {
+      const stateIndex = args.indexOf('--state');
+      if (args[stateIndex + 1] === 'open') {
+        if (failOpenList) callback(new Error('open PR list failed'));
+        else callback(null, JSON.stringify([pullRequest]));
+      } else callback(null, '[]');
+    } else if (args[0] === 'pr' && args[1] === 'view') callback(new Error(`PR #${args[2]} unavailable`));
+    else if (args[0] === 'api' && args[1] === 'repos/example/project') {
+      callback(null, JSON.stringify({
+        default_branch: 'main', allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true,
+      }));
+    } else callback(new Error(`unexpected gh arguments: ${args.join(' ')}`));
+  };
+  const runtime = await runningServer(t, { pullRequestOptions: {
+    execFileImpl,
+    gitExecFileImpl: (_file, _args, _options, callback) => callback(new Error('not a git worktree')),
+  } });
+  runtime.state.registerPullRequest('review-skip-api-session', {
+    url: 'https://github.com/example/project/pull/602',
+  }, { cwd: runtime.homeDir, product: { key: 'project', name: 'project' } });
+  runtime.state.registerPullRequest('other-review-skip-session', {
+    url: 'https://github.com/example/project/pull/603',
+  }, { cwd: runtime.homeDir, product: { key: 'project', name: 'project' } });
+  const registration = runtime.state.pullRequestRegistrationForSession('review-skip-api-session', 'example', 'project', 602);
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
+  const send = (action) => request(runtime.info.port, {
+    method: 'POST', path: '/api/pull-requests/review-skip', headers,
+    body: JSON.stringify({ action, headRefOid, registration_key: runtime.state.pullRequestRegistrationKey(registration) }),
+  });
+  return { runtime, headRefOid, send };
+}
+
+test('別の PR の取得エラーがあっても、確認済みの PR にレビュー不要を記録する', async (t) => {
+  const context = await reviewSkipApi(t);
+
+  const response = await context.send('set');
+
+  assert.equal(response.status, 200);
+  assert.equal(context.runtime.state.crossReviewSkip('example', 'project', 602).headRefOid, context.headRefOid);
+});
+
+test('別の PR の取得エラーがあっても、確認済みの PR のレビュー不要を取り消す', async (t) => {
+  const context = await reviewSkipApi(t);
+  context.runtime.state.setCrossReviewSkip({ owner: 'example', repo: 'project', number: 602,
+    headRefOid: context.headRefOid, reason: 'テスト用', recordedAt: new Date().toISOString() });
+
+  const response = await context.send('clear');
+
+  assert.equal(response.status, 200);
+  assert.equal(context.runtime.state.crossReviewSkip('example', 'project', 602), null);
+});
+
+test('オープン PR の一覧を取得できないとレビュー不要を記録せず状態の再取得エラーを返す', async (t) => {
+  const context = await reviewSkipApi(t, { failOpenList: true });
+
+  const response = await context.send('set');
+
+  assert.equal(response.status, 502);
+  assert.equal(jsonBody(response).error, 'PR の状態を取り直せませんでした');
+});
+
 test('レビュー不要は画面から設定と取消ができ、MCP は秘密値と現在の head を照合する', async (t) => {
   let headRefOid = 'a'.repeat(40);
   const pullRequestTracker = {
     start() {},
     close() {},
     snapshot: () => [],
-    async refreshRepoFresh() { return {}; },
+    async refreshRepoFresh() { return { listAvailable: true, uninspectedNumbers: new Set() }; },
     mergeCandidate() { return { pullRequest: { headRefOid } }; },
     async refreshReviewGroups() {},
   };

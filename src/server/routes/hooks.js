@@ -424,7 +424,7 @@ function createHookRoutes(ctx) {
         jsonResponse(response, 200, { ...result.saved });
       } catch (error) {
         request?.setDiagnosticError?.(error);
-        jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
+        jsonResponse(response, 502, { error: 'PR の状態を取り直せませんでした' });
       }
       return;
     }

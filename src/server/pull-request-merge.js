@@ -230,11 +230,11 @@ class PullRequestMergeManager {
   async setReviewSkip(registration, headRefOid, reason) {
     let saved;
     try {
-      const candidate = await this.refreshedCandidate(registration);
-      if (candidate.refreshFailed) return actionResult(502, 'Pull request state could not be refreshed');
-      if (candidate.error) return actionResult(409, 'Pull request is no longer open');
+      const candidate = await this.reviewSkipCandidate(registration);
+      if (candidate.refreshFailed) return actionResult(502, 'PR の状態を取り直せませんでした');
+      if (candidate.error) return actionResult(409, 'PR はオープンではありません');
       if (candidate.pullRequest.headRefOid.toLowerCase() !== headRefOid.toLowerCase()) {
-        return actionResult(409, 'Pull request head has changed');
+        return actionResult(409, 'PR の head が変わりました。現在の状態を確認してください');
       }
       saved = this.state.setCrossReviewSkip({
         owner: registration.owner,
@@ -247,7 +247,7 @@ class PullRequestMergeManager {
       if (!saved) return actionResult(400, 'Invalid review skip');
       await this.state.waitForPersistence();
     } catch {
-      return actionResult(502, 'Pull request state could not be refreshed');
+      return actionResult(502, 'PR の状態を取り直せませんでした');
     }
     try {
       await this.tracker.refreshReviewGroups(registration.owner, registration.repo);
@@ -255,6 +255,22 @@ class PullRequestMergeManager {
       // 記録は永続化済みで、表示は次の取り直しで追いつく。
     }
     return { ok: true, saved };
+  }
+
+  async reviewSkipCandidate(registration) {
+    let refreshed;
+    try {
+      refreshed = await this.tracker.refreshRepoFresh(registration.owner, registration.repo, { priority: true });
+    } catch {
+      return { error: 'PR の状態を取り直せませんでした', refreshFailed: true };
+    }
+    if (refreshed?.listAvailable !== true || !refreshed.uninspectedNumbers ||
+      refreshed.uninspectedNumbers.has(registration.number)) {
+      return { error: 'PR の状態を取り直せませんでした', refreshFailed: true };
+    }
+    const candidate = this.tracker.mergeCandidate(registration);
+    if (!candidate?.pullRequest) return { error: `PR #${registration.number} はオープンの記録済みスタックにありません` };
+    return candidate;
   }
 
   async refreshedCandidate(registration) {
