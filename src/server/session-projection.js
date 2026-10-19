@@ -1,6 +1,7 @@
 // イベント列からセッションを組み立てる。hookAt と sequence の順に、applyCommonEventStart → 種類別の処理 → applyCommonEventEnd の順で適用する。
 // 副作用は渡されたセッションにだけ及び、保存要求は出さない。
 const { isQuestionTool } = require('./events');
+const { isPullRequestShellTool } = require('./pull-request-utils');
 
 const CODEX_UNKNOWN_ANSWER_NOTE = '元の画面で回答済み(内容は不明)';
 // 次の入力は質問への回答とは限らないので、回答を確かめたと読めない言い方にする。
@@ -496,7 +497,7 @@ function applyAgentToolCompletion(session, event) {
 function applyCodexLaunchCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
-  if (event.tool_name === 'Bash' && toolUseId) {
+  if (isPullRequestShellTool(event.tool_name) && toolUseId) {
     const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
     if (placeholder) session.codexLaunchToolIds.add(toolUseId);
     if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
@@ -966,7 +967,7 @@ function applyCodexWaitStart(session, event) {
       agent.unconfirmed = false;
       agent.runId = event.codexWaitRunId;
       delete agent.waitEnded;
-      agent.lastTool = { tool_name: 'Bash', summary: event.summary };
+      agent.lastTool = { tool_name: event.tool_name, summary: event.summary };
       session.pendingCodex[toolUseId] = agent.agent_id;
     } else {
       const agentIdForCall = `codex:${toolUseId}`;
@@ -981,7 +982,7 @@ function applyCodexWaitStart(session, event) {
         backgrounded: true,
         runId: event.codexWaitRunId,
         startedAt: isoTime(event.hookAt),
-        lastTool: { tool_name: 'Bash', summary: event.summary },
+        lastTool: { tool_name: event.tool_name, summary: event.summary },
       });
       session.agents.push(waitAgent);
       session.pendingCodex[toolUseId] = agentIdForCall;
@@ -1006,7 +1007,7 @@ function applyCodexLaunchStart(session, event) {
     codex_home: '',
     unavailable: '',
     startedAt: isoTime(event.hookAt),
-    lastTool: { tool_name: 'Bash', summary: event.summary },
+    lastTool: { tool_name: event.tool_name, summary: event.summary },
   });
   const existingIndex = session.agents.findIndex((item) => item.agent_id === agentIdForCall);
   if (existingIndex >= 0) session.agents.splice(existingIndex, 1, agent);

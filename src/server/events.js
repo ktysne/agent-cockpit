@@ -245,15 +245,15 @@ function sanitizeEvent(input, metadata = {}) {
 
   if (eventName === 'PreToolUse') {
     event.summary = shortString(input.summary, 80) || event.tool_name;
-    event.codexDefinition = event.tool_name === 'Bash' && typeof input.codexLaunchDefinition === 'string' &&
+    event.codexDefinition = isPullRequestShellTool(event.tool_name) && typeof input.codexLaunchDefinition === 'string' &&
       /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}$/.test(input.codexLaunchDefinition) ? input.codexLaunchDefinition : null;
-    if (event.tool_name === 'Bash' && !event.codexDefinition && CODEX_REVIEW_DEFINITIONS.has(input.codexReviewDefinition)) {
+    if (isPullRequestShellTool(event.tool_name) && !event.codexDefinition && CODEX_REVIEW_DEFINITIONS.has(input.codexReviewDefinition)) {
       event.codexDefinition = input.codexReviewDefinition;
       event.codexReviewLaunch = true;
     }
     const codexWaitRunId = shortString(input.codexWaitRunId, 256) || '';
     const codexWaitMatch = codexWaitRunId.match(CODEX_RUN_ID_PATTERN);
-    if (event.tool_name === 'Bash' && !event.codexDefinition && codexWaitMatch) {
+    if (isPullRequestShellTool(event.tool_name) && !event.codexDefinition && codexWaitMatch) {
       event.codexWaitRunId = codexWaitRunId;
       event.codexWaitDefinition = codexWaitRunId.replace(/-\d{8}-\d{6}-\d+$/, '');
     }

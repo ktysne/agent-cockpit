@@ -16,9 +16,10 @@ const {
 const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
 
-test('起動定義は Bash の開始イベントで定義名の形式と長さを満たすものだけ受ける', () => {
+test('起動定義は Bash と PowerShell の開始イベントで定義名の形式と長さを満たすものだけ受ける', () => {
   for (const [tool_name, hook_event_name, definition, expected] of [
     ['Bash', 'PreToolUse', '_impl.hard-1', '_impl.hard-1'],
+    ['PowerShell', 'PreToolUse', '_impl.hard-1', '_impl.hard-1'],
     ['Read', 'PreToolUse', 'impl-hard', null],
     ['Bash', 'PostToolUse', 'impl-hard', undefined],
     ['Bash', 'PreToolUse', '--wait', null],
@@ -28,6 +29,24 @@ test('起動定義は Bash の開始イベントで定義名の形式と長さ�
     const event = sanitizeEvent({ session_id: 'launch-validation', tool_name, hook_event_name,
       summary: 'bash codex-agent.sh impl-hard', codexLaunchDefinition: definition });
     assert.equal(event.codexDefinition, expected);
+  }
+});
+
+test('PowerShell の開始イベントから Codex 起動、待機、レビューの定義を抽出する', () => {
+  const runId = 'impl-standard-20261019-110000-7';
+  const cases = [
+    ['& "$HOME\\.claude\\tools\\codex-agent.sh" impl-standard', 'codexLaunchDefinition', 'impl-standard', 'codexDefinition', 'impl-standard'],
+    ['& "$HOME\\.claude\\tools\\codex-agent.sh" --wait ' + runId, 'codexWaitRunId', runId, 'codexWaitDefinition', 'impl-standard'],
+    ['npm run review:codex', 'codexReviewDefinition', 'codex-review', 'codexDefinition', 'codex-review'],
+    ['Set-Location "D:\\repo\\"; bash "$HOME/.claude/tools/codex-agent.sh" impl-hard',
+      'codexLaunchDefinition', 'impl-hard', 'codexDefinition', 'impl-hard'],
+    ['bash `\n  "$HOME/.claude/tools/codex-agent.sh" impl-light', 'codexLaunchDefinition', 'impl-light', 'codexDefinition', 'impl-light'],
+  ];
+  for (const [command, field, expected, sanitizedField, sanitizedExpected] of cases) {
+    const event = makeHookEvent({ session_id: 'powershell-codex', hook_event_name: 'PreToolUse',
+      tool_name: 'PowerShell', tool_use_id: field, tool_input: { command } });
+    assert.equal(event[field], expected, command);
+    assert.equal(sanitizeEvent(event)[sanitizedField], sanitizedExpected, command);
   }
 });
 
@@ -629,13 +648,15 @@ test('文字列やヒアドキュメントのクロスレビュー手順と、--
   }
 });
 
-test('クロスレビュー定義は Bash の許可値だけを受け、既存の起動定義を優先する', () => {
+test('クロスレビュー定義は Bash と PowerShell の許可値だけを受け、既存の起動定義を優先する', () => {
   const sanitize = (toolName, codexReviewDefinition, summary = 'npm run review:codex') => sanitizeEvent({
     session_id: 'codex-review-sanitize', hook_event_name: 'PreToolUse', tool_name: toolName,
     codexReviewDefinition, summary, codexLaunchDefinition: summary.includes(' custom ') ? 'custom' : undefined,
   });
   assert.equal(sanitize('Bash', 'codex-review').codexDefinition, 'codex-review');
   assert.equal(sanitize('Bash', 'codex-review').codexReviewLaunch, true);
+  assert.equal(sanitize('PowerShell', 'codex-review').codexDefinition, 'codex-review');
+  assert.equal(sanitize('PowerShell', 'codex-review').codexReviewLaunch, true);
   assert.equal(sanitize('Bash', 'codex-subagent').codexDefinition, 'codex-subagent');
   assert.equal(sanitize('Bash', 'untrusted-definition').codexDefinition, null);
   assert.equal(sanitize('Read', 'codex-review').codexDefinition, null);
@@ -759,14 +780,19 @@ test('AskUserQuestion の回答を本文の全文なしで PostToolUse に載せ
   assert.equal(Object.hasOwn(agentEvent, 'decisionResolution'), false);
 });
 
-test('背景タスクの出力を読む呼び出しと、背景へ移った Bash から背景タスク ID を取り出す', () => {
+test('背景タスクの出力を読む呼び出しと、背景へ移ったシェルツールから背景タスク ID を取り出す', () => {
   const base = { session_id: 'bgid', hook_event_name: 'PostToolUse', tool_use_id: 't1' };
-  const started = makeHookEvent({
-    ...base, tool_name: 'Bash', tool_input: { command: 'npm run review:codex' },
-    tool_response: { stdout: '', backgroundTaskId: 'baepc74pm' },
-  }, 1);
-  assert.equal(started.backgroundTaskId, 'baepc74pm');
-  assert.equal(started.backgroundOutputTaskId, undefined);
+  for (const tool_name of ['Bash', 'PowerShell']) {
+    for (const hook_event_name of ['PostToolUse', 'PostToolUseFailure']) {
+      const started = makeHookEvent({
+        ...base, hook_event_name, tool_name, tool_input: { command: 'npm run review:codex' },
+        tool_response: { stdout: '', backgroundTaskId: 'baepc74pm' },
+      }, 1);
+      assert.equal(started.backgroundTaskId, 'baepc74pm');
+      assert.equal(sanitizeEvent(started).backgroundTaskId, 'baepc74pm');
+      assert.equal(started.backgroundOutputTaskId, undefined);
+    }
+  }
 
   const win = makeHookEvent({
     ...base, tool_name: 'Read',
@@ -777,6 +803,11 @@ test('背景タスクの出力を読む呼び出しと、背景へ移った Bash
     ...base, tool_name: 'Read', tool_input: { file_path: '/tmp/tasks/b2.output' }, tool_response: {},
   }, 1);
   assert.equal(posix.backgroundOutputTaskId, 'b2');
+  const powerShell = makeHookEvent({
+    ...base, tool_name: 'PowerShell',
+    tool_input: { command: 'Get-Content E:\\Temp\\claude\\x\\tasks\\baepc74pm.output' }, tool_response: {},
+  }, 1);
+  assert.equal(powerShell.backgroundOutputTaskId, 'baepc74pm');
 
   const one = makeHookEvent({
     ...base, tool_name: 'Bash', tool_input: { command: 'cat /tmp/tasks/a1.output; tail -5 /tmp/tasks/a1.output' }, tool_response: {},
@@ -918,21 +949,31 @@ test('フックは BackgroundTaskEnd と Claude の内部 Interrupt を送らな
   }
 });
 
-test('Codex の起動と待機は保存された出力から末尾の結果行を取得する', () => {
+test('Bash と PowerShell の Codex 起動と待機は保存された出力から末尾の結果行を取得する', () => {
   const outputPath = path.resolve('review-output.txt');
-  for (const command of ['bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md', 'npm run review:codex', 'bash ~/.claude/tools/codex-agent.sh --wait impl-hard-20261003-123456-7']) {
-    const readPaths = [];
-    const event = makeHookEvent({
-      session_id: 'persisted', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'call',
-      tool_input: { command },
-      tool_response: { stdout: 'codex-agent: waiting run=impl-hard-20261003-123456-7', persistedOutputPath: outputPath },
-    }, 1, { readTaskOutput(filePath) {
-      readPaths.push(filePath);
-      return 'codex-agent: vanished run=impl-hard-20261003-123456-7\ncodex-agent: result=ok';
-    } });
-    assert.deepEqual(readPaths, [outputPath]);
-    assert.equal(event.codexOutput.resultLine, 'codex-agent: result=ok');
-    assert.equal(event.codexOutput.waitStatusLine, 'codex-agent: vanished run=impl-hard-20261003-123456-7');
+  const runId = 'impl-hard-20261003-123456-7';
+  for (const tool_name of ['Bash', 'PowerShell']) {
+    const commands = tool_name === 'PowerShell'
+      ? ['& "$HOME\\.claude\\tools\\codex-agent.sh" impl-hard', 'npm run review:codex',
+        '& "$HOME\\.claude\\tools\\codex-agent.sh" --wait ' + runId]
+      : ['bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md', 'npm run review:codex',
+        'bash ~/.claude/tools/codex-agent.sh --wait ' + runId];
+    for (const hook_event_name of ['PostToolUse', 'PostToolUseFailure']) {
+      for (const command of commands) {
+        const readPaths = [];
+        const event = makeHookEvent({
+          session_id: 'persisted', hook_event_name, tool_name, tool_use_id: 'call',
+          tool_input: { command },
+          tool_response: { stdout: 'codex-agent: waiting run=' + runId, persistedOutputPath: outputPath },
+        }, 1, { readTaskOutput(filePath) {
+          readPaths.push(filePath);
+          return 'codex-agent: vanished run=' + runId + '\ncodex-agent: result=ok';
+        } });
+        assert.deepEqual(readPaths, [outputPath]);
+        assert.equal(event.codexOutput.resultLine, 'codex-agent: result=ok');
+        assert.equal(event.codexOutput.waitStatusLine, 'codex-agent: vanished run=' + runId);
+      }
+    }
   }
 });
 
