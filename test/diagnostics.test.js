@@ -249,12 +249,18 @@ const read = async (runtime, run = runtime.diagnostics.run) => jsonBody(await re
 
 test('期間内の同じ記録は最初の 1 件と期間終了時の件数を残す', async t => {
   const { runtime } = await startTestServer(t, { diagnosticsOptions: { repeatWindowMs: 50, repeatFlushIntervalMs: 5 } });
+  // 期間の内外を記録の時刻で決めるので、時刻を止めて、追記の遅さで期間を越えないようにする。
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   for (let index = 0; index < 3; index += 1) {
     await runtime.diagnostics.record('warn', 'web', 'web.failed', { path: '/api/health', status: 500 });
   }
   assert.equal((await read(runtime)).filter(entry => entry.msg === 'web.failed').length, 1);
-  await delay(80);
-  const entries = await read(runtime);
+  t.mock.timers.tick(50);
+  let entries = [];
+  for (let attempt = 0; attempt < 200 && !entries.some(entry => entry.msg === 'diagnostics.repeated'); attempt += 1) {
+    await delay(5);
+    entries = await read(runtime);
+  }
   const repeated = entries.find(entry => entry.msg === 'diagnostics.repeated');
   assert.deepEqual({ level: repeated.level, tag: repeated.tag, data: repeatedData(repeated.data) }, {
     level: 'warn', tag: 'web', data: { msg: 'web.failed', count: 2, data: { path: '/api/health', status: 500 } },
