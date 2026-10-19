@@ -2623,6 +2623,15 @@ class DashboardState {
     return this.decisionFor(sessionId, decisionId);
   }
 
+  deleteDecisionLifecycle(sessionId, decisionId) {
+    const lifecycles = this.decisionLifecycles.get(sessionId);
+    if (!lifecycles?.delete(decisionId)) return false;
+    if (!lifecycles.size) this.decisionLifecycles.delete(sessionId);
+    this.touch();
+    this.requestStoreWrite(true);
+    return true;
+  }
+
   touch() {
     this.version += 1;
     this.generatedAt = new Date().toISOString();

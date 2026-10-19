@@ -327,20 +327,6 @@ module.exports = function basic({ baseTime }) {
       at(35);
       await demo.ui('/api/hidden-sessions', { action: 'hide', session_id: demo.sessions.get('parcel-scratch').id });
 
-      at(30);
-      await toolStart('planner-main', 'ask-first-screens', 'AskUserQuestion', {
-        questions: [{
-          question: '週切り替えで先に対応する画面を選んでください',
-          header: '対応する画面',
-          multiSelect: true,
-          options: [
-            { label: '管理者の週表', description: '店長が使うシフトの編集画面' },
-            { label: '従業員のモバイル表示', description: '自分のシフトを確かめる画面' },
-            { label: '印刷用のレイアウト', description: '紙で掲示するための表' },
-          ],
-        }],
-      });
-
       at(23);
       await hook('planner-holiday', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'holiday-migrate', tool_input: { command: 'npm run db:migrate' } });
       at(22);
@@ -375,8 +361,22 @@ module.exports = function basic({ baseTime }) {
         hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Bash の実行許可を待っています。',
       });
 
+      at(2);
+      await toolStart('planner-main', 'ask-first-screens', 'AskUserQuestion', {
+        questions: [{
+          question: '週切り替えで先に対応する画面を選んでください',
+          header: '対応する画面',
+          multiSelect: true,
+          options: [
+            { label: '管理者の週表', description: '店長が使うシフトの編集画面' },
+            { label: '従業員のモバイル表示', description: '自分のシフトを確かめる画面' },
+            { label: '印刷用のレイアウト', description: '紙で掲示するための表' },
+          ],
+        }],
+      });
+
       at(1);
-      await toolStart('planner-main', 'planner-edit-weekview', 'Edit', { file_path: 'src/components/WeekView.tsx' });
+      await toolStart('planner-main', 'planner-edit-weekview', 'Edit', { file_path: 'src/components/WeekView.tsx' }, claudeAgent);
     },
   };
 };

@@ -280,7 +280,7 @@ class DecisionAnswerDelivery {
     const decision = this.state.decisionFor(sessionId, record.decisionId);
     const at = new Date(this.now()).toISOString();
     if (currentOutcome === 'released') {
-      this.state.setDecisionLifecycle(sessionId, record.decisionId, { answer: null, awaitingAnswerUntil: null, state: null }, this.now());
+      this.state.deleteDecisionLifecycle(sessionId, record.decisionId);
       this.clearAskWait(record);
       record.result = { outcome: 'released', hookOutput: null };
       return record.result;
@@ -667,11 +667,7 @@ class DecisionAnswerDelivery {
       const key = keyFor(sessionId, toolUseId);
       const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
       if (decisionId && !this.askWaits.has(key)) {
-        this.state.setDecisionLifecycle(sessionId, decisionId, {
-          answer: null,
-          state: null,
-          awaitingAnswerUntil: null,
-        }, this.now());
+        this.state.deleteDecisionLifecycle(sessionId, decisionId);
       }
       return;
     }

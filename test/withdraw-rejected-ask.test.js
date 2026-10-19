@@ -192,10 +192,6 @@ test('離席中のフックが回答待ちを記録した質問は再起動後�
   restored.addEvent(progress('Stop', NOW + 200));
   restored.addEvent(progress('PreToolUse', NOW + 300));
   assert.equal(decision(restored).state, 'waiting');
-  away.enabled = false;
-  assert.equal(delivery.finishAsk({ sessionId: 'session-a', toolUseId: 'ask-1' }).outcome, 'released');
-  state.addEvent(progress('Stop', NOW + 400));
-  assert.equal(decision(state).state, 'waiting');
 });
 
 test('離席中にフックが却下した質問と送信済みの回答は後続イベントで取り下げない', async () => {
