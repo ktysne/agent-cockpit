@@ -1,7 +1,7 @@
 const { planUpdateForTool } = require('./plan-updates');
 const path = require('node:path');
 const { isHookSessionId } = require('./session-ids');
-const { isPullRequestShellTool, parsePullRequestUrl, validRepositoryPart } = require('./pull-request-utils');
+const { isPullRequestShellTool, parsePullRequestUrl, pullRequestKey, validRepositoryPart } = require('./pull-request-utils');
 
 const EVENT_NAMES = new Set([
   'SessionStart',
@@ -22,6 +22,7 @@ const EVENT_NAMES = new Set([
 
 const MAX_ASK_QUESTIONS = 4;
 const MAX_ASK_OPTIONS = 6;
+const MAX_ADDITIONAL_PULL_REQUESTS = 9;
 const QUESTION_TEXT_LIMIT = 2000;
 const CODEX_RUN_ID_PATTERN = /^([A-Za-z0-9_][A-Za-z0-9_.-]*)-\d{8}-\d{6}-\d+$/;
 const CODEX_REVIEW_DEFINITIONS = new Set(['codex-review', 'codex-subagent']);
@@ -46,6 +47,27 @@ function sanitizePullRequestRefreshScope(event, input) {
   if (parts.length === 2 && validRepositoryPart(parts[0]) && validRepositoryPart(parts[1])) {
     event.refreshRepository = `${parts[0]}/${parts[1]}`;
   }
+}
+
+function pullRequestIdentity(pullRequest) {
+  return pullRequestKey(pullRequest.owner, pullRequest.repo, pullRequest.number);
+}
+
+function sanitizeAdditionalPullRequests(value, mainPullRequest, toolName) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set(mainPullRequest ? [pullRequestIdentity(mainPullRequest)] : []);
+  return value.slice(0, MAX_ADDITIONAL_PULL_REQUESTS).flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const pullRequest = parsePullRequestUrl(item.url);
+    if (!pullRequest || item.owner !== pullRequest.owner || item.repo !== pullRequest.repo || item.number !== pullRequest.number) return [];
+    const identity = pullRequestIdentity(pullRequest);
+    if (seen.has(identity)) return [];
+    seen.add(identity);
+    if (toolName === 'Bash' && typeof item.commandCwd === 'string' && item.commandCwd.length <= 4096 && path.isAbsolute(item.commandCwd)) {
+      return [{ ...pullRequest, commandCwd: item.commandCwd }];
+    }
+    return [pullRequest];
+  });
 }
 
 function recommendedOptionFor(question) {
@@ -199,6 +221,8 @@ function sanitizeEvent(input, metadata = {}) {
         const pullRequest = parsePullRequestUrl(input.pullRequest?.url);
         if (pullRequest && input.pullRequest.owner === pullRequest.owner && input.pullRequest.repo === pullRequest.repo &&
           input.pullRequest.number === pullRequest.number) event.pullRequest = pullRequest;
+        const additionalPullRequests = sanitizeAdditionalPullRequests(input.additionalPullRequests, event.pullRequest, event.tool_name);
+        if (additionalPullRequests.length) event.additionalPullRequests = additionalPullRequests;
       }
       if (eventName === 'PreToolUse' && isQuestionTool('codex', event.tool_name) && !agentId) {
         event.questions = sanitizeCodexQuestions(event.tool_name, input.questions);
@@ -275,6 +299,8 @@ function sanitizeEvent(input, metadata = {}) {
     const pullRequest = parsePullRequestUrl(input.pullRequest?.url);
     if (pullRequest && input.pullRequest.owner === pullRequest.owner && input.pullRequest.repo === pullRequest.repo &&
       input.pullRequest.number === pullRequest.number) event.pullRequest = pullRequest;
+    const additionalPullRequests = sanitizeAdditionalPullRequests(input.additionalPullRequests, event.pullRequest, event.tool_name);
+    if (additionalPullRequests.length) event.additionalPullRequests = additionalPullRequests;
   }
 
   if ((eventName === 'PostToolUse' || eventName === 'PostToolUseFailure')

@@ -1936,6 +1936,69 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
   assert.deepEqual(snapshot.pullRequests, []);
 });
 
+test('複数の gh pr create は順番と推定した product でサーバーへ登録する', async (t) => {
+  const refreshed = [];
+  const pullRequestTracker = { start() {}, close() {}, snapshot: () => [],
+    refreshRepo(owner, repo) { refreshed.push(`${owner}/${repo}`); return Promise.resolve(); },
+    refreshRepoFresh() { return Promise.resolve(); },
+    refreshAfterCommand() { return Promise.resolve(); } };
+  const runtime = await runningServer(t, { pullRequestTracker, findSessionIdByPid: async () => null });
+  const sessionCwd = path.join(runtime.homeDir, 'session-product', '.claude', 'worktrees', 'session');
+  const firstCwd = path.join(runtime.homeDir, 'first-product', '.claude', 'worktrees', 'feature');
+  const secondCwd = path.join(runtime.homeDir, 'second-product', '.claude', 'worktrees', 'feature');
+  const headers = hookHeaders(runtime.info.secret);
+  const send = async event => request(runtime.info.port, { method: 'POST', path: '/api/events', headers,
+    body: JSON.stringify(event) });
+  const register = async ({ sessionId, toolName = 'Bash', cwd = sessionCwd, command, stdout, provider }) => {
+    const event = makeHookEvent({ session_id: sessionId, hook_event_name: 'PostToolUse', cwd,
+      tool_name: toolName, tool_use_id: `create-${sessionId}`, tool_input: { command }, tool_response: { stdout } }, Date.now(),
+    provider ? { provider } : {});
+    const response = await send(event);
+    assert.equal(response.status, 202);
+  };
+  const quoted = value => `"${value.replaceAll('\\', '/')}"`;
+
+  await register({ sessionId: 'multi-bash', command:
+    `cd ${quoted(firstCwd)} && gh pr create && cd ${quoted(secondCwd)} && gh pr create`,
+  stdout: 'https://github.com/example/first/pull/61\nhttps://github.com/example/second/pull/62' });
+  const first = runtime.state.pullRequestRegistrationForSession('multi-bash', 'example', 'first', 61);
+  const second = runtime.state.pullRequestRegistrationForSession('multi-bash', 'example', 'second', 62);
+  assert.equal(first.cwd, path.resolve(firstCwd));
+  assert.equal(first.product.key, productFromCwd(firstCwd).key);
+  assert.equal(second.cwd, path.resolve(secondCwd));
+  assert.equal(second.product.key, productFromCwd(secondCwd).key);
+
+  await register({ sessionId: 'relative-cd', command:
+    `cd ${quoted(firstCwd)} && gh pr create && cd ../second && gh pr create`,
+  stdout: 'https://github.com/example/fallback-first/pull/63\nhttps://github.com/example/fallback-second/pull/64' });
+  const fallback = runtime.state.pullRequestRegistrationForSession('relative-cd', 'example', 'fallback-second', 64);
+  assert.equal(fallback.cwd, sessionCwd);
+  assert.equal(fallback.product.key, productFromCwd(sessionCwd).key);
+
+  await register({ sessionId: 'multi-powershell', toolName: 'PowerShell', command: 'gh pr create && gh pr create',
+    stdout: 'https://github.com/example/powershell-first/pull/65\nhttps://github.com/example/powershell-second/pull/66' });
+  const powershell = runtime.state.pullRequestRegistrationForSession('multi-powershell', 'example', 'powershell-second', 66);
+  assert.equal(powershell.cwd, sessionCwd);
+  assert.equal(powershell.product.key, productFromCwd(sessionCwd).key);
+
+  await register({ sessionId: 'multi-codex', command: 'gh pr create && gh pr create', provider: 'codex',
+    stdout: 'https://github.com/example/codex-first/pull/67\nhttps://github.com/example/codex-second/pull/68' });
+  const codex = runtime.state.pullRequestRegistrationForSession('multi-codex', 'example', 'codex-second', 68);
+  assert.ok(codex);
+  assert.equal(codex.provider, 'codex');
+  assert.equal(codex.cwd, sessionCwd);
+
+  await register({ sessionId: 'single-create', command: 'gh pr create',
+    stdout: 'https://github.com/example/single-first/pull/69\nhttps://github.com/example/single-extra/pull/70' });
+  assert.ok(runtime.state.pullRequestRegistrationForSession('single-create', 'example', 'single-first', 69));
+  assert.equal(runtime.state.pullRequestRegistrationForSession('single-create', 'example', 'single-extra', 70), null);
+  assert.deepEqual(refreshed, [
+    'example/first', 'example/second', 'example/fallback-first', 'example/fallback-second',
+    'example/powershell-first', 'example/powershell-second', 'example/codex-first', 'example/codex-second',
+    'example/single-first',
+  ]);
+});
+
 test('Bash の push は cwd の product に PR を登録したリポジトリだけを取り直す', async (t) => {
   const calls = { fresh: [], all: 0 };
   const pullRequestTracker = {

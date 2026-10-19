@@ -23,14 +23,18 @@ const {
   readCrossReviewState,
   readCrossReviewStateAcrossWorktrees,
   runGh,
-} = require('../src/server/pull-requests');const {
+} = require('../src/server/pull-requests');
+const {
+  countGhPrCreateCommands,
   findPullRequestUrl,
   firstPullRequestUrl,
   isGhPrCreateCommand,
   isPullRequestShellTool,
   parsePullRequestUrl,
+  pullRequestCreateCommandCwd,
   pullRequestCommandCwd,
   pullRequestRefreshScope,
+  pullRequestUrls,
   shouldRefreshPullRequests,
 } = require('../src/server/pull-request-utils');
 const { DashboardState } = require('../src/server/state');
@@ -475,6 +479,48 @@ test('PR URL の抽出は出力中の GitHub URL を限定して返す', () => {
   assert.equal(firstPullRequestUrl({ content: [{ text: 'created PR but did not include a URL' }] }), null);
   assert.equal(parsePullRequestUrl('https://github.com/example/project/issues/43'), null);
   assert.equal(parsePullRequestUrl('https://github.com/example/project/pull/43/anything'), null);
+});
+
+test('PR URL を出現順に抽出し、同じ PR と pull/new を除外する', () => {
+  const response = {
+    stdout: 'https://github.com/Example/Repo/pull/42 https://github.com/example/repo/pull/42',
+    content: [{ text: 'https://github.com/example/second/pull/7 https://github.com/example/repo/pull/new/main' }],
+  };
+  const pullRequests = pullRequestUrls(response, 5);
+  assert.deepEqual(pullRequests.map(({ owner, repo, number }) => ({ owner, repo, number })), [
+    { owner: 'example', repo: 'second', number: 7 },
+    { owner: 'Example', repo: 'Repo', number: 42 },
+  ]);
+  assert.deepEqual(firstPullRequestUrl(response), pullRequests[0]);
+  assert.equal(pullRequestUrls(response, 1).length, 1);
+});
+
+test('複数の gh pr create の個数と直前の Bash cd から 2 件目以降の cwd を求める', () => {
+  const cwd = path.resolve(os.tmpdir(), 'session-repo', '.claude', 'worktrees', 'session');
+  const firstCwd = path.resolve(os.tmpdir(), 'first-repo', '.claude', 'worktrees', 'feature');
+  const secondCwd = path.resolve(os.tmpdir(), 'second-repo', '.claude', 'worktrees', 'feature');
+  const quoted = value => `"${value.replaceAll('\\', '/')}"`;
+  const command = `cd ${quoted(firstCwd)} && gh pr create && cd ${quoted(secondCwd)} && gh pr create`;
+  assert.equal(countGhPrCreateCommands(command), 2);
+  assert.equal(countGhPrCreateCommands('echo "gh pr create" && gh pr create'), 1);
+  assert.equal(countGhPrCreateCommands('cd "D:\\repo\\" && gh pr create && gh pr create', 'PowerShell'), 2);
+  assert.equal(pullRequestCreateCommandCwd(command, cwd, 2), path.resolve(secondCwd));
+  assert.equal(pullRequestCreateCommandCwd(command, cwd, 3), null);
+  assert.equal(pullRequestCreateCommandCwd(`cd ${quoted(firstCwd)} && gh pr create && cd ${quoted(secondCwd)}; gh pr create`, cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd(`cd ${quoted(firstCwd)} && gh pr create && cd ../second && gh pr create`, cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd(`cd ${quoted(firstCwd)} && gh pr create && cd ${quoted(secondCwd)} && echo done && gh pr create`, cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd(`cd ${quoted(firstCwd)} && gh pr create && cd "$REPOSITORY" && gh pr create`, cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd(`cd ${quoted(firstCwd)} && gh pr create && cd ~/second && gh pr create`, cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd(`cd ${quoted(firstCwd)} && gh pr create && cd "~/second" && gh pr create`, cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd(`cd ${quoted(firstCwd)} && gh pr create && cd /tmp/repo* && gh pr create`, cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd('cd /first && gh pr create && cd "D:\\\\second" && gh pr create', cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd('cd /first && gh pr create && cd /tmp/second\\\\repo && gh pr create', cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd('cd /first && gh pr create && cd /tmp/second`repo && gh pr create', cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd('gh pr create && gh pr create', cwd, 2), null);
+  assert.equal(pullRequestCreateCommandCwd(command, cwd, 2, 'PowerShell'), null);
+  if (process.platform === 'win32') {
+    assert.equal(pullRequestCreateCommandCwd('cd /d/second-repo && gh pr create && cd /e/third-repo && gh pr create', cwd, 2), path.resolve('E:/third-repo'));
+  }
 });
 
 test('gh pr create と git push の検出は引用した説明文をコマンドとして扱わない', () => {

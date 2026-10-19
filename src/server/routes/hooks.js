@@ -279,12 +279,18 @@ function createHookRoutes(ctx) {
       (isPullRequestShellTool(event.tool_name) && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
       isGithubCreatePullRequestTool(event.tool_name)
     )) {
-      const registrationCwd = event.commandCwd || body.cwd;
-      const registrationProduct = event.commandCwd ? productFromCwd(event.commandCwd) : product;
-      const registered = state.registerPullRequest(event.session_id, event.pullRequest, {
-        cwd: registrationCwd, product: registrationProduct,
-      }, event.hookAt);
-      if (registered) void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
+      const registerPullRequest = (pullRequest, commandCwd) => {
+        const registrationCwd = commandCwd || body.cwd;
+        const registrationProduct = commandCwd ? productFromCwd(commandCwd) : product;
+        const registered = state.registerPullRequest(event.session_id, pullRequest, {
+          cwd: registrationCwd, product: registrationProduct,
+        }, event.hookAt);
+        if (registered) void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
+      };
+      registerPullRequest(event.pullRequest, event.commandCwd);
+      for (const pullRequest of event.additionalPullRequests || []) {
+        registerPullRequest(pullRequest, pullRequest.commandCwd);
+      }
     }
     if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (
       event.refreshPullRequests || state.wasPullRequestRefreshCommand(event.session_id, event.tool_use_id)

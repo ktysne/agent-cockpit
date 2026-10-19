@@ -54,41 +54,75 @@ function parsePullRequestUrl(value) {
   };
 }
 
-function findPullRequestUrl(value) {
-  if (typeof value !== 'string') return null;
-  const matches = value.match(/https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/[1-9]\d*(?:\?[^\s<>"']*)?(?:#[^\s<>"']*)?/gi) || [];
-  for (const match of matches) {
+function findPullRequestUrls(value, maxCount = Number.MAX_SAFE_INTEGER, excluded = new Set()) {
+  if (typeof value !== 'string') return [];
+  const pullRequests = [];
+  const seen = new Set(excluded);
+  const matches = value.matchAll(/https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/[1-9]\d*(?:\?[^\s<>"']*)?(?:#[^\s<>"']*)?/gi);
+  for (const { 0: match } of matches) {
     const normalized = match.replace(/[),.;]+$/, '');
     const parsed = parsePullRequestUrl(normalized.split(/[?#]/, 1)[0]);
-    if (parsed) return parsed;
+    if (!parsed) continue;
+    const key = pullRequestKey(parsed.owner, parsed.repo, parsed.number);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pullRequests.push(parsed);
+    if (pullRequests.length >= maxCount) break;
   }
-  return null;
+  return pullRequests;
 }
 
-function firstPullRequestUrl(value, depth = 0) {
-  if (depth > 7 || value == null) return null;
-  if (typeof value === 'string') return findPullRequestUrl(value);
-  if (Array.isArray(value)) {
-    for (const item of value.slice(0, 40)) {
-      const found = firstPullRequestUrl(item, depth + 1);
-      if (found) return found;
+function findPullRequestUrl(value) {
+  return findPullRequestUrls(value, 1)[0] || null;
+}
+
+function pullRequestUrls(value, maxCount, depth = 0) {
+  if (!Number.isInteger(maxCount) || maxCount < 1) return [];
+  const pullRequests = [];
+  const seen = new Set();
+  const add = (pullRequest) => {
+    const key = pullRequestKey(pullRequest.owner, pullRequest.repo, pullRequest.number);
+    if (seen.has(key)) return;
+    seen.add(key);
+    pullRequests.push(pullRequest);
+  };
+  const visit = (current, currentDepth) => {
+    if (currentDepth > 7 || current == null || pullRequests.length >= maxCount) return;
+    if (typeof current === 'string') {
+      for (const pullRequest of findPullRequestUrls(current, maxCount - pullRequests.length, seen)) {
+        add(pullRequest);
+      }
+      return;
     }
-    return null;
-  }
-  if (typeof value !== 'object') return null;
-  for (const key of ['html_url', 'htmlUrl', 'url', 'pull_request_url', 'pullRequestUrl']) {
-    if (typeof value[key] === 'string') {
-      const found = findPullRequestUrl(value[key]);
-      if (found) return found;
+    if (Array.isArray(current)) {
+      for (const item of current.slice(0, 40)) {
+        visit(item, currentDepth + 1);
+        if (pullRequests.length >= maxCount) return;
+      }
+      return;
     }
-  }
-  for (const key of ['structuredContent', 'content', 'result', 'data', 'output', 'stdout', 'text', 'message', 'pull_request', 'pullRequest']) {
-    if (Object.hasOwn(value, key)) {
-      const found = firstPullRequestUrl(value[key], depth + 1);
-      if (found) return found;
+    if (typeof current !== 'object') return;
+    for (const key of ['html_url', 'htmlUrl', 'url', 'pull_request_url', 'pullRequestUrl']) {
+      if (typeof current[key] === 'string') {
+        for (const pullRequest of findPullRequestUrls(current[key], maxCount - pullRequests.length, seen)) {
+          add(pullRequest);
+        }
+        if (pullRequests.length >= maxCount) return;
+      }
     }
-  }
-  return null;
+    for (const key of ['structuredContent', 'content', 'result', 'data', 'output', 'stdout', 'text', 'message', 'pull_request', 'pullRequest']) {
+      if (Object.hasOwn(current, key)) {
+        visit(current[key], currentDepth + 1);
+        if (pullRequests.length >= maxCount) return;
+      }
+    }
+  };
+  visit(value, depth);
+  return pullRequests;
+}
+
+function firstPullRequestUrl(value) {
+  return pullRequestUrls(value, 1)[0] || null;
 }
 
 function isGithubCreatePullRequestTool(toolName) {
@@ -102,6 +136,10 @@ function isPullRequestShellTool(toolName) {
 }
 
 function pullRequestCommandCwd(command, cwd) {
+  return resolvePullRequestCommandCwd(command, cwd, false);
+}
+
+function resolvePullRequestCommandCwd(command, cwd, requireAbsolute) {
   if (typeof command !== 'string' || typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
   const match = command.match(/^\s*cd[\t ]+(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\s;&|()<>]+))[\t ]*&&(?!&)/);
   if (!match) return null;
@@ -118,6 +156,7 @@ function pullRequestCommandCwd(command, cwd) {
     if (gitBashDrivePath) resolvedPath = `${gitBashDrivePath[1].toUpperCase()}:${resolvedPath.slice(2)}`;
     else if (resolvedPath.startsWith('/') && !resolvedPath.startsWith('//')) return null;
   }
+  if (requireAbsolute && !path.isAbsolute(resolvedPath)) return null;
   return path.resolve(cwd, resolvedPath);
 }
 
@@ -147,14 +186,20 @@ function shellTokens(segment) {
 }
 
 function commandSegments(command, toolName = 'Bash') {
+  return commandSegmentParts(command, toolName).map((part) => part.command);
+}
+
+function commandSegmentParts(command, toolName = 'Bash') {
   if (typeof command !== 'string') return [];
   // PowerShell は \ ではなく逆引用符でエスケープするので、"D:\repo\" の末尾の \ で引用符を閉じ損ねないようにする。
   const escapeCharacter = toolName === 'PowerShell' ? '`' : '\\';
-  const segments = [];
+  const parts = [];
   let segment = '';
   let quote = '';
   let escaped = false;
-  for (const character of command) {
+  let separatorBefore = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
     if (escaped) {
       segment += character;
       escaped = false;
@@ -168,14 +213,16 @@ function commandSegments(command, toolName = 'Bash') {
       segment += character;
       quote = character;
     } else if (';&|\n'.includes(character)) {
-      segments.push(segment);
+      parts.push({ command: segment, separatorBefore });
       segment = '';
+      separatorBefore = character === '&' && command[index + 1] === '&' ? '&&' : character;
+      if (separatorBefore === '&&') index += 1;
     } else {
       segment += character;
     }
   }
-  segments.push(segment);
-  return segments;
+  parts.push({ command: segment, separatorBefore });
+  return parts;
 }
 
 function commandWords(segment) {
@@ -208,6 +255,27 @@ function isGhPrCreateCommand(command, toolName = 'Bash') {
     const subcommand = subcommandIndex(words, 'gh');
     return words[0] === 'gh' && words[subcommand] === 'pr' && words[subcommand + 1] === 'create';
   });
+}
+
+function countGhPrCreateCommands(command, toolName = 'Bash') {
+  return commandSegments(command, toolName).filter((segment) => isGhPrCreateCommand(segment, toolName)).length;
+}
+
+function pullRequestCreateCommandCwd(command, cwd, commandNumber, toolName = 'Bash') {
+  if (!Number.isInteger(commandNumber) || commandNumber < 2 || toolName !== 'Bash') return null;
+  const parts = commandSegmentParts(command, toolName);
+  let found = 0;
+  for (let index = 0; index < parts.length; index += 1) {
+    if (!isGhPrCreateCommand(parts[index].command, toolName)) continue;
+    found += 1;
+    if (found !== commandNumber) continue;
+    if (index === 0 || parts[index].separatorBefore !== '&&') return null;
+    const previousCommand = parts[index - 1].command.trim();
+    const words = commandWords(previousCommand);
+    if (words.length !== 2 || words[0] !== 'cd') return null;
+    return resolvePullRequestCommandCwd(`${previousCommand} &&`, cwd, true);
+  }
+  return null;
 }
 
 function shouldRefreshPullRequests(command, toolName = 'Bash') {
@@ -266,6 +334,7 @@ module.exports = {
   COMPLETE_COMMIT_SHA_PATTERN,
   commandSegments,
   commandWords,
+  countGhPrCreateCommands,
   findPullRequestUrl,
   firstPullRequestUrl,
   isCompleteCommitSha,
@@ -275,7 +344,9 @@ module.exports = {
   isPullRequestShellTool,
   parsePullRequestUrl,
   parseGitHubRepositoryRemote,
+  pullRequestCreateCommandCwd,
   pullRequestCommandCwd,
+  pullRequestUrls,
   pullRequestRefreshScope,
   pullRequestKey,
   repositoryKey,
