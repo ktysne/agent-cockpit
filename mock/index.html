@@ -378,6 +378,8 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .ghost { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; cursor: pointer; min-height: 40px; }
 .merge-go { background: var(--ok); color: var(--on-ok); border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
 .merge-go.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
+.merge-confirm button:disabled, .merge-confirm button[aria-disabled="true"] { cursor: wait; opacity: .65; }
+.reservation-toggle input[aria-disabled="true"] { opacity: .65; cursor: wait; }
 .merged-list { font-size: 12px; color: var(--text-2); margin-top: 6px; }
 .merged-list .badge { margin-right: 4px; }
 .merged-list .badge.origin-claude, .merged-list .badge.origin-codex, .merged-list .badge.origin-both { position: relative; padding-left: 10px; }
@@ -2603,17 +2605,35 @@ function mergeConfirm(p, pr) {
     ${mergeMethodFixed(p, pr) ? '<span class="meta">集約ブランチと同期 PR はマージコミットで入れます</span>' : p.repo.methods.length === 1 ? '<span class="meta">リポジトリで許可されている方式です</span>' : ''}</div>
     ${pr.head === p.repo.defaultBranch || p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''} ${merging ? 'disabled' : ''}>マージ後にリモートブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
-    <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging || !o.method ? 'disabled' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
+    <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${!o.method ? 'disabled' : ''} ${merging ? 'aria-disabled="true"' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
       ${o.del && !pr.isCrossRepository && p.repo.autoDeleteBranch !== true ? `<button type="button" class="link-btn" data-mock-branch-update="${key}" ${merging ? 'disabled' : ''}>モック: 削除前に別の head へ更新</button>` : ''}
       ${kids.length && branchDeleted ? `<button type="button" class="link-btn" data-mock-retarget-failure="${key}" ${merging ? 'disabled' : ''}>モック: 子 PR の base 変更に失敗</button>` : ''}
       <button type="button" class="link-btn" data-mock-merge-failure="${prKey(p, pr.number)}">モック: 失敗の知らせを表示</button>
-      <button type="button" class="ghost" data-merge-cancel ${merging ? 'disabled' : ''}>やめる</button></div>
+      <button type="button" class="ghost" data-merge-cancel="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>やめる</button></div>
   </div>`;
 }
 
 function setMergeConfirmation(key, action) {
   if (action !== 'manual') return;
   ui.confirm = { key, action };
+}
+
+function restoreConfirmationFocus(focusData) {
+  const key = CSS.escape(focusData.key);
+  const selectors = {
+    'merge-go': [`[data-merge-go="${key}"]`, `[data-merge-cancel="${key}"]`, `[data-merge="${key}"]`, `[data-mode="${ui.mode}"]`],
+    'merge-cancel': [`[data-merge-cancel="${key}"]`, `[data-merge="${key}"]`, `.merge-confirm[data-pr="${key}"] [data-method]`],
+    'merge-open': [`[data-merge="${key}"]`, `.merge-confirm[data-pr="${key}"] [data-method]`],
+    'merge-reservation-toggle': [`[data-reservation-toggle="${key}"]`, `[data-merge="${key}"]`],
+    'conflict-cancel': [`[data-conflict="${key}"]`, `[data-mode="${ui.mode}"]`],
+    'conflict-open': [`[data-conflict-go="${key}"]`, `[data-conflict="${key}"]`],
+  }[focusData.kind] || [];
+  for (const selector of selectors) {
+    const target = document.querySelector(selector);
+    if (!target || target.disabled) continue;
+    target.focus({ preventScroll: true });
+    return;
+  }
 }
 
 // 衝突の解消は PR を登録したセッションに頼む。ダッシュボードはマージ以外の変更を自分では行わない。
@@ -2630,7 +2650,7 @@ function conflictConfirm(p, pr) {
     <ul class="effects">${effects.map(x => `<li>${x}</li>`).join('')}</ul>
     <div class="row"><button type="button" class="merge-go conflict-go" data-conflict-go="${k}">依頼を送る</button>
       <button type="button" class="link-btn" data-mock-conflict-failure="${k}">モック: 失敗の知らせを表示</button>
-      <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
+      <button type="button" class="ghost" data-merge-cancel="${k}" data-conflict-cancel="${k}">やめる</button></div>
   </div>`;
 }
 
@@ -2674,7 +2694,7 @@ function prItem(p, pr, showOriginBands = true) {
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
     !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
-      ${reservationToggleShown ? `<label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : ''}` : '',
+      ${reservationToggleShown ? `<label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'aria-disabled="true"' : ''}>収束後マージ</label>` : ''}` : '',
     conflictButton(p, pr),
   ].join('').trim();
   return `<div class="${classes}"${origin ? ` data-origin="${origin}"` : ''}>
@@ -3074,6 +3094,8 @@ function renderRestartNote(state) {
   // ポーリングのたびに作り直すとボタンのフォーカスが外れるため、表示が変わったときだけ作り直す。
   const view = JSON.stringify([text, buttons.map(([label]) => label), ui.phase === 'sending']);
   if (view === ui.view) return;
+  const focusedButton = [...(note.querySelectorAll?.('button') || [])].find(button => button === document.activeElement);
+  const focusedLabel = focusedButton?.dataset?.restartAction || focusedButton?.textContent || '';
   ui.view = view;
   note.textContent = text;
   for (const [label, action] of buttons) {
@@ -3081,10 +3103,11 @@ function renderRestartNote(state) {
     button.type = 'button';
     button.className = 'link-btn';
     button.textContent = label;
+    button.dataset.restartAction = label;
     button.disabled = ui.phase === 'sending';
     button.addEventListener('click', action);
     note.append(button);
-    if (label === ui.focus) button.focus?.();
+    if (label === ui.focus || label === focusedLabel) button.focus?.();
   }
   ui.focus = '';
 }
@@ -3273,8 +3296,14 @@ function render() {
        : active?.dataset?.showIdle ? { kind: 'show-idle' }
       : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
         : active?.dataset?.cancelCloseTask ? { kind: 'task-close', key: active.dataset.cancelCloseTask }
-          : active?.dataset?.closeTask ? { kind: 'task-close', key: active.dataset.closeTask }
-            : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo } : null;
+      : active?.dataset?.closeTask ? { kind: 'task-close', key: active.dataset.closeTask }
+        : active?.dataset?.reservationToggle ? { kind: 'merge-reservation-toggle', key: active.dataset.reservationToggle }
+        : active?.dataset?.conflictCancel ? { kind: 'conflict-cancel', key: active.dataset.conflictCancel }
+          : active?.dataset?.mergeCancel ? { kind: 'merge-cancel', key: active.dataset.mergeCancel }
+            : active?.dataset?.conflictGo ? { kind: 'conflict-open', key: active.dataset.conflictGo }
+              : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
+                : active?.dataset?.conflict ? { kind: 'conflict-open', key: active.dataset.conflict }
+                  : active?.dataset?.merge ? { kind: 'merge-open', key: active.dataset.merge } : null;
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
   renderConnectionNote();
@@ -3303,8 +3332,8 @@ function render() {
   } else if (focusData?.kind === 'task-close') {
     (document.querySelector(`[data-cancel-close-task="${CSS.escape(focusData.key)}"]`)
       || document.querySelector(`[data-close-task="${CSS.escape(focusData.key)}"]`))?.focus({ preventScroll: true });
-  } else if (focusData?.kind === 'merge-go') {
-    document.querySelector(`[data-merge-go="${CSS.escape(focusData.key)}"]`)?.focus({ preventScroll: true });
+  } else if (['merge-go', 'merge-cancel', 'merge-open', 'merge-reservation-toggle', 'conflict-cancel', 'conflict-open'].includes(focusData?.kind)) {
+    restoreConfirmationFocus(focusData);
   } else if (focusData?.kind === 'review-skip') {
     const controls = [...document.querySelectorAll('[data-review-skip]')];
     (controls.find(button => button.dataset.reviewKey === focusData.key && button.dataset.reviewSkip === focusData.action)
@@ -3315,6 +3344,7 @@ function render() {
 document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
+  if (t.getAttribute?.('aria-disabled') === 'true') return;
   if (t.dataset.wtAction) {
     const { wtAction: action, wtKey: key } = t.dataset;
     if (action === 'launch') {
@@ -3630,6 +3660,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('change', e => {
   const reservationToggle = e.target.closest('input[data-reservation-toggle]');
   if (reservationToggle) {
+    if (reservationToggle.getAttribute('aria-disabled') === 'true') { render(); return; }
     const k = reservationToggle.dataset.reservationToggle;
     const [pid, n] = k.split('#');
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);

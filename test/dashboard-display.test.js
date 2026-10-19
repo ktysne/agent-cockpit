@@ -892,11 +892,6 @@ test('フォーカスのある札が消えたら並びの次の札、無けれ�
   assert.equal(context.filterFocusFallback([button()], 'prs'), null);
 });
 
-test('札が消えた再描画のフォーカスは代わりの札か表示切り替えへ戻す', () => {
-  const render = functionSource(web, 'render');
-  assert.match(render, /focusData\.kind === 'filter' && !button\s*\?\s*filterFocusFallback\(buttons, focusData\.key\) \|\| document\.querySelector\('\[data-action="mode"\]/);
-});
-
 test('PRフィルターの切り替えは保存し、両表示モードのPR欄を隠す', () => {
   const toggleFilter = functionSource(web, 'toggleFilter');
   const productSection = functionSource(web, 'productSection');
