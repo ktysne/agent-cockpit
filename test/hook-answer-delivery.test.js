@@ -101,6 +101,8 @@ test('JSON 取得に失敗しても同じフック要求から回答と通知を
   const calls = [];
   const result = await runAnswerHook({ session_id: c.sessionId, hook_event_name: 'PostToolBatch' }, {
     homeDir: c.homeDir,
+    // 既定の 1 秒の期限では、負荷が高いと再送の前に打ち切られるため、期限を延ばして再送の回復だけを確かめる。
+    deadline: Date.now() + 30_000,
     fetchImpl: fetchToServer(c, { loseFirstDeliveryJson: true, loseFirstAcknowledgementJson: true, calls }),
   });
 
