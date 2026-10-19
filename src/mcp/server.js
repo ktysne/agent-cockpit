@@ -364,7 +364,9 @@ async function callTool(name, args, options = {}) {
     if (saved?.outcomeUnknown) return toolResult(UNKNOWN_OUTCOME_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, saved.isError !== false);
-    return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) を登録しました。`);
+    // created の無い応答は、MCP サーバーより古い常駐サーバーからのものなので、新規の登録として扱う。
+    const action = saved.created === false ? 'は登録済みです' : 'を登録しました';
+    return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) ${action}。`);
   }
   if (name === 'cockpit_skip_review') {
     const saved = await postCrossReviewSkip(args, options);

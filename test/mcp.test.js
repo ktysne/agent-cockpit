@@ -149,6 +149,27 @@ test('cockpit_add_pr は PR URL を秘密値付きで常駐サーバーへ登録
   assert.equal(sent.body.claudeCodeSessionId, 'mcp-session');
 });
 
+test('cockpit_add_pr の返答は常駐サーバーの created で新規の登録と登録済みを分ける', async () => {
+  for (const [created, expected] of [
+    [true, 'PR #45 (example/project) を登録しました。'],
+    [false, 'PR #45 (example/project) は登録済みです。'],
+    [undefined, 'PR #45 (example/project) を登録しました。'],
+  ]) {
+    const result = await callTool('cockpit_add_pr', { url: 'https://github.com/example/project/pull/45' }, {
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+      fetchImpl: async url => {
+        if (url.endsWith('/api/diagnostics')) return new Response('{}', { status: 202 });
+        return new Response(JSON.stringify({
+          owner: 'example', repo: 'project', number: 45, url: 'https://github.com/example/project/pull/45', created,
+        }), { status: 200 });
+      },
+    });
+    assert.equal(result.isError, undefined, `created: ${created}`);
+    assert.equal(result.content[0].text, expected, `created: ${created}`);
+  }
+});
+
 test('cockpit_skip_review は理由と指定 head を秘密値付きで常駐サーバーへ記録する', async () => {
   let sent = null;
   const headRefOid = 'a'.repeat(40);

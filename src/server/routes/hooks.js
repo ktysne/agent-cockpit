@@ -427,13 +427,16 @@ function createHookRoutes(ctx) {
       return;
     }
     const product = productFromCwd(body.cwd);
+    const alreadyRegistered = Boolean(state.pullRequestRegistrationForSession(sessionId, pullRequest.owner, pullRequest.repo, pullRequest.number));
     const registered = state.registerPullRequest(sessionId, pullRequest, { cwd: body.cwd, product, preserveLocation: true });
     if (!registered) {
       jsonResponse(response, 400, { error: 'Invalid request' });
       return;
     }
     void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
-    jsonResponse(response, 200, { owner: registered.owner, repo: registered.repo, number: registered.number, url: registered.url });
+    jsonResponse(response, 200, {
+      owner: registered.owner, repo: registered.repo, number: registered.number, url: registered.url, created: !alreadyRegistered,
+    });
   }
 
   return { handleHookAnswers, handleEvents, handlePlan, handleSessionPullRequests };
