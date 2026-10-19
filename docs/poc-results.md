@@ -13,7 +13,7 @@ Claude Code 2.1.284(デスクトップアプリ、Windows)で確かめた。
 | 内部ブラウザでパス付きの URL を開けるか | できる | `preview_start {url}` でも `navigate` でも、パスとクエリがそのまま渡る。ただしサーバーが先に起動している必要がある |
 | 受付ソケットからセッションへメッセージを届けられるか | 未確認 | 送信手順は分かったが、試験送信が auto mode の安全判定で拒否された |
 | ダイアログで待つ `AskUserQuestion` に外から答えられるか | できる | `PreToolUse` フックが `permissionDecision: "allow"` と、元の `questions` に `answers`(質問の文から選んだ label への対応)を足した `updatedInput` を返すと、ダイアログを出さずにその回答で進む。フックが待っているあいだはダイアログが出ない(`poc/answer-proto.js` の `ask`、2.1.287) |
-| 待機中のセッションを起こせるか | できる | `Stop` フックに `asyncRewake: true` を付けると背景で動き、終了コード 2 で終わると入力待ちのセッションがすぐ起きる。stderr の文がモデルに届く(同 `rewake`) |
+| 待機中のセッションを起こせるか | できる | `Stop` フックに `asyncRewake: true` を付けるとバックグラウンドで動き、終了コード 2 で終わると入力待ちのセッションがすぐ起きる。stderr の文がモデルに届く(同 `rewake`) |
 | `AskUserQuestion` に選択肢に無い答えや複数の質問へ答えられるか | できる | `answers` の値に選択肢に無い文を入れると、自由な答えとしてモデルに届く。質問が複数あるときは質問ごとに、複数選択は label を「, 」でつないで渡せる。`additionalContext` を添えると、回答と一緒にモデルに届く(同 `ask`) |
 | 作業中のセッションに文を差し込めるか | できる | `PostToolBatch` フックの `hookSpecificOutput.additionalContext` が、次のモデルの呼び出しに届く(同 `batch`) |
 | 終了コードが 0 以外の Bash の出力をフックで読めるか | できる | `PostToolUseFailure` の `error` に、1 行目の `Exit code N` に続いて出力が入る(公式の文書) |

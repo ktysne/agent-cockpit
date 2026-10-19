@@ -122,7 +122,7 @@ test('モデルの読み取り中の Stop は同じセッションの読み取�
   assert.equal(maxActive, 1);
 });
 
-test('待機中の Claude サブエージェントと背景 Codex があるセッションはメインのイベントの後に記録を読む', async (t) => {
+test('待機中の Claude サブエージェントとバックグラウンドの Codex があるセッションはメインのイベントの後に記録を読む', async (t) => {
   const state = new DashboardState();
   const reads = [];
   const runtime = await runningServer(t, {
@@ -339,7 +339,7 @@ test('SubagentStop 済みの行は Agent の中断失敗とメインの Stop で
 });
 
 for (const delayed of [false, true]) {
-  test(delayed ? 'Stop より前の Agent 応答が遅れて届いても背景の稼働を保つ' : '背景のサブエージェントはメインの Stop 後も稼働を保つ', async (t) => {
+  test(delayed ? 'Stop より前の Agent 応答が遅れて届いてもバックグラウンドの稼働を保つ' : 'バックグラウンドのサブエージェントはメインの Stop 後も稼働を保つ', async (t) => {
     const c = await foregroundPermissionCockpit(t);
     const response = () => c.hook('foreground', 'PostToolUse', 500, { tool_name: 'Agent', tool_use_id: 'call' });
     if (!delayed) await response();
@@ -353,7 +353,7 @@ for (const delayed of [false, true]) {
   });
 }
 
-test('前面のサブエージェントを閉じても、その下で背景起動した Codex が動いていれば稼働中として区別する', async (t) => {
+test('前面のサブエージェントを閉じても、その下でバックグラウンド起動した Codex が動いていれば稼働中として区別する', async (t) => {
   const c = await interruptionCockpit(t);
   await c.hook('nested-codex', 'UserPromptSubmit', 0);
   await c.hook('nested-codex', 'PreToolUse', 100, { tool_name: 'Agent', tool_use_id: 'call' });
@@ -367,7 +367,7 @@ test('前面のサブエージェントを閉じても、その下で背景起�
   assert.equal(session.status, '待機中(サブエージェント稼働中)');
 });
 
-test('背景の起動の応答が SubagentStart より先に届いてもメインの Stop 後も稼働を保つ', async (t) => {
+test('バックグラウンドの起動の応答が SubagentStart より先に届いてもメインの Stop 後も稼働を保つ', async (t) => {
   const c = await interruptionCockpit(t);
   await c.hook('early-response', 'UserPromptSubmit', 0);
   await c.hook('early-response', 'PreToolUse', 100, { tool_name: 'Agent', tool_use_id: 'call' });
@@ -382,7 +382,7 @@ test('背景の起動の応答が SubagentStart より先に届いてもメイ�
   assert.ok(session.tools.some(tool => tool.tool_use_id === 'child-tool'));
 });
 
-test('背景の許可待ちを画面から終了にするとツールと待ちを表示から除き状態を決め直す', async (t) => {
+test('バックグラウンドの許可待ちを画面から終了にするとツールと待ちを表示から除き状態を決め直す', async (t) => {
   const c = await foregroundPermissionCockpit(t);
   await c.hook('foreground', 'PostToolUse', 500, { tool_name: 'Agent', tool_use_id: 'call' });
   await c.hook('foreground', 'Stop', 600);
@@ -3376,7 +3376,7 @@ async function waitForBackgroundOutputRead(outputRead) {
   let timeout;
   try {
     await Promise.race([outputRead, new Promise((_, reject) => {
-      timeout = setTimeout(() => reject(new Error('背景タスクの出力読み取りが完了しませんでした')), 2000);
+      timeout = setTimeout(() => reject(new Error('バックグラウンドタスクの出力読み取りが完了しませんでした')), 2000);
     })]);
   } finally {
     clearTimeout(timeout);
@@ -3420,7 +3420,7 @@ async function backgroundNotificationCockpit(t, { byRun = false, output = 'codex
   return { state, before, runtime, sessionId, homeDir, outputRead };
 }
 
-test('フックの通知が無くても記録ファイルの task-id で背景 Codex を終了し結果を反映する', async (t) => {
+test('フックの通知が無くても記録ファイルの task-id でバックグラウンドの Codex を終了し結果を反映する', async (t) => {
   const { state, before } = await backgroundNotificationCockpit(t, {
     output: 'codex-agent: agent=codex-review model=gpt-6 effort=high codex_home=C:/codex\n' + 'x'.repeat(160 * 1024) + '\ncodex-agent: result=ok',
   });
@@ -3433,7 +3433,7 @@ test('フックの通知が無くても記録ファイルの task-id で背景 C
   assert.equal(after.lastActivityAt, before.lastActivityAt);
 });
 
-test('PostToolUse が無く背景タスク ID を持たない待ちの行を、記録ファイルの run ID で終了する', async (t) => {
+test('PostToolUse が無くバックグラウンドタスク ID を持たない待ちの行を、記録ファイルの run ID で終了する', async (t) => {
   const { state } = await backgroundNotificationCockpit(t, { byRun: true,
     output: 'codex-agent: run=codex-review-20261004-100000-1\ncodex-agent: result=ok' });
   assert.equal(state.backgroundCodexAgents('background-recovery').length, 0);
@@ -3441,7 +3441,7 @@ test('PostToolUse が無く背景タスク ID を持たない待ちの行を、�
   assert.equal(parent.gpt.active, false);
 });
 
-test('セッションの一覧が読めなくても、フックが送った cwd で記録ファイルを読み背景 Codex を終了する', async (t) => {
+test('セッションの一覧が読めなくても、フックが送った cwd で記録ファイルを読みバックグラウンドの Codex を終了する', async (t) => {
   const { state, runtime, sessionId, homeDir, outputRead } = await backgroundNotificationCockpit(t, { sessionFile: false });
   await request(runtime.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
     body: JSON.stringify({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read', cwd: homeDir }) });
@@ -3451,7 +3451,7 @@ test('セッションの一覧が読めなくても、フックが送った cwd 
   assert.equal(agent.resultReceived, true);
 });
 
-test('結果行が無い記録ファイルの完了通知も背景 Codex の稼働と終了未確認を外す', async (t) => {
+test('結果行が無い記録ファイルの完了通知もバックグラウンドの Codex の稼働と終了未確認を外す', async (t) => {
   const { state } = await backgroundNotificationCockpit(t, {
     output: 'codex-agent: agent=codex-review model=gpt-6 effort=high codex_home=C:/codex' });
   const agent = state.snapshot().sessions[0].agents[0];
@@ -3461,7 +3461,7 @@ test('結果行が無い記録ファイルの完了通知も背景 Codex の稼�
   assert.equal(agent.model, 'gpt-6');
 });
 
-test('--wait が待機の上限で返った完了通知では背景 Codex の行を稼働中のまま残す', async (t) => {
+test('--wait が待機の上限で返った完了通知ではバックグラウンドの Codex の行を稼働中のまま残す', async (t) => {
   const { state } = await backgroundNotificationCockpit(t, {
     output: 'codex-agent: waiting run=codex-review-20261004-100000-1 elapsed=600s' });
   const agent = state.snapshot().sessions[0].agents[0];
@@ -3504,7 +3504,7 @@ test('読み取りの上限で照合できなかった通知は次の照合で�
   assert.equal(state.backgroundCodexAgents('many-run').length, 0);
 });
 
-test('背景タスク ID の無い行も、--wait が Codex の終了を示して返った完了通知では終了にする', async (t) => {
+test('バックグラウンドタスク ID の無い行も、--wait が Codex の終了を示して返った完了通知では終了にする', async (t) => {
   for (const status of ['vanished', 'not-found']) {
     const { state } = await backgroundNotificationCockpit(t, { byRun: true,
       output: `codex-agent: run=codex-review-20261004-100000-1
@@ -3543,7 +3543,7 @@ test('読めない出力が 8 件並んでいても、次の照合では未試�
   assert.deepEqual(state.backgroundCodexAgents('unreadable').map(agent => agent.backgroundTaskId), ids.slice(0, 8));
 });
 
-test('出力ファイルが消えた完了通知では背景 Codex の行を終了未確認にし、照合から外す', async (t) => {
+test('出力ファイルが消えた完了通知ではバックグラウンドの Codex の行を終了未確認にし、照合から外す', async (t) => {
   const state = new DashboardState();
   backgroundRows(state, 'missing-output', ['task-a']);
   const { homeDir } = await temporaryHome(t);
@@ -3558,7 +3558,7 @@ test('出力ファイルが消えた完了通知では背景 Codex の行を終�
   assert.equal(agent.unconfirmed, true);
 });
 
-test('外部から送られた内部イベントで状態や背景 Codex の行を変えない', async (t) => {
+test('外部から送られた内部イベントで状態やバックグラウンドの Codex の行を変えない', async (t) => {
   const state = new DashboardState();
   state.addEvent({ session_id: 'internal', hook_event_name: 'UserPromptSubmit', hookAt: 1 });
   state.addEvent({ session_id: 'internal', hook_event_name: 'PreToolUse', hookAt: 2,
@@ -3626,7 +3626,7 @@ codex-agent: result=ok`),
   assert.equal(state.backgroundCodexAgents('read-fail').length, 0);
 });
 
-test('記録ファイルの run ID が違うか得られなければ背景タスク ID の無い行を終了しない', async (t) => {
+test('記録ファイルの run ID が違うか得られなければバックグラウンドタスク ID の無い行を終了しない', async (t) => {
   for (const output of ['codex-agent: run=codex-review-20261004-100000-2\ncodex-agent: result=ok', 'codex-agent: result=ok']) {
     const { state } = await backgroundNotificationCockpit(t, { byRun: true, output });
     assert.equal(state.snapshot().sessions[0].agents.find(agent => agent.agent_id === 'parent').gpt.active, true);

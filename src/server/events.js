@@ -267,6 +267,10 @@ function sanitizeEvent(input, metadata = {}) {
   }
 
   if (eventName === 'PostToolUse') {
+    if (isPullRequestShellTool(event.tool_name) && !agentId) {
+      event.summary = shortString(input.summary, 80) || event.tool_name;
+      event.description = shortString(input.description, 200) || '';
+    }
     if (!agentId) {
       const update = planUpdateForTool(event.tool_name, input.planUpdate);
       if (update) event.planUpdate = update;

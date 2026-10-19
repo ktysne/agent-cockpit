@@ -92,7 +92,7 @@ function backgroundLaunch(state, definition = 'impl-hard', startedAt = 100) {
 }
 
 for (const tool_name of ['Read', 'Bash']) {
-  test(`${tool_name} で別ファイルの結果行を引用しても背景レビューを終了にしない`, () => {
+  test(`${tool_name} で別ファイルの結果行を引用してもバックグラウンドレビューを終了にしない`, () => {
     for (const status of ['ok', 'rate-limited']) {
       const state = new DashboardState();
       launch(state, 'launch', { tool_input: { command: 'npm run review:codex' } });
@@ -113,7 +113,7 @@ for (const tool_name of ['Read', 'Bash']) {
   });
 }
 
-test('背景出力の Read と TaskOutput は実行 ID の無い結果行で対応するレビューを終了する', () => {
+test('バックグラウンド出力の Read と TaskOutput は実行 ID の無い結果行で対応するレビューを終了する', () => {
   for (const tool_name of ['Read', 'TaskOutput']) {
     const state = new DashboardState();
     backgroundLaunch(state, 'codex-review');
@@ -126,7 +126,7 @@ test('背景出力の Read と TaskOutput は実行 ID の無い結果行で対�
   }
 });
 
-test('背景タスク ID の記録が無い背景行も出力ファイルの結果行で終了する', () => {
+test('バックグラウンドタスク ID の記録が無いバックグラウンド行も出力ファイルの結果行で終了する', () => {
   const state = new DashboardState();
   launch(state);
   state.addEvent(claudeEvent('PostToolUse', { hookAt: 101 }));
@@ -137,7 +137,7 @@ test('背景タスク ID の記録が無い背景行も出力ファイルの結�
   assert.equal(agent.active, false);
 });
 
-test('別の背景タスクの出力は一意な背景行にも割り当てない', () => {
+test('別のバックグラウンドタスクの出力は一意なバックグラウンド行にも割り当てない', () => {
   const state = new DashboardState();
   backgroundLaunch(state);
   state.addEvent(claudeEvent('PostToolUse', { hookAt: 200, tool_name: 'Read', tool_use_id: 'output',
@@ -147,7 +147,7 @@ test('別の背景タスクの出力は一意な背景行にも割り当てな�
   assert.notEqual(agent.resultReceived, true);
 });
 
-test('子の --wait は背景出力の印も実行 ID の行も無い応答で同じ Codex を終了する', () => {
+test('子の --wait はバックグラウンド出力の印も実行 ID の行も無い応答で同じ Codex を終了する', () => {
   const state = new DashboardState();
   missingLaunch(state);
   state.addEvent(claudeEvent('PreToolUse', { hookAt: missingLaunchAt + 1, agent_id: 'sub', tool_use_id: 'wait',
@@ -162,7 +162,7 @@ test('子の --wait は背景出力の印も実行 ID の行も無い応答で�
   assert.equal(parent.gpt.unconfirmed, false);
 });
 
-test('killed と stopped の通知に結果が無ければ背景 Codex は終了未確認になる', () => {
+test('killed と stopped の通知に結果が無ければバックグラウンドの Codex は終了未確認になる', () => {
   for (const status of ['killed', 'stopped']) {
     const state = new DashboardState();
     backgroundLaunch(state);
@@ -175,7 +175,7 @@ test('killed と stopped の通知に結果が無ければ背景 Codex は終了
   }
 });
 
-test('背景レビューへ別定義の実行 ID の結果を割り当てない', () => {
+test('バックグラウンドレビューへ別定義の実行 ID の結果を割り当てない', () => {
   const state = new DashboardState();
   backgroundLaunch(state, 'codex-review');
   state.addEvent(claudeEvent('PostToolUse', { tool_use_id: 'read', hookAt: 300,
@@ -214,7 +214,7 @@ test('停止通知でも待機状態行があればその状態で稼働と終�
   }
 });
 
-test('実行 ID の定義と秒単位の起動時刻が合う結果だけを背景行へ割り当てる', () => {
+test('実行 ID の定義と秒単位の起動時刻が合う結果だけをバックグラウンド行へ割り当てる', () => {
   for (const [started, expected] of [['10:59:59', false], ['11:00:00', true], ['', true]]) {
     const state = new DashboardState();
     backgroundLaunch(state, 'impl-hard', Date.parse('2026-10-19T11:00:00.900Z'));
@@ -477,7 +477,7 @@ test('ローカル時刻の実行 ID の --wait は拒否の候補にした起�
   assert.equal(state.hasRunningDelegation(parentId), false);
 });
 
-test('結果行の取得後に背景化の通知が遅れて届いても、実行中に始まった thread を委譲に直す', () => {
+test('結果行の取得後にバックグラウンド化の通知が遅れて届いても、実行中に始まった thread を委譲に直す', () => {
   const state = new DashboardState();
   launch(state, 'launch', { hookAt: 1000 });
   state.addEvent(claudeEvent('PostToolBatch', { hookAt: 2100 }));
@@ -501,7 +501,7 @@ test('区切りより前の PostToolUse が遅れて届くと、見えるよう�
   assert.deepEqual(codexSessions(state), []);
 });
 
-test('背景へ移した PostToolUse が区切りと thread の開始後に届くと、通知時刻より後の thread も委譲に直す', () => {
+test('バックグラウンドへ移した PostToolUse が区切りと thread の開始後に届くと、通知時刻より後の thread も委譲に直す', () => {
   const state = new DashboardState();
   launch(state);
   state.addEvent(claudeEvent('PostToolBatch', { hookAt: 200 }));
@@ -603,7 +603,7 @@ test('同じ定義の起動が二つ欠落したとき run 行や --wait は引�
   assert.deepEqual([parent.unconfirmed, parent.gpt.active, parent.gpt.unconfirmed], [true, false, false]);
 });
 
-test('背景行と欠落した起動が共存すると正常な背景行の run 行を欠落した行へ付けない', () => {
+test('バックグラウンド行と欠落した起動が共存すると正常なバックグラウンド行の run 行を欠落した行へ付けない', () => {
   for (const outputTask of [true, false]) {
     const state = new DashboardState();
     backgroundLaunch(state, 'impl-hard', missingLaunchAt);
@@ -617,7 +617,7 @@ test('背景行と欠落した起動が共存すると正常な背景行の run 
   }
 });
 
-test('run 行で背景へ移った欠落起動はメインの Stop で終了未確認に戻らない', () => {
+test('run 行でバックグラウンドへ移った欠落起動はメインの Stop で終了未確認に戻らない', () => {
   const state = new DashboardState();
   launch(state, 'launch', { hookAt: missingLaunchAt });
   state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 1, tool_use_id: 'read',

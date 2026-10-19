@@ -571,7 +571,7 @@ async function startServer(options = {}) {
   function needsTaskNotifications(sessionId) {
     const session = state.sessionView(sessionId);
     if (!session || session.provider === 'codex') return false;
-    return state.backgroundCodexAgents(sessionId).length > 0 ||
+    return session.backgrounds.length > 0 || state.backgroundCodexAgents(sessionId).length > 0 ||
       (['待機中(サブエージェント稼働中)', '中断'].includes(session.status) &&
         session.agents.some((agent) => !agent.isCodex && agent.active));
   }
@@ -632,6 +632,10 @@ async function startServer(options = {}) {
         const ordered = [...notifications].sort(([a], [b]) => cache.failed.has(a) - cache.failed.has(b));
         for (const [taskId, notification] of ordered) {
           if (!['completed', 'failed', 'killed', 'stopped'].includes(notification.status)) continue;
+          // task-id は起動ごとに一意なので時刻は比べない。フックの到着順で開始時刻が遅れて記録され、短いタスクの通知を拒むため。
+          if (state.sessionView(sessionId)?.backgrounds.some((item) => item.taskId === taskId)) {
+            state.recordBackgroundTaskEnd(sessionId, { taskId, status: notification.status });
+          }
           const candidates = () => state.backgroundCodexAgents(sessionId).filter(agent =>
             (!agent.backgroundTaskId || agent.backgroundTaskId === taskId) &&
             !(Date.parse(notification.recordedAt) < Date.parse(agent.startedAt)));

@@ -67,7 +67,7 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{tools: SessionTool[], completedToolIds: Set<string>, agentToolBindings: Object<string, string|symbol|null>}} SessionTools */
 
-/** @typedef {{agents: SessionAgent[], stoppedAgentIds: Set<string>, launchedAgentIds: Set<string>}} SessionAgents */
+/** @typedef {{agents: SessionAgent[], backgrounds: Array<{taskId: string, agent_id: string, startedAt: string, description: string, tool_name: string, summary: string}>, stoppedAgentIds: Set<string>, launchedAgentIds: Set<string>}} SessionAgents */
 
 /** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>, codexReviewAgentIds: Set<string>}} SessionCodex */
 
@@ -94,6 +94,7 @@ function newSession(event, askDecisionState = {}) {
     launchedAgentIds: new Set(),
     codexLaunchToolIds: new Set(),
     agents: [],
+    backgrounds: [],
     permissionWaits: [],
     permissionBoundaries: new Set(),
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
@@ -184,7 +185,7 @@ function stopAgent(session, agentId, stoppedAgentIds, hookAt) {
 }
 
 // 実行 ID で直接特定できない結果行は、条件に合う行が一つの場合だけ割り当てる。実行 ID があれば定義名が同じで開始(秒で切り捨て)が
-// 行の開始より前でない行、無ければ出力ファイルを読んだ応答で背景タスク ID の無い行に限る。引用や別の実行の結果行を割り当てないため。
+// 行の開始より前でない行、無ければ出力ファイルを読んだ応答でバックグラウンドタスク ID の無い行に限る。引用や別の実行の結果行を割り当てないため。
 // 待機の終わった行はラッパーの出力に結果行が届かないので、実行 ID の一致だけで特定する。
 function uniqueBackgroundedCodex(session, parentAgentId, runId = null, runStartedAt = null, backgroundOutputTaskId = null) {
   if (!runId && !backgroundOutputTaskId) return null;
@@ -239,7 +240,7 @@ function latestCodexForParent(agents, parentAgentId) {
     .at(-1);
 }
 
-// 結果無しで失敗した起動は続きが無いので、背景へ移った行(終了未確認を含む)だけを候補にする。
+// 結果無しで失敗した起動は続きが無いので、バックグラウンドへ移った行(終了未確認を含む)だけを候補にする。
 // 実行 ID が分かっていて別の値の行は、別の実行なので候補にしない。
 function latestWaitableCodex(session, parentAgentId, definition, runId) {
   return session.agents
@@ -377,6 +378,7 @@ function sessionSnapshot(session) {
     status,
     tools,
     agents,
+    backgrounds: session.backgrounds.map((item) => ({ ...item })),
     permissionWaits,
     decisions: session.decisions.map(cloneDecision),
     decisionBindings: { ...session.decisionBindings },
@@ -487,7 +489,7 @@ function applyAgentToolCompletion(session, event) {
       ? responseAgent
       : boundAgent && !boundAgent.isCodex ? boundAgent : null;
     if (!targetAgent) {
-      // 背景の起動の応答は SubagentStart より先に届くことがあるので、後から作る行を背景にするため覚えておく。
+      // バックグラウンドの起動の応答は SubagentStart より先に届くことがあるので、後から作る行をバックグラウンドにするため覚えておく。
       // 前面の応答は SubagentStop の後に届くので、停止済みの agentId は覚えない。
       if (event.agentId && !session.stoppedAgentIds.has(event.agentId)) session.launchedAgentIds.add(event.agentId);
       return;
@@ -530,7 +532,7 @@ function applyCodexLaunchCompletion(session, event) {
       !ignoresReviewResult(session, placeholder, event.codexResult, eventName === 'PostToolUseFailure')) {
       completeCodexAgent(placeholder, event);
     } else if (placeholder && session.pendingCodexWait[toolUseId]) {
-      // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
+      // waiting や状態が読めないときは Codex がバックグラウンドで動き続けている見込みなので、稼働中に残す。
       applyCodexAudit(placeholder, event);
       if (['vanished', 'not-found'].includes(event.codexWaitStatus)) {
         placeholder.active = false;
@@ -554,8 +556,8 @@ function applyCodexLaunchCompletion(session, event) {
       placeholder.endedAt ??= event.hookAt;
     } else if (placeholder) {
       applyCodexAudit(placeholder, event);
-      // 合成の Interrupt は記録ファイルの時刻で並ぶので、終了未確認にした後に背景へ移った知らせが並ぶことがある。
-      // 止まったサブエージェントの背景の Codex は終了未確認にする規則があるので、その子は戻さない。
+      // 合成の Interrupt は記録ファイルの時刻で並ぶので、終了未確認にした後にバックグラウンドへ移った知らせが並ぶことがある。
+      // 止まったサブエージェントのバックグラウンドの Codex は終了未確認にする規則があるので、その子は戻さない。
       if (placeholder.unconfirmed && !session.stoppedAgentIds.has(placeholder.parent_agent_id)) {
         placeholder.active = true;
         placeholder.unconfirmed = false;
@@ -579,13 +581,13 @@ function applyCodexResult(session, event) {
   // 同じ PostToolUse が重複して届くと pendingCodex は消えているので、起動の記録で判定する。
   const isCodexLaunch = session.codexLaunchToolIds.has(toolUseId);
 
-  // 背景タスクの出力を読んだ呼び出しは、背景タスク ID で起動した行と結び付ける。実行 ID が無い複数の背景 Codex を区別できる。
+  // バックグラウンドタスクの出力を読んだ呼び出しは、バックグラウンドタスク ID で起動した行と結び付ける。実行 ID が無い複数のバックグラウンドの Codex を区別できる。
   const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent' && !isCodexLaunch
     ? session.agents.find((agent) => agent.isCodex && agent.backgroundTaskId === event.backgroundOutputTaskId)
     : null;
   if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
-  // 起動の PostToolUse が欠けた行は、後の出力の run 行で引き取る。実行 ID の付いていない背景の行の run 行を
-  // 吸い込まないよう、背景の行も候補に数え、一意のときだけにする。Agent の報告は別の実行を引用しうるので使わない。
+  // 起動の PostToolUse が欠けた行は、後の出力の run 行で引き取る。実行 ID の付いていないバックグラウンドの行の run 行を
+  // 吸い込まないよう、バックグラウンドの行も候補に数え、一意のときだけにする。Agent の報告は別の実行を引用しうるので使わない。
   if (!outputCodex && !isCodexLaunch && event.tool_name !== 'Agent' && event.codexRunId && event.codexRunStartedAt &&
     !session.agents.some((agent) => agent.runId === event.codexRunId)) {
     const definition = event.codexRunId.replace(/-\d{8}-\d{6}-\d+$/, '');
@@ -604,7 +606,7 @@ function applyCodexResult(session, event) {
     }
   }
 
-  // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
+  // Agent の結果は担当の最終報告で、バックグラウンドの Codex の結果行を写していることがあるので使わない。
   if (event.codexResult && !isCodexLaunch && event.tool_name !== 'Agent') {
     const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
     const matched = codexForRun || outputCodex;
@@ -622,6 +624,7 @@ function applyBackgroundTaskEnds(session, event) {
   if (session.provider === 'codex' || !['UserPromptSubmit', 'BackgroundTaskEnd'].includes(event.hook_event_name) || !Array.isArray(event.backgroundTaskEnds)) return;
   for (const end of event.backgroundTaskEnds) {
     if (!['completed', 'failed', 'killed', 'stopped'].includes(end.status)) continue;
+    session.backgrounds = session.backgrounds.filter((item) => item.taskId !== end.taskId);
     const agent = session.agents.find((item) => item.isCodex && item.backgrounded &&
       (item.active || item.unconfirmed) && !item.resultReceived &&
       (item.backgroundTaskId ? item.backgroundTaskId === end.taskId : Boolean(end.codexRunId && item.runId === end.codexRunId)));
@@ -631,7 +634,7 @@ function applyBackgroundTaskEnds(session, event) {
       completeCodexAgent(agent, { ...end, hookAt: event.hookAt });
       continue;
     }
-    // --wait が待機の上限で返っただけなら、Codex は背景で動き続けている。
+    // --wait が待機の上限で返っただけなら、Codex はバックグラウンドで動き続けている。
     if (end.codexWaitStatus === 'waiting') continue;
     applyCodexAudit(agent, end);
     agent.active = false;
@@ -809,6 +812,25 @@ function applyToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
+  if (session.provider === 'claude' && eventName === 'PostToolUse') {
+    if (!agentId && isPullRequestShellTool(event.tool_name) && event.backgroundTaskId
+      && !session.completedToolIds.has(toolUseId)
+      && !session.pendingCodex[toolUseId] && !session.codexLaunchToolIds.has(toolUseId)
+      && !session.backgrounds.some((item) => item.taskId === event.backgroundTaskId)) {
+      const tool = session.tools.find((item) => item.tool_use_id === toolUseId);
+      session.backgrounds.push({
+        taskId: event.backgroundTaskId,
+        agent_id: `background:${event.backgroundTaskId}`,
+        startedAt: tool?.startedAt || isoTime(event.hookAt),
+        description: event.description || '',
+        tool_name: event.tool_name,
+        summary: event.summary || tool?.summary || event.tool_name,
+      });
+    }
+    if (event.tool_name === 'TaskStop' && event.stoppedTaskId) {
+      session.backgrounds = session.backgrounds.filter((item) => item.taskId !== event.stoppedTaskId);
+    }
+  }
   if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
     if (session.provider !== 'codex') applyAgentToolCompletion(session, event);
     if (toolUseId) {
@@ -859,7 +881,7 @@ function applyToolBatch(session, event) {
       agent.deniedAt ??= event.hookAt;
     }
     session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
-    // メインの待ちの一括解除は、背景ツールの区切りで並列の待ちを巻き込むため避ける。
+    // メインの待ちの一括解除は、バックグラウンドツールの区切りで並列の待ちを巻き込むため避ける。
     session.permissionWaits = session.permissionWaits.filter((wait) => {
       if (!sameAgent(wait.agent_id, agentId)) return true;
       if (agentId && startedBeforeBatch(wait)) return false;
@@ -994,7 +1016,7 @@ function applyCodexWaitStart(session, event) {
   if (codexForRun?.resultReceived) {
     delete codexForRun.deniedCandidate;
     delete codexForRun.deniedAt;
-    // 取り出し直しの出力の結果行を、背景で動いている別の行へ流さないため、終わった行に結び付けておく。
+    // 取り出し直しの出力の結果行を、バックグラウンドで動いている別の行へ流さないため、終わった行に結び付けておく。
     session.pendingCodex[toolUseId] = codexForRun.agent_id;
   } else {
     let agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition, event.codexWaitRunId);

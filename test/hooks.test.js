@@ -16,6 +16,19 @@ const {
 const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
 
+test('メインのバックグラウンドシェルは説明とコマンドを上限付きで送る', () => {
+  for (const tool_name of ['Bash', 'PowerShell']) {
+    const event = makeHookEvent({ session_id: 'background', hook_event_name: 'PostToolUse', tool_name,
+      tool_input: { command: '  npm test\n  ' + 'x'.repeat(100), description: '説'.repeat(201) },
+      tool_response: { backgroundTaskId: 'task-a' } });
+    assert.equal(event.summary, 'npm test ' + 'x'.repeat(70) + '…');
+    assert.equal(event.description, '説'.repeat(200));
+    const sanitized = sanitizeEvent(event);
+    assert.equal(sanitized.summary, event.summary);
+    assert.equal(sanitized.description, event.description);
+  }
+});
+
 test('起動定義は Bash と PowerShell の開始イベントで定義名の形式と長さを満たすものだけ受ける', () => {
   for (const [tool_name, hook_event_name, definition, expected] of [
     ['Bash', 'PreToolUse', '_impl.hard-1', '_impl.hard-1'],
@@ -853,7 +866,7 @@ test('AskUserQuestion の回答を本文の全文なしで PostToolUse に載せ
   assert.equal(Object.hasOwn(agentEvent, 'decisionResolution'), false);
 });
 
-test('背景タスクの出力を読む呼び出しと、背景へ移ったシェルツールから背景タスク ID を取り出す', () => {
+test('バックグラウンドタスクの出力を読む呼び出しと、バックグラウンドへ移ったシェルツールからバックグラウンドタスク ID を取り出す', () => {
   const base = { session_id: 'bgid', hook_event_name: 'PostToolUse', tool_use_id: 't1' };
   for (const tool_name of ['Bash', 'PowerShell']) {
     for (const hook_event_name of ['PostToolUse', 'PostToolUseFailure']) {
@@ -963,7 +976,7 @@ test('開発者の入力に引用した完了通知と、終わりを示さな�
   assert.deepEqual(running.backgroundTaskEnds, [{ taskId: 'task-b', status: 'killed' }]);
 });
 
-test('形に合わない背景タスク ID はフックもサーバーの正規化も捨てる', () => {
+test('形に合わないバックグラウンドタスク ID はフックもサーバーの正規化も捨てる', () => {
   const bad = makeHookEvent({
     session_id: 'bgid', hook_event_name: 'PostToolUse', tool_use_id: 't1', tool_name: 'Bash',
     tool_input: { command: 'ls' }, tool_response: { backgroundTaskId: 'bad id!' },

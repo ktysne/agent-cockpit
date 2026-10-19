@@ -313,7 +313,7 @@ test('Codex のメインと子の画面行はそれぞれのモデルとメイ�
     expandedEndedSessions: new Set(), displayPreferences: { hideFinished: true }, isFilterShown: () => true,
     isEndedAgent: agent => !agent.active,
   });
-  vm.runInContext(['sessionOrigin', 'mainRow', 'appendAgents', 'appendSessionModelLine', 'appendModelLine', 'sessionDisplayName']
+  vm.runInContext(['sessionOrigin', 'runningBackgrounds', 'mainRow', 'appendAgents', 'appendSessionModelLine', 'appendModelLine', 'sessionDisplayName']
     .map(name => functionSource(html, name)).join('\n'), context);
   assert.equal(context.sessionDisplayName(session), 'Codex のセッション');
   const texts = node => [node.textContent, ...node.childNodes.flatMap(texts)];

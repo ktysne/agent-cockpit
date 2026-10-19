@@ -119,7 +119,7 @@ function assertProductCardBodyOrder(sectionOrder, expected) {
 }
 
 test('状態不明の操作と推定結果は種類別・プロダクト別のメイン行内にまとまる', () => {
-  const sourceFunctions = ['sessionOrigin', 'mainRow', 'unknownSessionControls', 'appendUnknownSessionControls']
+  const sourceFunctions = ['sessionOrigin', 'runningBackgrounds', 'mainRow', 'unknownSessionControls', 'appendUnknownSessionControls']
     .map((name) => functionSource(web, name));
   assert.ok(sourceFunctions.every(Boolean));
   const sourceContext = pageContext(web, {
@@ -153,7 +153,7 @@ test('状態不明の操作と推定結果は種類別・プロダクト別の�
   assert.equal((estimatedText.match(/10:00/g) || []).length, 1);
   assert.match(estimatedText, /入力待ちらしい: いいえ/);
 
-  const mockFunctions = ['sessionOrigin', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name));
+  const mockFunctions = ['sessionOrigin', 'runningBackgrounds', 'mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name));
   assert.ok(mockFunctions.every(Boolean));
   const mockContext = pageContext(mock, {
     ui: { estimatedSessions: ['unknown'] },
@@ -208,7 +208,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     appendDecisions() {},
     appendTasks(target) { target.append(fakeElement('div', 'task-list')); },
     mainRow: () => fakeElement('div', 'now-row main-row'),
-    appendAgents() {},
+    appendAgents() {}, appendBackgrounds() {},
   });
   vm.runInContext(`${functionSource(web, 'sessionOrigin')}\n${webSession}\n${functionSource(web, 'sessionDisplayName')}\nthis.renderSession = sessionBlock;`, webContext);
   const webVisible = webContext.renderSession({ key: 'p', name: 'P' }, {
@@ -226,7 +226,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     orderedSectionKeys: (keys) => keys,
     decisionSessionBlock: () => '',
     mainRow: () => '<div class="now-row main-row"></div>',
-    agentSection: () => '',
+    agentSection: () => '', backgroundSection: () => '',
     worktreeLinks: () => '',
     esc: (value) => String(value ?? ''),
   });
@@ -255,7 +255,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     appendKindToggle(target) { target.append(fakeElement('button', 'ended-toggle', '終了済みを表示')); },
     hasHiddenJudgmentItems: () => false,
     sessionActivityTime: () => 1,
-    appendAgents() {},
+    appendAgents() {}, appendBackgrounds() {},
     mainRow: (session) => fakeElement('div', 'now-row main-row', session.session_id),
     appendKindTaskSession() {},
     sinceSeenBox: () => null,
@@ -265,7 +265,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
   });
   const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
     .map((name) => functionSource(web, name)).join('\n');
-  vm.runInContext(`${kindSort}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
+  vm.runInContext(`${kindSort}\n${functionSource(web, 'runningBackgrounds')}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
   const activitySection = kindContext.renderKinds([{ pullRequestGroups: [] }]).find((section) => section.title === '今やっていること');
   const activity = activitySection.body;
   assert.equal(activity.className, 'body now');
@@ -482,7 +482,7 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     },
     hasHiddenJudgmentItems: () => false,
     sessionActivityTime: () => 1,
-    appendAgents() {},
+    appendAgents() {}, appendBackgrounds() {},
     mainRow: () => fakeElement('div', 'now-row main-row'),
     appendKindTaskSession(target) { target.append(fakeElement('section', 'kind-session-tasks group-frame')); },
     sinceSeenBox: () => null,
@@ -492,7 +492,7 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
   });
   const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
     .map((name) => functionSource(web, name)).join('\n');
-  vm.runInContext(`${kindSort}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
+  vm.runInContext(`${kindSort}\n${functionSource(web, 'runningBackgrounds')}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
   const sections = kindContext.renderKinds([{ pullRequestGroups: [] }]);
   const tasks = sections.find((section) => section.title === 'タスクと完了条件');
   const activity = sections.find((section) => section.title === '今やっていること');
