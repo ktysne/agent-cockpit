@@ -49,15 +49,125 @@ for (const eventName of ['UserPromptSubmit', 'Stop', 'Interrupt', 'PreToolUse'])
   });
 }
 
-test('開始以前の時刻や先に受信したイベントと同じ呼び出しの開始では取り下げない', () => {
+test('開始以前の時刻の区切りや同じ呼び出しの開始では取り下げない', () => {
   const state = new DashboardState();
-  state.addEvent(progress('UserPromptSubmit', NOW + 100));
+  state.addEvent(progress('UserPromptSubmit', NOW - 100));
+  state.addEvent(progress('Stop', NOW - 50));
   state.addEvent(ask());
   assert.equal(decision(state).state, 'waiting');
   state.addEvent(progress('Stop', NOW));
   state.addEvent(progress('UserPromptSubmit', NOW - 1));
   state.addEvent(ask('ask-1', NOW + 200));
   assert.equal(decision(state).state, 'waiting');
+});
+
+for (const eventName of ['Stop', 'PreToolUse', 'UserPromptSubmit', 'Interrupt']) {
+  test(`先に届いた ${eventName} より前の時刻の質問開始はその場で withdrawn になる`, () => {
+    const state = new DashboardState();
+    state.addEvent(progress('UserPromptSubmit', NOW - 100));
+    state.addEvent(progress(eventName, NOW + 200));
+    state.addEvent(ask('ask-1', NOW + 100));
+    assert.equal(decision(state).state, 'withdrawn');
+    assert.equal(decision(state).inferredWithdrawalHookAt, NOW + 200);
+    assert.equal(decision(state).finishedByToolUseId, 'ask-1');
+    assert.equal(decision(state).resolution, null);
+  });
+
+  for (const sameQuestions of [true, false]) {
+    test(`${eventName} の後に遅れて届いた${sameQuestions ? '同じ' : '別の'}質問も元の質問とともに withdrawn になる`, () => {
+      const state = new DashboardState();
+      state.addEvent(ask());
+      state.addEvent(progress(eventName, NOW + 200));
+      state.addEvent(ask('ask-2', NOW + 100, {
+        questions: sameQuestions ? QUESTIONS : [{ ...QUESTIONS[0], question: '別の質問' }],
+      }));
+      for (const toolUseId of ['ask-1', 'ask-2']) {
+        const current = state.decisionFor('session-a', state.decisionIdForToolUse('session-a', toolUseId));
+        assert.equal(current.state, 'withdrawn');
+        assert.equal(current.inferredWithdrawalHookAt, NOW + 200);
+        assert.equal(current.finishedByToolUseId, toolUseId);
+        assert.equal(current.resolution, null);
+      }
+    });
+  }
+}
+
+test('遅れた開始は同じ質問の出し直しを除いた最も早い区切りで取り下げる', () => {
+  const state = new DashboardState();
+  state.addEvent(ask('ask-2', NOW + 150));
+  state.addEvent(progress('Stop', NOW + 300));
+  state.addEvent(progress('UserPromptSubmit', NOW + 200));
+  state.addEvent(ask('ask-1', NOW + 100));
+  const current = state.decisionFor('session-a', state.decisionIdForToolUse('session-a', 'ask-1'));
+  assert.equal(current.state, 'withdrawn');
+  assert.equal(current.inferredWithdrawalHookAt, NOW + 200);
+  assert.equal(current.finishedByToolUseId, 'ask-1');
+});
+
+test('同じ質問の出し直しだけが先に届いていても遅れた開始を取り下げない', () => {
+  const state = new DashboardState();
+  state.addEvent(ask('ask-2', NOW + 150));
+  state.addEvent(ask('ask-1', NOW + 100));
+  const current = state.decisionFor('session-a', state.decisionIdForToolUse('session-a', 'ask-1'));
+  assert.equal(current.state, 'waiting');
+  assert.equal(state.decisionIdForToolUse('session-a', 'ask-1'), state.decisionIdForToolUse('session-a', 'ask-2'));
+});
+
+test('遅れた開始の取り下げも区切りより前の PostToolUse で resolved と回答内容に訂正する', () => {
+  const resolution = { chosen: ['JSON'], note: 'JSONで出力する' };
+  for (const hookAt of [NOW + 150, NOW + 200, NOW + 250]) {
+    const state = new DashboardState();
+    state.addEvent(progress('Stop', NOW + 200));
+    state.addEvent(ask('ask-1', NOW + 100));
+    const expected = decision(state);
+    state.addEvent(ask('ask-1', hookAt, { hook_event_name: 'PostToolUse', decisionResolution: resolution }));
+    if (hookAt < NOW + 200) {
+      assert.equal(decision(state).state, 'resolved');
+      assert.deepEqual(decision(state).resolution, resolution);
+      assert.equal(decision(state).resolvedAt, new Date(hookAt).toISOString());
+      assert.equal(decision(state).inferredWithdrawalHookAt, undefined);
+    }
+    else assert.deepEqual(decision(state), expected);
+  }
+});
+
+test('先に届いたサブエージェントの区切りでは遅れたメインの質問を取り下げない', () => {
+  for (const eventName of ['Stop', 'PreToolUse', 'UserPromptSubmit', 'Interrupt']) {
+    const state = new DashboardState();
+    state.addEvent(progress(eventName, NOW + 200, { agent_id: 'agent-a' }));
+    state.addEvent(ask('ask-1', NOW + 100));
+    assert.equal(decision(state).state, 'waiting');
+  }
+});
+
+test('Codex のセッションでは区切りより遅れて届いた質問開始を取り下げない', () => {
+  const state = new DashboardState();
+  state.addEvent(progress('Stop', NOW + 200, { provider: 'codex' }));
+  state.addEvent(ask('ask-1', NOW + 100, { provider: 'codex', tool_name: 'request_user_input' }));
+  assert.equal(decision(state).state, 'waiting');
+});
+
+test('遅れた開始の推定の取り下げは再起動後も保ち同じ開始で巻き戻らない', async () => {
+  const state = new DashboardState();
+  state.addEvent(progress('Stop', NOW + 200));
+  state.addEvent(ask('ask-1', NOW + 100));
+  const expected = decision(state);
+  assert.equal(expected.state, 'withdrawn');
+  const restored = await restart(state);
+  assert.deepEqual(decision(restored), expected);
+  restored.addEvent(ask('ask-1', NOW + 100));
+  assert.deepEqual(decision(restored), expected);
+});
+
+test('フックの回答待ちを扱った質問は区切りより遅れて開始が届いても取り下げない', () => {
+  const state = new DashboardState();
+  const delivery = new DecisionAnswerDelivery({ state, away: { snapshot: () => ({ enabled: true }) },
+    now: () => NOW, setTimeoutImpl: () => 1, clearTimeoutImpl: () => {} });
+  delivery.registerAsk({ sessionId: 'session-a', toolUseId: 'ask-1', questions: QUESTIONS });
+  state.addEvent(progress('Stop', NOW + 200));
+  state.addEvent(ask('ask-1', NOW + 100));
+  assert.equal(decision(state).state, 'waiting');
+  assert.ok(decision(state).awaitingAnswerUntil);
 });
 
 test('終了の根拠にしないイベントでは質問を取り下げない', () => {

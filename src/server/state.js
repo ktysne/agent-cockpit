@@ -2002,49 +2002,86 @@ class DashboardState {
     return true;
   }
 
-  withdrawFinishedDesktopAsks(event) {
-    if (event.provider === 'codex' || event.agent_id) return false;
-    const isNextTool = event.hook_event_name === 'PreToolUse' && event.tool_use_id;
-    if (!isNextTool && !['UserPromptSubmit', 'Stop', 'Interrupt'].includes(event.hook_event_name)) return false;
-    const sessionId = event.session_id;
+  desktopAskWithdrawalTarget(sessionId, decision) {
+    if (decision.source !== 'ask' || decision.state !== 'waiting') return null;
+    // フックの回答待ちは再起動で期限を消しても配信を続けるため、記録の存在で保護する。
+    if (this.decisionLifecycles.get(sessionId)?.has(decision.id)) return null;
+    const stored = this.plans.get(sessionId)?.decisions.find((item) => item.id === decision.id);
+    if (!stored) return null;
     const bindings = this.askDecisionBindings.get(sessionId) || new Map();
-    const entries = this.entries.questions(sessionId);
+    const starts = this.entries.questions(sessionId).filter(({ event: start }) => start.hook_event_name === 'PreToolUse' &&
+      start.tool_name === 'AskUserQuestion' && !start.agent_id && bindings.get(start.tool_use_id) === decision.id);
+    starts.sort((left, right) => right.event.hookAt - left.event.hookAt || right.sequence - left.sequence);
+    const start = starts[0]?.event;
+    const storedStartAt = Date.parse(stored.updatedAt);
+    const toolUseId = start && start.hookAt >= storedStartAt
+      ? start.tool_use_id
+      : [...bindings].reverse().find(([, id]) => id === decision.id)?.[0];
+    return toolUseId ? { decision, stored, toolUseId, startAt: Math.max(start?.hookAt ?? -Infinity, storedStartAt) } : null;
+  }
+
+  isDesktopAskProgress(event) {
+    if (event.provider === 'codex' || event.agent_id) return false;
+    return (event.hook_event_name === 'PreToolUse' && Boolean(event.tool_use_id)) ||
+      ['UserPromptSubmit', 'Stop', 'Interrupt'].includes(event.hook_event_name);
+  }
+
+  isDesktopAskBoundary(event, target) {
+    if (!this.isDesktopAskProgress(event)) return false;
+    const isNextTool = event.hook_event_name === 'PreToolUse';
+    if (isNextTool && event.tool_use_id === target.toolUseId) return false;
+    // 同じ質問の出し直しは既存の判断事項と回答を引き継ぐため、取り下げずに結び付ける。
+    if (isNextTool && event.tool_name === 'AskUserQuestion' && sameQuestionSet(target.decision.questions, event.questions || [])) return false;
+    return true;
+  }
+
+  recordInferredAskWithdrawal(sessionId, target, hookAt) {
+    Object.assign(target.stored, {
+      state: 'withdrawn',
+      updatedAt: isoTime(hookAt),
+      resolvedAt: isoTime(hookAt),
+      resolution: null,
+      finishedByToolUseId: target.toolUseId,
+      inferredWithdrawalHookAt: hookAt,
+    });
+    let finishedIds = this.finishedOutsideEventsAskDecisionIds.get(sessionId);
+    if (!finishedIds) {
+      finishedIds = new Set();
+      this.finishedOutsideEventsAskDecisionIds.set(sessionId, finishedIds);
+    }
+    finishedIds.add(target.decision.id);
+  }
+
+  withdrawFinishedDesktopAsks(event) {
+    if (!this.isDesktopAskProgress(event)) return false;
+    const sessionId = event.session_id;
     let changed = false;
     for (const decision of this.decisionsFor(sessionId)) {
-      if (decision.source !== 'ask' || decision.state !== 'waiting') continue;
-      // フックの回答待ちは再起動で期限を消しても配信を続けるため、記録の存在で保護する。
-      if (this.decisionLifecycles.get(sessionId)?.has(decision.id)) continue;
-      const stored = this.plans.get(sessionId)?.decisions.find((item) => item.id === decision.id);
-      if (!stored) continue;
-      const starts = entries.filter(({ event: start }) => start.hook_event_name === 'PreToolUse' &&
-        start.tool_name === 'AskUserQuestion' && !start.agent_id && bindings.get(start.tool_use_id) === decision.id);
-      starts.sort((left, right) => right.event.hookAt - left.event.hookAt || right.sequence - left.sequence);
-      const start = starts[0]?.event;
-      const storedStartAt = Date.parse(stored.updatedAt);
-      const toolUseId = start && start.hookAt >= storedStartAt
-        ? start.tool_use_id
-        : [...bindings].reverse().find(([, id]) => id === decision.id)?.[0];
-      if (!toolUseId || event.hookAt <= Math.max(start?.hookAt ?? -Infinity, storedStartAt)) continue;
-      if (isNextTool && event.tool_use_id === toolUseId) continue;
-      // 同じ質問の出し直しは既存の判断事項と回答を引き継ぐため、取り下げずに結び付ける。
-      if (isNextTool && event.tool_name === 'AskUserQuestion' && sameQuestionSet(decision.questions, event.questions || [])) continue;
-      Object.assign(stored, {
-        state: 'withdrawn',
-        updatedAt: isoTime(event.hookAt),
-        resolvedAt: isoTime(event.hookAt),
-        resolution: null,
-        finishedByToolUseId: toolUseId,
-        inferredWithdrawalHookAt: event.hookAt,
-      });
-      let finishedIds = this.finishedOutsideEventsAskDecisionIds.get(sessionId);
-      if (!finishedIds) {
-        finishedIds = new Set();
-        this.finishedOutsideEventsAskDecisionIds.set(sessionId, finishedIds);
-      }
-      finishedIds.add(decision.id);
+      const target = this.desktopAskWithdrawalTarget(sessionId, decision);
+      if (!target || event.hookAt <= target.startAt || !this.isDesktopAskBoundary(event, target)) continue;
+      this.recordInferredAskWithdrawal(sessionId, target, event.hookAt);
       changed = true;
     }
     return changed;
+  }
+
+  withdrawLateDesktopAskStart(event) {
+    if (event.provider === 'codex' || event.agent_id || event.hook_event_name !== 'PreToolUse' ||
+      event.tool_name !== 'AskUserQuestion' || !event.tool_use_id) return false;
+    const sessionId = event.session_id;
+    const decisionId = this.decisionIdForToolUse(sessionId, event.tool_use_id);
+    const decision = this.decisionFor(sessionId, decisionId);
+    const target = decision && this.desktopAskWithdrawalTarget(sessionId, decision);
+    if (!target) return false;
+    let boundaryAt = Infinity;
+    for (const { event: boundary } of this.entries.get(sessionId) || []) {
+      if (boundary.hookAt > target.startAt && boundary.hookAt < boundaryAt && this.isDesktopAskBoundary(boundary, target)) {
+        boundaryAt = boundary.hookAt;
+      }
+    }
+    if (boundaryAt === Infinity) return false;
+    this.recordInferredAskWithdrawal(sessionId, target, boundaryAt);
+    return true;
   }
 
   measure(name, fn) {
@@ -2118,11 +2155,12 @@ class DashboardState {
     }
     const entries = this.entries.push(event.session_id, { event, sequence: eventSequence });
     const askState = this.askDecisionStateFor(event.session_id);
-    const nextSessions = deriveSessions(entries, askState, eventSequence, this.entries.questions(event.session_id));
+    let nextSessions = deriveSessions(entries, askState, eventSequence, this.entries.questions(event.session_id));
     if (this.verifyEntries) {
       assert.deepStrictEqual(nextSessions, deriveSessions(this.entries.full(event.session_id), askState, eventSequence));
     }
     let askDecisionStateChanged = false;
+    let withdrawnLateAsk = false;
     if (nextSessions.length > 0) {
       if (nextSessions[0].codex && !nextSessions[0].codex.model) {
         nextSessions[0].codex.model = this.codexRecovery.get(event.session_id)?.model || '';
@@ -2130,6 +2168,17 @@ class DashboardState {
       this.sessions.set(event.session_id, nextSessions[0]);
       this.recordCodexRecovery(event, nextSessions[0]);
       askDecisionStateChanged = this.persistAskDecisionState(event.session_id, nextSessions[0]);
+      withdrawnLateAsk = this.withdrawLateDesktopAskStart(event);
+      if (withdrawnLateAsk) {
+        const updatedAskState = this.askDecisionStateFor(event.session_id);
+        // decisionsFor は this.sessions を優先するため、保存した取り下げを表示にも反映する。
+        nextSessions = deriveSessions(entries, updatedAskState, eventSequence, this.entries.questions(event.session_id));
+        if (this.verifyEntries) {
+          assert.deepStrictEqual(nextSessions, deriveSessions(this.entries.full(event.session_id), updatedAskState, eventSequence));
+        }
+        this.sessions.set(event.session_id, nextSessions[0]);
+        askDecisionStateChanged = this.persistAskDecisionState(event.session_id, nextSessions[0]) || askDecisionStateChanged;
+      }
     }
     else this.sessions.delete(event.session_id);
     // 推定はターンが不明な間の補助なので、状態が確定したら消す。不明のままのイベントでは残す。
@@ -2149,9 +2198,9 @@ class DashboardState {
       ? this.closedAgents.get(event.session_id)?.delete(event.agent_id) : false;
     const clearedClosedAgent = this.reconcileClosedAgents(event.session_id) || reopenedClosedAgent;
     if (stableStringify(this.sessions.get(event.session_id) ?? null) !== before || hadEstimate || wasHidden ||
-      clearedClosedAgent || reclassifiedDelegatedThread || correctedAsk || withdrawnAsk || endedFileOnlySession) this.touch();
+      clearedClosedAgent || reclassifiedDelegatedThread || correctedAsk || withdrawnAsk || withdrawnLateAsk || endedFileOnlySession) this.touch();
     if (wasHidden) this.requestStoreWrite();
-    if (askDecisionStateChanged || withdrawnAsk || correctedAsk) this.requestStoreWrite();
+    if (askDecisionStateChanged || withdrawnAsk || withdrawnLateAsk || correctedAsk) this.requestStoreWrite();
     return true;
   }
 
