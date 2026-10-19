@@ -193,7 +193,7 @@ function codexSessions(state) {
   return state.snapshot().sessions.filter(session => session.provider === 'codex');
 }
 
-test('PostToolBatch は拒否された Codex 起動を外し、次の thread を独立として表示する', () => {
+test('PostToolBatch は拒否された Codex 起動を隠し、次の thread を独立として表示する', () => {
   for (const agent_id of [null, 'window']) {
     const state = new DashboardState();
     launch(state, 'rejected', { agent_id,
@@ -208,7 +208,7 @@ test('PostToolBatch は拒否された Codex 起動を外し、次の thread を
   }
 });
 
-test('PostToolBatch で拒否を除去した次の区切りでは正しい Codex 起動だけが残る', () => {
+test('PostToolBatch で拒否の候補を隠した次の区切りでは正しい Codex 起動だけが見える', () => {
   const state = new DashboardState();
   launch(state, 'rejected', { tool_input: { command: 'npm run review:codex' } });
   state.addEvent(claudeEvent('PostToolBatch', { hookAt: 200 }));
@@ -295,6 +295,73 @@ test('中断の印が無い起動の Failure は終了にする', () => {
 const missingRunId = 'impl-hard-20261019-031058-1234';
 const missingRunLine = `codex-agent: run=${missingRunId} pid=1234 started=2026-10-19T03:10:58Z`;
 const missingLaunchAt = Date.parse('2026-10-19T03:10:58.900Z');
+
+test('区切りで隠した起動は出力ファイルの run 行で戻り、結果行で終了する', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: missingLaunchAt + 1 }));
+  state.addEvent(claudeEvent('Stop', { hookAt: missingLaunchAt + 2 }));
+  assert.deepEqual(state.snapshot().sessions[0].agents, []);
+  assert.equal(state.hasRunningDelegation(parentId), false);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 3, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: missingRunLine }));
+  const [running] = state.snapshot().sessions[0].agents;
+  assert.equal(running?.agent_id, 'codex:launch');
+  assert.equal(running.active, true);
+  assert.notEqual(running.unconfirmed, true);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 4, tool_use_id: 'result',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: `${missingRunLine}\ncodex-agent: result=ok` }));
+  const [finished] = state.snapshot().sessions[0].agents;
+  assert.equal(finished.resultReceived, true);
+  assert.equal(finished.active, false);
+});
+
+for (const hookAt of [150, 230]) {
+  test(`区切り後に始まった子 thread は${hookAt < 200 ? '区切りより前' : '区切りより後'}の完了通知で委譲に分類し直す`, () => {
+    for (const hook_event_name of ['PostToolUse', 'PostToolUseFailure']) {
+      for (const agent_id of [null, 'window']) {
+        const state = new DashboardState();
+        launch(state, 'launch', { agent_id });
+        state.addEvent(claudeEvent('PostToolBatch', { agent_id, hookAt: 200 }));
+        state.addEvent(codexEvent('SessionStart', { hookAt: 220 }));
+        assert.equal(codexSessions(state).length, 1);
+        state.addEvent(claudeEvent(hook_event_name, { agent_id, hookAt,
+          tool_response: 'codex-agent: result=ok' }));
+        assert.deepEqual(codexSessions(state), []);
+        assert.equal(state.isDelegatedCodexThread('thread'), true);
+      }
+    }
+  });
+}
+
+test('区切り後に始まった子 thread は出力の実行 ID で起動が戻ると委譲に分類し直す', () => {
+  const state = new DashboardState();
+  missingLaunch(state);
+  state.addEvent(claudeEvent('PostToolBatch', { agent_id: 'sub', hookAt: missingLaunchAt + 1 }));
+  state.addEvent(codexEvent('SessionStart', { hookAt: missingLaunchAt + 2 }));
+  assert.equal(codexSessions(state).length, 1);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 3, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: missingRunLine }));
+  assert.deepEqual(codexSessions(state), []);
+  assert.equal(state.isDelegatedCodexThread('thread'), true);
+});
+
+test('区切りで隠した起動と回復した起動の snapshot に拒否候補や照合情報を出さない', () => {
+  const state = new DashboardState();
+  launch(state, 'launch', { hookAt: missingLaunchAt });
+  state.addEvent(claudeEvent('PostToolBatch', { hookAt: missingLaunchAt + 1 }));
+  const hidden = state.snapshot().sessions[0];
+  assert.deepEqual(hidden.agents, []);
+  state.addEvent(claudeEvent('PostToolUse', { hookAt: missingLaunchAt + 2, tool_use_id: 'read',
+    tool_input: { command: 'cat /tmp/task-a.output' }, tool_response: missingRunLine }));
+  const recovered = state.snapshot().sessions[0];
+  assert.equal(recovered.agents.length, 1);
+  for (const snapshot of [hidden, recovered]) {
+    assert.equal(Object.hasOwn(snapshot, 'codexLaunches'), false);
+    assert.equal(JSON.stringify(snapshot).includes('deniedCandidate'), false);
+    assert.equal(JSON.stringify(snapshot).includes('codexLaunches'), false);
+  }
+});
 
 function missingLaunch(state, toolUseId = 'launch') {
   state.addEvent(claudeEvent('SubagentStart', { hookAt: missingLaunchAt - 1, agent_id: 'sub', agent_type: 'impl-hard' }));

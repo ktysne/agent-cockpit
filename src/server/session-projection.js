@@ -60,7 +60,7 @@ function agentModelFromDefinition(agentType, definition) {
 /** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string, phase: 'checking'|'prompted', candidate_tool_use_ids?: string[]}} PermissionWait */
 
 /** @typedef {ReturnType<typeof agentModelFromDefinition> & {
- * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
+ * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, deniedCandidate?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
  * }} SessionAgent */
 
 /** @typedef {{session_id: string, provider: 'claude'|'codex', codex?: {model: string, resumes: number}, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, interrupted: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
@@ -152,7 +152,7 @@ function deactivatePendingCodex(session, parentAgentId) {
   for (const [toolUseId, agentId] of Object.entries(session.pendingCodex)) {
     if (session.pendingCodexWait[toolUseId]) continue;
     const agent = agentFor(session, agentId);
-    if (agent?.active && !agent.backgrounded && sameAgent(agent.parent_agent_id, parentAgentId)) {
+    if (agent?.active && !agent.deniedCandidate && !agent.backgrounded && sameAgent(agent.parent_agent_id, parentAgentId)) {
       agent.active = false;
       agent.unconfirmed = true;
     }
@@ -318,13 +318,14 @@ function sessionStatus({ permissionWaits, agentActive, turnKnown, interrupted, s
  */
 function sessionSnapshot(session) {
   const permissionWaits = session.permissionWaits.map(({ candidate_tool_use_ids, ...wait }) => wait);
-  const agents = session.agents
+  const visibleAgents = session.agents.filter((agent) => !agent.deniedCandidate);
+  const agents = visibleAgents
     .filter((agent) => !(
       agent.isCodex && agent.parent_agent_id && session.agents.some((parent) => parent.agent_id === agent.parent_agent_id)
     ))
     .map((agent) => {
-      const gptAgent = agent.isCodex ? null : latestCodexForParent(session.agents, agent.agent_id);
-      const childUnconfirmed = !agent.isCodex && !agent.active && session.agents.some((child) => (
+      const gptAgent = agent.isCodex ? null : latestCodexForParent(visibleAgents, agent.agent_id);
+      const childUnconfirmed = !agent.isCodex && !agent.active && visibleAgents.some((child) => (
         child.isCodex && child.unconfirmed && child.parent_agent_id === agent.agent_id
       ));
       return {
@@ -348,7 +349,7 @@ function sessionSnapshot(session) {
     turnKnown: session.turnKnown,
     interrupted: session.interrupted,
     stopped: session.stopped,
-    activeAgentIds: session.agents.filter((agent) => agent.active).map((agent) => agent.agent_id),
+    activeAgentIds: visibleAgents.filter((agent) => agent.active).map((agent) => agent.agent_id),
   };
   const status = sessionStatus({ ...lifecycle, permissionWaits, agentActive: lifecycle.activeAgentIds.length > 0 });
 
@@ -369,6 +370,11 @@ function sessionSnapshot(session) {
   // 表示側が終了にした行を除いて状態を決め直す入力。親の行へまとめた Codex も稼働の判定に含めるため、まとめる前の行で持つ。
   // 画面へ送らないよう列挙しない。
   Object.defineProperty(snapshot, 'lifecycle', { value: lifecycle });
+  // 親の行にまとめた Codex も遅延した完了通知と照合するため、画面へ送らない起動情報を持つ。
+  Object.defineProperty(snapshot, 'codexLaunches', {
+    value: visibleAgents.filter((agent) => agent.isCodex)
+      .map(({ agent_id, runId, startedAt }) => ({ agent_id, runId, startedAt })),
+  });
   // 完了通知の照合だけに使う。親の行にまとめた Codex も含むので表示の形に出さず、画面へ送らないよう列挙しない。
   Object.defineProperty(snapshot, 'backgroundCodex', {
     value: session.agents
@@ -499,6 +505,7 @@ function applyCodexLaunchCompletion(session, event) {
   const toolUseId = event.tool_use_id || null;
   if (isPullRequestShellTool(event.tool_name) && toolUseId) {
     const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
+    if (placeholder) delete placeholder.deniedCandidate;
     if (placeholder) session.codexLaunchToolIds.add(toolUseId);
     if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
     if (placeholder && event.codexResult &&
@@ -565,6 +572,7 @@ function applyCodexResult(session, event) {
     if (candidates.length === 1 && pending.includes(candidates[0])) {
       const agent = candidates[0];
       agent.runId = event.codexRunId;
+      delete agent.deniedCandidate;
       agent.backgrounded = true;
       if (event.backgroundOutputTaskId && !agent.backgroundTaskId) agent.backgroundTaskId = event.backgroundOutputTaskId;
     }
@@ -811,21 +819,16 @@ function applyToolCompletion(session, event) {
 function applyToolBatch(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
-  // 区切りが終わった時点で、同じエージェントの先に始まったツールは終わったか拒否されている。
-  // 拒否されたツールには PostToolUse も PostToolUseFailure も届かない。
+  // 区切りより前のツールの待ちは解除するが、Codex は完了通知の欠落も考慮して起動の記録を残す。
   if (eventName === 'PostToolBatch') {
     const startedBeforeBatch = (item) => sameAgent(item.agent_id, agentId) && Date.parse(item.startedAt) < event.hookAt;
-    // 完了イベントは hookAt 順に先に適用されるため、区切りに残る前面の起動は拒否されたものとして外す。
+    // 非同期の完了通知が欠けても後の run 行で回復できるよう、拒否の候補は記録を残して隠す。
     for (const [toolUseId, codexAgentId] of Object.entries(session.pendingCodex)) {
       if (session.pendingCodexWait[toolUseId]) continue;
       const agent = agentFor(session, codexAgentId);
-      if (!agent || agent.backgrounded || !sameAgent(agent.parent_agent_id, agentId)
+      if (!agent || agent.backgrounded || agent.backgroundTaskId || !sameAgent(agent.parent_agent_id, agentId)
         || Date.parse(agent.startedAt) >= event.hookAt) continue;
-      session.agents = session.agents.filter((item) => item.agent_id !== codexAgentId);
-      delete session.pendingCodex[toolUseId];
-      delete session.pendingCodexWait[toolUseId];
-      session.codexReviewAgentIds.delete(codexAgentId);
-      session.codexLaunchToolIds.delete(toolUseId);
+      agent.deniedCandidate = true;
     }
     session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
     // メインの待ちの一括解除は、背景ツールの区切りで並列の待ちを巻き込むため避ける。

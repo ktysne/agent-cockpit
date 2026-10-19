@@ -2241,8 +2241,16 @@ class DashboardState {
     // 許可確認はターンの確定を待たずに優先して出るので、確認中と許可待ちでも残す。
     const derivedStatus = nextSessions[0]?.status;
     const hadEstimate = !['不明', '許可確認中', '許可待ち'].includes(derivedStatus) && this.estimates.delete(event.session_id);
-    const reclassifiedDelegatedThread = event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition
+    let reclassifiedDelegatedThread = event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition
       ? this.reclassifyDelegatedThreads(event.session_id, event.hookAt) : false;
+    if (event.provider === 'claude' && ['PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) {
+      const launches = nextSessions[0]?.codexLaunches || [];
+      for (const launch of launches) {
+        if (launch.agent_id !== `codex:${event.tool_use_id}` && !(event.codexRunId && launch.runId === event.codexRunId)) continue;
+        reclassifiedDelegatedThread = this.reclassifyDelegatedThreads(event.session_id, Date.parse(launch.startedAt))
+          || reclassifiedDelegatedThread;
+      }
+    }
 
     const ended = event.hook_event_name === 'SessionEnd' && nextSessions.length === 0;
     if (ended) {
