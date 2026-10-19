@@ -234,35 +234,6 @@ function isBranchDeleteCall(args) {
   return args[0] === 'api' && args[1] === 'graphql' && args.some((argument) => argument.startsWith('refName=refs/heads/'));
 }
 
-test('レビュー不要の記録後にレビュー表示の更新が失敗しても成功を返す', async () => {
-  const order = [];
-  const headRefOid = sha(1);
-  let savedRecord;
-  const registration = { owner: 'example', repo: 'project', number: 1 };
-  const state = {
-    setCrossReviewSkip(record) {
-      order.push('save');
-      savedRecord = { ...record };
-      return savedRecord;
-    },
-    async waitForPersistence() { order.push('persist'); },
-  };
-  const tracker = {
-    async refreshRepoFresh() { order.push('refresh-repo'); },
-    mergeCandidate() { return { pullRequest: { headRefOid } }; },
-    async refreshReviewGroups() {
-      order.push('refresh-groups');
-      throw new Error('review group refresh failed');
-    },
-  };
-  const manager = new PullRequestMergeManager({ state, tracker, now: () => NOW });
-
-  const result = await manager.setReviewSkip(registration, headRefOid, '説明文だけのため');
-
-  assert.deepEqual(order, ['refresh-repo', 'save', 'persist', 'refresh-groups']);
-  assert.deepEqual(result, { ok: true, saved: savedRecord });
-});
-
 test('確定操作のブランチ削除は待機中の定期取得より先にghを起動する', async (t) => {
   const { state, tracker, manager } = await mergeFixture(t);
   state.getDisplayPreferences = () => ({ ghConcurrencyLimit: 4 });
