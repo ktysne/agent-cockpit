@@ -69,7 +69,7 @@ node src/client/doctor.js --json > <一時ファイル>
 bridge と ai-cross-review の写しは、区分(`category`)が `copies` の項目である。
 
 - bridge の項目の id は `bridge.copies.<kind>.<name>` である。`requires` に、その項目を置くときに一致している必要がある項目の id が並ぶ。`requires` の中に `mismatch` の項目があれば、それも一緒に選んでもらう。選び漏れがあると、`apply.js` は足りない id を理由に書いて適用しない。
-- ai-cross-review の項目の id は `cross-review.skills.<配布先>` である。配布先に写しが無いものは `not-installed` で、対処が付いている。新しく置くかは開発者に尋ね、認められたときだけ選ぶ。
+- ai-cross-review の項目の id は `cross-review.skills.<配布先>` である。`not-installed` のうち、`actions` に `copy-file` があるものは、写しの無い配布先である。新しく置くかは開発者に尋ね、認められたときだけ選ぶ。`actions` が空のものは配布の対象外なので、`reason` を伝えるだけにして選ばない。
 - `bridge.copies.query` と `cross-review.skills.query` の `unverified` は、そのツールの照会ができなかったことを表す。checkout が古いと照会の入口が無いので、手順 2 で checkout を更新してから診断し直す。
 
 ai-cross-review は、レビューを回すリポジトリごとに `tools/cross-review.sync.json` で GitHub から直接取り込む形でも入っている。
@@ -81,7 +81,7 @@ agent-cockpit の checkout の親ディレクトリと、今のリポジトリ�
 ツールごとに、次をまとめて開発者に示す。
 
 - checkout：手順 2 の `status`、`from`、`to`、`commits`、更新できない理由
-- 写し、登録、常駐サーバー：手順 3 の診断の `mismatch` の項目と、ai-cross-review の `not-installed` の項目の id、`reason`、`actions`
+- 写し、登録、常駐サーバー：手順 3 の診断の `mismatch` の項目と、ai-cross-review の `not-installed` のうち `copy-file` の対処がある項目の id、`reason`、`actions`
 - ai-cross-review の取り込み先：差分のあるリポジトリ
 
 すべて最新なら、そう報告して終える。
