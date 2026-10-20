@@ -520,3 +520,60 @@ test('催促より前の時刻の PostToolUse が ACK の前に届いても、AC
   await sendEvent('PreToolUse', Date.now() + 60_000, { tool_name: 'Read' });
   assert.equal((await fetch('after-ack')).json.hookOutput, null);
 });
+
+test('同じ ACK の再送では後から登録した通知と次の入力の配信回数を更新しない', async (t) => {
+  const c = await fixture(t);
+  const prompt = (id) => postHookRequest(c, { session_id: c.sessionId, action: 'user-prompt-submit', event_name: 'UserPromptSubmit', id });
+  const ack = (delivery_id) => postHookRequest(c, { session_id: c.sessionId, action: 'delivery-ack', id: 'ack', delivery_id });
+  const first = await prompt('first-prompt');
+  assert.equal(c.state.decisionFor(c.sessionId, c.decision.id).answer.deliveredAt, null);
+  await ack(first.json.deliveryId);
+  c.runtime.answerDelivery.notifySessions([c.sessionId], '後続の通知。');
+  const next = await prompt('next-prompt');
+  await ack(first.json.deliveryId);
+  const answer = c.state.decisionFor(c.sessionId, c.decision.id).answer;
+  assert.equal(answer.promptDeliveries, 1);
+  assert.equal(answer.reflectedAt, null);
+  assert.match((await prompt('third-prompt')).json.hookOutput.hookSpecificOutput.additionalContext, /後続の通知。/);
+  await ack(next.json.deliveryId);
+  assert.equal(c.state.decisionFor(c.sessionId, c.decision.id).answer.promptDeliveries, 2);
+  assert.equal(c.runtime.answerDelivery.sessionNotifications.has(c.sessionId), false);
+});
+
+for (const [provider, action] of [['claude', 'stop-poll'], ['codex', 'stop-check']]) {
+  test(`${provider} の古い Stop 要求を再送しても新しい Stop の回答を抑止しない`, async (t) => {
+    const c = await fixture(t, { provider });
+    const start = await postHookRequest(c, { session_id: c.sessionId, action: 'stop-start', event_name: 'Stop', id: 'start' });
+    const body = { session_id: c.sessionId, action, event_name: 'Stop', provider: action === 'stop-check' ? provider : undefined,
+      id: 'old-stop', generation: start.json.generation, parent_alive: true };
+    const first = await postHookRequest(c, body);
+    assert.equal(typeof first.json.deliveryId, 'string');
+    const current = await postHookRequest(c, { ...body, id: 'current-stop', action: 'stop-check', provider, hook_at: Date.now() + 100 });
+    const stale = await postHookRequest(c, body);
+    assert.deepEqual(stale.json, action === 'stop-poll' ? { stderrText: null, done: true } : { hookOutput: null, generation: null, wait: false });
+    assert.match(current.json.hookOutput.reason, /最初の回答。/);
+    assert.deepEqual(await postHookRequest(c, { ...body, id: 'current-stop', action: 'stop-check', provider }), current);
+    assert.equal(c.state.decisionFor(c.sessionId, c.decision.id).answer.deliveredAt, null);
+  });
+}
+
+test('Codex Stop の判定待ちに新しいツールが始まると遅い判定は回答を配信せず次の Stop へ残す', async (t) => {
+  const c = await fixture(t, { provider: 'codex' });
+  let release;
+  let entered;
+  const waiting = new Promise((resolve) => { entered = resolve; });
+  const candidates = new Promise((resolve) => { release = resolve; });
+  c.runtime.answerDelivery.pullRequestTracker = { missingReviewRecords: () => { entered(); return candidates; } };
+  const body = { session_id: c.sessionId, action: 'stop-check', event_name: 'Stop', provider: 'codex', id: 'delayed', hook_at: c.now + 1 };
+  const pending = postHookRequest(c, body);
+  t.after(() => release([]));
+  await waiting;
+  const tool = await request(c.info.port, { method: 'POST', path: '/api/events', headers: hookHeaders(c.info.secret),
+    body: JSON.stringify({ session_id: c.sessionId, provider: 'codex', hook_event_name: 'PreToolUse', tool_name: 'shell', hookAt: c.now + 2 }) });
+  assert.equal(tool.status, 202);
+  release([]);
+  assert.deepEqual((await pending).json, { hookOutput: null, generation: null, wait: false });
+  const next = await postHookRequest(c, { ...body, id: 'next', hook_at: c.now + 3 });
+  assert.match(next.json.hookOutput.reason, /最初の回答。/);
+  assert.equal(c.state.decisionFor(c.sessionId, c.decision.id).answer.deliveredAt, null);
+});

@@ -13,6 +13,7 @@ const MAX_ASK_POLL_GAP_MS = 30_000;
 const HOOK_DELIVERY_TTL_MS = 10 * 60_000;
 const MAX_HOOK_DELIVERY_RECORDS_PER_SESSION = 128;
 const MAX_SESSION_NOTIFICATIONS = 20;
+const HOOK_DELIVERY_ACTIONS = new Set(['ask-finish', 'post-tool-batch', 'post-tool-use', 'user-prompt-submit', 'stop-check', 'stop-poll']);
 const ANSWER_HOOK_DENY_REASON = '開発者は離席中です。AskUserQuestion で尋ねずに、推奨の選択肢を適用して作業を続けてください。判断事項の id は「{id}」です。推奨で進めたら cockpit_update_decision でこの id を provisional にし、選んだ選択肢を書いてください。判断が必要だった事項と仮に適用した推奨は、最後の報告の「あなたの判断が必要なこと」に一覧で書いてください。破壊的な操作は行わず、判断待ちとして残してください。';
 // 知らせはフックの英語の定型文に包まれて届き、返答が英語に引きずられやすいため、毎回添える。
 const SESSION_NOTIFICATION_REPLY_LANGUAGE = 'この知らせへの返答と、続けて開発者に見せる文は日本語で書く。';
@@ -333,17 +334,8 @@ class DecisionAnswerDelivery {
   }
 
   deliverPending(sessionId) {
-    const pending = this.state.decisionsFor(sessionId).filter((decision) => (
-      decision.answer?.sentAt && !decision.answer.deliveredAt && !decision.answer.ignoredAt && !decision.awaitingAnswerUntil && ['waiting', 'provisional'].includes(decision.state)
-    ));
-    if (!pending.length) return null;
-    for (const decision of pending) {
-      if (typeof decision.answer.version === 'string') continue;
-      this.state.setDecisionLifecycle(sessionId, decision.id, {
-        answer: { ...decision.answer, version: crypto.randomUUID() },
-      }, this.now());
-    }
-    return pending.map((decision) => decisionAnswerText(this.state.decisionFor(sessionId, decision.id))).join('\n');
+    const pending = this.intakeHookDelivery({ type: 'prepare-answers', sessionId, action: 'post-tool-batch' }, this.now());
+    return pending.length ? pending.map((decision) => decisionAnswerText(decision)).join('\n') : null;
   }
 
   deliverPostToolBatch(sessionId, { includeTaskReminder = true } = {}) {
@@ -390,16 +382,94 @@ class DecisionAnswerDelivery {
     return [...messages, SESSION_NOTIFICATION_REPLY_LANGUAGE].join('\n');
   }
 
+  intakeHookDelivery(operation, now) {
+    const { type, sessionId } = operation;
+    const producesDelivery = HOOK_DELIVERY_ACTIONS.has(operation.action);
+    if (type === 'request') {
+      const { action, requestId, generation = null, parentAlive = true } = operation;
+      const cached = producesDelivery ? this.getHookDelivery(sessionId, action, requestId, generation, now) : null;
+      if (cached) {
+        const stop = ['stop-check', 'stop-poll'].includes(action);
+        const replay = !stop || this.intakeHookDelivery({ type: 'stop-status', sessionId,
+          generation: cached.generation, parentAlive, replay: true }, now);
+        return { handled: true, response: replay ? cached.response : action === 'stop-check'
+          ? { hookOutput: null, generation: null, wait: false } : { stderrText: null, done: true } };
+      }
+      if (producesDelivery || action === 'stop-start') {
+        this.intakeHookDelivery({ type: 'cancel-reminders', sessionId, occurredAt: Infinity }, now);
+      }
+      return { handled: false };
+    }
+    if (type === 'response') {
+      const { response, action, requestId, requestGeneration, generation, decisionId } = operation;
+      if (!producesDelivery || !response || operation.unrecorded ||
+        !(response.hookOutput || (typeof response.stderrText === 'string' && response.stderrText))) {
+        return { response };
+      }
+      const delivery = this.recordHookDelivery({ sessionId, action, requestId, response,
+        requestGeneration, generation, decisionId }, now);
+      return delivery ? { response: delivery.response } : { capacityReached: true };
+    }
+    if (type === 'prepare-answers') {
+      const decisions = this.answersForDelivery(sessionId, operation.action);
+      for (const decision of decisions) {
+        if (typeof decision.answer.version === 'string') continue;
+        this.state.setDecisionLifecycle(sessionId, decision.id, {
+          answer: { ...decision.answer, version: crypto.randomUUID() },
+        }, now);
+      }
+      return decisions.map((decision) => this.state.decisionFor(sessionId, decision.id));
+    }
+    if (type === 'ack') return this.acknowledgeHookDelivery(sessionId, operation.deliveryId, now);
+    if (type === 'cancel-reminders') {
+      const { occurredAt } = operation;
+      if (this.pendingHookReminders.get(sessionId)?.createdAt < occurredAt) this.pendingHookReminders.delete(sessionId);
+      this.taskNudges.cancelReminder(sessionId, occurredAt);
+      return;
+    }
+    if (type === 'stop-status') {
+      const { generation, parentAlive = true, provider = 'claude', replay = false } = operation;
+      return (!replay || Number.isSafeInteger(generation)) && !this.closed && parentAlive &&
+        !this.endedSessions.has(sessionId) && this.stopGenerations.get(sessionId) === generation &&
+        (replay ? !this.state.sessionHasEnded?.(sessionId) : provider !== 'codex' || this.away.snapshot().enabled === true);
+    }
+    if (type === 'reopen') {
+      if (this.endedSessions.has(sessionId)) this.clearSessionAskWaits(sessionId);
+      this.endedSessions.delete(sessionId);
+      if (['startup', 'resume', 'clear'].includes(operation.source)) this.lastLifecycleAt.delete(sessionId);
+      return;
+    }
+    if (type === 'lifecycle') {
+      const { eventName, occurredAt, startStop = false } = operation;
+      const toolEvent = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName);
+      if (!toolEvent && !['Stop', 'UserPromptSubmit', 'SessionEnd'].includes(eventName)) return null;
+      const previous = this.lastLifecycleAt.get(sessionId) ?? -1;
+      if (occurredAt < previous || (toolEvent && occurredAt === previous)) return null;
+      this.intakeHookDelivery({ type: 'cancel-reminders', sessionId, occurredAt }, now);
+      this.lastLifecycleAt.set(sessionId, occurredAt);
+      if (eventName === 'UserPromptSubmit') {
+        this.reviewPromptVersions.set(sessionId, (this.reviewPromptVersions.get(sessionId) || 0) + 1);
+      }
+      if (eventName === 'SessionEnd') this.endedSessions.add(sessionId);
+      if (startStop || toolEvent || ['UserPromptSubmit', 'SessionEnd'].includes(eventName)) {
+        this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
+      }
+      this.signal(sessionId);
+      return this.stopGenerations.get(sessionId);
+    }
+    throw new Error(`Unknown hook delivery operation: ${type}`);
+  }
+
   hookDeliveryRequestKey(action, requestId, generation = null) {
     return JSON.stringify([action, requestId, generation]);
   }
 
-  getHookDelivery(sessionId, action, requestId, generation = null) {
+  getHookDelivery(sessionId, action, requestId, generation = null, now = this.now()) {
     const records = this.pendingHookDeliveries.get(sessionId);
     if (!records) return null;
     let changed = false;
     for (const [key, record] of records) {
-      if (Date.parse(record.expiresAt) <= this.now()) {
+      if (Date.parse(record.expiresAt) <= now) {
         records.delete(key);
         changed = true;
       }
@@ -412,13 +482,7 @@ class DecisionAnswerDelivery {
     return records.get(this.hookDeliveryRequestKey(action, requestId, generation)) || null;
   }
 
-  canReplayStopDelivery(sessionId, record, parentAlive = true) {
-    return Number.isSafeInteger(record.generation) && parentAlive && !this.closed && !this.endedSessions.has(sessionId) &&
-      this.stopGenerations.get(sessionId) === record.generation &&
-      !this.state.sessionHasEnded?.(sessionId);
-  }
-
-  answerVersionsForDelivery(sessionId, action, decisionId = null, response = null) {
+  answersForDelivery(sessionId, action, decisionId = null, response = null) {
     let decisions;
     if (action === 'ask-finish') {
       const decision = decisionId ? this.state.decisionFor(sessionId, decisionId) : null;
@@ -433,29 +497,23 @@ class DecisionAnswerDelivery {
           !decision.awaitingAnswerUntil && ['waiting', 'provisional'].includes(decision.state);
       });
     }
-    return decisions.flatMap((decision) => decision.answer?.version
+    return decisions;
+  }
+
+  answerVersionsForDelivery(sessionId, action, decisionId = null, response = null) {
+    return this.answersForDelivery(sessionId, action, decisionId, response).flatMap((decision) => decision.answer?.version
       ? [{ decisionId: decision.id, version: decision.answer.version, prompt: action === 'user-prompt-submit' }]
       : []);
   }
 
-  // 非同期のフックのイベントは配信した区切りより後に届くことがあるので、催促を組み立てた後に起きたイベントでだけ取り消す。
-  cancelHookReminders(sessionId, occurredAt = Infinity) {
-    if (this.pendingHookReminders.get(sessionId)?.createdAt < occurredAt) this.pendingHookReminders.delete(sessionId);
-    this.taskNudges.cancelReminder(sessionId, occurredAt);
-  }
-
-  recordHookDelivery({ sessionId, action, requestId, response, requestGeneration = null, generation = null, decisionId = null }) {
+  recordHookDelivery({ sessionId, action, requestId, response, requestGeneration = null, generation = null, decisionId = null }, now = this.now()) {
     const requestKey = this.hookDeliveryRequestKey(action, requestId, requestGeneration);
-    const existing = this.getHookDelivery(sessionId, action, requestId, requestGeneration);
+    const existing = this.getHookDelivery(sessionId, action, requestId, requestGeneration, now);
     if (existing) return existing;
     let records = this.pendingHookDeliveries.get(sessionId);
     if (!records) {
       records = new Map();
       this.pendingHookDeliveries.set(sessionId, records);
-    }
-    const now = this.now();
-    for (const [key, record] of records) {
-      if (Date.parse(record.expiresAt) <= now) records.delete(key);
     }
     while (records.size >= MAX_HOOK_DELIVERY_RECORDS_PER_SESSION) {
       const oldestAcknowledged = [...records].filter(([, record]) => record.acknowledgedAt)
@@ -489,12 +547,12 @@ class DecisionAnswerDelivery {
     return delivery;
   }
 
-  acknowledgeHookDelivery(sessionId, deliveryId) {
+  acknowledgeHookDelivery(sessionId, deliveryId, now = this.now()) {
     const records = this.pendingHookDeliveries.get(sessionId);
     const record = records && [...records.values()].find((candidate) => candidate.deliveryId === deliveryId);
     if (!record) return false;
     if (record.acknowledgedAt) return true;
-    const acknowledgedAt = new Date(this.now()).toISOString();
+    const acknowledgedAt = new Date(now).toISOString();
     for (const item of record.answerVersions) {
       const decision = this.state.decisionFor(sessionId, item.decisionId);
       if (decision?.answer?.version !== item.version) continue;
@@ -503,7 +561,7 @@ class DecisionAnswerDelivery {
         deliveredAt: decision.answer.deliveredAt || acknowledgedAt,
         ...(item.prompt ? { promptDeliveries: Math.min(3, (Number.isInteger(decision.answer.promptDeliveries) ? decision.answer.promptDeliveries : 0) + 1) } : {}),
       };
-      this.state.setDecisionLifecycle(sessionId, item.decisionId, { answer }, this.now());
+      this.state.setDecisionLifecycle(sessionId, item.decisionId, { answer }, now);
     }
     if (record.notificationIds.length) {
       const pending = this.pendingSessionNotifications.get(sessionId) || [];
@@ -535,26 +593,16 @@ class DecisionAnswerDelivery {
   deliverPrompt(sessionId, eventId, hookAt = this.now()) {
     this.taskNudges.afterEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt });
     this.handleLifecycleEvent(sessionId, 'UserPromptSubmit', eventId, hookAt);
-    const pending = this.state.decisionsFor(sessionId).filter((decision) => (
-      decision.answer?.sentAt && !decision.answer.reflectedAt && !decision.answer.ignoredAt && !decision.awaitingAnswerUntil && decision.answer.promptDeliveries < 3 && ['waiting', 'provisional'].includes(decision.state)
-    ));
-    for (const decision of pending) {
-      if (typeof decision.answer.version !== 'string') {
-        this.state.setDecisionLifecycle(sessionId, decision.id, {
-          answer: { ...decision.answer, version: crypto.randomUUID() },
-        }, this.now());
-      }
-    }
+    const pending = this.intakeHookDelivery({ type: 'prepare-answers', sessionId, action: 'user-prompt-submit' }, this.now());
     const messages = [this.deliverSessionNotifications(sessionId), ...pending.map((decision) => decisionAnswerText(decision))].filter(Boolean);
     return messages.length ? messages.join('\n') : null;
   }
 
   // stop-start のフックは 1 秒で打ち切るので、判定はここで待たず、最初の stop-poll と stop-check で待つ。
   startStop(sessionId, eventId, hookAt = this.now()) {
-    if (hookAt < (this.lastLifecycleAt.get(sessionId) ?? -1)) return null;
-    this.handleLifecycleEvent(sessionId, 'Stop', eventId, hookAt);
-    const generation = (this.stopGenerations.get(sessionId) || 0) + 1;
-    this.stopGenerations.set(sessionId, generation);
+    const generation = this.intakeHookDelivery({ type: 'lifecycle', sessionId, eventName: 'Stop',
+      occurredAt: hookAt, startStop: true }, this.now());
+    if (generation === null) return null;
     if (this.pullRequestTracker) this.stopReviewReminders.set(sessionId, { generation, candidates: this.reviewReminderCandidates(sessionId) });
     else this.stopReviewReminders.delete(sessionId);
     this.signal(sessionId);
@@ -579,7 +627,7 @@ class DecisionAnswerDelivery {
     const generation = this.startStop(sessionId, eventId, hookAt);
     if (generation === null) return { hookOutput: null, generation: null, wait: false };
     const reminder = await this.deliverReviewReminder(sessionId, generation);
-    if (this.closed || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation) return { hookOutput: null, generation: null, wait: false };
+    if (this.stopWaitEnded(sessionId, generation, true)) return { hookOutput: null, generation: null, wait: false };
     const reason = [reminder, this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     return {
       hookOutput: reason ? { decision: 'block', reason } : null,
@@ -595,7 +643,7 @@ class DecisionAnswerDelivery {
     if (pending?.generation !== generation) return null;
     this.stopReviewReminders.delete(sessionId);
     const candidates = await pending.candidates;
-    if (!candidates?.length || this.closed || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation) return null;
+    if (!candidates?.length || this.stopWaitEnded(sessionId, generation, true)) return null;
     const seen = this.remindedReviewHeads.get(sessionId) || new Map();
     const promptVersion = this.reviewPromptVersions.get(sessionId) || 0;
     const targets = candidates.filter(({ owner, repo, number, headRefOid }) => {
@@ -641,25 +689,11 @@ class DecisionAnswerDelivery {
   }
 
   stopWaitEnded(sessionId, generation, parentAlive, provider = 'claude') {
-    return this.closed || !parentAlive || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation ||
-      (provider === 'codex' && this.away.snapshot().enabled !== true);
+    return !this.intakeHookDelivery({ type: 'stop-status', sessionId, generation, parentAlive, provider }, this.now());
   }
 
   handleLifecycleEvent(sessionId, eventName, eventId, hookAt = this.now()) {
-    if (eventName !== 'Stop' && eventName !== 'UserPromptSubmit' && eventName !== 'SessionEnd') return;
-    const key = sessionId;
-    const previous = this.lastLifecycleAt.get(key) ?? -1;
-    if (hookAt < previous) return;
-    this.cancelHookReminders(sessionId, hookAt);
-    this.lastLifecycleAt.set(key, hookAt);
-    if (eventName === 'UserPromptSubmit') {
-      this.reviewPromptVersions.set(sessionId, (this.reviewPromptVersions.get(sessionId) || 0) + 1);
-      this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
-    } else if (eventName === 'SessionEnd') {
-      this.endedSessions.add(sessionId);
-      this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
-    }
-    this.signal(sessionId);
+    this.intakeHookDelivery({ type: 'lifecycle', sessionId, eventName, occurredAt: hookAt }, this.now());
   }
 
   sessionEnded(sessionId, endedAt = this.now()) {
@@ -673,9 +707,8 @@ class DecisionAnswerDelivery {
     this.state.clearAwaitingAnswers?.(sessionId, endedAt);
   }
 
-  sessionReopened(sessionId) {
-    if (this.endedSessions.has(sessionId)) this.clearSessionAskWaits(sessionId);
-    this.endedSessions.delete(sessionId);
+  sessionReopened(sessionId, source) {
+    this.intakeHookDelivery({ type: 'reopen', sessionId, source }, this.now());
   }
 
   afterEvent(event, { ended = true } = {}) {
@@ -686,17 +719,10 @@ class DecisionAnswerDelivery {
     }
     this.taskNudges.afterEvent(event, { ended });
     if (eventName === 'SessionStart') {
-      this.sessionReopened(sessionId);
-      if (['startup', 'resume', 'clear'].includes(event.source)) this.lastLifecycleAt.delete(sessionId);
+      this.sessionReopened(sessionId, event.source);
     }
-    if (
-      !event.agent_id && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName) &&
-      event.hookAt > (this.lastLifecycleAt.get(sessionId) ?? -1)
-    ) {
-      this.cancelHookReminders(sessionId, event.hookAt);
-      this.lastLifecycleAt.set(sessionId, event.hookAt);
-      this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
-      this.signal(sessionId);
+    if (!event.agent_id && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName)) {
+      this.intakeHookDelivery({ type: 'lifecycle', sessionId, eventName, occurredAt: event.hookAt }, this.now());
     }
     if (eventName === 'UserPromptSubmit') {
       this.handleLifecycleEvent(sessionId, eventName, `${eventName}:${event.hookAt}`, event.hookAt);
