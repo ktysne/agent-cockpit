@@ -5648,12 +5648,22 @@ const updateToolsPrompt = '/update-tools スキルを使って連携ツールを
 const copyPromptButton = '/update-tools スキルでの更新依頼プロンプトをコピー';
 const copiedPromptNotice = 'コピーされたプロンプトでAIエージェントに更新を依頼してください。';
 const failedPromptNotice = `コピーできませんでした。次の文を AI エージェントに渡してください: ${updateToolsPrompt}`;
+// 帯のボタンは、モックでは導入の点検を開き、画面ではその実装が入るまで依頼文をコピーする。
+const toolsButton = { 画面: copyPromptButton, モック: '導入の点検を開く' };
+
+test('モックの再起動待ちの帯から導入の点検を開く', () => {
+  const f = restartNoteHarness(mockHtml);
+  let opened = 0;
+  f.context.openDoctorDialog = () => { opened += 1; };
+  f.click('導入の点検を開く');
+  assert.equal(opened, 1);
+});
 
 for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
   test(`${label}の再起動待ちでは案内の下の 1 行に再起動と更新依頼のボタンを順に表示する`, () => {
     const f = restartNoteHarness(source);
     assert.deepEqual(f.rows(), [
-      { className: 'restart-note-actions', items: ['常駐サーバーを再起動する', 'または', copyPromptButton] },
+      { className: 'restart-note-actions', items: ['常駐サーバーを再起動する', 'または', toolsButton[label]] },
     ]);
   });
 
@@ -5661,8 +5671,10 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     const f = restartNoteHarness(source);
     f.state.restartAvailable = false;
     f.render();
-    assert.deepEqual(f.rows(), [{ className: 'restart-note-actions', items: [copyPromptButton] }]);
+    assert.deepEqual(f.rows(), [{ className: 'restart-note-actions', items: [toolsButton[label]] }]);
   });
+
+  if (label === 'モック') continue;
 
   test(`${label}は更新依頼のプロンプトをコピーしてボタンの下の行に案内を保つ`, async () => {
     const written = [];
@@ -5711,7 +5723,7 @@ test('保存失敗の帯は未保存と再試行を示し、復旧後に警告�
 });
 
 test('保存失敗中は再起動操作を出さず、通常の保存待ちでは確認を維持する', () => {
-  for (const source of [pageHtml, mockHtml]) {
+  for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     const f = restartNoteHarness(source);
     f.state.persistence = { status: 'failed' };
     f.render();
@@ -5719,7 +5731,7 @@ test('保存失敗中は再起動操作を出さず、通常の保存待ちで�
     assert.equal(f.buttons.length, 0);
     f.state.persistence = { status: 'pending' };
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
     f.click('常駐サーバーを再起動する');
     const rebuilt = f.note.rebuilt;
     f.state.persistence = { status: 'saved' };
@@ -5735,7 +5747,7 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     f.click('常駐サーバーを再起動する');
     await f.click('再起動する');
     assert.equal(f.note.message, '保存処理が進行中です。少し待ってから再起動してください。');
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
   });
 
   test(`${label}の再起動は帯で消える行と許可待ちを確認し、やめると元に戻る`, () => {
@@ -5743,10 +5755,10 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     f.click('常駐サーバーを再起動する');
     assert.equal(f.note.message, '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。許可待ち 2 件は、再起動後に表示されません。');
     f.click('やめる');
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
     f.state.restartAvailable = false;
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), [copyPromptButton]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), [toolsButton[label]]);
   });
 
   test(`${label}の帯は同じ表示なら作り直さず、確認と取り消しで次に押すボタンへフォーカスを移す`, () => {
@@ -5795,7 +5807,7 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
       f.click('常駐サーバーを再起動する');
       await f.click('再起動する');
       assert.equal(f.note.message, '再起動を始められませんでした。タスクトレイのメニューから再起動してください。');
-      assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
+      assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
     }
   });
 
@@ -5808,10 +5820,10 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     assert.equal(ms, 30_000);
     timeout();
     assert.equal(f.note.message, '再起動できませんでした。タスクトレイのメニューから再起動してください。');
-    assert.deepEqual(f.buttons.map(button => button.textContent), [copyPromptButton]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), [toolsButton[label]]);
     f.state.restartAvailable = true;
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
   });
 }
 

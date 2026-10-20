@@ -13,8 +13,8 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 段階 2b(#673)の前提の照会の入口は、2 つともそろった。bridge は `bash tools/codex-agent.sh --check-copies`、ai-cross-review は `node tools/cross-review.sync-all.js --global-skill --check --json` である。契約の正本は、bridge の `docs/gpt-agents.md` の「配置済みの写しを照合する」と、ai-cross-review の `docs/cross-review.md` の「グローバル SKILL の配布」にある。
 段階 2b(#673)は、診断と適用に ai-cross-review と bridge の写しの項目が入り、`update-tools` の手順もそれを使う形になった。bridge と ai-cross-review の写しは、ファイルを見比べず、診断の `copies` の項目を選んで適用する。
 ktysne/ai-cross-review#89 で、すべての導入先が新形式(入口だけを置き、本体は登録した checkout から読む)に移った。`update-tools` も、移行の要否、取り込み先の差分、本体の登録を確かめる形になった(表の 7 行目)。
-残るのは、表の 6 行目(段階 3、未起票)と 8 行目(#667 で扱う)である。
-8 行目に着手するときは、先に #667 の本文の取り込み方を直す。本文は「既存の同期機構でテストの入力として取り込む」としているが、#89 で、導入先へ写さず上流の revision を固定して取り込むと決まったためである。
+残るのは、表の 6 行目(段階 3、#694)である。
+6 行目は、モックを先に入れ、その後に常駐サーバーと画面を実装する。画面の形と常駐サーバーからの呼び方は #694 の本文にある。
 
 ## 決定済みの判断
 
@@ -23,6 +23,7 @@ ktysne/ai-cross-review#89 で、すべての導入先が新形式(入口だけ�
 | 最終目標 | 診断で終えず、更新と反映まで支える(開発者の決定、2026-10-20) | 利用者が手で照合して直す手間を無くすため |
 | 段階 | 1 診断、2 更新と反映、3 ダッシュボードの入口。2 と 3 は段階 1 の後に別の Issue で起票する | 診断の出力の形を固めてから、適用の処理を作るため |
 | 再起動待ちの帯のボタン | 「/update-tools スキルでの更新依頼プロンプトをコピー」(#664)はつなぎで、段階 3 でより良い形に置き換えてよい(開発者の決定、2026-10-20) | 段階 3 で、ダッシュボードから更新を始められるようにするため |
+| 段階 3 の形 | 常駐サーバーが診断を子プロセスで流し、結果をダッシュボードの「導入の点検」に出す。直すのはセッションの update-tools に任せ、ダッシュボードからは適用しない。再起動待ちの帯のボタンは「導入の点検を開く」に置き換える(開発者の決定、2026-10-21) | 診断は読み取りだけなので、安全の制約に触れずに、何が古いかをセッションを開かずに示せるため。適用を画面に持たせるかは、この形を使ってから決める |
 | 段階 1 の範囲 | agent-cockpit 自身のフック、MCP、スキル、常駐サーバーに限る。出力の項目には `tool` を持たせ、bridge と ai-cross-review は段階 2 以降に足す | bridge は `CLAUDE_CONFIG_DIR` を見ないなど、ホームの解決の規則が別で、照合の設計が倍になるため |
 | 期待値の正本 | `src/shared/integration-manifest.js` に置き、導入手順の JSON と TOML の例との一致をテストで縛る | 段階 2 の適用も同じ期待値を使うため。導入手順を生成物にすると、周りの説明と例が離れて読みにくくなるため |
 | 照合する checkout | `--root`、登録済みのフックが指す checkout、診断を置いた checkout(worktree なら元の checkout)の順に決める | worktree から実行したときに、すべてのフックが別の checkout として不一致になるのを避けるため |
@@ -57,9 +58,9 @@ ktysne/ai-cross-review#89 で、すべての導入先が新形式(入口だけ�
 | 3 | ktysne/claude-codex-bridge#169 写しの照会 | bridge の `tools/codex-agent.sh` | bridge 側 | `claude/issue-169-copy-check` | bridge の main | ktysne/claude-codex-bridge#171 でマージ済み、#169 は閉じた。前提の ktysne/claude-codex-bridge#167 も ktysne/claude-codex-bridge#170 でマージ済み |
 | 4 | ktysne/ai-cross-review#87 グローバル SKILL の確認 | ai-cross-review の `tools/cross-review.sync-all.js` | ai-cross-review 側 | `fix/global-skill-check` | ai-cross-review の main | ktysne/ai-cross-review#88 でマージ済み、#87 は閉じた |
 | 5 | #673 段階 2b 連携ツールの写し | `src/client/doctor-observe.js`、`src/client/doctor-evaluate.js`、`src/client/apply.js`、`skills/update-tools/SKILL.md` | hard、3 段目はメインセッション | `claude/673-cross-review-copies`、`claude/673-bridge-copies`、`claude/673-update-tools-copies` | main | 1 段目は PR #681、2 段目は PR #682 でマージ済み。1 段目のマージ後に 2 段目を main から切ったので、スタックにはしていない。3 段目は PR #683 でマージ済み、#673 は閉じた |
-| 6 | 段階 3 ダッシュボードの入口 | 未定 | 未定 | 未定 | main | 未起票 |
+| 6 | #694 段階 3 ダッシュボードの入口 | 1 段目は `mock/index.html`。2 段目は常駐サーバーの診断の呼び出しと `src/web/index.html` | 1 段目はメインセッション、2 段目は hard | `claude/694-doctor-mock`、2 段目は未作成 | main | 1 段目の PR を作成中 |
 | 7 | update-tools の ai-cross-review の取り込み先の確認を新形式に合わせる | `skills/update-tools/SKILL.md` | light | `claude/684-update-tools-new-form` | main | PR #686 でマージ済み、#684 は閉じた |
-| 8 | ai-cross-review#85 の検証データを revision を固定して取り込む | 未定 | 未定 | 未定 | main | #667 で扱う。#667 は #666 の後 |
+| 8 | ai-cross-review#85 の検証データを revision を固定して取り込む | `test/fixtures/cross-review-state/`、`tools/import-cross-review-contract.js` | メインセッション | `claude/667-shared-contracts` | main | #667 として PR #692 でマージ済み、#667 は閉じた |
 
 - 7 は、ktysne/ai-cross-review#89 の移行で、導入先から `tools/cross-review.sync.js` が消えたために要る。手順 3 の「取り込み先」の確認を、`node tools/cross-review.js sync --check` と、ai-cross-review の `--register --check --json`、`--migrate --check --json` の照会を使う形にする。
 - 8 は、ktysne/ai-cross-review#89 の計画で、#85 の契約の文書と検証データを導入先へ写さず、agent-cockpit が上流の revision を固定して取り込むと決まったために要る。#85 は ktysne/ai-cross-review#93 でマージ済み(マージコミット 1978f8f)。#667 の項目 1 が、この検証データの取り込みを含む。

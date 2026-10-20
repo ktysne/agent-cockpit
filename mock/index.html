@@ -152,6 +152,7 @@ header.top {
 .doctor-rest summary { cursor: pointer; color: var(--text-2); }
 .doctor-homes { margin: 14px 0 0; color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
 .doctor-homes code { font-size: 12px; }
+.doctor-dialog .diagnostics-actions[hidden] { display: none; }
 .diagnostics-policy-table-wrap { overflow-x: auto; }
 .diagnostics-policy-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .diagnostics-policy-table th, .diagnostics-policy-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
@@ -3432,7 +3433,7 @@ function renderRestartNote(state) {
       }]);
       separator = 'または';
     }
-    buttons.push(['導入の点検を開く', openDoctorDialog]);
+    buttons.push(['導入の点検を開く', () => openDoctorDialog()]);
   }
   // ポーリングのたびに作り直すとボタンのフォーカスが外れるため、表示が変わったときだけ作り直す。
   const view = JSON.stringify([text, buttons.map(([label]) => label), ui.phase === 'sending', separator, showCopyStatus ? ui.copyStatus : '']);
