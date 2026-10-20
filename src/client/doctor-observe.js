@@ -72,6 +72,7 @@ async function observeCrossReview(checkouts, homes, environment, options) {
   try { value = JSON.parse(stdout); }
   catch { return { error: 'ai-cross-review の照会結果を JSON として読めませんでした。' }; }
   if (value?.schemaVersion !== 1) return { error: 'ai-cross-review の照会結果の schemaVersion が 1 ではありません。' };
+  if (value.source?.error) return { error: `ai-cross-review の SKILL の正本を読めませんでした (${value.source.error})。` };
   if (!Array.isArray(value.targets) || !value.targets.every(target => object(target) &&
       ['claude', 'codex', 'codex-subagent'].includes(target.id) && typeof target.path === 'string' &&
       ['match', 'stale', 'missing', 'unreadable', 'skipped'].includes(target.state))) {

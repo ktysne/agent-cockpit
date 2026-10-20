@@ -365,6 +365,18 @@ test('copy-file は正本のバイト列を写し元の写しを退避する', a
   assert.ok(report.manual.some(text => text.includes('セッション')));
 });
 
+test('copy-file は UTF-8 でない写しも生のバイト列の sha256 で照合して置き直す', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f);
+  const utf16 = Buffer.from('﻿古い写し', 'utf16le');
+  await fs.writeFile(copy.target, utf16);
+  copy.targetEntry.sha256 = createHash('sha256').update(utf16).digest('hex');
+  await save(f);
+  const { code } = await run(f, [copy.id]);
+  assert.equal(code, 0);
+  assert.deepEqual(await fs.readFile(copy.target), copy.bytes);
+});
+
 test('copy-file の正本が照会後に変われば診断し直すよう案内して見送る', async t => {
   const f = await fixture(t);
   const copy = await reviewCopy(f);

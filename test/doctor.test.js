@@ -495,6 +495,8 @@ test('照会できない各場合は写しを一つの未確認にまとめる',
     async () => { throw Object.assign(new Error(), { code: 4 }); },
     async () => ({ stdout: 'invalid' }),
     async () => ({ stdout: JSON.stringify({ schemaVersion: 2 }) }),
+    async () => { throw Object.assign(new Error(), { code: 3,
+      stdout: JSON.stringify({ schemaVersion: 1, result: 'error', source: { path: 'SKILL.md', sha256: null, error: 'ENOENT' }, targets: [] }) }); },
   ];
   for (const queryCrossReview of failures) {
     const { report } = await run({ ...f.options, queryCrossReview });
@@ -508,6 +510,18 @@ test('照会できない各場合は写しを一つの未確認にまとめる',
   await write(path.join(f.homes.claude, 'skills/cross-review/SKILL.md'), 'installed');
   const { report } = await run(f.options);
   assert.deepEqual(report.items.filter(item => item.category === 'copies').map(item => item.result), ['unverified']);
+});
+
+test('Codex の配布先にだけ写しがあり checkout が見つからなくても未確認にする', async t => {
+  for (const home of ['codex', 'codex-subagent']) {
+    const f = await fixture(t);
+    const skill = home === 'codex' ? path.join(f.homes.codex, 'skills/cross-review/SKILL.md')
+      : path.join(f.userHome, '.codex-subagent/skills/cross-review/SKILL.md');
+    await write(skill, 'installed');
+    const { report } = await run(f.options);
+    assert.deepEqual(report.items.filter(item => item.category === 'copies').map(item => [item.id, item.result]),
+      [['cross-review.skills.query', 'unverified']]);
+  }
 });
 
 test('照会が終了コード 1 と 3 でも JSON の配布先を診断する', async t => {

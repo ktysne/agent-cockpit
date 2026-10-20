@@ -22,7 +22,7 @@ function matches(content, actions) {
   try {
     return actions.every(action => action.observedDigest === (action.digestPath
       ? subtreeDigest(content === null ? null : JSON.parse(content.toString('utf8')), action.digestPath)
-      : content === null ? null : digest(content.toString('utf8'))));
+      : content === null ? null : digest(action.op === 'copy-file' ? content : content.toString('utf8'))));
   } catch (error) {
     if (error instanceof SyntaxError) return false;
     throw error;

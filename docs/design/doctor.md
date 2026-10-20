@@ -91,8 +91,8 @@ ai-cross-review の写しは、checkout を cwd とする `node tools/cross-revi
 古い写しと配布条件を満たす未配置の写しには `copy-file` とセッションの開き直しを案内する。
 対象外と読めない写しには書き込みの対処を付けない。
 
-checkout が見つからないか照会できなければ、写しの項目を一つの `unverified` にまとめ、原因と `node src/client/apply.js --update-checkouts --check`、ai-cross-review の導入手順を案内する。
-ai-cross-review が未導入なら写しの項目を出さない。
+checkout が見つからないか、照会できないか、照会が正本を読めなかった(`source.error`)ときは、写しの項目を一つの `unverified` にまとめ、原因と `node src/client/apply.js --update-checkouts --check`、ai-cross-review の導入手順を案内する。
+ai-cross-review が未導入なら写しの項目を出さない。Claude、Codex、`~/.codex-subagent` のどのホームにも `skills/cross-review/SKILL.md` が無く、checkout も見つからないときを未導入とする。
 
 ## 出力の形
 
@@ -142,11 +142,11 @@ matcher はグループの属性なので、matcher が違う登録は、フッ�
 
 Codex の `config.toml` のうち、agent-cockpit の登録をインラインテーブルやドット付きのキーで書いたもの(`tools = { … }` など)は読まないので、MCP の項目を `unverified` にし、書き換えの対処を出さない。
 | `copy` | `from`(対象の checkout からの相対パス)、`to`(絶対パス) |
-| `copy-file` | `from`(正本の絶対パス)、`to`(配布先の絶対パス)、`sourceDigest`(正本の生バイト列の sha256)、`observedDigest`(写しの sha256、未配置なら `null`) |
+| `copy-file` | `from`(正本の絶対パス)、`to`(配布先の絶対パス)、`sourceDigest`(正本の生バイト列の sha256)、`observedDigest`(写しの生バイト列の sha256、未配置なら `null`) |
 | `command` | `command`(例 `node src/client/restart-server.js --json`)と、実行する場所 |
 | `manual` | 開発者の操作(セッションの開き直し、Codex の `/hooks` での信頼し直し)を `text` で |
 
-ファイルを書き換える対処には、`observedDigest`(観測したファイル全体の sha256)を付ける。UTF-8 で読んだ文字列から計算する。
+ファイルを書き換える対処には、`observedDigest`(観測したファイル全体の sha256)を付ける。UTF-8 で読んだ文字列から計算する。ただし `copy-file` は照会が返す値をそのまま使うので、生バイト列から計算する。
 ただし、Claude の MCP の登録の対処は `digestPath: ['mcpServers', 'agent-cockpit']` を持ち、この部分木の `JSON.stringify(値 ?? null)` の sha256 を使う。
 途中がオブジェクトでない場合も値を `null` として計算する。
 Claude Code が登録以外を頻繁に書き換えるため、この対処では登録の変化だけを検出する。
