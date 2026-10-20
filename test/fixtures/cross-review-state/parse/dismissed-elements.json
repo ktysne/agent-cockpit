@@ -1,0 +1,39 @@
+{
+  "description": "不正な要素を除き前後の空白を除く",
+  "input": "{\"branches\": {\"feature/x.y\": {\"dismissed\": [42, \"  \", \"  確認済み  \"]}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {
+        "feature/x.y": {
+          "round": 0,
+          "lastReviewedSha": null,
+          "dismissed": [
+            "確認済み"
+          ],
+          "lastTriage": null
+        }
+      }
+    },
+    "issues": [
+      {
+        "path": [
+          "branches",
+          "feature/x.y",
+          "dismissed",
+          0
+        ],
+        "code": "invalid-type"
+      },
+      {
+        "path": [
+          "branches",
+          "feature/x.y",
+          "dismissed",
+          1
+        ],
+        "code": "invalid-format"
+      }
+    ]
+  }
+}

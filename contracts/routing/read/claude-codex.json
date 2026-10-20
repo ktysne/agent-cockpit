@@ -1,0 +1,8 @@
+{
+  "description": "逆の経路の組み合わせを採用する",
+  "input": "{\"agents\":\"claude\",\"review\":\"codex\"}",
+  "expected": {
+    "agents": "claude",
+    "review": "codex"
+  }
+}

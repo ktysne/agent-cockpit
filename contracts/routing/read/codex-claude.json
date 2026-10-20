@@ -1,0 +1,8 @@
+{
+  "description": "異なる経路を組み合わせて採用する",
+  "input": "{\"agents\":\"codex\",\"review\":\"claude\"}",
+  "expected": {
+    "agents": "codex",
+    "review": "claude"
+  }
+}

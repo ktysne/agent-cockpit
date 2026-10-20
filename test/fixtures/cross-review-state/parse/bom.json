@@ -1,0 +1,9 @@
+{
+  "description": "BOM は受け付けない",
+  "input": "\ufeff{\"branches\":{}}",
+  "expected": {
+    "kind": "invalid",
+    "state": null,
+    "issues": []
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "description": "余分なキーがあれば全体を既定にする",
+  "input": "{\"agents\":\"codex\",\"review\":\"claude\",\"extra\":true}",
+  "expected": {
+    "agents": "default",
+    "review": "default"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "description": "ファイルが無ければ既定にする",
+  "input": null,
+  "expected": {
+    "agents": "default",
+    "review": "default"
+  }
+}

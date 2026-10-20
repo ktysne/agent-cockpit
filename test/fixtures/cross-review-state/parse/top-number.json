@@ -1,0 +1,16 @@
+{
+  "description": "オブジェクトでない値は空の記録にする",
+  "input": "5",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {}
+    },
+    "issues": [
+      {
+        "path": [],
+        "code": "invalid-type"
+      }
+    ]
+  }
+}

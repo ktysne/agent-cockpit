@@ -1,0 +1,16 @@
+{
+  "branches": {
+    "feature/x": {
+      "round": 1,
+      "lastReviewedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "dismissed": [
+        "対応不要と確認済み"
+      ],
+      "lastTriage": {
+        "round": 1,
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outcome": "converged"
+      }
+    }
+  }
+}

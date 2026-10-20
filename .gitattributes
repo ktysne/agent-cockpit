@@ -4,3 +4,6 @@
 manual/dist/** text eol=lf
 manual/img/**/*.json text eol=lf
 site/img/**/*.json text eol=lf
+# 上流から取り込む契約データのバイト列を保つ。
+test/fixtures/cross-review-state/**/*.json text eol=lf
+test/fixtures/cross-review-state/SOURCE.json text eol=lf

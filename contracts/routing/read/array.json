@@ -1,0 +1,8 @@
+{
+  "description": "配列は全体を既定にする",
+  "input": "[]",
+  "expected": {
+    "agents": "default",
+    "review": "default"
+  }
+}

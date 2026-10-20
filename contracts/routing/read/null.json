@@ -1,0 +1,8 @@
+{
+  "description": "null は全体を既定にする",
+  "input": "null",
+  "expected": {
+    "agents": "default",
+    "review": "default"
+  }
+}

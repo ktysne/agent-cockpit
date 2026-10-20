@@ -1,0 +1,18 @@
+{
+  "description": "オブジェクトでない値は空の記録にする",
+  "input": "{\"branches\": [{\"round\": 2}]}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {}
+    },
+    "issues": [
+      {
+        "path": [
+          "branches"
+        ],
+        "code": "invalid-type"
+      }
+    ]
+  }
+}

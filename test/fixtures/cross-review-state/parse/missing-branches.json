@@ -1,0 +1,11 @@
+{
+  "description": "省略したキーは issue にしない",
+  "input": "{}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {}
+    },
+    "issues": []
+  }
+}

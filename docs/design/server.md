@@ -498,6 +498,14 @@ GitHub の承認状態は `githubReview` に分ける。
 モックの例示用の短縮 SHA は評価の入力で完全な SHA に広げ、画面では短縮形を使う。
 
 セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は、PR の head のコミットにも無いことを `git ls-tree` で確かめて「レビュー不要」とする。head のコミットにあれば、道具がある worktree と同じく状態ファイルを読む。worktree が道具の無い別のブランチへ切り替わっても、記録を「不要」で隠さないためである。head のコミットが手元に無いなどで確かめられないときは、PR の base ブランチを remote の追跡ブランチ(`<remote>/<base>`)のコミットで確かめ、どれかにあれば道具を使うリポジトリとする。見る remote は PR のリポジトリと一致する GitHub の remote で、GitHub の remote と判定できるものが無い(SSH の別名ホストなど)ときはすべての remote とする。ローカルの `<base>` は、PR のリポジトリと内容が違うことがあるので見ない。head と base のどちらでも確かめられないときは「確認できない」とする。状態ファイルの有無ではなく道具の有無で判定したまま、「レビュー不要」は道具が無いと確かめられたときだけにし、head を取り込んでいないだけで、使わないリポジトリの PR を「確認できない」にしないためである。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。
+状態ファイルの本文の正規化と診断は `src/server/cross-review-state.js` の `parseCrossReviewState` が担う。
+上流の ai-cross-review の固定 revision の検証データを `test/fixtures/cross-review-state/` に置き、契約テストで読み取り結果を確かめる。
+`src/server/pull-requests.js` の `readCrossReviewState` は、ファイルの有無と読み取り失敗、道具の有無、古い記録かどうかの判断を担う adapter とする。
+JSON の構文誤りは取得不能とし、診断のうち対象ブランチ自体、`round`、`dismissed` 自体の不正も取得不能とする。
+それ以外の診断では正規化した値を使い、不正な `lastTriage` は `null`、非対応の件数は文字列でない要素と空白だけの要素を除いた数とする。
+`lastReviewedSha` は前後の空白を除き、完全な SHA なら小文字、それ以外は `null` とする。
+対象ブランチの記録が無ければ `null` を返す。
+
 状態ファイルは、登録の `cwd` の worktree に加えて、同じリポジトリのほかの worktree からも探す。PR の head のブランチをチェックアウトしている worktree は記録の有無を問わず候補にし、それ以外の worktree はそのブランチの記録を持つときだけ候補にする。スタックを 1 つの worktree で積むと、下の段のブランチはどこにもチェックアウトされないためである。
 登録の `cwd` が消えたときは、親へ上って見つかる worktree の根で下の remote の照合をしてから、PR の head のコミットに `tools/cross-review.js` があるかを確かめる。head のコミットを確かめられなければ、上と同じく base ブランチのコミットで確かめる。無ければ「レビュー不要」とし、あるか、どちらも確かめられなければ「確認できない」とする。消えた worktree の状態ファイルは読めないためである。このとき見つけた根も、ほかの worktree と同じ規則の候補にする。`git worktree list` で `prunable` の worktree(フォルダーが無い)は候補にしない。
 登録や worktree の候補が複数あるときは、同じ worktree のパスを重複から除き、全登録の候補を集めてから一度だけ選ぶ。
