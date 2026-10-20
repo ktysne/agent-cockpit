@@ -6159,6 +6159,21 @@ test('点検の全文を取得できなければ前の項目を消し、要約�
   assert.equal(fetches, 2);
 });
 
+test('点検の全文の取得中に要約が新しくなったら、古い全文を採らずに取り直す', async () => {
+  const bodies = [{ generatedAt: 'old', items: [{ id: 'stale', result: 'mismatch' }] }, { generatedAt: 'new', items: [] }];
+  const context = pageContext(pageHtml, { doctorLoading: null, doctorResult: null,
+    doctorState: { generatedAt: 'old', error: null }, renderDoctorDialog() {},
+    fetch: async () => {
+      const body = bodies.shift();
+      context.doctorState = { generatedAt: 'new', error: null };
+      return { ok: true, json: async () => body };
+    } });
+  vm.runInContext(functionSource(pageHtml, 'loadDoctorResult'), context);
+  await context.loadDoctorResult();
+  assert.equal(context.doctorResult.generatedAt, 'new');
+  assert.deepEqual(bodies, []);
+});
+
 test('点検し直す操作は画面用 POST を一度だけ送り、完了後に全文を読み直す', async () => {
   let finish;
   let posts = 0;

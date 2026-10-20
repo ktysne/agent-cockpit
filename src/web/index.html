@@ -5349,9 +5349,15 @@ function loadDoctorResult() {
   if (doctorLoading) return doctorLoading;
   doctorLoading = (async () => {
     try {
-      const response = await fetch('/api/doctor', { cache: 'no-store' });
-      if (!response.ok) throw new Error('Doctor result unavailable');
-      doctorResult = await response.json();
+      // 取得中に点検が終わると要約だけが新しくなるため、要約と同じ点検の全文が返るまで取り直す。
+      const matches = result => (result?.generatedAt ?? null) === doctorState.generatedAt;
+      let result = null;
+      for (let attempt = 0; attempt === 0 || (attempt < 3 && !matches(result)); attempt += 1) {
+        const response = await fetch('/api/doctor', { cache: 'no-store' });
+        if (!response.ok) throw new Error('Doctor result unavailable');
+        result = await response.json();
+      }
+      doctorResult = matches(result) ? result : null;
     } catch {
       // 前の項目を残すと、新しい件数と古い不一致の ID を並べて見せるため、取得できなければ項目を出さない。
       doctorResult = null;
