@@ -84,11 +84,16 @@ Codex のフックの `command` は、`node "<パス>" codex` の形の文字列
 
 ai-cross-review の写しは、checkout を cwd とする `node tools/cross-review.sync-all.js --global-skill --check --json` の結果だけで照合する。
 子プロセスには診断で解決したホームを `CLAUDE_CONFIG_DIR` と `CODEX_HOME` で渡し、30 秒で時間切れにする。
-終了コード 0、1、3 の JSON を受け付け、`schemaVersion` は 1 とする。
+終了コード 0、1、3 の JSON を受け付け、`schemaVersion` は 1 または 2 とする。
+版 1 では従来の配布先 ID と状態を検査し、版 2 では `claude`、`agents`、`codex-legacy`、`codex-subagent-legacy` を受け付ける。
+版 2 では、`codex-legacy` と `codex-subagent-legacy` の状態は `legacy` か `unreadable` で、`removable` が boolean であることを要求する。ほかの配布先は版 1 と同じ状態を受け付ける。
 配布先ごとに `cross-review.skills.<id>` を作り、`tool` は `ai-cross-review`、区分は `copies` にする。
 `provider` は Claude の配布先で `claude`、Codex と Codex サブエージェントの配布先で `codex` にする。
 `expected` と `observed` には正本と写しの sha256 だけを載せる。
 古い写しと配布条件を満たす未配置の写しには `copy-file` とセッションの開き直しを案内する。
+`legacy` は不一致にし、古い置き場に残った写しのため Codex の選択肢に `cross-review` が 2 つ並ぶことを理由に示す。
+`removable: true` では ai-cross-review の checkout で `node tools/cross-review.sync-all.js --global-skill` を実行する案内を出す。
+`removable: false` では内容を確認して手で片付ける案内を出す。
 対象外と読めない写しには書き込みの対処を付けない。
 
 checkout が見つからないか、照会できないか、照会が正本を読めなかった(`source.error`)ときは、写しの項目を一つの `unverified` にまとめ、原因と `node src/client/apply.js --update-checkouts --check`、ai-cross-review の導入手順を案内する。
