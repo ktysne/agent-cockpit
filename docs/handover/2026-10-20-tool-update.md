@@ -1,5 +1,7 @@
 # 連携ツールの更新と反映の計画(2026-10-20)
 
+2026-10-21 に、表のすべての行を終えた。
+
 Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利用者が、連携ツール(ai-cross-review、claude-codex-bridge)も含めて、最新のツールを簡単に使える状態にすることを最終目標にする。
 起点は main の 558e7480 である。
 各リポジトリが `tools/cross-review.sync.json` で取り込む ai-cross-review の写しは、リポジトリの中身でホームの設定ではないので、対象に入れない。
@@ -13,8 +15,8 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 段階 2b(#673)の前提の照会の入口は、2 つともそろった。bridge は `bash tools/codex-agent.sh --check-copies`、ai-cross-review は `node tools/cross-review.sync-all.js --global-skill --check --json` である。契約の正本は、bridge の `docs/gpt-agents.md` の「配置済みの写しを照合する」と、ai-cross-review の `docs/cross-review.md` の「グローバル SKILL の配布」にある。
 段階 2b(#673)は、診断と適用に ai-cross-review と bridge の写しの項目が入り、`update-tools` の手順もそれを使う形になった。bridge と ai-cross-review の写しは、ファイルを見比べず、診断の `copies` の項目を選んで適用する。
 ktysne/ai-cross-review#89 で、すべての導入先が新形式(入口だけを置き、本体は登録した checkout から読む)に移った。`update-tools` も、移行の要否、取り込み先の差分、本体の登録を確かめる形になった(表の 7 行目)。
-残るのは、表の 6 行目(段階 3、#694)である。
-6 行目は、モックを先に入れ、その後に常駐サーバーと画面を実装する。画面の形と常駐サーバーからの呼び方は #694 の本文にある。
+段階 3(#694)は終わった。常駐サーバーが診断を流し、ダッシュボードの「導入の点検」に結果を出す。仕様は [導入の整合の診断の設計](../design/doctor.md) にある。
+残る作業は無い。
 
 ## 決定済みの判断
 
@@ -51,14 +53,14 @@ ktysne/ai-cross-review#89 で、すべての導入先が新形式(入口だけ�
 
 ## 対応順序、ブランチ、PR
 
-| 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-20 に確認) |
+| 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-21 に確認) |
 |---|---|---|---|---|---|---|
 | 1 | #534 段階 1 診断 | `src/client/doctor.js`、`src/shared/integration-manifest.js`、`docs/setup.md`、`docs/update.md` | hard | `claude/integration-doctor` | main | PR #670。マージ済み、#534 は閉じた |
 | 2 | #671 段階 2a 適用、checkout の更新、Codex のホームの解決の集約 | `src/client/doctor.js`、`src/client/apply.js`、`src/server/identity.js`、`src/server/server.js`、`skills/update-tools/SKILL.md` | hard | 項目ごとに main から切る | main | PR #674、#675、#676、#677、#678 でマージ済み、#671 は閉じた。項目 6 は `test/apply-checkouts.test.js` と `test/apply.test.js` で確かめた。実機で `update-tools` を通した |
 | 3 | ktysne/claude-codex-bridge#169 写しの照会 | bridge の `tools/codex-agent.sh` | bridge 側 | `claude/issue-169-copy-check` | bridge の main | ktysne/claude-codex-bridge#171 でマージ済み、#169 は閉じた。前提の ktysne/claude-codex-bridge#167 も ktysne/claude-codex-bridge#170 でマージ済み |
 | 4 | ktysne/ai-cross-review#87 グローバル SKILL の確認 | ai-cross-review の `tools/cross-review.sync-all.js` | ai-cross-review 側 | `fix/global-skill-check` | ai-cross-review の main | ktysne/ai-cross-review#88 でマージ済み、#87 は閉じた |
 | 5 | #673 段階 2b 連携ツールの写し | `src/client/doctor-observe.js`、`src/client/doctor-evaluate.js`、`src/client/apply.js`、`skills/update-tools/SKILL.md` | hard、3 段目はメインセッション | `claude/673-cross-review-copies`、`claude/673-bridge-copies`、`claude/673-update-tools-copies` | main | 1 段目は PR #681、2 段目は PR #682 でマージ済み。1 段目のマージ後に 2 段目を main から切ったので、スタックにはしていない。3 段目は PR #683 でマージ済み、#673 は閉じた |
-| 6 | #694 段階 3 ダッシュボードの入口 | 1 段目は `mock/index.html`。2 段目は常駐サーバーの診断の呼び出しと `src/web/index.html` | 1 段目はメインセッション、2 段目は hard | `claude/694-doctor-mock`、`claude/694-doctor-dashboard` | main | 1 段目は PR #695 でマージ済み。2 段目はブランチ `claude/694-doctor-dashboard` |
+| 6 | #694 段階 3 ダッシュボードの入口 | 1 段目は `mock/index.html`。2 段目は常駐サーバーの診断の呼び出しと `src/web/index.html` | 1 段目はメインセッション、2 段目は hard | `claude/694-doctor-mock`、`claude/694-doctor-dashboard` | main | 1 段目は PR #695、2 段目は PR #696 でマージ済み、#694 は閉じた。PATH に bash が無い常駐サーバーでの bridge の照会は PR #697 でマージ済み |
 | 7 | update-tools の ai-cross-review の取り込み先の確認を新形式に合わせる | `skills/update-tools/SKILL.md` | light | `claude/684-update-tools-new-form` | main | PR #686 でマージ済み、#684 は閉じた |
 | 8 | ai-cross-review#85 の検証データを revision を固定して取り込む | `test/fixtures/cross-review-state/`、`tools/import-cross-review-contract.js` | メインセッション | `claude/667-shared-contracts` | main | #667 として PR #692 でマージ済み、#667 は閉じた |
 
