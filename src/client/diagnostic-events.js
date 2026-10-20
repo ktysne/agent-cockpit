@@ -2,7 +2,7 @@ const MAX_DIAGNOSTICS_PER_EVENT = 8;
 const MAX_DIAGNOSTICS_BODY_BYTES = 16 * 1024;
 const HOOK_EVENT_NAMES = ['SessionStart', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop',
   'Stop', 'SessionEnd', 'UserPromptSubmit', 'PostToolBatch', 'PermissionRequest', 'Interrupt'];
-const TOOL_NAMES = ['cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_update_decision', 'cockpit_add_pr', 'cockpit_skip_review', 'cockpit_defer_review'];
+const { TOOL_NAMES } = require('../shared/mcp-tool-names');
 const CLIENT_EVENTS = Object.freeze({
   'hook.input': { tag: 'hook', level: 'info', fields: { result: ['parsed', 'invalid'] } },
   'hook.pid': { tag: 'hook', level: 'info', fields: { result: ['found', 'missing', 'timeout', 'failed'], durationMs: 'number' } },

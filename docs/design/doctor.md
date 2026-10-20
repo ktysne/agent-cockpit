@@ -54,9 +54,14 @@ provider は、ホームに agent-cockpit のフック、MCP の登録、スキ�
 | server | `/health` の `version`、`commit`、`sourceState` を対象の checkout と比べる | 一致で `ok`、違えば `mismatch`。動いていなければ `unverified`(SessionStart のフックが起動するため) |
 | hooks | 期待する登録ごとに、同じイベントと matcher で同じスクリプトを指す登録を探し、引数、timeout、`async`、`asyncRewake` を比べる。agent-cockpit のスクリプトを指すが期待に無い登録も挙げる | 足りない、値が違う、余分、別の checkout を指すものは `mismatch` |
 | mcp | Claude は `.claude.json` の `mcpServers['agent-cockpit']`、Codex は `config.toml` の `[mcp_servers.agent-cockpit]` の実行先と、各ツールの `approval_mode` | 違えば `mismatch`。Claude のプロジェクトのスコープに同名の登録があれば、そちらが効くので `unverified` |
-| mcp-runtime | 診断ログ(`GET /api/diagnostics`)の今の起動の `mcp.write` に残る MCP プロセスの `version` と `commit` | 期待値より古いものがあれば `mismatch`。記録が無ければ `unverified` |
+| mcp-runtime | 診断ログ(`GET /api/diagnostics`)の今の起動の `mcp.write` に残る MCP プロセスの `version` と `commit` | すべて期待値と一致すれば `ok`。古いものがあれば、開き直しの案内を付けて `unverified`。記録はセッションを閉じた後も起動のあいだ残り、今動いているとは言えないため。記録が無ければ `unverified` |
 | skills | 正本と写しを、行末の違いを除いて比べる | 違えば `mismatch`。agent-cockpit のスキルが無ければ `mismatch`、`update-tools` が無ければ `not-installed` |
 | runtime-check | MCP からの書き込みと質問の回答の往復 | 常に `not-run`。導入手順の「確認」へ案内する |
+
+Claude の `route.js` のフック(導入手順のパターン C)は、bridge が導入済み(`codexAgentScriptPaths` のどれかに `codex-agent.sh` がある)なら期待する登録に含め、無ければ `mismatch` にする。
+bridge が未導入なら、登録があれば値を照合し、無くても `mismatch` にしない。どちらの場合も余分な登録として扱わない。bridge を外した後も登録を残してよい作りのためである。
+
+matcher は、無い、空、`*` を同じものとして比べる。どれもすべてのツールに一致するためである。
 
 パスは、`\` と `/` の違い、末尾の区切り、Windows の大文字小文字を除いて比べる。`fs.realpath` は使わない。ジャンクションで別のパスに解決されるためである。
 Codex のフックの `command` は、`node "<パス>" codex` の形の文字列から、スクリプトのパスと末尾の引数を取り出して比べる。
@@ -105,4 +110,5 @@ Codex のフックの `command` は、`node "<パス>" codex` の形の文字列
 | `manual` | 開発者の操作(セッションの開き直し、Codex の `/hooks` での信頼し直し)を `text` で |
 
 ファイルを書き換える対処には、`observedDigest`(観測したファイル全体の sha256)を付ける。適用する側は、適用の直前に計算し直し、違えばその対処を適用しない。
+観測したときにファイルが無ければ `observedDigest` を `null` にする。適用する側は、適用の直前にもファイルが無いことを確かめ、あればその対処を適用しない。
 Codex の `hooks.json` を書き換える対処には、`/hooks` で信頼し直す `manual` を必ず対にする。信頼の記録はフックの内容のハッシュで、書き換えると外れるためである。
