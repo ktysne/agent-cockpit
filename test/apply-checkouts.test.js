@@ -140,6 +140,31 @@ for (const valid of [true, false]) {
   });
 }
 
+test('リリース追従で更新先のタグの履歴が分かれていると確認でも更新でも拒む', async t => {
+  const f = await fixture(t);
+  await git(f.clone, 'tag', 'v1.0.0');
+  const before = await git(f.clone, 'rev-parse', 'HEAD');
+  await git(f.seed, 'checkout', '--orphan', 'other');
+  await write(path.join(f.seed, 'package.json'), { name: f.tool, version: '1.0.2' });
+  await git(f.seed, 'add', '.');
+  await git(f.seed, 'commit', '-m', '別の履歴');
+  await git(f.seed, 'tag', 'v1.0.2');
+  await git(f.seed, 'push', 'origin', 'v1.0.2');
+  for (const args of [['--check'], ['--tool', 'agent-cockpit']]) {
+    const result = await run(f, args);
+    assert.equal(result.code, 1);
+    assert.equal(result.report.checkouts[0].status, 'blocked');
+    assert.equal(await git(f.clone, 'rev-parse', 'HEAD'), before);
+  }
+});
+
+test('選んだツールの checkout も導入の印も無ければ not-found で終了コード 1 にする', async t => {
+  const f = await fixture(t);
+  const result = await run(f, ['--tool', 'ai-cross-review']);
+  assert.equal(result.code, 1);
+  assert.deepEqual(result.report.checkouts.map(item => [item.tool, item.status]), [['ai-cross-review', 'not-found']]);
+});
+
 test('導入の印があると checkout が無いツールを報告し未導入は出さない', async t => {
   const f = await fixture(t);
   assert.deepEqual((await run(f, ['--check'])).report.checkouts.map(item => item.tool), ['agent-cockpit']);

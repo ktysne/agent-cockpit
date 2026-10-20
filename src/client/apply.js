@@ -274,6 +274,8 @@ async function updateCheckout(checkout, check, options, manual) {
       }
     }
     if (await git('rev-list', '--count', `HEAD..${result.to}`) === '0') return finish('up-to-date', '最新です。');
+    try { await git('merge-base', '--is-ancestor', 'HEAD', result.to); }
+    catch { return finish('blocked', '更新先の履歴が今の HEAD から分かれていて、fast-forward できません。'); }
     result.commits = (await git('log', '--oneline', '-n', '20', `HEAD..${result.to}`)).split(/\r?\n/).filter(Boolean);
     if (check) return finish('updatable', 'fast-forward で更新できます。');
     await git('merge', '--ff-only', result.to);
@@ -301,9 +303,9 @@ async function updateCheckouts(argv, options, log) {
   if (check ? tools.length : !tools.length) throw new Error('確認か更新対象を選んでください。');
   const observation = await observe(options);
   const report = { schemaVersion: 1, checkouts: [], manual: [] };
-  for (const checkout of observation.checkouts) {
-    if (check || tools.includes(checkout.tool)) report.checkouts.push(await updateCheckout(checkout, check, options, report.manual));
-  }
+  const targets = check ? observation.checkouts
+    : [...new Set(tools)].map(tool => observation.checkouts.find(checkout => checkout.tool === tool) || { tool, root: null });
+  for (const checkout of targets) report.checkouts.push(await updateCheckout(checkout, check, options, report.manual));
   log(argv.includes('--json') ? JSON.stringify(report) : [
     ...report.checkouts.flatMap(item => [`${item.tool}: ${item.root || '場所不明'}: ${item.status}: ${item.reason}`,
       ...(item.to ? [`  更新先 (${item.track}): ${item.to}`] : []), ...item.commits]), ...report.manual,

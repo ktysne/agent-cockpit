@@ -202,6 +202,7 @@ HTTPS と SSH の `git@github.com:` 形式、末尾の `.git` の有無を許す
 探索とブランチの読み取りは `checkouts.js` で行い、git を起動しない。
 bridge は `codexAgentScriptPaths` のいずれか、ai-cross-review は Claude ホームの `skills/cross-review/SKILL.md` を導入の印とする。
 印があるのに checkout が無ければ `not-found` とし、両方無ければ出力しない。
+ただし `--tool` で選んだツールは、両方無くても `not-found` として出力する。選んだ更新の取りこぼしを成功に見せないためである。
 
 確認と更新の直前には、未コミットの変更が無く、ブランチが `main` であることを確かめ、`fetch origin` を行う。
 `origin/main` に無いローカルのコミットがあれば `blocked` にする。
@@ -213,6 +214,7 @@ HEAD にタグがある agent-cockpit は配布元のリリースを追い、`pa
 版は `compareVersions` で比較し、配布元の既定値は `https://github.com/ktysne/agent-cockpit.git` とする。
 選んだタグだけを force なしで取得し、コミット内の `package.json` の version がタグと一致することを確かめる。
 更新先が無ければ `up-to-date`、遅れていれば `updatable` とし、遅れているコミットを最大 20 件報告する。
+遅れていても、`merge-base --is-ancestor HEAD <更新先>` が成り立たなければ `blocked` にする。配布元のタグの履歴がフォークの `origin/main` から分かれていると、件数だけでは fast-forward できるかを判定できないためである。
 
 更新は `updatable` のものだけに `merge --ff-only <更新先のコミット>` を行う。
 更新後の HEAD が更新先と一致すれば `updated`、fetch、タグの検証、merge の失敗や HEAD の不一致は `failed` にする。
