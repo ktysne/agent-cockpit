@@ -67,7 +67,7 @@ provider は、ホームに agent-cockpit のフック、MCP の登録、スキ�
 | hooks | 期待する登録ごとに、同じイベントと matcher で同じスクリプトを指す登録を探し、引数、timeout、`async`、`asyncRewake` を比べる。agent-cockpit のスクリプトを指すが期待に無い登録も挙げる | 足りない、値が違う、余分、別の checkout を指すものは `mismatch` |
 | mcp | Claude は `.claude.json` の `mcpServers['agent-cockpit']`、Codex は `config.toml` の `[mcp_servers.agent-cockpit]` の実行先と、各ツールの `approval_mode` | 違えば `mismatch`。Claude のプロジェクトのスコープに同名の登録があれば、そちらが効くので `unverified` |
 | mcp-runtime | 診断ログ(`GET /api/diagnostics`)の今の起動の `mcp.write` に残る MCP プロセスの `version` と `commit` | すべて期待値と一致すれば `ok`。古いものがあれば、開き直しの案内を付けて `unverified`。記録はセッションを閉じた後も起動のあいだ残り、今動いているとは言えないため。記録が無ければ `unverified` |
-| skills | 正本と写しを、行末の違いを除いて比べる | 違えば `mismatch`。agent-cockpit のスキルが無ければ `mismatch`、`update-tools` が無ければ `not-installed` |
+| skills | 正本と写しを、行末の違いを除いて比べる。Codex の写しは `CODEX_HOME` と独立した `<home>/.agents` を基準にする | 違えば `mismatch`。agent-cockpit のスキルが無ければ `mismatch`、`update-tools` が新旧どちらにも無ければ `not-installed` |
 | copies | ai-cross-review と bridge の照会結果をそのまま写す | 一致で `ok`、古い写しと bridge の必須の未配置は `mismatch`、任意の未配置と対象外は `not-installed`、読めなければ `unverified` |
 | runtime-check | MCP からの書き込みと質問の回答の往復 | 常に `not-run`。導入手順の「確認」へ案内する |
 
@@ -80,7 +80,13 @@ matcher は、無い、空、`*` を同じものとして比べる。どれも�
 Codex のフックの `command` は、`node "<パス>" codex` の形の文字列から、スクリプトのパスと末尾の引数を取り出して比べる。
 
 セッションが古い登録で動いているかは判定しない。ファイルの更新時刻は、同じ内容の写し直しでも変わるため、誤った案内が増えるからである。
-代わりに、フック、MCP、スキルのどれかに `mismatch` があれば、直した後に開いたセッションだけが新しい内容で動くことを `manual` の対処として必ず添える。
+代わりに、フック、MCP、スキル(古い置き場の写しを除く)のどれかに `mismatch` があれば、直した後に開いたセッションだけが新しい内容で動くことを `manual` の対処として必ず添える。
+
+Codex の古い置き場(`CODEX_HOME` の `skills/`)に写しがあれば、`codex.skills.agent-cockpit-legacy` と `codex.skills.update-tools-legacy` を `mismatch` として出す。
+親ディレクトリを `realpath` で解決し、新しい置き場と同じ実体なら項目を出さない。
+実体を確認できない場合は項目を出す。
+対処は古い写しのフォルダーの削除と新しい配布先を案内する `manual` だけとし、自動では削除しない。
+新旧どちらかに写しがあれば Codex を導入済みと扱い、古い置き場だけに写しがある場合は新しい置き場への `copy` を提示する。
 
 ai-cross-review の写しは、checkout を cwd とする `node tools/cross-review.sync-all.js --global-skill --check --json` の結果だけで照合する。
 子プロセスには診断で解決したホームを `CLAUDE_CONFIG_DIR` と `CODEX_HOME` で渡し、30 秒で時間切れにする。
@@ -97,7 +103,7 @@ ai-cross-review の写しは、checkout を cwd とする `node tools/cross-revi
 対象外と読めない写しには書き込みの対処を付けない。
 
 checkout が見つからないか、照会できないか、照会が正本を読めなかった(`source.error`)ときは、写しの項目を一つの `unverified` にまとめ、原因と `node src/client/apply.js --update-checkouts --check`、ai-cross-review の導入手順を案内する。
-ai-cross-review が未導入なら写しの項目を出さない。Claude、Codex、`~/.codex-subagent` のどのホームにも `skills/cross-review/SKILL.md` が無く、checkout も見つからないときを未導入とする。
+ai-cross-review が未導入なら写しの項目を出さない。Claude、Codex、`~/.agents`、`~/.codex-subagent` のどのホームにも `skills/cross-review/SKILL.md` が無く、checkout も見つからないときを未導入とする。
 
 bridge の写しは、checkout を cwd とする `bash tools/codex-agent.sh --check-copies` の結果だけで照合する。
 子プロセスには診断で解決した Claude のホームを `CLAUDE_CONFIG_DIR` で渡し、30 秒で時間切れにする。
@@ -252,7 +258,7 @@ agent-cockpit は診断と同じ checkout を対象とする。
 `.git/config` の origin が `github.com/ktysne/<名前>` を指す最初のディレクトリを使う。
 HTTPS と SSH の `git@github.com:` 形式、末尾の `.git` の有無を許す。
 探索とブランチの読み取りは `checkouts.js` で行い、git を起動しない。
-bridge は `codexAgentScriptPaths` のいずれか、ai-cross-review は Claude ホームの `skills/cross-review/SKILL.md` を導入の印とする。
+bridge は `codexAgentScriptPaths` のいずれか、ai-cross-review は Claude、Codex、`~/.agents`、`~/.codex-subagent` のいずれかのホームの `skills/cross-review/SKILL.md` を導入の印とする。
 印があるのに checkout が無ければ `not-found` とし、両方無ければ出力しない。
 ただし `--tool` で選んだツールは、両方無くても `not-found` として出力する。選んだ更新の取りこぼしを成功に見せないためである。
 

@@ -181,3 +181,13 @@ for (const args of [['--check', '--tool', 'agent-cockpit'], ['--from', 'input.js
     assert.equal(result.code, 2);
   });
 }
+
+test('.agents にだけ cross-review があると checkout 不明の導入済みツールとして報告する', async t => {
+  const { directory } = temporaryDirectory(t, 'agents-review-fixture-');
+  const userHome = path.join(directory, 'home');
+  await write(path.join(directory, 'package.json'), { name: 'agent-cockpit', version: '1.0.0' });
+  await write(path.join(userHome, '.agents/skills/cross-review/SKILL.md'), 'review');
+  const result = await run({ options: { root: directory, userHome, cwd: directory, environment: {}, execFile: executeIsolated } }, ['--check']);
+  const item = result.report.checkouts.find(item => item.tool === 'ai-cross-review');
+  assert.equal(item.status, 'not-found');
+});

@@ -258,14 +258,15 @@ test('診断後に既に直った項目は already-ok で書き込まない', as
 
 test('copy は不足した親を作り正本のバイト列を写して再診断で一致する', async t => {
   const f = await fixture(t);
-  const [source, destination] = Object.entries(f.manifest.claude.skills)[0];
+  await write(path.join(f.userHome, '.codex/hooks.json'), { hooks: f.manifest.codex.hooks });
+  const [source, destination] = Object.entries(f.manifest.codex.skills)[0];
   const content = 'スキルの正本\r\n';
   await write(path.join(f.root, source), content);
   const before = await save(f);
-  const item = before.items.find(item => item.category === 'skills' && item.provider === 'claude' && item.result === 'mismatch');
+  const item = before.items.find(item => item.category === 'skills' && item.provider === 'codex' && item.result === 'mismatch');
   const { code, report } = await run(f, [item.id]);
   assert.equal(code, 0);
-  assert.equal(await fs.readFile(path.join(f.userHome, '.claude', destination), 'utf8'), content);
+  assert.equal(await fs.readFile(path.join(f.userHome, '.agents', destination), 'utf8'), content);
   assert.equal((await diagnose(f.options)).items.find(entry => entry.id === item.id).result, 'ok');
   assert.equal(report.backupDir, null);
 });
@@ -340,17 +341,17 @@ test('command は選んだときだけファイルを書いた後に execFile �
 async function reviewCopy(f, state = 'stale') {
   const root = path.join(f.directory, 'ai-cross-review');
   const source = path.join(root, '.claude/skills/cross-review/SKILL.md');
-  const target = path.join(f.userHome, '.codex-subagent/skills/cross-review/SKILL.md');
+  const target = path.join(f.userHome, '.agents/skills/cross-review/SKILL.md');
   const bytes = Buffer.from('正本\r\n');
   await write(path.join(root, '.git/config'), '[remote "origin"]\nurl = https://github.com/ktysne/ai-cross-review.git\n');
   await fs.mkdir(path.dirname(source), { recursive: true });
   await fs.writeFile(source, bytes);
   if (state === 'stale') await write(target, '古い写し');
   const hash = value => createHash('sha256').update(value).digest('hex');
-  const targetEntry = { id: 'codex-subagent', path: target, state, sourcePath: source,
+  const targetEntry = { id: 'agents', path: target, state, sourcePath: source,
     sourceSha256: hash(bytes), sha256: state === 'stale' ? hash('古い写し') : null };
-  f.options.queryCrossReview = async () => ({ stdout: JSON.stringify({ schemaVersion: 1, targets: [targetEntry] }) });
-  return { source, target, bytes, targetEntry, id: 'cross-review.skills.codex-subagent' };
+  f.options.queryCrossReview = async () => ({ stdout: JSON.stringify({ schemaVersion: 2, targets: [targetEntry] }) });
+  return { source, target, bytes, targetEntry, id: 'cross-review.skills.agents' };
 }
 
 test('copy-file は正本のバイト列を写し元の写しを退避する', async t => {

@@ -32,7 +32,7 @@ async function observeCheckouts({ root, userHome, homes, bridgeInstalled, cwd = 
       if (tool && !found.has(tool)) found.set(tool, candidate);
     }
   }
-  const reviewInstalled = (await Promise.all([homes.claude, homes.codex, path.join(userHome, '.codex-subagent')]
+  const reviewInstalled = (await Promise.all([homes.claude, homes.codex, path.join(userHome, '.agents'), path.join(userHome, '.codex-subagent')]
     .map(home => fs.stat(path.join(home, 'skills/cross-review/SKILL.md')).then(() => true, () => false)))).some(Boolean);
   return ['agent-cockpit', 'claude-codex-bridge', 'ai-cross-review'].flatMap(tool => {
     const checkout = found.get(tool) || null;

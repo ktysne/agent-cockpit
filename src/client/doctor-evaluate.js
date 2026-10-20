@@ -194,11 +194,12 @@ function checkMcp(provider, document, registration, manifest, add, shadowed, inv
 }
 
 function checkSkills(provider, skills, add) {
-  for (const { source, destination, target, original, copy } of skills) {
+  for (const { source, destination, target, original, copy, legacy } of skills) {
     const optional = destination.includes('/update-tools/');
-    const result = copy.missing && optional ? 'not-installed' : original.missing || original.invalid || copy.invalid ? 'unverified'
+    const result = copy.missing && optional && !legacy ? 'not-installed' : original.missing || original.invalid || copy.invalid ? 'unverified'
       : copy.missing || original.text.replace(/\r\n/g, '\n') !== copy.text.replace(/\r\n/g, '\n') ? 'mismatch' : 'ok';
-    add(provider, 'skills', optional ? 'update-tools' : 'agent-cockpit', target,
+    const name = optional ? 'update-tools' : 'agent-cockpit';
+    add(provider, 'skills', name, target,
       original.text === null ? null : digest(original.text.replace(/\r\n/g, '\n')),
       copy.text === null ? null : digest(copy.text.replace(/\r\n/g, '\n')), result,
       result === 'ok' ? 'スキルの写しは対象の checkout と一致しています。'
@@ -206,6 +207,9 @@ function checkSkills(provider, skills, add) {
         : result === 'unverified' ? 'スキルを読めないため、正本と写しを手で確認してください。'
         : 'スキルの写しが無いか内容が違うため、対象の checkout からコピーし直してください。', result === 'mismatch'
         ? [{ op: 'copy', from: source, to: target, observedDigest: copy.observedDigest }, SESSION_ACTION] : []);
+    if (legacy) add(provider, 'skills', `${name}-legacy`, legacy.file, null, legacy.observedDigest, 'mismatch',
+      '古い置き場に写しが残っているため、Codex の選択肢に同じスキルが 2 つ並びます。',
+      [{ op: 'manual', text: `${path.dirname(legacy.file)} を消してください。スキルは ${target} に配っています。` }]);
   }
 }
 
