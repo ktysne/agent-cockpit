@@ -265,6 +265,15 @@ function evaluate(observation) {
     checkMcp(provider, mcpDocument, registration, manifest[provider], add, shadowed, provider === 'codex' && toml.invalid);
     checkSkills(provider, skills[provider], add);
   }
+  for (const checkout of observation.checkouts) {
+    items.push({ id: `${checkout.tool === 'agent-cockpit' ? 'cockpit' : checkout.tool}.checkout.state`,
+      tool: checkout.tool, provider: null, category: 'checkout', target: checkout.root,
+      expected: null, observed: { branch: checkout.branch }, observedAt: generatedAt,
+      result: checkout.root ? 'not-run' : 'unverified',
+      reason: checkout.root ? `ブランチは ${checkout.branch || '不明'} です。更新の有無は node src/client/apply.js --update-checkouts --check で確かめてください。`
+        : 'checkout の場所が分かりません。',
+      actions: [{ op: 'manual', text: 'node src/client/apply.js --update-checkouts --check' }] });
+  }
   checkServer(homes.cockpit, root, expected, server, add);
   add(null, 'runtime-check', 'roundtrip', 'docs/setup.md', null, null, 'not-run',
     'MCP の書き込みと質問の回答の往復は実施していません。導入手順の「確認」で実際に操作してください。',
