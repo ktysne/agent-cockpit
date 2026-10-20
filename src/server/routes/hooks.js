@@ -7,7 +7,7 @@ const { sanitizeEvent, isQuestionTool } = require('../events');
 const { productFromCwd } = require('../identity');
 const { claudeAgentDefinition, codexAgentDefinition } = require('../session-files');
 const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, isPullRequestShellTool, repositoryKey, validRepositoryPart } = require('../pull-request-utils');
-const { applyReviewSkip } = require('./review-skip');
+const { applyReviewSkip, applyReviewDeferral } = require('./review-skip');
 const { keepImportedCriteria } = require('../plan-updates');
 const { matchingRepositoryCheckout } = require('../pull-requests');
 
@@ -389,14 +389,16 @@ function createHookRoutes(ctx) {
     const routeSessionId = params[1];
     const isAddPullRequest = body?.kind === 'add_pr';
     const isSkipReview = body?.kind === 'skip_review';
+    const isDeferReview = body?.kind === 'defer_review';
     const pullRequest = isAddPullRequest ? parsePullRequestUrl(body.url) : null;
     const isCodex = Object.hasOwn(body || {}, 'codexSessionId');
     const skipReviewKeys = isCodex
       ? ['codexSessionId', 'headRefOid', 'kind', 'number', 'owner', 'reason', 'repo']
       : ['claudeCodeSessionId', 'headRefOid', 'kind', 'number', 'owner', 'ppid', 'reason', 'repo'];
-    const validSkipReview = isSkipReview && Object.keys(body).sort().join(',') === skipReviewKeys.join(',') &&
+    if (isDeferReview) skipReviewKeys.push('next');
+    const validSkipReview = (isSkipReview || isDeferReview) && Object.keys(body).sort().join(',') === skipReviewKeys.sort().join(',') &&
       validRepositoryPart(body.owner) && validRepositoryPart(body.repo) && Number.isSafeInteger(body.number) && body.number > 0 &&
-      isCompleteCommitSha(body.headRefOid) && validText(body.reason, 2000);
+      isCompleteCommitSha(body.headRefOid) && validText(body.reason, 2000) && (!isDeferReview || validText(body.next, 2000));
     if ((!pullRequest && !validSkipReview) || (!isCodex && (!Number.isInteger(body.ppid) || body.ppid < 1)) ||
       (body.cwd !== undefined && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) ||
       (body.prCwd !== undefined && (typeof body.prCwd !== 'string' || body.prCwd.length > 4096 || !path.isAbsolute(body.prCwd))) ||
@@ -414,19 +416,20 @@ function createHookRoutes(ctx) {
       jsonResponse(response, 400, { error: 'Session id unavailable' });
       return;
     }
-    if (isSkipReview) {
+    if (isSkipReview || isDeferReview) {
       const registration = state.pullRequestRegistrationForSession(sessionId, body.owner, body.repo, body.number);
       if (!registration) {
         jsonResponse(response, 404, { error: 'PR is not registered by this session' });
         return;
       }
       try {
-        const result = await applyReviewSkip({
+        const result = await (isDeferReview ? applyReviewDeferral : applyReviewSkip)({
           pullRequestTracker,
           pullRequestMergeManager,
           registration,
           headRefOid: body.headRefOid,
           reason: body.reason,
+          ...(isDeferReview ? { next: body.next } : {}),
         });
         if (!result.ok) {
           jsonResponse(response, result.status, { error: result.error });

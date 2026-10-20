@@ -842,7 +842,8 @@ const DATA = {
       prs: [
         { number: 201, title: 'Codex セッションの受付', head: 'feat/codex-session', base: 'claude/feature-codex-support', sha: 'c01de01', ci: 'pass', review: 'none', conflict: false, draft: false, providers: ['codex'],
           xr: { round: 1, reviewedSha: 'c01de01', dismissed: 0, triage: { round: 1, sha: 'c01de01', outcome: 'converged' } } },
-        { number: 202, title: 'Codex の状態表示', head: 'feat/codex-display', base: 'feat/codex-session', sha: 'c01de02', ci: 'pass', review: 'none', conflict: false, draft: false, providers: ['claude', 'codex'], xr: null },
+        { number: 202, title: 'Codex の状態表示', head: 'feat/codex-display', base: 'feat/codex-session', sha: 'c01de02', ci: 'pass', review: 'none', conflict: false, draft: false, providers: ['claude', 'codex'],
+          xr: { deferred: true, reason: 'Codex の実機確認を待つため', next: '実機で状態表示を確かめてクロスレビューを回す' } },
       ],
       extraSessions: [
         {
@@ -2326,6 +2327,7 @@ function pushedAfterConvergence(pr) {
 // 未収束の往復状態を優先し、収束済みなら収束 SHA、それ以外の比較可能な記録なら reviewed SHA を現在の head と比べる。
 function crossReviewState(pr) {
   if (pr.xr === undefined) return { cls: 'mute', text: '', warn: null };
+  if (pr.xr?.deferred === true) return { cls: 'warn', text: 'レビュー保留', warn: 'レビュー保留' };
   if (pr.xr?.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null };
   if (!pr.xr) return { cls: 'warn', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
   if (pr.xr.conflict?.length) return { cls: 'warn', text: '記録が食い違う', warn: 'クロスレビューの記録が食い違う' };
@@ -2364,19 +2366,27 @@ function crossReviewLine(p, pr) {
       <button type="button" class="link-btn" data-review-skip="clear" data-review-key="${esc(key)}">レビュー不要を取り消す</button></div>`;
   }
   const state = crossReviewState(pr);
+  if (pr.xr?.deferred === true) return `<div class="xr">クロスレビュー <span class="badge warn">レビュー保留</span>
+    <span>理由: ${esc(pr.xr.reason)}</span><span>次の作業: ${esc(pr.xr.next)}</span>
+    <button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button></div>`;
+  const triage = pr.xr?.triage;
+  const coveredSha = triage?.round === pr.xr?.round
+    ? (['converged', 'halted', 'fixing'].includes(triage?.outcome) ? triage.sha : null) : pr.xr?.reviewedSha;
+  const missing = pr.xr === null || (pr.xr && !pr.xr.notRequired && !pr.xr.unavailable && !pr.xr.conflict?.length &&
+    coveredSha?.toLowerCase() !== pr.sha?.toLowerCase());
+  const nextAction = missing ? '<span>現在の head の記録がありません。クロスレビューを実施するか、レビュー不要にする操作で記録してください。</span>' : '';
   if (pr.xr?.notRequired === true) {
     const reason = pr.xr.reason ? ` title="${esc(pr.xr.reason)}"` : '';
     const action = pr.xr.source === 'recorded'
       ? `<button type="button" class="link-btn" data-review-skip="clear" data-review-key="${esc(key)}">レビュー不要を取り消す</button>` : '';
     return `<div class="xr">クロスレビュー <span class="badge mute"${reason}>レビュー不要</span>${action}</div>`;
   }
-  if (!pr.xr || pr.xr.unavailable === true) return `<div class="xr">クロスレビュー <span class="badge ${state.cls}">${state.text}</span>
+  if (!pr.xr || pr.xr.unavailable === true) return `<div class="xr">クロスレビュー ${nextAction}<span class="badge ${state.cls}">${state.text}</span>
     <button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button></div>`;
   const rounds = Array.from({ length: CROSS_REVIEW_MAX_ROUNDS }, (_, i) => `<span class="${i < pr.xr.round ? 'used' : ''}"></span>`).join('');
-  // 不要の記録はレビューが要る状態(warn)でだけ出す。
-  const skipAction = state.cls === 'warn'
+  const skipAction = missing || state.cls === 'warn'
     ? `<button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button>` : '';
-  return `<div class="xr">クロスレビュー <span class="rounds" aria-hidden="true">${rounds}</span>
+  return `<div class="xr">クロスレビュー ${nextAction}<span class="rounds" aria-hidden="true">${rounds}</span>
     <span>${pr.xr.round} / ${CROSS_REVIEW_MAX_ROUNDS} 往復、非対応 ${pr.xr.dismissed}</span><span class="badge ${state.cls}">${esc(state.text)}</span>${skipAction}</div>`;
 }
 
@@ -2484,6 +2494,7 @@ function crossReviewSettled(p, pr) {
 
 function crossReviewWaitReason(p, pr) {
   const review = pr.xr;
+  if (review?.deferred === true) return 'レビュー保留';
   if (review?.notRequired === true || ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha) return null;
   if (review?.conflict?.length) return 'クロスレビューの記録が食い違う';
   if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
@@ -2499,7 +2510,8 @@ function crossReviewWaitReason(p, pr) {
 
 function reservationWaitReasons(p, pr, method = null) {
   const waiting = [];
-  if (pr.xr?.conflict?.length) waiting.push('クロスレビューの記録が食い違う');
+  if (pr.xr?.deferred === true) waiting.push('レビュー保留');
+  else if (pr.xr?.conflict?.length) waiting.push('クロスレビューの記録が食い違う');
   else if (pr.xr?.notRequired === true || !convergedAtHead(pr)) waiting.push(pushedAfterConvergence(pr)
     ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
   if (pr.ci !== 'pass') waiting.push((CI_LABELS[pr.ci] || CI_LABELS.unknown).wait);
@@ -3605,6 +3617,7 @@ document.addEventListener('click', e => {
     if (!pr || !['set', 'clear'].includes(t.dataset.reviewSkip)) return;
     if (t.dataset.reviewSkip === 'set') {
       ui.reviewSkips[key] = { sha: pr.sha, reason: '開発者がダッシュボードでこの head のレビューを不要と判断した' };
+      if (pr.xr?.deferred) pr.xr = null;
     } else {
       delete ui.reviewSkips[key];
       if (pr.xr?.notRequired && pr.xr.source === 'recorded') pr.xr = null;

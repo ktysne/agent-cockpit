@@ -2114,6 +2114,7 @@ function pullRequestCrossReviewSettled(pullRequest) {
 
 function pullRequestCrossReviewWaitReason(pullRequest) {
   const review = pullRequest.crossReview;
+  if (review?.deferred === true) return 'レビュー保留';
   if (review?.notRequired === true) return null;
   if (review?.conflict?.length) return 'クロスレビューの記録が食い違う';
   if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
@@ -2140,7 +2141,9 @@ function pullRequestMergeConditionWaits(pullRequest) {
 
 function pullRequestReservationWaitReasons(pullRequest, group = null, method = null) {
   const waiting = [];
-  if (pullRequest.crossReview?.conflict?.length) {
+  if (pullRequest.crossReview?.deferred === true) {
+    waiting.push('レビュー保留');
+  } else if (pullRequest.crossReview?.conflict?.length) {
     waiting.push('クロスレビューの記録が食い違う');
   } else if (pullRequest.crossReview?.notRequired === true || !convergedAtHead(pullRequest)) {
     waiting.push(pushedAfterConvergence(pullRequest) ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
@@ -2190,6 +2193,7 @@ function crossReviewState(pullRequest) {
   const review = pullRequest.crossReview;
   if (review === undefined) return { cls: 'mute', text: '', warn: null };
   if (review === null) return { cls: 'warn', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  if (review.deferred === true) return { cls: 'warn', text: 'レビュー保留', warn: 'レビュー保留' };
   if (review.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null };
   if (review.conflict?.length) return { cls: 'warn', text: '記録が食い違う', warn: 'クロスレビューの記録が食い違う' };
   if (review.unavailable === true) return { cls: 'warn', text: '状態を確認できない', warn: 'クロスレビューの状態を確認できない' };
@@ -2250,6 +2254,18 @@ function crossReviewLine(pullRequest) {
   const state = crossReviewState(pullRequest);
   const line = element('div', 'xr');
   line.append(document.createTextNode('クロスレビュー '));
+  if (review?.deferred === true) {
+    line.append(badge(state.text, state.cls), element('span', '', `理由: ${review.reason}`),
+      element('span', '', `次の作業: ${review.next}`));
+    appendCrossReviewSkipControl(line, pullRequest, false);
+    return line;
+  }
+  const triage = review?.triage;
+  const coveredSha = triage?.round === review?.round
+    ? (['converged', 'halted', 'fixing'].includes(triage?.outcome) ? triage.sha : null) : review?.reviewedSha;
+  const missing = review === null || (review && !review.notRequired && !review.unavailable && !review.conflict?.length &&
+    isCompleteCommitSha(pullRequest.headRefOid) && coveredSha?.toLowerCase() !== pullRequest.headRefOid.toLowerCase());
+  if (missing) line.append(element('span', '', '現在の head の記録がありません。クロスレビューを実施するか、レビュー不要にする操作で記録してください。'));
   if (!review || review.unavailable === true) {
     line.append(badge(state.text, state.cls));
     if (state.cls === 'warn') appendCrossReviewSkipControl(line, pullRequest, false);
@@ -2273,8 +2289,7 @@ function crossReviewLine(pullRequest) {
     document.createTextNode(' '),
     badge(state.text, state.cls),
   );
-  // 不要の記録はレビューが要る状態(warn)でだけ意味を持つ。済みや判定できない状態で記録しても表示もマージ条件も変わらない。
-  if (state.cls === 'warn') appendCrossReviewSkipControl(line, pullRequest, false);
+  if (missing || state.cls === 'warn') appendCrossReviewSkipControl(line, pullRequest, false);
   return line;
 }
 

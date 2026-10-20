@@ -504,14 +504,28 @@ cwd の worktree の GitHub の remote のどれも PR のリポジトリと一�
 head と base の道具の有無も、見つけた checkout で確かめる。
 兄弟のフォルダーなどのファイルシステムの走査は行わず、候補が見つからなければ「確認できない」のままにする。
 表示設定 `display.mergeableCondition` は「マージ操作が可能」「CI が成功」「現在の head のクロスレビューが収束または不要」の各条件を選ぶ。既定は最後の条件まで求める。収束は `lastTriage.round` と現在の round が一致し、`lastTriage.sha` と現在の head が一致する場合だけ有効とする。操作可否は CI とクロスレビューを含めずに判定し、選択条件を満たすかどうかでカードの緑表示、待ち条件と件数を決める。操作可だが条件が残る場合も、確認欄に警告を出して開発者が実行できる。
+クロスレビューの保留は `cockpit_defer_review` で owner、repo、number、headRefOid、reason、next(次の作業)を必須として受け付け、`store.json` の新しいキー `crossReviewDeferrals` に保存する。
+キーが無い旧形式は空として読む。
+登録元のセッションと最新の head を照合し、head の変更と PR 登録の保持期限で無効にする。
+同じ head の不要記録と保留は、MCP と画面のどちらから記録しても後からの記録だけを残す。
+保留はマージ条件を満たさず、収束後マージの予約は取り消さずに待つ。
+保留は、選んだレビューの記録が現在の head に触れないとき(記録なし、古い head の記録だけ、確認不能、道具なし)だけ重ねる。保留の後に現在の head で始めたレビューの収束や判断待ちを隠さないためである。
+レビューの往復と halted、waiting の判断事項は既存の状態から導き、保存する状態を増やさない。
+通信不能は観測できないため、MCP の失敗応答で完了報告に書く内容を伝える。記録の前に拒否されたとき(入力不備、登録や head の不一致、PR の取り直しの失敗、常駐サーバーに届かない)は未記録であることと理由を書くよう伝える。時間切れ、応答の喪失、常駐サーバーの例外(500)と、記録を反映した後に保存を確かめられないとき(500)は、記録できたかを確かめられなかったとして、ダッシュボードで確かめるよう伝える。
 クロスレビュー不要記録は PR の owner/repo/番号、head SHA、理由を `store.json` の `crossReviewSkips` に保存する。MCP の `cockpit_skip_review` は登録元セッションからのみ記録でき、ダッシュボードの操作は起動時の秘密値と必須 Origin を照合して記録または取り消す。どちらもサーバーが最新の PR head を取り直して照合し、別の head には適用しない。head が変われば記録を無効にし、PR 登録の保持期限に合わせて削除する。
 不要の記録がある PR でも状態ファイルを読み、今の head で収束した記録があれば、不要の記録より収束を優先する。収束後マージの予約は不要の記録だけでは実行しないので、記録の後の収束を隠さないためである。
-メインセッションの Stop 開始時だけ、登録先 repo の進行中の再取得を待ってからローカルのレビュー記録を読み直し、記録の無い PR があればレビュー不要の記録を促す。
+メインセッションの Stop 開始時だけ、登録先 repo の進行中の再取得を待ってからローカルのレビュー記録を読み直し、現在の head の記録が無い PR があればクロスレビューの実施、不要または保留の記録を促す。
 `stop-start` は判定を待たずに generation を返し、判定は最初の `stop-poll` または `stop-check` で待つ。`stop-start` のフックは 1 秒で打ち切るため。
 待機と読み直しの合計上限は 3 秒とし、失敗や時間切れでは催促せず Stop を続ける。`stop-check` のフックは、この上限に 2 秒を足した時間まで応答を待つ。Claude の `stop-poll` のフックは、この上限と long-poll の上限を足した時間まで待つ。
-登録済みの open な PR のうち `crossReview === null` だけを対象とし、開発者の回答を待つ判断事項（waiting）があるセッションには催促しない。推奨を仮に適用した判断事項（provisional）は自走中に残り続けるので、抑止の条件にしない。
+登録済みの open な PR のうち、現在の head を覆う記録が無いものを対象にする。`classifyReviewAtHead` が stale 以外になるレビュー、現在の head の不要記録または保留記録があれば対象にしない。`crossReview === null` と古い head の記録だけがある PR は対象にし、確認不能、道具なしの不要、競合は対象にしない。開発者の回答を待つ判断事項（waiting）があるセッションには催促しない。推奨を仮に適用した判断事項（provisional）は自走中に残り続けるので、抑止の条件にしない。
 催促は Stop の generation に紐づけて返す。通常の通知キューには入れず、待機中の再取得完了やポーリングでは再判定しない。
-同じセッション、PR、head への配信はメモリー上で一度だけに制限し、セッション終了で記録を消す。本文に head SHA は含めず、現在の head を確かめて `cockpit_skip_review` に理由と渡すよう促す。
+ACK は配信済みとして数えるだけで、記録を完了したことにはしない。
+最後の配信の後に UserPromptSubmit が届くか、配信から 30 分以上たった Stop で再び催促し、同じセッション、PR、head で 3 回までにする。
+同じターンでは繰り返さず、ACK の無い配信は次の Stop で再送する。
+上限後は block せず、画面で未記録と次の操作を示す。
+セッション終了で配信の記録を消す。
+本文に head SHA は含めず、現在の head と理由を `cockpit_skip_review` に渡すか、次の作業も添えて `cockpit_defer_review` で保留するよう促す。
+ツールの成功を確かめてから完了報告し、失敗時はツールの応答に従って、未記録であることか、記録を確かめられなかったことを理由と一緒に報告する。
 診断ログは配信した PR ごとに repository、番号、セッション ID の先頭 8 文字だけを残す。
 MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り消しは `POST /api/pull-requests/review-skip` を使う。画面からの要求は `uiSecret` と `validRequiredUiOrigin` を通し、登録キーと表示中の head SHA が最新状態と一致することを確かめる。
 各プロダクトの PR 群には、リポジトリ全体の失敗をまとめた `error` とは別に、そのプロダクトのオープンの PR を数えきれていないことを示す `openStateUnknown` を付ける。PR の一覧を取得できなかったときと、そのプロダクトが登録した PR の状態を確かめられなかったときに真にする。
@@ -840,10 +854,10 @@ items は 12 件、content は 200 文字までとし、不正な形や content 
 題は 200 文字、本文は 2,000 文字、タスクは 50 件、完了条件は 20 件、選択肢は 6 件までに制限する。
 
 MCP サーバーは `src/mcp/server.js` で、JSON-RPC を stdio の行単位で扱う。
-ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision`、`cockpit_report_launch`、`cockpit_add_pr`、`cockpit_skip_review` の 6 つである。
+ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision`、`cockpit_report_launch`、`cockpit_add_pr`、`cockpit_skip_review`、`cockpit_defer_review` の 7 つである。
 `cockpit_report_launch` は判断事項の `id` と、`url`(http か https)または `process` のどちらか一方を受け取る(扱いは「タスクと判断事項」の節)。
 `cockpit_add_pr` は PR の `url` に加え、任意の `cwd`(絶対パスの文字列、4096 文字まで)を受け取る。
-計画の変更は `ensureServerRunning` で常駐サーバーを確かめ、`secret` 付きで `/plan` に送る。PR の登録とクロスレビュー不要の記録は `/prs` に送る。
+計画の変更は `ensureServerRunning` で常駐サーバーを確かめ、`secret` 付きで `/plan` に送る。PR の登録とクロスレビュー不要または保留の記録は `/prs` に送る。
 MCP が渡す `ppid` と `CLAUDE_CODE_SESSION_ID` のうち、常駐サーバーはまず `ppid` から `~/.claude/sessions/*.json` に対応する session ID を探し、見つからない場合に環境変数の ID を使う。どちらも無ければ書き込みを拒否する。
 委譲した Codex の thread への書き込みは、403 の `error: "Codex session delegated"` で拒否し、MCP は委譲元の Claude のセッションが記録するので呼ばなくてよいと、エラーにせずに返す(詳細は [委譲した Codex の表示](codex-delegation.md))。
 他の環境変数値や `CLAUDE_CODE_MESSAGING_TOKEN` は MCP の結果、ログ、常駐サーバーへの要求に含めない。

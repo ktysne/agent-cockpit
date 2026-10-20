@@ -59,6 +59,7 @@ function createPullRequestRoutes(ctx) {
         jsonResponse(response, 409, { error: 'Review skip is no longer active' });
         return;
       }
+      await state.flushStoreWrite();
       await state.waitForPersistence();
       await pullRequestTracker.refreshReviewGroups(registration.owner, registration.repo);
       jsonResponse(response, 200, { action: body.action, number: registration.number });

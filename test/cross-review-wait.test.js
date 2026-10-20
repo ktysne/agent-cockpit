@@ -32,6 +32,7 @@ test('クロスレビューの記録状態ごとに待ち理由を表示する',
     [{ round: 3, triage: { round: 2, outcome: 'fixing', sha: headSha } }, headSha, 'クロスレビュー対応中'],
     [{ round: 2, triage: { round: 2, outcome: 'converged', sha: staleSha } }, headSha, 'クロスレビュー後に push あり'],
     [{ unavailable: true }, headSha, 'クロスレビューの状態を確認できない'],
+    [{ deferred: true, reason: '実機待ち', next: '実機で確認する' }, headSha, 'レビュー保留'],
   ];
 
   const webReason = functionSource(web, 'pullRequestCrossReviewWaitReason');
@@ -52,6 +53,36 @@ test('クロスレビューの記録状態ごとに待ち理由を表示する',
     assert.equal(webContext.reason({ crossReview: review, headRefOid: sha }), expected);
     assert.equal(mockContext.reason({}, { number: 1, sha, xr: review }), expected);
   }
+});
+
+test('保留のカードは理由と次の作業をテキストで示しマージの条件を待たせる', () => {
+  const context = vm.createContext({
+    element: fakeElement, badge: (text, cls) => fakeElement('span', `badge ${cls}`, text),
+    document: { createTextNode: text => text }, appendCrossReviewSkipControl() {},
+  });
+  for (const name of ['crossReviewState', 'crossReviewLine', 'pullRequestCrossReviewWaitReason', 'pullRequestReservationWaitReasons']) {
+    vm.runInContext(functionSource(web, name), context);
+  }
+  const pr = { crossReview: { deferred: true, reason: '<img src=x onerror=alert(1)>', next: '実機で確認する' },
+    ci: 'pass', review: 'none', canMerge: true };
+  const line = context.crossReviewLine(pr);
+  assert.match(line.textContent, /レビュー保留/);
+  assert.match(line.textContent, /理由: <img src=x onerror=alert\(1\)>/);
+  assert.match(line.textContent, /次の作業: 実機で確認する/);
+  assert.equal(context.pullRequestCrossReviewWaitReason(pr), 'レビュー保留');
+  assert.equal(context.pullRequestReservationWaitReasons(pr)[0], 'レビュー保留');
+  assert.ok(line.children.every(node => typeof node === 'string' || node.tag === 'span'));
+  const mockContext = vm.createContext({ ui: { reviewSkips: {} }, prKey: () => 'repo/1' });
+  vm.runInContext(mock.match(/^const esc = .+$/m)[0], mockContext);
+  for (const name of ['crossReviewState', 'crossReviewLine']) {
+    vm.runInContext(functionSource(mock, name), mockContext);
+  }
+  const mockPr = { ...pr, sha: 'a'.repeat(40), xr: pr.crossReview };
+  const mockLine = mockContext.crossReviewLine({}, mockPr);
+  assert.match(mockLine, /レビュー保留/);
+  assert.match(mockLine, /次の作業: 実機で確認する/);
+  assert.match(mockLine, /&lt;img/);
+  assert.doesNotMatch(mockLine, /<img/);
 });
 
 test('クロスレビューの状態を確認できない PR は、往復の数を出さずに札だけを出す', () => {

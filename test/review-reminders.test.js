@@ -5,6 +5,8 @@ const { PullRequestTracker } = require('../src/server/pull-requests');
 const { DecisionAnswerDelivery } = require('../src/server/decision-answers');
 const { pullRequest } = require('./support/github');
 const { request, startTestServer } = require('./support/server');
+const { runAnswerHookMain } = require('../src/hooks/answer');
+const { Writable } = require('node:stream');
 
 function reminderFixture(t, options = {}) {
   const state = new DashboardState();
@@ -37,7 +39,96 @@ function reminderFixture(t, options = {}) {
   return { state, sessionId, tracker, pr, logs, delivery, stop };
 }
 
-test('未記録の PR は同じセッションと head で一度だけ催促する', async (t) => {
+async function reminderHttp(t) {
+  let now = Date.now();
+  const f = reminderFixture(t, { now: () => now });
+  const server = await startTestServer(t, { state: f.state, answerDelivery: f.delivery });
+  let id = 0;
+  const send = async (action, extra = {}) => {
+    const response = await request(server.info.port, { method: 'POST', path: '/api/hooks/answers',
+      headers: { 'x-cockpit-secret': server.info.secret },
+      body: JSON.stringify({ session_id: f.sessionId, action, event_name: action === 'user-prompt-submit' ? 'UserPromptSubmit' : 'Stop',
+        id: `http-${++id}`, ...extra }) });
+    assert.equal(response.status, 200);
+    return JSON.parse(response.body);
+  };
+  const stop = async () => {
+    const result = await send('stop-check', { provider: 'claude' });
+    if (result.deliveryId) await send('delivery-ack', { delivery_id: result.deliveryId });
+    return result.hookOutput?.reason || null;
+  };
+  return { ...f, ...server, send, stop, now: () => now, advance: ms => { now += ms; } };
+}
+
+test('ACK 後も未記録なら新しい UserPromptSubmit の後の Stop で再び催促する', async t => {
+  const f = await reminderHttp(t);
+  assert.match(await f.stop(), /現在の head/);
+  assert.equal(await f.stop(), null);
+  await f.send('user-prompt-submit');
+  assert.match(await f.stop(), /cockpit_defer_review/);
+});
+
+test('ACK 後の最後の配信から 30 分が過ぎた Stop で再び催促する', async t => {
+  const f = await reminderHttp(t);
+  await f.stop();
+  f.advance(30 * 60_000 + 1);
+  assert.match(await f.stop(), /cockpit_skip_review/);
+});
+
+test('入力と時間経過を繰り返しても同じ head の催促は 3 回を超えない', async t => {
+  const f = await reminderHttp(t);
+  for (let count = 0; count < 3; count += 1) {
+    assert.match(await f.stop(), /cockpit_skip_review/);
+    f.advance(31 * 60_000);
+    await f.send('user-prompt-submit');
+  }
+  assert.equal(await f.stop(), null);
+  const response = await request(f.info.port, { path: '/api/state' });
+  assert.equal(response.status, 200);
+  assert.ok((await f.tracker.missingReviewRecords(f.sessionId)).length);
+});
+
+test('古い head の収束または往復の記録だけなら現在の head の記録を催促する', async t => {
+  for (const review of [{ round: 1, reviewedSha: 'b'.repeat(40) },
+    { round: 1, triage: { round: 1, outcome: 'converged', sha: 'b'.repeat(40) } }]) {
+    const f = await reminderHttp(t);
+    f.tracker.readCrossReviewState = async () => review;
+    assert.match(await f.stop(), /古い head/);
+  }
+});
+
+test('現在の head の保留記録があれば Stop で催促しない', async t => {
+  const f = await reminderHttp(t);
+  f.state.setCrossReviewDeferral({ owner: 'example', repo: 'project', number: 31,
+    headRefOid: f.pr.headRefOid, reason: '実機が無い', next: '実機でレビューする', recordedAt: new Date().toISOString() });
+  assert.equal(await f.stop(), null);
+});
+
+for (const options of [{ noninteractive: true }, { provider: 'codex' }, {}]) {
+  test(`${options.provider || (options.noninteractive ? '非対話' : 'Claude stop-poll')} の Stop は出力後に ACK し再催促の上限を守る`, async t => {
+    const f = await reminderHttp(t);
+    let output = '';
+    const stream = new Writable({ write(chunk, _encoding, done) { output += chunk; done(); } });
+    const run = async () => {
+      output = '';
+      await runAnswerHookMain({ session_id: f.sessionId, hook_event_name: 'Stop' }, stream, stream, {
+        ...options, now: f.now, once: true, isParentAlive: () => true, readServerInfo: async () => f.info, homeDir: f.homeDir,
+      });
+      return output;
+    };
+    assert.match(await run(), /cockpit_defer_review/);
+    assert.equal(await run(), '');
+    f.advance(30 * 60_000 + 1);
+    assert.match(await run(), /cockpit_defer_review/);
+    assert.equal(await run(), '');
+    await f.send('user-prompt-submit');
+    assert.match(await run(), /cockpit_defer_review/);
+    await f.send('user-prompt-submit');
+    assert.equal(await run(), '');
+  });
+}
+
+test('未記録の PR は ACK 後の同じターンの Stop では再び催促しない', async (t) => {
   const { stop, logs, pr } = reminderFixture(t);
   const first = await stop();
   assert.match(first.stderrText, /PR #31 \(example\/project\)/);
@@ -57,14 +148,17 @@ test('head が変わると同じ PR でも催促する', async (t) => {
   assert.match((await stop()).stderrText, /cockpit_skip_review/);
 });
 
-test('レビュー記録や不要記録があれば催促しない', async (t) => {
-  const { tracker, stop } = reminderFixture(t);
+test('現在の head のレビュー記録や不要記録と確認不能や競合は催促しない', async (t) => {
+  const { tracker, stop, pr } = await reminderHttp(t);
   for (const review of [undefined, { notRequired: true, source: 'tool-absent' },
     { notRequired: true, source: 'recorded' }, { unavailable: true },
-    { round: 1, reviewedSha: 'b'.repeat(40) },
-    { round: 1, reviewedSha: '0'.repeat(38) + '31', triage: { outcome: 'converged' } }]) {
+    { round: 1, reviewedSha: pr.headRefOid },
+    { round: 1, triage: { round: 1, sha: pr.headRefOid, outcome: 'converged' } },
+    { round: 1, triage: { round: 1, sha: pr.headRefOid, outcome: 'halted' } },
+    { round: 1, triage: { round: 1, sha: pr.headRefOid, outcome: 'fixing' } },
+    { round: 1, reviewedSha: 'b'.repeat(40), conflict: [{ outcome: 'halted', round: 1, sha: pr.headRefOid }] }]) {
     tracker.readCrossReviewState = async () => review;
-    assert.equal((await stop()).stderrText, null);
+    assert.equal(await stop(), null);
   }
 });
 
@@ -214,7 +308,7 @@ test('読み直し中に次の入力が届いた Stop の催促は破棄する',
 });
 
 for (const action of ['stop-check', 'stop-poll']) {
-  test(`${action} の未 ACK のレビュー催促は次の Stop で再配信し、ACK 後は同じ head を繰り返さない`, async (t) => {
+  test(`${action} の未 ACK のレビュー催促は次の Stop で再配信し、ACK 後は同じターンで繰り返さない`, async (t) => {
     const f = reminderFixture(t);
     const server = await startTestServer(t, { state: f.state, answerDelivery: f.delivery });
     const send = async (action, id, extra = {}) => {

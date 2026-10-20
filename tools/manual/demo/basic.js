@@ -309,6 +309,10 @@ module.exports = function basic({ baseTime }) {
         kind: 'skip_review', owner: OWNER, repo: 'parcel-api', number: 44, headRefOid: headOf(PARCEL_REPOSITORY, 44),
         reason: 'ドキュメントだけの変更なので、クロスレビューを省く',
       });
+      await prs('notes-main', {
+        kind: 'defer_review', owner: OWNER, repo: 'field-notes', number: 57, headRefOid: headOf(NOTES_REPOSITORY, 57),
+        reason: 'PDF の実機確認を待つため', next: '実機で出力を確認してクロスレビューを回す',
+      });
 
       at(52);
       const finishedCodex = { id: 'agent-planner-codex-done', type: 'impl-light' };

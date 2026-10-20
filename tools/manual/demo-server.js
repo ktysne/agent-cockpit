@@ -268,7 +268,7 @@ async function startDemoServer(options = {}) {
         return ensureOk(await post(`/api/sessions/${session.id}/plan`, { ...identity, ...body }), `${key} の ${body.kind}`);
       },
       /**
-       * MCP サーバーが送る形(add_pr、skip_review)を /api/sessions/<id>/prs へ送る。
+       * MCP サーバーが送る形(add_pr、skip_review、defer_review)を /api/sessions/<id>/prs へ送る。
        * 全セッションが撮影のプロセスの pid を共有するので、ppid は生きたセッションに対応しない値にして、claudeCodeSessionId で特定させる。
        */
       async prs(key, body) {
