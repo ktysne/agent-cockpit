@@ -7,6 +7,16 @@ const TRUST_ACTION = { op: 'manual', text: 'Codex の /hooks でフックを信�
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const digest = text => createHash('sha256').update(text).digest('hex');
 
+function subtreeDigest(value, keys) {
+  for (const key of keys) value = object(value) && Object.hasOwn(value, key) ? value[key] : null;
+  return digest(JSON.stringify(value ?? null));
+}
+
+function tomlTableName(line) {
+  return line.trim().match(/^\[\s*(.*?)\s*\]\s*(?:#.*)?$/)?.[1]
+    .replace(/"([\w-]+)"|'([\w-]+)'/g, (_, basic, literal) => basic || literal).replace(/\s*\.\s*/g, '.');
+}
+
 function normalizedPath(value) {
   const paths = path.sep === '\\' || /^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\') ? path.win32 : path.posix;
   const normalized = paths.normalize(value).replace(/\\/g, '/').replace(/\/+$/, '');
@@ -39,10 +49,12 @@ function hookValue(hook) {
 function hookEntries(document) {
   if (!object(document.value?.hooks)) return [];
   return Object.entries(document.value.hooks).flatMap(([event, groups]) => Array.isArray(groups)
-    ? groups.flatMap(group => Array.isArray(group?.hooks) ? group.hooks.filter(object).map(hook => {
+    ? groups.flatMap((group, groupIndex) => Array.isArray(group?.hooks) ? group.hooks.flatMap((hook, hookIndex) => {
+      if (!object(hook)) return [];
       const run = execution(hook);
       const match = typeof run.script === 'string' && run.script.replace(/\\/g, '/').match(/^(.*)\/src\/hooks\/([^/]+)\.js$/i);
-      return { event, matcher: group.matcher ?? null, matcherKey: matcherKey(group.matcher), hook, root: match ? match[1] : null, name: match ? match[2] : null };
+      return [{ event, matcher: group.matcher ?? null, matcherKey: matcherKey(group.matcher), hook, groupIndex, hookIndex,
+        root: match ? match[1] : null, name: match ? match[2] : null }];
     }) : []) : []);
 }
 
@@ -56,7 +68,7 @@ function parseMcpToml(text) {
     if (!line || line.startsWith('#')) continue;
     if (line.startsWith('[')) {
       const header = line.match(/^\[\s*(.*?)\s*\]\s*(?:#.*)?$/);
-      const name = header?.[1].replace(/"([\w-]+)"|'([\w-]+)'/g, (_, basic, literal) => basic || literal).replace(/\s*\.\s*/g, '.');
+      const name = tomlTableName(line);
       tableName = name ?? '';
       current = name === 'mcp_servers.agent-cockpit' || name?.startsWith('mcp_servers.agent-cockpit.tools.') ? name : null;
       if (current) {
@@ -91,7 +103,9 @@ function parseMcpToml(text) {
 // matcher はグループの属性なので、違うときはフックを外して期待するグループを足す。
 function hookActions(document, provider, entry, expectedGroup) {
   const target = { file: document.file, path: ['hooks', entry.event], observedDigest: document.observedDigest };
-  const remove = { op: 'json-remove', target: 'hook', ...target, match: { matcher: entry.matcher, script: execution(entry.hook).script ?? null } };
+  // 同じ matcher とスクリプトのフックが重複しうるので、観測した位置で 1 件を指す。位置は observedDigest が一致する間だけ有効である。
+  const remove = { op: 'json-remove', target: 'hook', ...target, match: { matcher: entry.matcher, script: execution(entry.hook).script ?? null,
+    groupIndex: entry.groupIndex, hookIndex: entry.hookIndex } };
   const edits = !expectedGroup ? [remove]
     : entry.matcherKey === matcherKey(expectedGroup.matcher) ? [{ ...remove, op: 'json-replace', value: expectedGroup.hooks[0] }]
       : [remove, addGroupAction(document, entry.event, expectedGroup)];
@@ -161,7 +175,8 @@ function checkMcp(provider, document, registration, manifest, add, shadowed, inv
   const agrees = isDeepStrictEqual(expected, observed);
   const actions = ['command', 'args'].map(key => provider === 'claude'
     ? { op: registration && Object.hasOwn(registration, key) ? 'json-replace' : 'json-add', file: document.file,
-      path: ['mcpServers', 'agent-cockpit', key], match: { name: 'agent-cockpit' }, value: manifest.mcp[key], observedDigest: document.observedDigest }
+      path: ['mcpServers', 'agent-cockpit', key], match: { name: 'agent-cockpit' }, value: manifest.mcp[key],
+      digestPath: ['mcpServers', 'agent-cockpit'], observedDigest: subtreeDigest(document.value, ['mcpServers', 'agent-cockpit']) }
     : { op: 'toml-set', file: document.file, table: 'mcp_servers.agent-cockpit', key, value: manifest.mcp[key], observedDigest: document.observedDigest });
   add(provider, 'mcp', 'registration', document.file, expected, observed, agrees ? 'ok' : 'mismatch', agrees
     ? 'MCP サーバーの実行先は対象の checkout と一致しています。'
@@ -259,4 +274,4 @@ function evaluate(observation) {
   return { schemaVersion: 1, generatedAt, checkout: { root, ...expected, resolvedBy }, homes, summary, items };
 }
 
-module.exports = { evaluate, hookEntries, normalizedPath };
+module.exports = { evaluate, hookEntries, normalizedPath, execution, subtreeDigest, tomlTableName };

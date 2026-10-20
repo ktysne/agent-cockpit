@@ -194,6 +194,11 @@ test('MCP の実行先とスキルの古さと不存在を別々に報告する'
   assert.equal(action.op, 'copy');
   assert.equal(action.observedDigest, null);
   assert.equal(action.from, 'skills/codex/agent-cockpit/SKILL.md');
+  const registration = report.items.find(item => item.id === 'claude.mcp.registration').actions[0];
+  assert.deepEqual(registration.digestPath, ['mcpServers', 'agent-cockpit']);
+  assert.equal(registration.observedDigest, createHash('sha256').update(JSON.stringify({
+    command: 'node', args: ['/other/src/mcp/server.js'], env: { TOKEN: ENV_SECRET },
+  })).digest('hex'));
 });
 
 test('Codex の MCP の実行先とツールの approval_mode を別々に照合する', async t => {
@@ -293,13 +298,15 @@ test('独自のフックと MCP 設定と秘密値は診断の項目や対処に
   assert.deepEqual(report.items.filter(item => item.result === 'mismatch').map(item => item.id), ['claude.hooks.SessionStart.all.away']);
 });
 
-test('存在しない設定ファイルへの対処は observedDigest を null にする', async t => {
+test('存在しない設定ファイルへの対処は全体なら null で部分木なら null のハッシュを持つ', async t => {
   const f = await fixture(t);
   await fs.unlink(path.join(f.homes.codex, 'hooks.json'));
   await fs.unlink(path.join(f.userHome, '.claude.json'));
   const { report } = await run(f.options);
   for (const item of report.items.filter(item => item.result === 'mismatch')) {
-    for (const action of item.actions.filter(action => action.op.startsWith('json-'))) assert.equal(action.observedDigest, null);
+    for (const action of item.actions.filter(action => action.op.startsWith('json-'))) {
+      assert.equal(action.observedDigest, action.digestPath ? createHash('sha256').update('null').digest('hex') : null);
+    }
     if (item.provider === 'codex' && item.category === 'hooks') assert.ok(item.actions.some(action => action.text?.includes('/hooks')));
   }
 });
