@@ -250,6 +250,10 @@ button.chip[aria-pressed="false"] { border: 1px dashed var(--border); background
 button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; background: var(--surface); color: var(--text-2); font-size: 12px; }
 .filter-note[hidden], .body[hidden] { display: none; }
+#restart-note { row-gap: 2px; }
+.restart-note-actions { display: flex; flex-basis: 100%; flex-wrap: wrap; align-items: center; gap: 6px; }
+.restart-note-actions .link-btn { min-height: 0; padding: 0; }
+.restart-note-status { flex-basis: 100%; }
 .link-btn { min-height: 32px; padding: 4px 0; border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; }
 .link-btn:disabled, .link-btn[aria-disabled="true"], .ghost:disabled, .ghost[aria-disabled="true"] { opacity: .55; cursor: default; }
 .close-agent:hover { color: var(--text); }
@@ -5302,7 +5306,7 @@ function renderPersistenceNote(state) {
 
 function renderRestartNote(state) {
   const note = document.getElementById('restart-note');
-  const ui = renderRestartNote.ui ||= { phase: 'idle', error: '', timer: null, view: '', focus: '' };
+  const ui = renderRestartNote.ui ||= { phase: 'idle', error: '', timer: null, view: '', focus: '', copyStatus: '', copySequence: 0 };
   ui.state = state;
   if (ui.phase === 'waiting' && state.runtime?.startedAt !== ui.startedAt) {
     clearTimeout(ui.timer);
@@ -5310,9 +5314,11 @@ function renderRestartNote(state) {
     ui.error = '';
   }
   note.hidden = !state.restartRequired && ui.phase !== 'waiting';
-  if (note.hidden) { ui.phase = 'idle'; ui.error = ''; ui.view = ''; note.textContent = ''; return; }
+  if (note.hidden) { ui.phase = 'idle'; ui.error = ''; ui.copyStatus = ''; ui.copySequence += 1; ui.view = ''; note.textContent = ''; return; }
   let text;
   const buttons = [];
+  let separator = '';
+  let showCopyStatus = false;
   if (state.persistence?.status === 'failed' && ui.phase !== 'waiting') {
     text = '未保存の変更があるため、再起動できません。保存の警告が消えてから再起動してください。';
   } else if (ui.phase === 'waiting') {
@@ -5361,18 +5367,39 @@ function renderRestartNote(state) {
       : '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
     if (state.restartRequired && state.restartAvailable) {
       buttons.push(['常駐サーバーを再起動する', () => {
-        ui.phase = 'confirm'; ui.error = ''; ui.focus = '再起動する'; renderRestartNote(ui.state);
+        ui.phase = 'confirm'; ui.error = ''; ui.copyStatus = ''; ui.copySequence += 1; ui.focus = '再起動する'; renderRestartNote(ui.state);
       }]);
+      separator = 'または';
     }
+    buttons.push(['/update-tools スキルでの更新依頼プロンプトをコピー', async () => {
+      const copySequence = ++ui.copySequence;
+      const prompt = '/update-tools スキルを使って連携ツールを含めて最新化してください。';
+      let copyStatus;
+      try {
+        if (!navigator.clipboard) throw new Error('Clipboard unavailable');
+        await navigator.clipboard.writeText(prompt);
+        copyStatus = 'コピーされたプロンプトでAIエージェントに更新を依頼してください。';
+      } catch {
+        copyStatus = `コピーできませんでした。次の文を AI エージェントに渡してください: ${prompt}`;
+      }
+      if (copySequence !== ui.copySequence || ui.phase !== 'idle') return;
+      ui.copyStatus = copyStatus;
+      renderRestartNote(ui.state);
+    }]);
+    showCopyStatus = true;
   }
   // ポーリングのたびに作り直すとボタンのフォーカスが外れるため、表示が変わったときだけ作り直す。
-  const view = JSON.stringify([text, buttons.map(([label]) => label), ui.phase === 'sending']);
+  const view = JSON.stringify([text, buttons.map(([label]) => label), ui.phase === 'sending', separator, showCopyStatus ? ui.copyStatus : '']);
   if (view === ui.view) return;
   const focusedButton = [...(note.querySelectorAll?.('button') || [])].find((button) => button === document.activeElement);
   const focusedLabel = focusedButton?.dataset?.restartAction || focusedButton?.textContent || '';
   ui.view = view;
   note.textContent = text;
-  for (const [label, action] of buttons) {
+  const actions = document.createElement('span');
+  actions.className = 'restart-note-actions';
+  if (buttons.length) note.append(actions);
+  for (const [index, [label, action]] of buttons.entries()) {
+    if (index > 0 && separator) actions.append(separator);
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'link-btn';
@@ -5380,8 +5407,14 @@ function renderRestartNote(state) {
     button.dataset.restartAction = label;
     button.disabled = ui.phase === 'sending';
     button.addEventListener('click', action);
-    note.append(button);
+    actions.append(button);
     if (label === ui.focus || label === focusedLabel) button.focus?.();
+  }
+  if (showCopyStatus && ui.copyStatus) {
+    const status = document.createElement('span');
+    status.className = 'restart-note-status';
+    status.textContent = ui.copyStatus;
+    note.append(status);
   }
   ui.focus = '';
 }
