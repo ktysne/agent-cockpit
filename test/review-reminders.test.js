@@ -60,6 +60,13 @@ async function reminderHttp(t) {
   return { ...f, ...server, send, stop, now: () => now, advance: ms => { now += ms; } };
 }
 
+async function addReminderEvent(f, event) {
+  const response = await request(f.info.port, { method: 'POST', path: '/api/events',
+    headers: { 'x-cockpit-secret': f.info.secret },
+    body: JSON.stringify({ session_id: f.sessionId, hookAt: f.now(), ...event }) });
+  assert.equal(response.status, 202);
+}
+
 test('ACK 後も未記録なら新しい UserPromptSubmit の後の Stop で再び催促する', async t => {
   const f = await reminderHttp(t);
   assert.match(await f.stop(), /現在の head/);
@@ -102,6 +109,76 @@ test('現在の head の保留記録があれば Stop で催促しない', async
   f.state.setCrossReviewDeferral({ owner: 'example', repo: 'project', number: 31,
     headRefOid: f.pr.headRefOid, reason: '実機が無い', next: '実機でレビューする', recordedAt: new Date().toISOString() });
   assert.equal(await f.stop(), null);
+});
+
+test('実行中のクロスレビュー Codex は前面とバックグラウンドのどちらでも Stop の催促を止める', async t => {
+  for (const backgrounded of [false, true]) {
+    const f = await reminderHttp(t);
+    await addReminderEvent(f, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'review-launch',
+      codexReviewDefinition: 'codex-review' });
+    if (backgrounded) {
+      await addReminderEvent(f, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'review-launch',
+        backgroundTaskId: 'review-task' });
+    }
+    assert.deepEqual(f.state.sessions.get(f.sessionId).reviewRuns.map(({ agent_id }) => agent_id), ['codex:review-launch']);
+    assert.equal(await f.stop(), null);
+    const response = await request(f.info.port, { path: '/api/state' });
+    const session = JSON.parse(response.body).sessions.find(({ session_id }) => session_id === f.sessionId);
+    assert.equal(session.reviewRuns, undefined);
+  }
+});
+
+test('見送った Stop は催促の上限に数えず、バックグラウンドレビューの完了後に 3 回まで催促する', async t => {
+  const f = await reminderHttp(t);
+  await addReminderEvent(f, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'review-launch',
+    codexReviewDefinition: 'codex-review' });
+  await addReminderEvent(f, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'review-launch',
+    backgroundTaskId: 'review-task' });
+
+  assert.equal(await f.stop(), null);
+  assert.equal(f.delivery.remindedReviewHeads.has(f.sessionId), false);
+  assert.equal(f.delivery.pendingHookReminders.has(f.sessionId), false);
+  assert.deepEqual(f.logs, []);
+
+  await addReminderEvent(f, { hook_event_name: 'UserPromptSubmit',
+    backgroundTaskEnds: [{ taskId: 'review-task', status: 'completed' }] });
+  assert.deepEqual(f.state.sessions.get(f.sessionId).reviewRuns, []);
+  for (let count = 0; count < 3; count += 1) {
+    assert.match(await f.stop(), /cockpit_skip_review/);
+    if (count < 2) {
+      f.advance(30 * 60_000 + 1);
+      await f.send('user-prompt-submit');
+    }
+  }
+  f.advance(30 * 60_000 + 1);
+  await f.send('user-prompt-submit');
+  assert.equal(await f.stop(), null);
+});
+
+test('起動を拒否されたクロスレビュー Codex は Stop の催促を止めない', async t => {
+  const f = await reminderHttp(t);
+  await addReminderEvent(f, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'review-launch',
+    codexReviewDefinition: 'codex-review' });
+  f.advance(1);
+  await addReminderEvent(f, { hook_event_name: 'PostToolBatch' });
+  assert.deepEqual(f.state.sessions.get(f.sessionId).reviewRuns, []);
+  assert.match(await f.stop(), /cockpit_skip_review/);
+});
+
+test('実行中の review-claude サブエージェントは Stop の催促を止める', async t => {
+  const f = await reminderHttp(t);
+  await addReminderEvent(f, { hook_event_name: 'SubagentStart', agent_id: 'review-agent', agent_type: 'review-claude' });
+  assert.deepEqual(f.state.sessions.get(f.sessionId).reviewRuns.map(({ agent_id }) => agent_id), ['review-agent']);
+  assert.equal(await f.stop(), null);
+});
+
+test('開始から 60 分を過ぎた実行中レビューは Stop の催促を止めない', async t => {
+  const f = await reminderHttp(t);
+  await addReminderEvent(f, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'review-launch',
+    codexReviewDefinition: 'codex-review' });
+  f.advance(60 * 60_000 + 1);
+  assert.deepEqual(f.state.sessions.get(f.sessionId).reviewRuns.map(({ agent_id }) => agent_id), ['codex:review-launch']);
+  assert.match(await f.stop(), /cockpit_skip_review/);
 });
 
 for (const options of [{ noninteractive: true }, { provider: 'codex' }, {}]) {
