@@ -398,9 +398,9 @@ function sessionSnapshot(session) {
       .filter((agent) => agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) && !agent.resultReceived)
       .map(({ agent_id, backgroundTaskId, runId, startedAt }) => ({ agent_id, backgroundTaskId, runId, startedAt })),
   });
-  // Stop の催促抑止に使い、画面へ送らないよう列挙しない。
+  // Stop の催促抑止に使い、画面へ送らないよう列挙しない。拒否の候補は実行していないので含めない。
   Object.defineProperty(snapshot, 'reviewRuns', {
-    value: session.agents
+    value: visibleAgents
       .filter((agent) => (
         agent.isCodex && session.codexReviewAgentIds.has(agent.agent_id) && (agent.active || agent.unconfirmed) &&
         !agent.resultReceived && !agent.waitEnded

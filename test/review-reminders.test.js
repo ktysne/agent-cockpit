@@ -155,6 +155,16 @@ test('見送った Stop は催促の上限に数えず、バックグラウン�
   assert.equal(await f.stop(), null);
 });
 
+test('起動を拒否されたクロスレビュー Codex は Stop の催促を止めない', async t => {
+  const f = await reminderHttp(t);
+  await addReminderEvent(f, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'review-launch',
+    codexReviewDefinition: 'codex-review' });
+  f.advance(1);
+  await addReminderEvent(f, { hook_event_name: 'PostToolBatch' });
+  assert.deepEqual(f.state.sessions.get(f.sessionId).reviewRuns, []);
+  assert.match(await f.stop(), /cockpit_skip_review/);
+});
+
 test('実行中の review-claude サブエージェントは Stop の催促を止める', async t => {
   const f = await reminderHttp(t);
   await addReminderEvent(f, { hook_event_name: 'SubagentStart', agent_id: 'review-agent', agent_type: 'review-claude' });
