@@ -17,8 +17,8 @@
     "review:codex": "node tools/cross-review.js codex",
     "review:codex:fix": "node tools/cross-review.js codex --fix",
     "review:claude": "node tools/cross-review.js claude",
-    "sync:cross-review": "node tools/cross-review.sync.js",
-    "sync:cross-review:check": "node tools/cross-review.sync.js --check"
+    "sync:cross-review": "node tools/cross-review.js sync",
+    "sync:cross-review:check": "node tools/cross-review.js sync --check"
   },
   "devDependencies": {
     "basic-ftp": "^6.2.3"
