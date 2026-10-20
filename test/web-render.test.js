@@ -5575,30 +5575,36 @@ test('取り込み確認を直接閉じても取り込まない回答を送り�
 
 test('再起動待ちの帯はバージョンが違えば配置済みのバージョンを示し、コミットは出さず、解消したら消す', () => {
   for (const source of [pageHtml, mockHtml]) {
-    const note = { hidden: true, textContent: '' };
-    const context = pageContext(source, { document: { getElementById: () => note } });
-    vm.runInContext(['renderRestartNote', 'formatRuntime'].map(name => functionSource(source, name)).join('\n'), context);
-    context.renderRestartNote({ restartRequired: true,
-      runtime: { version: '1.4.0', commit: 'c933f60' }, installed: { version: '1.5.0', commit: 'a1b2c3d' } });
-    assert.equal(note.hidden, false);
-    assert.equal(note.textContent, 'バージョン 1.5.0 のファイルが配置されています。常駐サーバーを再起動すると反映されます。');
-    context.renderRestartNote({ restartRequired: true,
-      runtime: { version: '1.4.0', commit: 'c933f60' }, installed: { version: '1.4.0', commit: 'a1b2c3d' } });
-    assert.equal(note.textContent, '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
-    context.renderRestartNote({ restartRequired: true, uiVersion: 'old', installed: { uiVersion: 'new' } });
-    assert.equal(note.textContent, '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
-    assert.doesNotMatch(note.textContent, /実行中|配置済み|c933f60|a1b2c3d/);
-    context.renderRestartNote({ restartRequired: false });
-    assert.equal(note.hidden, true);
-    assert.equal(note.textContent, '');
+    const f = restartNoteHarness(source);
+    f.state.runtime = { version: '1.4.0', commit: 'c933f60' };
+    f.state.installed = { version: '1.5.0', commit: 'a1b2c3d' };
+    f.render();
+    assert.equal(f.note.hidden, false);
+    assert.equal(f.note.message, 'バージョン 1.5.0 のファイルが配置されています。常駐サーバーを再起動すると反映されます。');
+    f.state.installed.version = '1.4.0';
+    f.render();
+    assert.equal(f.note.message, '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
+    f.state.uiVersion = 'old';
+    f.state.installed.uiVersion = 'new';
+    f.render();
+    assert.equal(f.note.message, '更新したファイルが配置されています。常駐サーバーを再起動すると反映されます。');
+    assert.doesNotMatch(f.note.message, /実行中|配置済み|c933f60|a1b2c3d/);
+    f.state.restartRequired = false;
+    f.render();
+    assert.equal(f.note.hidden, true);
+    assert.equal(f.note.textContent, '');
   }
 });
 
-function restartNoteHarness(source, response = async () => ({ status: 202 })) {
+function restartNoteHarness(source, response = async () => ({ status: 202 }), clipboard = { writeText: async () => {} }) {
   const buttons = [];
-  const note = { hidden: true, value: '', get textContent() { return this.value; },
-    set textContent(value) { this.value = value; buttons.length = 0; activeElement = null; this.rebuilt += 1; }, rebuilt: 0,
-    append(button) { buttons.push(button); }, querySelectorAll: selector => selector === 'button' ? buttons : [] };
+  const contentNodes = [];
+  const note = { hidden: true, value: '', get textContent() { return contentNodes.map(node => typeof node === 'string' ? node : node.textContent).join(''); },
+    get message() { return this.value; },
+    set textContent(value) { this.value = value; contentNodes.length = 0; contentNodes.push(value); buttons.length = 0; activeElement = null; this.rebuilt += 1; }, rebuilt: 0,
+    contentNodes,
+    append(...nodes) { contentNodes.push(...nodes); buttons.push(...nodes.filter(node => typeof node !== 'string')); },
+    querySelectorAll: selector => selector === 'button' ? buttons : [] };
   let focused = null;
   let activeElement = null;
   const timers = new Map();
@@ -5606,8 +5612,9 @@ function restartNoteHarness(source, response = async () => ({ status: 202 })) {
     document: {
       get activeElement() { return activeElement; },
       getElementById: () => note,
-      createElement: () => ({ dataset: {}, addEventListener(type, fn) { this.click = fn; }, focus() { focused = this.textContent; activeElement = this; } }),
+      createElement: () => ({ tagName: 'button', dataset: {}, addEventListener(type, fn) { this.click = fn; }, focus() { focused = this.textContent; activeElement = this; } }),
     },
+    navigator: { clipboard },
     requestServerRestart: response,
     setTimeout: (fn, ms) => { timers.set(fn, ms); return fn; }, clearTimeout: id => timers.delete(id),
   });
@@ -5616,8 +5623,59 @@ function restartNoteHarness(source, response = async () => ({ status: 202 })) {
     sessions: [{ permissionWaits: [{ phase: 'prompted' }, { phase: 'prompted' }, { phase: 'checking' }] }] };
   const render = () => context.renderRestartNote(state);
   render();
-  const click = label => buttons.find(button => button.textContent === label).click();
+  const click = label => {
+    const button = buttons.find(item => item.textContent === label);
+    button.focus();
+    return button.click();
+  };
   return { note, buttons, timers, state, render, click, context, focused: () => focused };
+}
+
+const updateToolsPrompt = '/update-tools スキルを使って連携ツールを含めて最新化してください。';
+const copyPromptButton = '/update-tools スキルでの更新依頼プロンプトをコピー';
+const copiedPromptNotice = 'コピーされたプロンプトでAIエージェントに更新を依頼してください。';
+const failedPromptNotice = `コピーできませんでした。次の文を AI エージェントに渡してください: ${updateToolsPrompt}`;
+
+for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
+  test(`${label}の再起動待ちでは再起動と更新依頼のボタンを順に表示する`, () => {
+    const f = restartNoteHarness(source);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
+    assert.deepEqual(f.note.contentNodes.slice(1).map(node => typeof node === 'string' ? node : node.textContent), [
+      '常駐サーバーを再起動する', ' または ', copyPromptButton,
+    ]);
+  });
+
+  test(`${label}は再起動できない状態でも更新依頼のボタンを表示する`, () => {
+    const f = restartNoteHarness(source);
+    f.state.restartAvailable = false;
+    f.render();
+    assert.deepEqual(f.buttons.map(button => button.textContent), [copyPromptButton]);
+    assert.deepEqual(f.note.contentNodes.slice(1).map(node => typeof node === 'string' ? node : node.textContent), [copyPromptButton]);
+  });
+
+  test(`${label}は更新依頼のプロンプトをコピーして案内を保つ`, async () => {
+    const written = [];
+    const f = restartNoteHarness(source, undefined, { writeText: async value => written.push(value) });
+    await f.click(copyPromptButton);
+    assert.deepEqual(written, [updateToolsPrompt]);
+    assert.ok(f.note.textContent.includes(copiedPromptNotice));
+    assert.equal(f.focused(), copyPromptButton);
+    const rebuilt = f.note.rebuilt;
+    f.render();
+    assert.ok(f.note.textContent.includes(copiedPromptNotice));
+    assert.equal(f.note.rebuilt, rebuilt);
+    f.click('常駐サーバーを再起動する');
+    assert.equal(f.note.message, '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。許可待ち 2 件は、再起動後に表示されません。');
+    assert.ok(!f.note.textContent.includes(copiedPromptNotice));
+  });
+
+  test(`${label}はクリップボードが使えないときにコピーする文を表示する`, async () => {
+    for (const clipboard of [null, { writeText: async () => { throw new Error('Clipboard failed'); } }]) {
+      const f = restartNoteHarness(source, undefined, clipboard);
+      await f.click(copyPromptButton);
+      assert.ok(f.note.textContent.includes(failedPromptNotice));
+    }
+  });
 }
 
 test('保存失敗の帯は未保存と再試行を示し、復旧後に警告を消す', async () => {
@@ -5649,7 +5707,7 @@ test('保存失敗中は再起動操作を出さず、通常の保存待ちで�
     assert.equal(f.buttons.length, 0);
     f.state.persistence = { status: 'pending' };
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
     f.click('常駐サーバーを再起動する');
     const rebuilt = f.note.rebuilt;
     f.state.persistence = { status: 'saved' };
@@ -5664,19 +5722,19 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     const f = restartNoteHarness(source, async () => ({ status: 409, json: async () => ({ persistence: { status: 'pending' } }) }));
     f.click('常駐サーバーを再起動する');
     await f.click('再起動する');
-    assert.equal(f.note.textContent, '保存処理が進行中です。少し待ってから再起動してください。');
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+    assert.equal(f.note.message, '保存処理が進行中です。少し待ってから再起動してください。');
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
   });
 
   test(`${label}の再起動は帯で消える行と許可待ちを確認し、やめると元に戻る`, () => {
     const f = restartNoteHarness(source);
     f.click('常駐サーバーを再起動する');
-    assert.equal(f.note.textContent, '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。許可待ち 2 件は、再起動後に表示されません。');
+    assert.equal(f.note.message, '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。許可待ち 2 件は、再起動後に表示されません。');
     f.click('やめる');
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
     f.state.restartAvailable = false;
     f.render();
-    assert.equal(f.buttons.length, 0);
+    assert.deepEqual(f.buttons.map(button => button.textContent), [copyPromptButton]);
   });
 
   test(`${label}の帯は同じ表示なら作り直さず、確認と取り消しで次に押すボタンへフォーカスを移す`, () => {
@@ -5707,11 +5765,11 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     const f = restartNoteHarness(source);
     f.click('常駐サーバーを再起動する');
     await f.click('再起動する');
-    assert.equal(f.note.textContent, '常駐サーバーを再起動しています。');
+    assert.equal(f.note.message, '常駐サーバーを再起動しています。');
     assert.equal(f.buttons.length, 0);
     f.state.restartAvailable = false;
     f.render();
-    assert.equal(f.note.textContent, '常駐サーバーを再起動しています。');
+    assert.equal(f.note.message, '常駐サーバーを再起動しています。');
     f.state.runtime.startedAt = 'after';
     f.state.restartRequired = false;
     f.render();
@@ -5724,8 +5782,8 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
       const f = restartNoteHarness(source, response);
       f.click('常駐サーバーを再起動する');
       await f.click('再起動する');
-      assert.equal(f.note.textContent, '再起動を始められませんでした。タスクトレイのメニューから再起動してください。');
-      assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+      assert.equal(f.note.message, '再起動を始められませんでした。タスクトレイのメニューから再起動してください。');
+      assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
     }
   });
 
@@ -5737,11 +5795,11 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     const [timeout, ms] = [...f.timers][0];
     assert.equal(ms, 30_000);
     timeout();
-    assert.equal(f.note.textContent, '再起動できませんでした。タスクトレイのメニューから再起動してください。');
-    assert.equal(f.buttons.length, 0);
+    assert.equal(f.note.message, '再起動できませんでした。タスクトレイのメニューから再起動してください。');
+    assert.deepEqual(f.buttons.map(button => button.textContent), [copyPromptButton]);
     f.state.restartAvailable = true;
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する']);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
   });
 }
 
