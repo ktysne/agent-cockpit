@@ -4,7 +4,6 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const http = require('node:http');
-const os = require('node:os');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
 const { RoutingState } = require('./routing');
@@ -15,7 +14,7 @@ const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers')
 const { readTaskNotifications, readSessionModel, readTranscriptInterruption } = require('./transcript');
 const { TASK_OUTPUT_MISSING, codexOutputLines, readTaskOutputFileAsync } = require('../shared/task-output');
 const { parseCodexRunLine } = require('./events');
-const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
+const { productFromCwd, claudeHomeFromOptions, codexHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { isShortSessionId } = require('./session-ids');
 const { listLiveSessionFiles, readCodexSessionNames, findLiveSessionIdByPid, processIsAlive } = require('./session-files');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
@@ -429,7 +428,7 @@ async function startServer(options = {}) {
   }
   const homeDir = cockpitHomeFromOptions(options);
   const claudeHome = claudeHomeFromOptions(options);
-  const codexHome = options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  const codexHome = codexHomeFromOptions(options);
   const codexSessionNameCache = {};
   const port = options.port === undefined ? DEFAULT_PORT : Number(options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('port must be between 0 and 65535');

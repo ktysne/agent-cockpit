@@ -5,7 +5,7 @@ const os = require('node:os');
 const { createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { integrationManifest } = require('../shared/integration-manifest');
-const { cockpitHomeFromOptions, claudeHomeFromOptions, codexAgentScriptPaths, gitDirectoryFromFile, repositoryRootFromGitDirectory } = require('../server/identity');
+const { cockpitHomeFromOptions, claudeHomeFromOptions, codexHomeFromOptions, codexAgentScriptPaths, gitDirectoryFromFile, repositoryRootFromGitDirectory } = require('../server/identity');
 const { readSourceState } = require('../server/source-revision');
 const { readExpected } = require('./server-verification');
 const { readServerInfo, requestFromServer } = require('./server-connection');
@@ -265,7 +265,7 @@ async function diagnose(options = {}) {
   const environment = options.environment || process.env;
   const userHome = options.userHome || os.homedir();
   const homes = { claude: claudeHomeFromOptions({ environment, userHome }),
-    codex: path.resolve(environment.CODEX_HOME || path.join(userHome, '.codex')),
+    codex: codexHomeFromOptions({ environment, userHome }),
     cockpit: cockpitHomeFromOptions({ environment, userHome }) };
   const bridgeInstalled = options.isBridgeInstalled
     ? await options.isBridgeInstalled({ claudeHome: homes.claude, userHome })
