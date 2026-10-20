@@ -142,6 +142,7 @@ ai-cross-review が未導入なら写しの項目を出さない。Claude、Code
 
 bridge の写しは、checkout を cwd とする `bash tools/codex-agent.sh --check-copies` の結果だけで照合する。
 子プロセスには診断で解決した Claude のホームを `CLAUDE_CONFIG_DIR` で渡し、30 秒で時間切れにする。
+Windows で PATH に `bash` が無いときは、`git --exec-path` の 3 つ上のフォルダーの `bin/bash.exe`(Git for Windows の bash)で実行する。トレイから起動した常駐サーバーの PATH には、Git for Windows の `bin` が無いためである。
 終了コード 0 と整数の `protocol: 1` の JSON だけを受け付け、`items`、`order`、`after` の形を確認する。
 照合のやり直しと `content` の加工は行わない。
 

@@ -6082,6 +6082,17 @@ test('導入の点検の HTML と CSS と共通の描画はモックと一致す
   }
 });
 
+test('点検の項目の案内は、理由の文に含まれる手作業の案内を繰り返さない', () => {
+  const context = pageContext(pageHtml, {});
+  vm.runInContext(functionSource(pageHtml, 'doctorActionText'), context);
+  const guidance = 'docs/setup.md の「更新するとき」を確かめてください。';
+  assert.equal(context.doctorActionText({ reason: `照会できませんでした。 ${guidance}`,
+    actions: [{ op: 'manual', text: guidance }] }), '');
+  assert.equal(context.doctorActionText({ reason: 'フックが違います。',
+    actions: [{ op: 'json-replace' }, { op: 'manual', text: '/hooks で信頼し直してください。' }] }),
+  'update-tools スキルで直せます。 /hooks で信頼し直してください。');
+});
+
 for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
   test(`${label}の点検通知は不一致だけを示し、点検中と再起動待ちと更新前の結果では隠す`, () => {
     const span = { textContent: '' };

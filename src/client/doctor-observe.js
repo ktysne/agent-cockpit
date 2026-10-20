@@ -88,15 +88,33 @@ async function observeCrossReview(checkouts, homes, environment, options) {
   return value;
 }
 
+// git --exec-path は <Git>/mingw64/libexec/git-core を返し、bash は <Git>/bin/bash.exe にある。
+async function gitForWindowsBash(run, environment) {
+  const { stdout } = await run('git', ['--exec-path'], { env: environment, timeout: 10000, windowsHide: true, encoding: 'utf8' });
+  const bash = path.resolve(stdout.trim(), '../../..', 'bin', 'bash.exe');
+  await fs.access(bash);
+  return bash;
+}
+
 async function observeBridge(checkouts, homes, environment, options) {
   const checkout = checkouts.find(entry => entry.tool === 'claude-codex-bridge');
   if (!checkout) return null;
   if (!checkout.root) return { error: 'claude-codex-bridge の checkout が見つかりません。' };
+  const run = options.queryBridge || promisify(execFile);
+  const query = bash => run(bash, ['tools/codex-agent.sh', '--check-copies'],
+    { cwd: checkout.root, env: { ...environment, CLAUDE_CONFIG_DIR: homes.claude },
+      timeout: 30000, windowsHide: true, encoding: 'utf8' });
   let stdout;
   try {
-    ({ stdout } = await (options.queryBridge || promisify(execFile))('bash', ['tools/codex-agent.sh', '--check-copies'],
-      { cwd: checkout.root, env: { ...environment, CLAUDE_CONFIG_DIR: homes.claude },
-        timeout: 30000, windowsHide: true, encoding: 'utf8' }));
+    try {
+      ({ stdout } = await query('bash'));
+    } catch (error) {
+      if (error.code !== 'ENOENT' || (options.platform || process.platform) !== 'win32') throw error;
+      // トレイから起動した常駐サーバーの PATH には Git for Windows の bin が無いので、git の場所から bash を割り出す。
+      const gitBash = await gitForWindowsBash(run, environment).catch(() => null);
+      if (!gitBash) throw error;
+      ({ stdout } = await query(gitBash));
+    }
   } catch (error) {
     if (error.code === 'ENOENT') return { error: 'bash が見つからないため、bridge の照会を実行できませんでした。' };
     if (error.killed || error.code === 'ETIMEDOUT') return { error: 'bridge の照会が時間切れになりました。' };
