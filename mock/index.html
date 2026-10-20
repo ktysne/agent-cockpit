@@ -1648,6 +1648,7 @@ const doctorDialog = document.getElementById('doctor-dialog');
 const DOCTOR_OPEN_GROUPS = [['mismatch', '不一致'], ['unverified', '未確認']];
 const DOCTOR_REST_LABELS = { 'not-run': '未実施', 'not-installed': '未導入', ok: '一致' };
 let doctorResult = DOCTOR_RESULT;
+let doctorGroupsHtml = '';
 
 function doctorIsStale(doctor) {
   return Boolean(doctor.staleBefore && doctor.generatedAt && doctor.generatedAt < doctor.staleBefore);
@@ -1696,9 +1697,20 @@ function renderDoctorDialog() {
   const restCounts = Object.entries(DOCTOR_REST_LABELS)
     .map(([result, label]) => [label, rest.filter(item => item.result === result).length])
     .filter(([, count]) => count).map(([label, count]) => `${label} ${count} 件`).join('、');
-  document.getElementById('doctor-groups').innerHTML = open + (rest.length
+  const groupsHtml = open + (rest.length
     ? `<details class="doctor-rest"><summary>ほかの項目(${restCounts})</summary><ul class="doctor-items">${rest.map(doctorItemHtml).join('')}</ul></details>`
     : '');
+  // 点検のたびに作り直すと、開いた「ほかの項目」が閉じ、そこにあるフォーカスも失われるため、中身が変わったときだけ作り直して引き継ぐ。
+  const groups = document.getElementById('doctor-groups');
+  if (groupsHtml !== doctorGroupsHtml) {
+    const restOpen = groups.querySelector('details')?.open;
+    const summaryFocused = document.activeElement === groups.querySelector('summary');
+    groups.innerHTML = groupsHtml;
+    doctorGroupsHtml = groupsHtml;
+    const details = groups.querySelector('details');
+    if (details && restOpen) details.open = true;
+    if (details && summaryFocused) details.querySelector('summary').focus();
+  }
   const homes = doctorResult?.homes;
   document.getElementById('doctor-homes').innerHTML = homes
     ? `照合した checkout: <code>${esc(doctorResult.checkout.root)}</code>(バージョン ${esc(doctorResult.checkout.version)})。ホーム: Claude <code>${esc(homes.claude)}</code>、Codex <code>${esc(homes.codex)}</code>、<code>${esc(homes.agents)}</code>`
