@@ -8,8 +8,8 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 ## 現在地と次にやること
 
 段階 1(診断)は終わった。仕様の正本は [導入の整合の診断の設計](../design/doctor.md) である。
-段階 2a(#671)の「設計で決める点」は決めて、「決定済みの判断」に足した。Codex のホームの解決の集約(#671 の項目 1)は終わった。
-次は #671 の項目 2(診断を読み取り、評価、出力に分ける)で、その後に適用のコマンド(項目 3)、checkout の更新(項目 4)、スキルの書き換え(項目 5)の順に進める。
+段階 2a(#671)は、項目 1〜4(Codex のホームの解決の集約、診断の読み取りと評価の分離、適用のコマンド、checkout の更新)が終わり、項目 5(`update-tools` スキルの書き換え)の PR を出している。項目 6(連携ツールが無い環境でエラーも警告も出さないこと)は、`test/apply-checkouts.test.js` と `test/apply.test.js`(bridge と ai-cross-review の無いホームで流す)で確かめてあり、項目 5 の PR で #671 を閉じる。
+適用のコマンドと checkout の更新は、実機のホームと checkout ではまだ確かめていない。手順は PR #676 と #677 の「確認して欲しいポイント」にある。
 段階 2b(#673)は、#671、ktysne/claude-codex-bridge#169、ktysne/ai-cross-review#87 がそろった側から進める。
 
 ## 決定済みの判断
@@ -39,7 +39,7 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 | 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-20 に確認) |
 |---|---|---|---|---|---|---|
 | 1 | #534 段階 1 診断 | `src/client/doctor.js`、`src/shared/integration-manifest.js`、`docs/setup.md`、`docs/update.md` | hard | `claude/integration-doctor` | main | PR #670。マージ済み、#534 は閉じた |
-| 2 | #671 段階 2a 適用、checkout の更新、Codex のホームの解決の集約 | `src/client/doctor.js`、`src/client/apply.js`、`src/server/identity.js`、`src/server/server.js`、`skills/update-tools/SKILL.md` | hard | 項目ごとに main から切る(項目 1 は `claude/codex-home-resolution`、項目 2 は `claude/doctor-evaluate-split`) | main | 項目 1 は PR #674 でマージ済み。項目 2 は着手中 |
+| 2 | #671 段階 2a 適用、checkout の更新、Codex のホームの解決の集約 | `src/client/doctor.js`、`src/client/apply.js`、`src/server/identity.js`、`src/server/server.js`、`skills/update-tools/SKILL.md` | hard | 項目ごとに main から切る | main | 項目 1 は PR #674、項目 2 は PR #675、項目 3 は PR #676、項目 4 は PR #677 でマージ済み。項目 5 は `claude/update-tools-commands` で PR を出している。項目 6 は既存のテストで確かめた |
 | 3 | ktysne/claude-codex-bridge#169 写しの照会 | bridge の `tools/codex-agent.sh` | bridge 側 | 未定 | bridge の main | 起票済み、#167 の後 |
 | 4 | ktysne/ai-cross-review#87 グローバル SKILL の確認 | ai-cross-review の `tools/cross-review.sync-all.js` | ai-cross-review 側 | 未定 | ai-cross-review の main | 起票済み、未着手 |
 | 5 | #673 段階 2b 連携ツールの写し | `src/client/doctor.js`、`skills/update-tools/SKILL.md` | 未定 | 未定 | main | 起票済み、2〜4 の後 |
