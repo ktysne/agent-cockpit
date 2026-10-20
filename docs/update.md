@@ -134,6 +134,7 @@ cp skills/update-tools/SKILL.md "$HOME/.agents/skills/update-tools/SKILL.md"
 ```
 
 古い置き場(`$CODEX_HOME/skills/agent-cockpit/`、`$CODEX_HOME/skills/update-tools/`、既定では `~/.codex/skills/` の下)に写しがあれば、その写しのフォルダーを消してください。
+ただし、`~/.codex/skills` を `~/.agents/skills` へのジャンクションやシンボリックリンクにしているときは、古い置き場と新しい置き場が同じフォルダーなので、消さないでください。消すと、配ったばかりのスキルも消えます。
 
 ## 常駐サーバーの再起動と確認
 

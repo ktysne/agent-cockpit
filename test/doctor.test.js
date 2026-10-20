@@ -745,7 +745,7 @@ test('旧配置だけの Codex を導入済みとし新配置へのコピーと�
     assert.equal(legacy.expected, null);
     assert.equal(legacy.observed, createHash('sha256').update('旧配置の写し').digest('hex'));
     assert.equal(legacy.reason, '古い置き場に写しが残っているため、Codex の選択肢に同じスキルが 2 つ並びます。');
-    assert.deepEqual(legacy.actions, [{ op: 'manual', text: `${path.dirname(target)} を消してください。スキルは ${item.target} に配っています。` }]);
+    assert.deepEqual(legacy.actions, [{ op: 'manual', text: `${path.dirname(target)} が ${path.dirname(item.target)} と別のフォルダーであることを確かめてから消してください。スキルは ${item.target} に配っています。` }]);
   }
 });
 

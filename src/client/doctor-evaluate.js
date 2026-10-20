@@ -209,7 +209,7 @@ function checkSkills(provider, skills, add) {
         ? [{ op: 'copy', from: source, to: target, observedDigest: copy.observedDigest }, SESSION_ACTION] : []);
     if (legacy) add(provider, 'skills', `${name}-legacy`, legacy.file, null, legacy.observedDigest, 'mismatch',
       '古い置き場に写しが残っているため、Codex の選択肢に同じスキルが 2 つ並びます。',
-      [{ op: 'manual', text: `${path.dirname(legacy.file)} を消してください。スキルは ${target} に配っています。` }]);
+      [{ op: 'manual', text: `${path.dirname(legacy.file)} が ${path.dirname(target)} と別のフォルダーであることを確かめてから消してください。スキルは ${target} に配っています。` }]);
   }
 }
 

@@ -85,7 +85,8 @@ Codex のフックの `command` は、`node "<パス>" codex` の形の文字列
 Codex の古い置き場(`CODEX_HOME` の `skills/`)に写しがあれば、`codex.skills.agent-cockpit-legacy` と `codex.skills.update-tools-legacy` を `mismatch` として出す。
 親ディレクトリを `realpath` で解決し、新しい置き場と同じ実体なら項目を出さない。
 実体を確認できない場合は項目を出す。
-対処は古い写しのフォルダーの削除と新しい配布先を案内する `manual` だけとし、自動では削除しない。
+対処は、古い写しのフォルダーが新しい配布先と別のフォルダーであることを確かめてから消すよう案内する `manual` だけとし、自動では削除しない。
+実体を確認できずに項目を出した場合も、同じフォルダーを消して配った写しを失わないためである。
 新旧どちらかに写しがあれば Codex を導入済みと扱い、古い置き場だけに写しがある場合は新しい置き場への `copy` を提示する。
 
 ai-cross-review の写しは、checkout を cwd とする `node tools/cross-review.sync-all.js --global-skill --check --json` の結果だけで照合する。
