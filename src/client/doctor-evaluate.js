@@ -209,6 +209,29 @@ function checkSkills(provider, skills, add) {
   }
 }
 
+function checkCrossReview(query, observedAt, items) {
+  if (!query) return;
+  const base = { tool: 'ai-cross-review', category: 'copies', observedAt };
+  if (query.error) {
+    const guidance = 'node src/client/apply.js --update-checkouts --check と ai-cross-review の導入手順を確かめてください。';
+    items.push({ ...base, id: 'cross-review.skills.query', provider: null, target: null,
+      expected: null, observed: null, result: 'unverified', reason: `${query.error} ${guidance}`,
+      actions: [{ op: 'manual', text: guidance }] });
+    return;
+  }
+  const results = { match: 'ok', stale: 'mismatch', missing: 'not-installed', skipped: 'not-installed', unreadable: 'unverified' };
+  const reasons = { match: 'スキルの写しは正本と一致しています。', stale: 'スキルの写しが正本と違うため、コピーし直してください。',
+    missing: '配布先にスキルの写しがありません。必要なら、この項目を選ぶと配布します。', skipped: '配布条件を満たさないため、この配布先は対象外です。',
+    unreadable: 'スキルの写しを照合できないため、ai-cross-review の導入手順とアクセス権を確認してください。' };
+  for (const target of query.targets) {
+    items.push({ ...base, id: `cross-review.skills.${target.id}`, provider: target.id === 'claude' ? 'claude' : 'codex',
+      target: target.path, expected: target.sourceSha256, observed: target.sha256, result: results[target.state],
+      reason: reasons[target.state], actions: ['stale', 'missing'].includes(target.state)
+        ? [{ op: 'copy-file', from: target.sourcePath, to: target.path,
+          observedDigest: target.sha256, sourceDigest: target.sourceSha256 }, SESSION_ACTION] : [] });
+  }
+}
+
 function checkServer(home, root, expected, server, add) {
   const { port, pid, startedAt, health, sourceState, entries } = server;
   const observed = health ? { version: health.version ?? null, commit: health.commit ?? null, sourceState: health.sourceState ?? null,
@@ -274,6 +297,7 @@ function evaluate(observation) {
         : 'checkout の場所が分かりません。',
       actions: [{ op: 'manual', text: 'node src/client/apply.js --update-checkouts --check' }] });
   }
+  checkCrossReview(observation.crossReview, generatedAt, items);
   checkServer(homes.cockpit, root, expected, server, add);
   add(null, 'runtime-check', 'roundtrip', 'docs/setup.md', null, null, 'not-run',
     'MCP の書き込みと質問の回答の往復は実施していません。導入手順の「確認」で実際に操作してください。',

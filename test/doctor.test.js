@@ -433,3 +433,111 @@ test('導入手順の JSON と TOML の例は共通の期待値と一致する',
   const toml = [...setup.matchAll(/```toml\r?\n([\s\S]*?)```/g)].find(match => match[1].includes('[mcp_servers.agent-cockpit]'))[1];
   assert.equal(toml.replace(/\r\n/g, '\n').trim(), mcpToml(manifest.codex.mcp).trim());
 });
+
+async function reviewCheckout(f) {
+  const root = path.join(f.directory, 'ai-cross-review');
+  await write(path.join(root, '.git/config'), '[remote "origin"]\nurl = https://github.com/ktysne/ai-cross-review.git\n');
+  return root;
+}
+
+test('グローバル SKILL の配布先の状態を診断と対処へ写す', async t => {
+  const f = await fixture(t);
+  await reviewCheckout(f);
+  const results = { match: 'ok', stale: 'mismatch', missing: 'not-installed', skipped: 'not-installed', unreadable: 'unverified' };
+  for (const [state, result] of Object.entries(results)) {
+    const targets = ['claude', 'codex', 'codex-subagent'].map(id => ({ id, state,
+      path: path.join(f.userHome, id, 'SKILL.md'), sourcePath: path.join(f.directory, 'source.md'),
+      sha256: state === 'missing' ? null : 'a'.repeat(64), sourceSha256: 'b'.repeat(64) }));
+    const queryCrossReview = async () => ({ stdout: JSON.stringify({ schemaVersion: 1, targets }) });
+    const { report } = await run({ ...f.options, queryCrossReview });
+    const items = report.items.filter(item => item.category === 'copies');
+    assert.equal(items.length, targets.length);
+    for (const [index, item] of items.entries()) {
+      const target = targets[index];
+      assert.equal(item.id, 'cross-review.skills.' + target.id);
+      assert.equal(item.tool, 'ai-cross-review');
+      assert.equal(item.provider, target.id === 'claude' ? 'claude' : 'codex');
+      assert.equal(item.target, target.path);
+      assert.equal(item.result, result);
+      assert.equal(item.expected, target.sourceSha256);
+      assert.equal(item.observed, target.sha256);
+      assert.deepEqual(item.actions.filter(action => action.op !== 'manual'), ['stale', 'missing'].includes(state)
+        ? [{ op: 'copy-file', from: target.sourcePath, to: target.path, observedDigest: target.sha256, sourceDigest: target.sourceSha256 }] : []);
+      assert.equal(item.actions.some(action => action.op === 'manual'), ['stale', 'missing'].includes(state));
+    }
+  }
+});
+
+test('照会には解決したホームと checkout と時間切れを渡す', async t => {
+  const f = await fixture(t, []);
+  f.options.environment = { CLAUDE_CONFIG_DIR: path.join(f.directory, 'custom-claude'), CODEX_HOME: path.join(f.directory, 'custom-codex') };
+  const root = await reviewCheckout(f);
+  const queryCrossReview = async (command, args, options) => {
+    assert.equal(command, process.execPath);
+    assert.deepEqual(args, ['tools/cross-review.sync-all.js', '--global-skill', '--check', '--json']);
+    assert.equal(options.cwd, root);
+    assert.equal(options.timeout, 30000);
+    assert.equal(options.env.CLAUDE_CONFIG_DIR, f.options.environment.CLAUDE_CONFIG_DIR);
+    assert.equal(options.env.CODEX_HOME, f.options.environment.CODEX_HOME);
+    return { stdout: JSON.stringify({ schemaVersion: 1, targets: [] }) };
+  };
+  assert.equal((await run({ ...f.options, queryCrossReview })).code, 0);
+});
+
+test('照会できない各場合は写しを一つの未確認にまとめる', async t => {
+  const f = await fixture(t);
+  const root = await reviewCheckout(f);
+  const failures = [
+    async () => { throw Object.assign(new Error(), { code: 'EPERM' }); },
+    async () => { throw Object.assign(new Error(), { code: 'ENOENT' }); },
+    async () => { throw Object.assign(new Error(), { killed: true }); },
+    async () => { throw Object.assign(new Error(), { code: 2 }); },
+    async () => { throw Object.assign(new Error(), { code: 4 }); },
+    async () => ({ stdout: 'invalid' }),
+    async () => ({ stdout: JSON.stringify({ schemaVersion: 2 }) }),
+    async () => { throw Object.assign(new Error(), { code: 3,
+      stdout: JSON.stringify({ schemaVersion: 1, result: 'error', source: { path: 'SKILL.md', sha256: null, error: 'ENOENT' }, targets: [] }) }); },
+  ];
+  for (const queryCrossReview of failures) {
+    const { report } = await run({ ...f.options, queryCrossReview });
+    const items = report.items.filter(item => item.category === 'copies');
+    assert.equal(items.length, 1);
+    assert.equal(items[0].result, 'unverified');
+    assert.match(items[0].reason, /--update-checkouts --check/);
+    assert.match(items[0].reason, /導入手順/);
+  }
+  await fs.rm(root, { recursive: true });
+  await write(path.join(f.homes.claude, 'skills/cross-review/SKILL.md'), 'installed');
+  const { report } = await run(f.options);
+  assert.deepEqual(report.items.filter(item => item.category === 'copies').map(item => item.result), ['unverified']);
+});
+
+test('Codex の配布先にだけ写しがあり checkout が見つからなくても未確認にする', async t => {
+  for (const home of ['codex', 'codex-subagent']) {
+    const f = await fixture(t);
+    const skill = home === 'codex' ? path.join(f.homes.codex, 'skills/cross-review/SKILL.md')
+      : path.join(f.userHome, '.codex-subagent/skills/cross-review/SKILL.md');
+    await write(skill, 'installed');
+    const { report } = await run(f.options);
+    assert.deepEqual(report.items.filter(item => item.category === 'copies').map(item => [item.id, item.result]),
+      [['cross-review.skills.query', 'unverified']]);
+  }
+});
+
+test('照会が終了コード 1 と 3 でも JSON の配布先を診断する', async t => {
+  const f = await fixture(t);
+  await reviewCheckout(f);
+  for (const code of [1, 3]) {
+    const queryCrossReview = async () => { throw Object.assign(new Error(), { code,
+      stdout: JSON.stringify({ schemaVersion: 1, targets: [{ id: 'claude', path: f.homes.claude, state: 'unreadable', sha256: null, sourceSha256: null }] }) }); };
+    const { report } = await run({ ...f.options, queryCrossReview });
+    assert.deepEqual(report.items.filter(item => item.category === 'copies').map(item => item.id), ['cross-review.skills.claude']);
+  }
+});
+
+test('ai-cross-review が未導入なら照会も写しの項目も作らない', async t => {
+  const f = await fixture(t);
+  const queryCrossReview = async () => { assert.fail('未導入の照会'); };
+  const { report } = await run({ ...f.options, queryCrossReview });
+  assert.deepEqual(report.items.filter(item => item.category === 'copies'), []);
+});

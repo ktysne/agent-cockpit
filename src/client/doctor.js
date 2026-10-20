@@ -8,8 +8,8 @@ async function diagnose(options = {}) {
 function formatReport(report) {
   return [['ok', '確認できたこと'], ['mismatch', '不一致'], ['unverified', '未確認'], ['not-installed', '未導入・対象外'], ['not-run', '未実施']]
     .map(([result, title]) => [title, ...report.items.filter(item => item.result === result).flatMap(item => [
-      `- ${item.id}: ${item.reason}`, ...(result === 'mismatch' ? item.actions.map(action => `  対処: ${action.op === 'manual' ? action.text
-        : action.op === 'copy' ? `${action.from} を ${action.to} へコピーします。`
+      `- ${item.id}: ${item.reason}`, ...(['mismatch', 'not-installed'].includes(result) ? item.actions.map(action => `  対処: ${action.op === 'manual' ? action.text
+        : ['copy', 'copy-file'].includes(action.op) ? `${action.from} を ${action.to} へコピーします。`
           : action.op === 'command' ? `${action.cwd} で ${action.command} を実行します。`
             : `${action.file} の ${action.path?.join('.') || `${action.table}.${action.key}`} を ${action.op} で直します。`}`) : []),
     ])].join('\n')).join('\n\n');

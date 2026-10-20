@@ -32,7 +32,8 @@ async function observeCheckouts({ root, userHome, homes, bridgeInstalled, cwd = 
       if (tool && !found.has(tool)) found.set(tool, candidate);
     }
   }
-  const reviewInstalled = await fs.stat(path.join(homes.claude, 'skills/cross-review/SKILL.md')).then(() => true, () => false);
+  const reviewInstalled = (await Promise.all([homes.claude, homes.codex, path.join(userHome, '.codex-subagent')]
+    .map(home => fs.stat(path.join(home, 'skills/cross-review/SKILL.md')).then(() => true, () => false)))).some(Boolean);
   return ['agent-cockpit', 'claude-codex-bridge', 'ai-cross-review'].flatMap(tool => {
     const checkout = found.get(tool) || null;
     if (!checkout && !(tool === 'claude-codex-bridge' ? bridgeInstalled : reviewInstalled)) return [];

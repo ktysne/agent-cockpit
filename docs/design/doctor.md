@@ -68,6 +68,7 @@ provider は、ホームに agent-cockpit のフック、MCP の登録、スキ�
 | mcp | Claude は `.claude.json` の `mcpServers['agent-cockpit']`、Codex は `config.toml` の `[mcp_servers.agent-cockpit]` の実行先と、各ツールの `approval_mode` | 違えば `mismatch`。Claude のプロジェクトのスコープに同名の登録があれば、そちらが効くので `unverified` |
 | mcp-runtime | 診断ログ(`GET /api/diagnostics`)の今の起動の `mcp.write` に残る MCP プロセスの `version` と `commit` | すべて期待値と一致すれば `ok`。古いものがあれば、開き直しの案内を付けて `unverified`。記録はセッションを閉じた後も起動のあいだ残り、今動いているとは言えないため。記録が無ければ `unverified` |
 | skills | 正本と写しを、行末の違いを除いて比べる | 違えば `mismatch`。agent-cockpit のスキルが無ければ `mismatch`、`update-tools` が無ければ `not-installed` |
+| copies | ai-cross-review のグローバル SKILL の照会結果に従い、正本と写しの生バイト列の sha256 を比べる | 一致で `ok`、古い写しは `mismatch`、未配置と対象外は `not-installed`、読めなければ `unverified` |
 | runtime-check | MCP からの書き込みと質問の回答の往復 | 常に `not-run`。導入手順の「確認」へ案内する |
 
 Claude の `route.js` のフック(導入手順のパターン C)は、bridge が導入済み(`codexAgentScriptPaths` のどれかに `codex-agent.sh` がある)なら期待する登録に含め、無ければ `mismatch` にする。
@@ -80,6 +81,18 @@ Codex のフックの `command` は、`node "<パス>" codex` の形の文字列
 
 セッションが古い登録で動いているかは判定しない。ファイルの更新時刻は、同じ内容の写し直しでも変わるため、誤った案内が増えるからである。
 代わりに、フック、MCP、スキルのどれかに `mismatch` があれば、直した後に開いたセッションだけが新しい内容で動くことを `manual` の対処として必ず添える。
+
+ai-cross-review の写しは、checkout を cwd とする `node tools/cross-review.sync-all.js --global-skill --check --json` の結果だけで照合する。
+子プロセスには診断で解決したホームを `CLAUDE_CONFIG_DIR` と `CODEX_HOME` で渡し、30 秒で時間切れにする。
+終了コード 0、1、3 の JSON を受け付け、`schemaVersion` は 1 とする。
+配布先ごとに `cross-review.skills.<id>` を作り、`tool` は `ai-cross-review`、区分は `copies` にする。
+`provider` は Claude の配布先で `claude`、Codex と Codex サブエージェントの配布先で `codex` にする。
+`expected` と `observed` には正本と写しの sha256 だけを載せる。
+古い写しと配布条件を満たす未配置の写しには `copy-file` とセッションの開き直しを案内する。
+対象外と読めない写しには書き込みの対処を付けない。
+
+checkout が見つからないか、照会できないか、照会が正本を読めなかった(`source.error`)ときは、写しの項目を一つの `unverified` にまとめ、原因と `node src/client/apply.js --update-checkouts --check`、ai-cross-review の導入手順を案内する。
+ai-cross-review が未導入なら写しの項目を出さない。Claude、Codex、`~/.codex-subagent` のどのホームにも `skills/cross-review/SKILL.md` が無く、checkout も見つからないときを未導入とする。
 
 ## 出力の形
 
@@ -129,10 +142,11 @@ matcher はグループの属性なので、matcher が違う登録は、フッ�
 
 Codex の `config.toml` のうち、agent-cockpit の登録をインラインテーブルやドット付きのキーで書いたもの(`tools = { … }` など)は読まないので、MCP の項目を `unverified` にし、書き換えの対処を出さない。
 | `copy` | `from`(対象の checkout からの相対パス)、`to`(絶対パス) |
+| `copy-file` | `from`(正本の絶対パス)、`to`(配布先の絶対パス)、`sourceDigest`(正本の生バイト列の sha256)、`observedDigest`(写しの生バイト列の sha256、未配置なら `null`) |
 | `command` | `command`(例 `node src/client/restart-server.js --json`)と、実行する場所 |
 | `manual` | 開発者の操作(セッションの開き直し、Codex の `/hooks` での信頼し直し)を `text` で |
 
-ファイルを書き換える対処には、`observedDigest`(観測したファイル全体の sha256)を付ける。UTF-8 で読んだ文字列から計算する。
+ファイルを書き換える対処には、`observedDigest`(観測したファイル全体の sha256)を付ける。UTF-8 で読んだ文字列から計算する。ただし `copy-file` は照会が返す値をそのまま使うので、生バイト列から計算する。
 ただし、Claude の MCP の登録の対処は `digestPath: ['mcpServers', 'agent-cockpit']` を持ち、この部分木の `JSON.stringify(値 ?? null)` の sha256 を使う。
 途中がオブジェクトでない場合も値を `null` として計算する。
 Claude Code が登録以外を頻繁に書き換えるため、この対処では登録の変化だけを検出する。
@@ -155,9 +169,9 @@ node src/client/apply.js --from diagnosis.json --item claude.mcp.registration [-
 適用は次の順に進める。
 
 1. 保存した診断の `checkout.resolvedBy` が `root` なら同じ `root` を指定し、それ以外は既定の解決で観測と評価をやり直す。正規化した checkout が違えばすべて `skipped` にする。
-2. 元が `mismatch` の項目だけを候補とする。今は `ok` なら `already-ok`、項目が消えたか適用できる状態でなければ `skipped` にする。今の対処と保存した対処を `isDeepStrictEqual` で比べ、違えば診断し直すよう案内して `skipped` にする。
+2. 元が `mismatch` の項目と、`--item` で選んだ、元が `not-installed` で `copy-file` を持つ項目を候補とする。今は `ok` なら `already-ok`、今も `not-installed` なら `copy-file` を持つものだけ適用できる。項目が消えたか適用できる状態でなければ `skipped` にする。今の対処と保存した対処を `isDeepStrictEqual` で比べ、違えば診断し直すよう案内して `skipped` にする。
 3. ファイルの対処をファイルごとにまとめる。1 項目が複数のファイルを対象にしていれば `failed` にする。ファイルを読み、各対処の digest を確かめ、違えばそのファイルの項目をすべて `skipped` にする。
-4. 元のバイト列を退避して、メモリー上で `json-remove`、`json-replace`、`json-add` の順に適用する。同じ操作の中と TOML、copy は選んだ項目の順、項目内の順にする。どれかが適用できなければ、そのファイルを書かずに対象の項目をすべて `failed` にする。
+4. `copy-file` は正本を読み、生バイト列の sha256 が `sourceDigest` と一致しなければ、診断し直すよう案内して `skipped` にする。一致した正本のバイト列を適用に使う。元のバイト列を退避し、メモリー上で `json-remove`、`json-replace`、`json-add` の順に適用する。同じ操作の中と TOML、copy、copy-file は選んだ項目の順、項目内の順にする。どれかが適用できなければ、そのファイルを書かずに対象の項目をすべて `failed` にする。`copy-file` は照合した正本のバイト列をそのまま写す。
 5. 同じフォルダーの一時ファイルに書き、対象をもう一度読んで、手順 3 で読んだバイト列と同じかを確かめる。`digestPath` の対処でも、ここではファイル全体で比べる。手順 3 の後の登録以外の書き込みも、上書きで失わないためである。違えば一時ファイルを消して `skipped` にし、一致すれば rename で 1 回だけ書き換える。JSON は字下げ、改行コード、末尾の改行の有無を保つ。TOML は対象の表のキーだけを書き換え、ほかの表と `[hooks.state]` を残す。copy は checkout の正本のバイト列を写す。
 6. ファイルへの適用が終わってから、選んだ `command` を実行する。許すのは checkout を cwd とする `node src/client/restart-server.js --json` だけで、`execFile` に実行ファイルと引数を分けて渡す。適用した項目の `manual` は重複を除いて最後に案内する。
 
