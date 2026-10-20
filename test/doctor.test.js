@@ -485,6 +485,45 @@ test('グローバル SKILL の配布先の状態を診断と対処へ写す', a
   }
 });
 
+test('グローバル SKILL 版 2 の配布先と古い置き場の写しを診断と対処へ写す', async t => {
+  const f = await fixture(t);
+  await reviewCheckout(f);
+  const target = (id, state, extra = {}) => ({ id, state, path: path.join(f.userHome, id, 'SKILL.md'),
+    sourcePath: path.join(f.directory, 'source.md'), sha256: 'a'.repeat(64), sourceSha256: 'b'.repeat(64), ...extra });
+  const targets = [target('claude', 'match', { sha256: 'b'.repeat(64) }), target('agents', 'stale'),
+    target('codex-legacy', 'legacy', { removable: true }), target('codex-subagent-legacy', 'legacy', { removable: false })];
+  const queryCrossReview = async () => ({ stdout: JSON.stringify({ schemaVersion: 2, targets }) });
+  const { report } = await run({ ...f.options, queryCrossReview });
+  const items = report.items.filter(item => item.category === 'copies');
+  assert.deepEqual(items.map(item => [item.id, item.provider, item.result]), [
+    ['cross-review.skills.claude', 'claude', 'ok'], ['cross-review.skills.agents', 'codex', 'mismatch'],
+    ['cross-review.skills.codex-legacy', 'codex', 'mismatch'], ['cross-review.skills.codex-subagent-legacy', 'codex', 'mismatch']]);
+  assert.deepEqual(items[1].actions[0], { op: 'copy-file', from: targets[1].sourcePath, to: targets[1].path,
+    observedDigest: targets[1].sha256, sourceDigest: targets[1].sourceSha256 });
+  assert.deepEqual(items.slice(2).map(item => item.actions), [
+    [{ op: 'manual', text: 'ai-cross-review の checkout で node tools/cross-review.sync-all.js --global-skill を実行して、古い置き場の写しを片付けてください。' }],
+    [{ op: 'manual', text: '古い置き場の写しは書き換えられているため、内容を確かめて手で片付けてください。' }],
+  ]);
+  assert.ok(items.slice(2).every(item => item.reason.includes('Codex の選択肢に cross-review が 2 つ')));
+});
+
+for (const [name, legacyTarget] of [
+  ['removable が無い', { id: 'codex-legacy', state: 'legacy' }],
+  ['legacy でない状態', { id: 'codex-legacy', state: 'stale', removable: true }],
+  ['legacy の項目以外の legacy', { id: 'agents', state: 'legacy', removable: true }],
+]) {
+  test(`グローバル SKILL 版 2 の${name}の古い置き場の項目は照会を未確認にする`, async t => {
+    const f = await fixture(t);
+    await reviewCheckout(f);
+    const queryCrossReview = async () => ({ stdout: JSON.stringify({ schemaVersion: 2, targets: [
+      { path: path.join(f.homes.codex, 'skills/cross-review/SKILL.md'), ...legacyTarget },
+    ] }) });
+    const { report } = await run({ ...f.options, queryCrossReview });
+    const items = report.items.filter(item => item.category === 'copies');
+    assert.deepEqual(items.map(item => [item.id, item.result]), [['cross-review.skills.query', 'unverified']]);
+  });
+}
+
 test('照会には解決したホームと checkout と時間切れを渡す', async t => {
   const f = await fixture(t, []);
   f.options.environment = { CLAUDE_CONFIG_DIR: path.join(f.directory, 'custom-claude'), CODEX_HOME: path.join(f.directory, 'custom-codex') };

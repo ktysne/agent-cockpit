@@ -219,16 +219,22 @@ function checkCrossReview(query, observedAt, items) {
       actions: [{ op: 'manual', text: guidance }] });
     return;
   }
-  const results = { match: 'ok', stale: 'mismatch', missing: 'not-installed', skipped: 'not-installed', unreadable: 'unverified' };
+  const results = { match: 'ok', stale: 'mismatch', missing: 'not-installed', skipped: 'not-installed', unreadable: 'unverified', legacy: 'mismatch' };
   const reasons = { match: 'スキルの写しは正本と一致しています。', stale: 'スキルの写しが正本と違うため、コピーし直してください。',
     missing: '配布先にスキルの写しがありません。必要なら、この項目を選ぶと配布します。', skipped: '配布条件を満たさないため、この配布先は対象外です。',
-    unreadable: 'スキルの写しを照合できないため、ai-cross-review の導入手順とアクセス権を確認してください。' };
+    unreadable: 'スキルの写しを照合できないため、ai-cross-review の導入手順とアクセス権を確認してください。',
+    legacy: '古い置き場に写しが残っているため、Codex の選択肢に cross-review が 2 つ並びます。' };
   for (const target of query.targets) {
+    const actions = target.state === 'legacy'
+      ? [{ op: 'manual', text: target.removable
+        ? 'ai-cross-review の checkout で node tools/cross-review.sync-all.js --global-skill を実行して、古い置き場の写しを片付けてください。'
+        : '古い置き場の写しは書き換えられているため、内容を確かめて手で片付けてください。' }]
+      : ['stale', 'missing'].includes(target.state)
+        ? [{ op: 'copy-file', from: target.sourcePath, to: target.path,
+          observedDigest: target.sha256, sourceDigest: target.sourceSha256 }, SESSION_ACTION] : [];
     items.push({ ...base, id: `cross-review.skills.${target.id}`, provider: target.id === 'claude' ? 'claude' : 'codex',
       target: target.path, expected: target.sourceSha256, observed: target.sha256, result: results[target.state],
-      reason: reasons[target.state], actions: ['stale', 'missing'].includes(target.state)
-        ? [{ op: 'copy-file', from: target.sourcePath, to: target.path,
-          observedDigest: target.sha256, sourceDigest: target.sourceSha256 }, SESSION_ACTION] : [] });
+      reason: reasons[target.state], actions });
   }
 }
 
