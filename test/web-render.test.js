@@ -1,3 +1,4 @@
+const { reviewPr } = require('./support/review');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -53,7 +54,7 @@ function mergeTargetConfirmation(pullRequest) {
   });
   vm.runInContext(['pullRequestMergeOptionsFor', 'appendPullRequestMergeConfirmation'].map(name => functionSource(pageHtml, name)).join('\n'), context);
   const root = element('div');
-  context.appendPullRequestMergeConfirmation(root, { defaultBranch: 'main', mergeMethods: ['merge', 'squash', 'rebase'], lastMethod: 'squash' }, pullRequest);
+  context.appendPullRequestMergeConfirmation(root, { defaultBranch: 'main', mergeMethods: ['merge', 'squash', 'rebase'], lastMethod: 'squash' }, reviewPr(pullRequest));
   const flatten = node => [node, ...node.children.flatMap(flatten)];
   return flatten(root);
 }
@@ -77,10 +78,10 @@ test('同期 PR の確認欄には main の削除選択と子の付け替え説�
 });
 
 test('予約の方式がマージコミットの固定と違うと画面に実行しない理由を表示する', () => {
-  const context = pageContext(pageHtml, { convergedAtHead: () => true, pushedAfterConvergence: () => false });
+  const context = pageContext(pageHtml, {});
   vm.runInContext(functionSource(pageHtml, 'pullRequestReservationWaitReasons'), context);
-  const waiting = context.pullRequestReservationWaitReasons({ canMerge: true, ci: 'pass', review: 'none',
-    baseRefName: 'feature/aggregate', effectiveBase: 'feature/aggregate', mergeTarget: 'feature/aggregate', mergeMethodFixed: 'merge' },
+  const waiting = context.pullRequestReservationWaitReasons(reviewPr({ headRefOid: 'a'.repeat(40), crossReview: { round: 1, triage: { round: 1, outcome: 'converged', sha: 'a'.repeat(40) } }, canMerge: true, ci: 'pass', review: 'none',
+    baseRefName: 'feature/aggregate', effectiveBase: 'feature/aggregate', mergeTarget: 'feature/aggregate', mergeMethodFixed: 'merge' }),
   { defaultBranch: 'main', mergeMethods: ['merge', 'squash'] }, 'squash');
   assert.deepEqual(Array.from(waiting), ['マージ方式がマージコミットに固定のため、予約の方式では実行しない']);
 });
@@ -1328,12 +1329,12 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   const textOf = (node) => node.children?.length ? node.children.map(textOf).join('') : node.textContent;
   const allNodes = (root) => [root, ...(root.children || []).flatMap(allNodes)];
   const headSha = 'a'.repeat(40);
-  const line = (pullRequest) => context.crossReviewLine(pullRequest);
+  const line = (pullRequest) => context.crossReviewLine(reviewPr(pullRequest));
 
   const absent = { headRefOid: headSha };
   assert.equal(line(absent), null);
-  assert.equal(context.crossReviewState(absent).warn, null);
-  assert.match(html, /if \(pullRequest\.crossReview !== undefined\) text\.append\(crossReviewLine\(pullRequest\)\)/);
+  assert.equal(context.crossReviewState(reviewPr(absent)).warn, null);
+  assert.match(html, /if \(pullRequest\.review\.display\.visible\) text\.append\(crossReviewLine\(pullRequest\)\)/);
 
   const missing = line({ headRefOid: headSha, crossReview: null });
   const missingBadge = allNodes(missing).find((node) => node.className?.startsWith('badge'));
@@ -1371,36 +1372,36 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.equal(undo.textContent, 'レビュー不要を取り消す');
   assert.equal(allNodes(recordedNotRequired).find((node) => node.className?.startsWith('badge')).title, '軽微な変更のため');
 
-  const waitingForTriage = context.crossReviewState({
+  const waitingForTriage = context.crossReviewState(reviewPr({
     headRefOid: headSha,
     crossReview: { round: 3, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } },
-  });
+  }));
   assert.equal(waitingForTriage.text, '3 往復目の結論待ち');
   assert.equal(waitingForTriage.warn, 'クロスレビューの 3 往復目の結論がまだ出ていない');
 
-  const convergedButNextRound = context.crossReviewState({
+  const convergedButNextRound = context.crossReviewState(reviewPr({
     headRefOid: headSha,
     crossReview: { round: 3, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' } },
-  });
+  }));
   assert.deepEqual([convergedButNextRound.text, convergedButNextRound.cls], ['3 往復目の結論待ち', 'warn']);
 
-  const triageAheadOfRound = context.crossReviewState({
+  const triageAheadOfRound = context.crossReviewState(reviewPr({
     headRefOid: headSha,
     crossReview: { round: 1, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 3, sha: 'b'.repeat(40), outcome: 'fixing' } },
-  });
+  }));
   assert.equal(triageAheadOfRound.text, 'この head をレビューに回した');
 
-  const fixing = context.crossReviewState({
+  const fixing = context.crossReviewState(reviewPr({
     headRefOid: headSha,
     crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'fixing' } },
-  });
+  }));
   assert.equal(fixing.text, '指摘の対応中');
   assert.equal(fixing.warn, 'クロスレビューの 2 往復目の指摘に対応している途中');
 
-  const halted = context.crossReviewState({
+  const halted = context.crossReviewState(reviewPr({
     headRefOid: headSha,
     crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'halted' } },
-  });
+  }));
   assert.equal(halted.text, '開発者の判断待ち');
   assert.equal(halted.warn, 'クロスレビューは開発者の判断を待って止まっている');
 
@@ -1414,15 +1415,15 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   const convergedBadge = allNodes(converged).find((node) => node.className?.startsWith('badge'));
   assert.equal(convergedBadge.textContent, 'レビュー済み');
   assert.equal(convergedBadge.className, 'badge ok');
-  assert.equal(context.crossReviewState({
+  assert.equal(context.crossReviewState(reviewPr({
     headRefOid: headSha,
     crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: null, triage: { round: 2, sha: headSha, outcome: 'converged' } },
-  }).warn, null);
+  })).warn, null);
 
-  const changedAfterConvergence = context.crossReviewState({
+  const changedAfterConvergence = context.crossReviewState(reviewPr({
     headRefOid: 'c'.repeat(40),
     crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(64), outcome: 'converged' } },
-  });
+  }));
   assert.equal(changedAfterConvergence.text, '収束の後に変更あり (収束 bbbbbbb)');
   assert.equal(changedAfterConvergence.warn, 'head ccccccc はクロスレビューの収束の後に変更されている (収束は bbbbbbb)');
   const changedConvergenceLine = line({
@@ -1433,10 +1434,10 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.equal(changedConvergenceBadge.textContent, '収束の後に変更あり (収束 bbbbbbb)');
   assert.equal(changedConvergenceBadge.className, 'badge warn');
 
-  const unverifiableConvergence = context.crossReviewState({
+  const unverifiableConvergence = context.crossReviewState(reviewPr({
     headRefOid: 'short-sha',
     crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' } },
-  });
+  }));
   assert.equal(unverifiableConvergence.text, 'head を確かめられない');
   assert.equal(unverifiableConvergence.warn, 'head を確かめられない');
 
@@ -1460,14 +1461,14 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.equal(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha }), undefined);
   assert.ok(skipButtonOf({ round: 1, max: 3, dismissed: 0, reviewedSha: null }));
 
-  const changedAfter64DigitReview = context.crossReviewState({
+  const changedAfter64DigitReview = context.crossReviewState(reviewPr({
     headRefOid: 'e'.repeat(64),
     crossReview: { round: 1, max: 3, dismissed: 0, reviewedSha: 'd'.repeat(64) },
-  });
+  }));
   assert.equal(changedAfter64DigitReview.text, 'レビューの後に変更あり (レビュー済み ddddddd)');
   assert.match(changedAfter64DigitReview.warn, /head eeeeeee はクロスレビューの後に変更されている/);
 
-  assert.equal(context.crossReviewState({ headRefOid: headSha }).warn, null);
+  assert.equal(context.crossReviewState(reviewPr({ headRefOid: headSha })).warn, null);
 });
 
 test('マージと予約の確認欄は警告と照合用 SHA を表示する', () => {
@@ -1515,7 +1516,7 @@ test('マージと予約の確認欄は警告と照合用 SHA を表示する', 
       crossReview: review,
     };
     const target = new FakeElement('div');
-    context.appendPullRequestMergeConfirmation(target, group, pullRequest, automatic);
+    context.appendPullRequestMergeConfirmation(target, group, reviewPr(pullRequest), automatic);
     return target.children[0].children.find((node) => node.className === 'effects').children;
   };
   const changedReview = { round: 1, max: 3, dismissed: 0, reviewedSha: 'b'.repeat(40) };
@@ -1670,7 +1671,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
     if (confirmation) context.pullRequestMergeConfirmations.set(key, 'merge');
     else context.pullRequestMergeConfirmations.delete(key);
     const root = new FakeElement('div');
-    context.appendPullRequestTree(root, group, pullRequest);
+    context.appendPullRequestTree(root, group, reviewPr(pullRequest));
     const all = (node) => [node, ...(node.children || []).flatMap(all)];
     return { all: all(root), text: textOf(root) };
   };
@@ -1718,7 +1719,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
 
 test('マージできる PR は選択条件を満たし、登録セッションにマージボタンがあるものだけを数える', () => {
   const source = readWebPage();
-  const functions = ['pullRequestKeys', 'convergedAtHead', 'pushedAfterConvergence', 'pullRequestCrossReviewSettled', 'pullRequestCrossReviewWaitReason', 'isCompleteCommitSha', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
+  const functions = ['pullRequestKeys', 'isCompleteCommitSha', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
     functionSource(source, name)
   ));
   assert.ok(functions.every(Boolean));
@@ -1739,17 +1740,17 @@ test('マージできる PR は選択条件を満たし、登録セッション�
     { owner: 'example', repo: 'project', trees: [shared, { number: 3, canMerge: false, mergeSessionId: 'session-b', children: [] }] },
   ];
 
-  assert.equal(context.pullRequestMergeableCount(groups), 1);
+  assert.equal(context.pullRequestMergeableCount(groups.map(group => ({ ...group, trees: group.trees.map(reviewPr) }))), 1);
   context.displayPreferences.mergeableCondition = 'ci';
-  assert.equal(context.pullRequestMergeableCount(groups), 0);
+  assert.equal(context.pullRequestMergeableCount(groups.map(group => ({ ...group, trees: group.trees.map(reviewPr) }))), 0);
   shared.ci = 'pass';
-  assert.equal(context.pullRequestMergeableCount(groups), 1);
+  assert.equal(context.pullRequestMergeableCount(groups.map(group => ({ ...group, trees: group.trees.map(reviewPr) }))), 1);
   context.displayPreferences.mergeableCondition = 'cross-review';
-  assert.equal(context.pullRequestMergeableCount(groups), 0);
+  assert.equal(context.pullRequestMergeableCount(groups.map(group => ({ ...group, trees: group.trees.map(reviewPr) }))), 0);
   shared.crossReview = { round: 2, triage: { round: 2, outcome: 'converged', sha: headRefOid } };
-  assert.equal(context.pullRequestMergeableCount(groups), 1);
+  assert.equal(context.pullRequestMergeableCount(groups.map(group => ({ ...group, trees: group.trees.map(reviewPr) }))), 1);
   shared.crossReview = null;
-  assert.equal(context.pullRequestMergeableCount(groups), 0);
+  assert.equal(context.pullRequestMergeableCount(groups.map(group => ({ ...group, trees: group.trees.map(reviewPr) }))), 0);
 });
 
 test('見出しの判断待ちは有効な回答を数えず、無視された回答は数える', () => {
@@ -3045,7 +3046,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
   vm.runInContext(source, context);
 
   const root = new FakeElement('div');
-  context.appendPullRequestTree(root, group, pullRequest);
+  context.appendPullRequestTree(root, group, reviewPr(pullRequest));
   const nodes = [];
   const visit = (node) => {
     nodes.push(node);
@@ -3062,7 +3063,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
 
   const confirmationText = () => {
     const target = new FakeElement('div');
-    context.appendPullRequestMergeConfirmation(target, group, pullRequest);
+    context.appendPullRequestMergeConfirmation(target, group, reviewPr(pullRequest));
     const texts = [];
     const collect = (node) => {
       texts.push(node.textContent);
@@ -3160,7 +3161,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join('');
   const renderPullRequest = (value) => {
     const root = new FakeElement('div');
-    context.appendPullRequestTree(root, group, value);
+    context.appendPullRequestTree(root, group, reviewPr(value));
     return flatten(root);
   };
 
@@ -3242,7 +3243,7 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
-  const reservationSources = ['isCompleteCommitSha', 'convergedAtHead', 'pushedAfterConvergence', 'pullRequestReservationWaitReasons', 'pullRequestReservationWaits']
+  const reservationSources = ['isCompleteCommitSha', 'pullRequestReservationWaitReasons', 'pullRequestReservationWaits']
     .map((name) => functionSource(html, name));
   const resultSources = ['pullRequestRepositoryKey', 'rememberPullRequestMergeResult', 'pullRequestTimestampExpired', 'pullRequestTransientNoticeExpired']
     .map((name) => functionSource(html, name));
@@ -3335,7 +3336,7 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   };
   const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join('');
   const mergeRoot = new FakeElement('div');
-  context.appendPullRequestMergeConfirmation(mergeRoot, group, pullRequest);
+  context.appendPullRequestMergeConfirmation(mergeRoot, group, reviewPr(pullRequest));
   const mergeNodes = flatten(mergeRoot);
   const shaEffect = mergeNodes.find((node) => node.children?.[0]?.textContent === '照合する head SHA: ');
   assert.ok(shaEffect);
@@ -3354,12 +3355,12 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   pullRequest.children = [{ number: 43, children: [] }, { number: 44, children: [] }];
   context.pullRequestMergeOptions.set(key, { method: 'squash', deleteBranch: false });
   const restackRoot = new FakeElement('div');
-  context.appendPullRequestMergeConfirmation(restackRoot, group, pullRequest);
+  context.appendPullRequestMergeConfirmation(restackRoot, group, reviewPr(pullRequest));
   assert.ok(flatten(restackRoot).some((node) => node.textContent.includes('#43、#44 に #42 のコミットが残る')));
 
   context.pullRequestMergeOptions.set(key, { method: 'merge', deleteBranch: true });
   const rowRoot = new FakeElement('div');
-  context.appendPullRequestTree(rowRoot, group, pullRequest);
+  context.appendPullRequestTree(rowRoot, group, reviewPr(pullRequest));
   const rowNodes = flatten(rowRoot);
   const line = rowNodes.find((node) => node.className === 'pline');
   const reservationToggle = rowNodes.find((node) => node.dataset?.reservationToggle === key);
@@ -3384,7 +3385,7 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   releaseReservation();
   await failingReservation;
   const restoredRoot = new FakeElement('div');
-  context.appendPullRequestTree(restoredRoot, group, pullRequest);
+  context.appendPullRequestTree(restoredRoot, group, reviewPr(pullRequest));
   const restoredNodes = flatten(restoredRoot);
   assert.equal(restoredNodes.find((node) => node.dataset?.reservationToggle === key).checked, false);
   assert.ok(restoredNodes.some((node) => node.className === 'merge-error' && node.textContent.includes('表示していた head SHA')));
@@ -3396,7 +3397,7 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   pullRequest.reservation = { method: 'merge', deleteBranch: false, createdAt: '2026-10-05T00:00:00.000Z' };
   const reservedRoot = new FakeElement('div');
   context.pullRequestMergeConfirmations.set(key, 'merge');
-  context.appendPullRequestTree(reservedRoot, group, pullRequest);
+  context.appendPullRequestTree(reservedRoot, group, reviewPr(pullRequest));
   const reservedNodes = flatten(reservedRoot);
   const checkedReservation = reservedNodes.find((node) => node.dataset?.reservationToggle === key);
   assert.equal(checkedReservation.checked, true);
@@ -3408,7 +3409,7 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   pullRequest.reservation = { method: 'merge', deleteBranch: false, createdAt: '2026-10-05T00:00:00.000Z' };
   const reservedMergeRoot = new FakeElement('div');
   context.pullRequestMergeConfirmations.set(key, 'merge');
-  context.appendPullRequestTree(reservedMergeRoot, group, pullRequest);
+  context.appendPullRequestTree(reservedMergeRoot, group, reviewPr(pullRequest));
   const reservedMergeNodes = flatten(reservedMergeRoot);
   const reservedMergeButton = reservedMergeNodes.find((node) => node.dataset?.mergeGo === key);
   assert.ok(reservedMergeButton);
@@ -3454,7 +3455,7 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
     { ok: true, body: { ok: true, cancelled: true, message: 'PR #42 のクロスレビューが halted になったため、レビュー収束後マージの予約を取り消しました。' } },
   );
   const immediateRoot = new FakeElement('div');
-  context.appendPullRequestTree(immediateRoot, group, pullRequest);
+  context.appendPullRequestTree(immediateRoot, group, reviewPr(pullRequest));
   const immediateToggle = flatten(immediateRoot).find((node) => node.dataset?.reservationToggle === key);
   immediateToggle.checked = true;
   await context.runPullRequestReservationAction(immediateToggle, true);
@@ -3465,11 +3466,11 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
 
   const noMethodsGroup = { ...group, mergeMethods: [] };
   const unreservedRoot = new FakeElement('div');
-  context.appendPullRequestTree(unreservedRoot, noMethodsGroup, pullRequest);
+  context.appendPullRequestTree(unreservedRoot, noMethodsGroup, reviewPr(pullRequest));
   assert.equal(flatten(unreservedRoot).find((node) => node.dataset?.reservationToggle === key).disabled, true);
   pullRequest.reservation = { method: 'merge', deleteBranch: false, createdAt: '2026-10-05T00:00:00.000Z' };
   const reservedNoMethodsRoot = new FakeElement('div');
-  context.appendPullRequestTree(reservedNoMethodsRoot, noMethodsGroup, pullRequest);
+  context.appendPullRequestTree(reservedNoMethodsRoot, noMethodsGroup, reviewPr(pullRequest));
   assert.equal(flatten(reservedNoMethodsRoot).find((node) => node.dataset?.reservationToggle === key).disabled, false);
 });
 
@@ -3729,7 +3730,7 @@ test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操�
   const group = { owner: 'example', repo: 'project', defaultBranch: 'main', mergeMethods: ['merge'], trees: [pullRequest] };
   const renderTree = () => {
     const root = new FakeElement('div');
-    context.appendPullRequestTree(root, group, pullRequest);
+    context.appendPullRequestTree(root, group, reviewPr(pullRequest));
     return flatten(root);
   };
   const renderNotice = (at) => {
@@ -5140,7 +5141,7 @@ test('Codex が状態にあるときセッション、PR、「前回見てから
   vm.runInContext(`${helpers}\n${component}`, prContext);
   const renderPr = (providers, showOriginBands = true) => {
     const root = new FakeElement('div');
-    prContext.appendPullRequestTree(root, {}, { number: 1, title: 'PR', canMerge: false, providers, children: [] }, showOriginBands);
+    prContext.appendPullRequestTree(root, {}, reviewPr({ number: 1, title: 'PR', canMerge: false, providers, children: [] }), showOriginBands);
     return root.children[0];
   };
   for (const [providers, origin] of [
@@ -5985,8 +5986,8 @@ for (const scenario of [
     });
     vm.runInContext(functionSource(pageHtml, 'appendPullRequestTree'), context);
     const root = element('div');
-    context.appendPullRequestTree(root, { mergeMethods: ['merge'] }, { number: 31, mergeSessionId: 'session-pr', canMerge: true, children: [],
-      crossReview: { notRequired: true, source: scenario.source }, reservation: scenario.reserved ? { method: 'merge' } : null });
+    context.appendPullRequestTree(root, { mergeMethods: ['merge'] }, reviewPr({ number: 31, mergeSessionId: 'session-pr', canMerge: true, children: [],
+      crossReview: { notRequired: true, source: scenario.source }, reservation: scenario.reserved ? { method: 'merge' } : null }));
     const flatten = (node) => [node, ...node.children.flatMap(flatten)];
     const toggle = flatten(root).find((node) => node.dataset.reservationToggle === 'key');
     assert.equal(Boolean(toggle), scenario.show);
@@ -6047,7 +6048,7 @@ test('前提が消えた衝突の確認欄と登録を外す確認は、条件�
       const root = new FakeElement('div');
       for (const group of state.pullRequests) {
         context.appendPullRequestError(root, group);
-        for (const pullRequest of group.trees) context.appendPullRequestTree(root, group, pullRequest);
+        for (const pullRequest of group.trees) context.appendPullRequestTree(root, group, reviewPr(pullRequest));
       }
       rendered = flatten(root);
     },

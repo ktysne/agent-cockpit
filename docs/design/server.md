@@ -474,7 +474,30 @@ squash マージでは元の SHA が base に残らないため、前の PR の�
 取得開始時に控えた世代より後の記録がある PR を除いたオープン一覧を、登録の所属更新とリポジトリの状態の置き換えに使う。
 同じ取得で得たほかの PR の更新は反映する。
 
-base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha`、`triage` を設定する。`triage` は状態ファイルの `lastTriage` を `{round, sha, outcome}` に検証したもので、`sha` は 40 桁か 64 桁の小文字、`outcome` は `fixing`、`converged`、`halted` のいずれか。無いか形が合わなければ `null` とする。表示の規則は計画書の決定「クロスレビューの結論の表示」を正本とする。セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は、PR の head のコミットにも無いことを `git ls-tree` で確かめて「レビュー不要」とする。head のコミットにあれば、道具がある worktree と同じく状態ファイルを読む。worktree が道具の無い別のブランチへ切り替わっても、記録を「不要」で隠さないためである。head のコミットが手元に無いなどで確かめられないときは、PR の base ブランチを remote の追跡ブランチ(`<remote>/<base>`)のコミットで確かめ、どれかにあれば道具を使うリポジトリとする。見る remote は PR のリポジトリと一致する GitHub の remote で、GitHub の remote と判定できるものが無い(SSH の別名ホストなど)ときはすべての remote とする。ローカルの `<base>` は、PR のリポジトリと内容が違うことがあるので見ない。head と base のどちらでも確かめられないときは「確認できない」とする。状態ファイルの有無ではなく道具の有無で判定したまま、「レビュー不要」は道具が無いと確かめられたときだけにし、head を取り込んでいないだけで、使わないリポジトリの PR を「確認できない」にしないためである。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。
+base と head の対応から関連するオープン PR を積み上げる。
+レビューの記録の評価と各入口の方針は `src/shared/review-evaluation.js` に集める。
+評価は保存せず、PR の取得とローカル記録の読み直しのたびに導出する。
+画面へは生の `crossReview` を渡さず、`review = { evaluation, mergeCondition, display, reservation }` を渡す。
+GitHub の承認状態は `githubReview` に分ける。
+
+| 項目 | 入力、結果と優先順位 | 利用する入口 |
+|---|---|---|
+| 入力 | `record` は `selectCrossReview` で選んだ生の記録。`undefined` は未登録、`null` は記録なし、`unavailable` は確認不能、`notRequired` と `source: 'tool-absent'` は道具なし。`skip` と `deferral` は保存済みの不要と保留、`headSha` は PR の現在の head | `recalculateReviewGroups`、`selectCrossReview`、`mergeCandidate` |
+| head と記録 | `headKnown` は 40 桁か 64 桁の完全な SHA か。`record` は `unregistered / none / unavailable / tool-absent / recorded`。`atHead` は `converged / halted / fixing / in-progress / stale`。SHA は小文字で比較する | `evaluateReview` |
+| 今の結論 | `latest = { round, outcome, sha }`。triage と記録の round が同じときだけ outcome を採用し、それ以外は null と reviewedSha を使う。`rounds` は往復、上限、非対応数。`reviewedSha` と `conflict` の証拠も残す | `evaluateReview` |
+| head の範囲 | `covered` は head 不明なら `unknown`、今の head の記録か判断があれば true。`pushedAfterConvergence` は今の往復の収束 SHA と現在の完全な head が異なるときだけ true。`awaitingConclusion` は以前の往復にだけ結論がある場合の表示材料 | `evaluateReview`、`reviewDisplay` |
+| 判断の重ね合わせ | `decision = { kind, source, reason, next }`。道具なしは不要。現在の head の保留は、競合がなく atHead が stale のときだけ重ねる。現在の head の不要は atHead が converged でないときだけ重ねる。結論、往復、競合の証拠は重ね合わせても残す | `evaluateReview` |
+| マージ条件 | 保留 → 不要 → 競合 → 確認不能 → 今の結論の順。不要は競合があっても met、保留と未登録は待つ。CI の待ちは利用側で結合する | `mergeConditionReview` → `mergeConditionWaits`、`mergeablePullRequestCount`、画面の条件切り替え |
+| Stop の催促 | 完全な head が分かり、判断と競合がなく、記録なしまたは recorded で stale のときだけ催促する | `reviewReminderNeeded` → `missingReviewRecords` |
+| 予約のレビュー | 保留は wait `review-deferred`、競合は wait `review-conflict`、不要は wait `review-required`、今の往復の halted は cancel `review-halted`。次に非収束(前の往復の収束を含む)、head 不一致、収束 SHA の欠けを待ち、満たせば merge と `matchSha = latest.sha` を返す | `reservationReview` → `reservationMergeInput` |
+| 予約の外側の条件 | 保留、競合、halted の取消を先に評価し、マージ先変更、残りのレビュー条件、CI、GitHub 承認、操作条件の順に確かめる。freshCandidate で取り直す前後に評価し、収束 SHA を `--match-head-commit` に使う | `reservationMergeInput` |
+| 表示 | 保留 → 不要 → 競合 → 確認不能 → 今の結論の順で札と行を作る。古い head の fixing と halted も結論を表示し、覆っていなければ未記録の案内を添える。head 不明は「head を確かめられない」 | `reviewDisplay` → `attachReviewState`、画面の `crossReviewLine` |
+| 予約の表示 | 待ち文言は同じ評価から作る。道具なしには予約チェックを出さず、保存した不要には出す。既存の予約は出所によらず取り消せる | `reservationReviewDisplay` → 画面の `pullRequestReservationWaitReasons`、予約チェック |
+
+モックは評価モジュールの本文を印の間に埋め込み、テストで原本との一致を確かめる。
+モックの例示用の短縮 SHA は評価の入力で完全な SHA に広げ、画面では短縮形を使う。
+
+セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は、PR の head のコミットにも無いことを `git ls-tree` で確かめて「レビュー不要」とする。head のコミットにあれば、道具がある worktree と同じく状態ファイルを読む。worktree が道具の無い別のブランチへ切り替わっても、記録を「不要」で隠さないためである。head のコミットが手元に無いなどで確かめられないときは、PR の base ブランチを remote の追跡ブランチ(`<remote>/<base>`)のコミットで確かめ、どれかにあれば道具を使うリポジトリとする。見る remote は PR のリポジトリと一致する GitHub の remote で、GitHub の remote と判定できるものが無い(SSH の別名ホストなど)ときはすべての remote とする。ローカルの `<base>` は、PR のリポジトリと内容が違うことがあるので見ない。head と base のどちらでも確かめられないときは「確認できない」とする。状態ファイルの有無ではなく道具の有無で判定したまま、「レビュー不要」は道具が無いと確かめられたときだけにし、head を取り込んでいないだけで、使わないリポジトリの PR を「確認できない」にしないためである。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。
 状態ファイルは、登録の `cwd` の worktree に加えて、同じリポジトリのほかの worktree からも探す。PR の head のブランチをチェックアウトしている worktree は記録の有無を問わず候補にし、それ以外の worktree はそのブランチの記録を持つときだけ候補にする。スタックを 1 つの worktree で積むと、下の段のブランチはどこにもチェックアウトされないためである。
 登録の `cwd` が消えたときは、親へ上って見つかる worktree の根で下の remote の照合をしてから、PR の head のコミットに `tools/cross-review.js` があるかを確かめる。head のコミットを確かめられなければ、上と同じく base ブランチのコミットで確かめる。無ければ「レビュー不要」とし、あるか、どちらも確かめられなければ「確認できない」とする。消えた worktree の状態ファイルは読めないためである。このとき見つけた根も、ほかの worktree と同じ規則の候補にする。`git worktree list` で `prunable` の worktree(フォルダーが無い)は候補にしない。
 登録や worktree の候補が複数あるときは、同じ worktree のパスを重複から除き、全登録の候補を集めてから一度だけ選ぶ。
@@ -486,13 +509,8 @@ base と head の対応から関連するオープン PR を積み上げる。�
 進行中との組み合わせは、進行中の round が収束した round より大きいときだけ競合とする。
 競合のない同順位の記録は、今の head の収束を優先し、次に今の head のほかの記録、round の降順、worktree のパスの昇順で選ぶ。
 競合の代表は halted、fixing、進行中、converged の順とし、同順位なら round の降順、worktree のパスの昇順にする。
-`crossReview.conflict` に今の head の記録元を `{worktree, round, sha, outcome}` の一覧で残す。
-競合中はマージのレビュー条件を満たさず、予約を取り消さずに待つ。
-画面には記録元の一覧と、古い worktree の記録を消すかレビュー不要として確定する案内を表示する。
-確認できない値で、確かめられた「レビュー未実施」を隠さない(催促は未実施の PR だけを対象にするため)。
-確認できない値を道具なしより上に置くのは、確かめられない worktree の PR をレビュー不要と扱わないためである。
-不要の記録は、選んだ値に下の規則で重ねる。
-不要として確定したときも `conflict` の一覧は残す。
+`review.evaluation.conflict` に今の head の記録元を `{worktree, round, sha, outcome}` の一覧で残す。
+競合、確認不能、道具なし、不要の重ね合わせと画面の案内は、上の評価と方針の表に従う。
 登録の `cwd` と製品は、`commandCwd` があればそこから決める。
 `cockpit_add_pr` は任意の `cwd` に checkout の絶対パスを受け取り、常駐サーバーへセッションの `cwd` と分けて `prCwd` として送る。
 常駐サーバーは指定されたフォルダーを読めて、その remote が PR のリポジトリと一致するときだけ、登録の `cwd` と製品をそこから決める。
@@ -503,21 +521,24 @@ cwd の worktree の GitHub の remote のどれも PR のリポジトリと一�
 その checkout と `git worktree list` にある worktree を候補にし、それぞれの remote が PR のリポジトリと一致することを照合してから、状態ファイルを読む。
 head と base の道具の有無も、見つけた checkout で確かめる。
 兄弟のフォルダーなどのファイルシステムの走査は行わず、候補が見つからなければ「確認できない」のままにする。
-表示設定 `display.mergeableCondition` は「マージ操作が可能」「CI が成功」「現在の head のクロスレビューが収束または不要」の各条件を選ぶ。既定は最後の条件まで求める。収束は `lastTriage.round` と現在の round が一致し、`lastTriage.sha` と現在の head が一致する場合だけ有効とする。操作可否は CI とクロスレビューを含めずに判定し、選択条件を満たすかどうかでカードの緑表示、待ち条件と件数を決める。操作可だが条件が残る場合も、確認欄に警告を出して開発者が実行できる。
+表示設定 `display.mergeableCondition` は「マージ操作が可能」「CI が成功」「現在の head のクロスレビューが収束または不要」の各条件を選ぶ。
+既定は最後の条件まで求める。
+レビュー条件は上の表の `mergeConditionReview` を使い、操作可否は CI とクロスレビューを含めずに判定する。
+選択条件を満たすかどうかでカードの緑表示、待ち条件と件数を決める。
+操作可だが条件が残る場合も、確認欄に警告を出して開発者が実行できる。
 クロスレビューの保留は `cockpit_defer_review` で owner、repo、number、headRefOid、reason、next(次の作業)を必須として受け付け、`store.json` の新しいキー `crossReviewDeferrals` に保存する。
 キーが無い旧形式は空として読む。
 登録元のセッションと最新の head を照合し、head の変更と PR 登録の保持期限で無効にする。
 同じ head の不要記録と保留は、MCP と画面のどちらから記録しても後からの記録だけを残す。
-保留はマージ条件を満たさず、収束後マージの予約は取り消さずに待つ。
-保留は、選んだレビューの記録が現在の head に触れないとき(記録なし、古い head の記録だけ、確認不能、道具なし)だけ重ねる。保留の後に現在の head で始めたレビューの収束や判断待ちを隠さないためである。
+保留を重ねる条件と予約の待ちは、上の評価と方針の表に従う。
 レビューの往復と halted、waiting の判断事項は既存の状態から導き、保存する状態を増やさない。
 通信不能は観測できないため、MCP の失敗応答で完了報告に書く内容を伝える。記録の前に拒否されたとき(入力不備、登録や head の不一致、PR の取り直しの失敗、常駐サーバーに届かない)は未記録であることと理由を書くよう伝える。時間切れ、応答の喪失、常駐サーバーの例外(500)と、記録を反映した後に保存を確かめられないとき(500)は、記録できたかを確かめられなかったとして、ダッシュボードで確かめるよう伝える。
 クロスレビュー不要記録は PR の owner/repo/番号、head SHA、理由を `store.json` の `crossReviewSkips` に保存する。MCP の `cockpit_skip_review` は登録元セッションからのみ記録でき、ダッシュボードの操作は起動時の秘密値と必須 Origin を照合して記録または取り消す。どちらもサーバーが最新の PR head を取り直して照合し、別の head には適用しない。head が変われば記録を無効にし、PR 登録の保持期限に合わせて削除する。
-不要の記録がある PR でも状態ファイルを読み、今の head で収束した記録があれば、不要の記録より収束を優先する。収束後マージの予約は不要の記録だけでは実行しないので、記録の後の収束を隠さないためである。
+不要の記録がある PR でも状態ファイルを読み、上の評価と方針の表に従って収束を優先する。
 メインセッションの Stop 開始時だけ、登録先 repo の進行中の再取得を待ってからローカルのレビュー記録を読み直し、現在の head の記録が無い PR があればクロスレビューの実施、不要または保留の記録を促す。
 `stop-start` は判定を待たずに generation を返し、判定は最初の `stop-poll` または `stop-check` で待つ。`stop-start` のフックは 1 秒で打ち切るため。
 待機と読み直しの合計上限は 3 秒とし、失敗や時間切れでは催促せず Stop を続ける。`stop-check` のフックは、この上限に 2 秒を足した時間まで応答を待つ。Claude の `stop-poll` のフックは、この上限と long-poll の上限を足した時間まで待つ。
-登録済みの open な PR のうち、現在の head を覆う記録が無いものを対象にする。`classifyReviewAtHead` が stale 以外になるレビュー、現在の head の不要記録または保留記録があれば対象にしない。`crossReview === null` と古い head の記録だけがある PR は対象にし、確認不能、道具なしの不要、競合は対象にしない。開発者の回答を待つ判断事項（waiting）があるセッションには催促しない。推奨を仮に適用した判断事項（provisional）は自走中に残り続けるので、抑止の条件にしない。
+催促するレビュー状態は上の表の `reviewReminderNeeded` に従う。開発者の回答を待つ判断事項（waiting）があるセッションには催促しない。推奨を仮に適用した判断事項（provisional）は自走中に残り続けるので、抑止の条件にしない。
 セッション内で開始した Codex クロスレビューまたは `review-claude` が実行中で、開始から 60 分以内なら催促を見送る。異常終了などで実行中の状態が残っても、開始から 60 分を過ぎれば催促する。
 催促は Stop の generation に紐づけて返す。通常の通知キューには入れず、待機中の再取得完了やポーリングでは再判定しない。
 ACK は配信済みとして数えるだけで、記録を完了したことにはしない。
@@ -538,7 +559,7 @@ MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り
 compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
 判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
 ダッシュボードから即時マージする口は、秘密値と必須 Origin を照合し、登録済みスタックの一番下と現在の head をサーバーで確かめる。`gh pr merge` には画面で確認した `--match-head-commit` を渡す。PR 行の予約チェックからは画面で見た head、方式、ブランチ削除の有無を予約口に送り、条件がそろっていればクロスレビューの最後の `converged` 記録の SHA を `--match-head-commit` に渡してその場でマージする。確認欄は予約状態にかかわらず即時マージ専用とする。
-道具が無い PR(`crossReview` が `{notRequired: true, source: 'tool-absent'}`)には、予約が無ければ予約のチェックを出さない。予約は収束記録が無いと実行しないためである。予約が残っていれば、取り消せるように出す。
+予約チェックの表示は上の評価と方針の表に従う。
 子 PR の base は head ブランチを削除する場合(自動削除を含む)だけ付け替え、残す場合と fork では付け替えない。
 子の base を変える外部操作より先に、子と親の PR 番号および変更前後の base を `completed: false` で `store.json` に保存し、保存完了後に `gh pr edit` を呼ぶ。edit が成功した後に `completed: true` を保存する。保存に失敗した場合は edit せずマージを失敗させる。`completed: false` の記録は親への依存として残すが、表示する base と `retargetedFrom` には使わない。`completed` が無い旧形式の記録は完了済みとして扱う。retarget 記録を持つ子は、完了状態にかかわらず、親 PR が取得済みのマージ候補で `MERGED` と確認されるまで、即時・予約の両方でマージしない。マージできない理由には「親 PR #N のマージ確認待ち」を出す。親が open 一覧に無いだけ、未マージで closed、または取得失敗だけでは待ちを解除しない。親が未マージで closed の場合は再オープンしてマージする。確認後は現在の head、レビュー、CI、積み直し条件を再評価する。
 `mergedHead` のない旧マージ済み記録は refresh ごとに最大 5 件を `gh pr view` で補完し、通知を再発火させず、失敗を画面へ出さずに同じプロセス内で 1 回まで再試行する。
@@ -568,8 +589,10 @@ compare の失敗や 250 件超で全件を確認できない場合はマージ�
 いずれも `uiSecret` と `validRequiredUiOrigin` を照合し、PR の記録キーから owner/repo を解決する。
 即時マージは画面の SHA、許可方式、スタック最下段、現在のマージ操作条件を gh で取り直して確かめる。予約は方式とブランチ削除の有無を保存し、GitHub の自動マージ予約 API は呼ばない。同じリポジトリの即時マージと予約は到着順に待ち、リポジトリ、PR の順にロックを取り、一件ずつ実行する。予約確認もリポジトリ、PR の順にロックを取る。予約確認自身の処理中に再入した確認は重複実行せず、手動操作がリポジトリロックを保持または待機している場合は確認を保留し、手動操作の待機列が空いた後に再評価する。予約中でも即時マージを拒まない。成功後はマージ検出処理が予約を消し、失敗した場合は予約を残す。
 `/reserve` は保存直後にも同じ PR の予約条件を確認する。条件がそろっていれば、クロスレビュー収束記録の SHA を `--match-head-commit` に指定してその場でマージし、即時マージと同じ結果(`merged`、`branchDeleted`、`queued`、`warning`)を応答する。条件がそろっていなければ `reserved: true` と予約を応答する。
-リポジトリの状態を取り直すたびに予約を確認する。最後のクロスレビュー記録が現在の round の `converged` で SHA が現在の head と一致し、スタック最下段、ドラフトでない、コンフリクトなし、CI 成功を満たし、レビュー承認が必須のリポジトリでは GitHub レビューが承認済みの場合、通常のマージ手順でその収束 SHA を `--match-head-commit` に指定する。`review.notRequired` だけでは予約によるマージを実行しない。head が収束 SHA と違う場合は予約を維持し、新しい head の収束を待つ。サーバー停止中に条件がそろった場合は起動後最初の PR 状態取得で処理する。
-画面からの予約取消、PR のクローズ、今の往復のクロスレビューの結論が `halted`(`lastTriage.round` が現在の round と等しい)のときはローカル予約を消し、画面と作成元セッションへ知らせる。`halted` の後に次の往復が始まっていれば、結論待ちとして予約を残す。
+リポジトリの状態を取り直すたびに予約を確認する。
+レビューの wait、cancel、merge と外側の条件の順序は「PR の表示」の評価と方針の表に従う。
+サーバー停止中に条件がそろった場合は起動後最初の PR 状態取得で処理する。
+画面からの予約取消と PR のクローズでもローカル予約を消し、画面と作成元セッションへ知らせる。
 予約取消の知らせは記録時刻から 1 分で画面から隠し、常駐サーバーは期限を過ぎた知らせを配らない。
 旧形式の GitHub 自動マージ予約は読み込み時に捨て、GitHub 側の取消 API は呼ばない。
 マージ履歴、予約、リポジトリごとの前回方式は `store.json` に保存し、マージ履歴は 24 時間で消す。予約取消の通知はメモリーに持ち、該当 PR グループの `reservationNotices` で画面へ配る。

@@ -16,6 +16,7 @@ const {
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { findWorktreeRoot } = require('./git-worktree');
 const { DISPLAY_SCHEMA } = require('./display-preferences');
+const { evaluateReview, reviewPresentation, reviewReminderNeeded } = require('../shared/review-evaluation');
 
 const GH_TIMEOUT_MS = 20_000;
 const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
@@ -1027,18 +1028,6 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   return selectCrossReview(candidates, pullRequest.headRefOid);
 }
 
-/** 今の head に対する往復の結論を分類する。 */
-function classifyReviewAtHead(review, headSha) {
-  if (!isCompleteCommitSha(headSha)) return 'stale';
-  const head = headSha.toLowerCase();
-  const triage = review?.triage;
-  if (triage?.round === review?.round) {
-    return triage?.sha?.toLowerCase() === head && ['converged', 'halted', 'fixing'].includes(triage.outcome)
-      ? triage.outcome : 'stale';
-  }
-  return review?.reviewedSha?.toLowerCase() === head ? 'in-progress' : 'stale';
-}
-
 function selectCrossReview(candidates, headSha) {
   const pathKey = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
   const comparePath = (left, right) => left < right ? -1 : left > right ? 1 : 0;
@@ -1051,7 +1040,7 @@ function selectCrossReview(candidates, headSha) {
     if (!current || priority(candidate.review) > priority(current.review)) unique.set(key, candidate);
   }
   const entries = [...unique.values()].map(candidate => ({
-    ...candidate, outcome: classifyReviewAtHead(candidate.review, headSha),
+    ...candidate, outcome: evaluateReview({ record: candidate.review, headSha }).atHead,
   }));
   const converged = entries.filter(entry => entry.outcome === 'converged');
   const conflicting = converged.length > 0 && entries.some(entry =>
@@ -1075,40 +1064,13 @@ function selectCrossReview(candidates, headSha) {
   return { ...selected, conflict };
 }
 
-function crossReviewConvergedAtHead(pullRequest) {
-  if (pullRequest.crossReview?.deferred === true) return false;
-  if (pullRequest.crossReview?.notRequired === true) return true;
-  const review = pullRequest.crossReview;
-  return !review?.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'converged';
-}
-
-function crossReviewWaitReason(review, headSha) {
-  if (review?.deferred === true) return 'レビュー保留';
-  if (review?.notRequired === true) return null;
-  if (review?.conflict?.length) return 'クロスレビューの記録が食い違う';
-  if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
-  if (!review) return 'クロスレビュー未実施';
-
-  const triage = review.triage;
-  if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
-  if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
-  if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
-  if (triage?.outcome === 'converged') {
-    if (isCompleteCommitSha(headSha) && isCompleteCommitSha(triage.sha) && triage.sha.toLowerCase() !== headSha.toLowerCase()) {
-      return 'クロスレビュー後に push あり';
-    }
-    if (crossReviewConvergedAtHead({ crossReview: review, headRefOid: headSha })) return null;
-  }
-  return review.round > 0 ? 'クロスレビュー対応中' : 'クロスレビュー未実施';
-}
-
 function mergeConditionWaits(pullRequest, condition) {
   const waiting = [];
   if (condition !== 'operation' && pullRequest.ci !== 'pass') {
     waiting.push(pullRequest.ci === 'fail' ? 'CI が失敗' : pullRequest.ci === 'pending' ? 'CI 実行中' : 'CI 状態不明');
   }
-  if (condition === 'cross-review' && !crossReviewConvergedAtHead(pullRequest)) {
-    waiting.push(crossReviewWaitReason(pullRequest.crossReview, pullRequest.headRefOid));
+  if (condition === 'cross-review' && !pullRequest.review.mergeCondition.met) {
+    waiting.push(pullRequest.review.mergeCondition.waitReason);
   }
   return waiting;
 }
@@ -1273,7 +1235,7 @@ class PullRequestTracker {
     this.now = options.now || Date.now;
     this.repositories = new Map();
     this.productViews = new Map();
-    this.crossReviewByRepository = new Map();
+    this.reviewByRepository = new Map();
     this.reviewGroupRefreshes = new Map();
     this.headToolResults = new Map();
     this.inFlight = new Map();
@@ -1387,7 +1349,7 @@ class PullRequestTracker {
       await this.refreshRepo(owner, repo);
     } else {
       this.repositories.delete(key);
-      this.crossReviewByRepository.delete(key);
+      this.reviewByRepository.delete(key);
       this.initialFetchCompleted.delete(key);
       this.pruneUnregisteredRepositoryRecords(new Set(
         [...this.state.readOnlyPullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
@@ -1515,8 +1477,10 @@ class PullRequestTracker {
       return null;
     };
     const pullRequest = find(assembled.trees);
-    if (pullRequest && this.crossReviewByRepository.get(key)?.has(pullRequest.number)) {
-      pullRequest.crossReview = this.crossReviewByRepository.get(key).get(pullRequest.number);
+    if (pullRequest) {
+      pullRequest.githubReview = pullRequest.review;
+      pullRequest.review = this.reviewByRepository.get(key)?.get(pullRequest.number)
+        || reviewPresentation(evaluateReview({ headSha: pullRequest.headRefOid }));
     }
     return {
       registration,
@@ -1952,9 +1916,8 @@ class PullRequestTracker {
     for (const { owner, repo, number } of registrations) {
       const key = repoKey(owner, repo);
       const pullRequest = this.repositories.get(key)?.openPullRequests.find((pr) => pr.number === number);
-      const review = this.crossReviewByRepository.get(key)?.get(number);
-      if (pullRequest?.headRefOid && (review === null || (review && !review.unavailable && !review.notRequired &&
-        !review.deferred && !review.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'stale'))) {
+      const review = this.reviewByRepository.get(key)?.get(number);
+      if (review && reviewReminderNeeded(review.evaluation)) {
         targets.set(`${key}#${number}`, { owner, repo, number, headRefOid: pullRequest.headRefOid });
       }
     }
@@ -1999,8 +1962,8 @@ class PullRequestTracker {
     const remoteRepositoryCache = new Map();
     const headToolCache = { known: this.headToolResults, unknown: new Set() };
     const baseAncestorCache = new Map();
-    // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
-    const crossReviewByNumber = new Map();
+    // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR は未登録と評価する。
+    const reviewByNumber = new Map();
     const candidatesByNumber = new Map();
     this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);
     for (const registration of registrations) {
@@ -2026,36 +1989,11 @@ class PullRequestTracker {
     for (const [number, candidates] of candidatesByNumber) {
       const pullRequest = repositoryState.openPullRequests.find(candidate => candidate.number === number);
       const review = selectCrossReview(candidates, pullRequest.headRefOid);
-      crossReviewByNumber.set(number, review && (review.notRequired
-        ? { notRequired: true, source: review.source }
-        : review.unavailable
-          ? { unavailable: true }
-        : {
-          round: review.round,
-          max: review.max,
-          dismissed: review.dismissed,
-          reviewedSha: review.reviewedSha,
-          triage: review.triage,
-          ...(review.conflict ? { conflict: review.conflict } : {}),
-        }));
-    }
-    for (const [number, review] of crossReviewByNumber) {
-      const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === number);
-      const deferral = this.state.crossReviewDeferral?.(owner, repo, number);
-      // 保留の後に今の head で始めたレビューの記録(収束、判断待ちを含む)を隠さないため、記録が今の head に触れないときだけ重ねる。
-      if (deferral?.headRefOid === pullRequest.headRefOid.toLowerCase() &&
-        !review?.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'stale') {
-        crossReviewByNumber.set(number, { deferred: true, source: 'recorded', reason: deferral.reason, next: deferral.next,
-          ...(review?.conflict ? { conflict: review.conflict } : {}),
-        });
-        continue;
-      }
-      const skip = this.state.crossReviewSkip?.(owner, repo, number);
-      if (skip?.headRefOid !== pullRequest.headRefOid.toLowerCase()) continue;
-      const converged = !review?.conflict?.length && classifyReviewAtHead(review, pullRequest.headRefOid) === 'converged';
-      if (!converged) crossReviewByNumber.set(number, { notRequired: true, source: 'recorded', reason: skip.reason,
-        ...(review?.conflict ? { conflict: review.conflict } : {}),
-      });
+      reviewByNumber.set(number, reviewPresentation(evaluateReview({ record: review,
+        headSha: pullRequest.headRefOid,
+        skip: this.state.crossReviewSkip?.(owner, repo, number),
+        deferral: this.state.crossReviewDeferral?.(owner, repo, number),
+      })));
     }
     for (const [productKey, group] of productGroups) {
       const assembled = assemblePullRequestStacks({
@@ -2070,9 +2008,9 @@ class PullRequestTracker {
         liveMergedBranches: repositoryState.liveMergedBranches,
       });
       const condition = this.state.getDisplayPreferences?.().mergeableCondition || 'cross-review';
-      const trees = assembled.trees.map((tree) => applyMergeCondition(attachCrossReviewState(
+      const trees = assembled.trees.map((tree) => applyMergeCondition(attachReviewState(
         attachMergeState(tree, group.registrations, owner, repo, this.state),
-        crossReviewByNumber,
+        reviewByNumber,
       ), condition));
       const identity = `${productKey}\0${key}`;
       createdIdentities.add(identity);
@@ -2101,7 +2039,7 @@ class PullRequestTracker {
         lastMethod: this.state.lastPullRequestMethod(owner, repo),
       });
     }
-    this.crossReviewByRepository.set(key, crossReviewByNumber);
+    this.reviewByRepository.set(key, reviewByNumber);
     removeStaleProductViews(this.productViews, key, createdIdentities);
     this.state.touch();
   }
@@ -2188,13 +2126,14 @@ function attachMergeState(pullRequest, registrations, owner, repo, state) {
   };
 }
 
-function attachCrossReviewState(pullRequest, crossReviewByNumber) {
+function attachReviewState(pullRequest, reviewByNumber) {
   const value = {
     ...pullRequest,
-    children: pullRequest.children.map((child) => attachCrossReviewState(child, crossReviewByNumber)),
+    children: pullRequest.children.map((child) => attachReviewState(child, reviewByNumber)),
   };
-  const crossReview = crossReviewByNumber.get(pullRequest.number);
-  if (crossReview !== undefined) value.crossReview = crossReview;
+  value.githubReview = value.review;
+  value.review = reviewByNumber.get(pullRequest.number)
+    || reviewPresentation(evaluateReview({ headSha: pullRequest.headRefOid }));
   return value;
 }
 
@@ -2227,8 +2166,5 @@ module.exports = {
   matchingRepositoryCheckout,
   listWorktrees,
   gitRemotes,
-  classifyReviewAtHead,
-  crossReviewConvergedAtHead,
-  crossReviewWaitReason,
   runGh,
 };

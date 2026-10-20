@@ -665,6 +665,145 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   <div class="excluded-note" id="idle-note" role="status" aria-live="polite" hidden></div>
 </main>
 
+<!-- review-evaluation:begin -->
+<script>
+'use strict';
+
+function completeReviewSha(value) {
+  return typeof value === 'string' && /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(value);
+}
+
+function classifyReviewAtHead(review, headSha) {
+  if (!completeReviewSha(headSha)) return 'stale';
+  const head = headSha.toLowerCase();
+  const triage = review?.triage;
+  if (triage?.round === review?.round) {
+    return triage?.sha?.toLowerCase() === head && ['converged', 'halted', 'fixing'].includes(triage.outcome)
+      ? triage.outcome : 'stale';
+  }
+  return review?.reviewedSha?.toLowerCase() === head ? 'in-progress' : 'stale';
+}
+
+/** PR の記録と現在の head に対する判断を評価する。 */
+function evaluateReview({ record, skip = null, deferral = null, headSha }) {
+  const headKnown = completeReviewSha(headSha);
+  const head = headSha?.toLowerCase();
+  const kind = record === undefined ? 'unregistered' : record === null ? 'none'
+    : record.unavailable ? 'unavailable' : record.notRequired ? 'tool-absent' : 'recorded';
+  const atHead = classifyReviewAtHead(record, headSha);
+  const triage = record?.triage;
+  const currentRound = triage && triage.round === record.round;
+  const latest = { round: record?.round, outcome: currentRound ? triage.outcome : null,
+    sha: (currentRound ? triage.sha : record?.reviewedSha)?.toLowerCase() };
+  const conflict = record?.conflict || [];
+  let decision = { kind: kind === 'tool-absent' ? 'not-required' : 'none',
+    source: kind === 'tool-absent' ? 'tool-absent' : null, reason: null, next: null };
+  if (deferral && deferral.headRefOid?.toLowerCase() === head && !conflict.length && atHead === 'stale') {
+    decision = { kind: 'deferred', source: 'recorded', reason: deferral.reason, next: deferral.next };
+  } else if (skip && skip.headRefOid?.toLowerCase() === head && atHead !== 'converged') {
+    decision = { kind: 'not-required', source: 'recorded', reason: skip.reason, next: null };
+  }
+  return { headKnown, headSha: head, record: kind, atHead, latest,
+    covered: headKnown ? atHead !== 'stale' || decision.kind !== 'none' : 'unknown',
+    pushedAfterConvergence: latest.outcome === 'converged' && completeReviewSha(latest.sha) && headKnown && latest.sha !== head,
+    conflict, decision, rounds: kind === 'recorded' ? { round: record.round, max: record.max, dismissed: record.dismissed } : null,
+    reviewedSha: record?.reviewedSha?.toLowerCase(), awaitingConclusion: Boolean(triage && triage.round < record.round) };
+}
+
+/** マージ条件のレビュー部分を返す。 */
+function mergeConditionReview(e) {
+  let waitReason = null;
+  if (e.decision.kind === 'deferred') waitReason = 'レビュー保留';
+  else if (e.decision.kind === 'not-required') return { met: true, waitReason };
+  else if (e.conflict.length) waitReason = 'クロスレビューの記録が食い違う';
+  else if (e.record === 'unavailable') waitReason = 'クロスレビューの状態を確認できない';
+  else if (e.atHead === 'converged') return { met: true, waitReason };
+  else if (e.latest.outcome === 'halted') waitReason = 'クロスレビューが開発者の判断待ち';
+  else if (e.pushedAfterConvergence) waitReason = 'クロスレビュー後に push あり';
+  else waitReason = e.rounds?.round > 0 ? 'クロスレビュー対応中' : 'クロスレビュー未実施';
+  return { met: false, waitReason };
+}
+
+/** Stop でレビューの記録を促す必要があるかを返す。 */
+function reviewReminderNeeded(e) {
+  return e.headKnown && e.decision.kind === 'none' && !e.conflict.length
+    && (e.record === 'none' || e.record === 'recorded' && e.atHead === 'stale');
+}
+
+/** 予約マージのレビュー条件を返す。 */
+function reservationReview(e) {
+  const wait = condition => ({ action: 'wait', condition, matchSha: null });
+  if (e.decision.kind === 'deferred') return wait('review-deferred');
+  if (e.conflict.length) return wait('review-conflict');
+  if (e.decision.kind === 'not-required') return wait('review-required');
+  if (e.latest.outcome === 'halted') return { action: 'cancel', condition: 'review-halted', matchSha: null };
+  if (e.latest.outcome !== 'converged') return wait('review-not-converged');
+  if (e.atHead !== 'converged') return wait('review-head-mismatch');
+  if (!completeReviewSha(e.latest.sha)) return wait('review-head-missing');
+  return { action: 'merge', condition: 'ready', matchSha: e.latest.sha };
+}
+
+/** 予約のレビュー待ち表示とチェックの有無を返す。 */
+function reservationReviewDisplay(e) {
+  let waitReason = null;
+  if (e.decision.kind === 'deferred') waitReason = 'レビュー保留';
+  else if (e.conflict.length) waitReason = 'クロスレビューの記録が食い違う';
+  else if (e.decision.kind === 'not-required' || e.atHead !== 'converged') {
+    waitReason = e.pushedAfterConvergence ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち';
+  }
+  return { waitReason, showCheckbox: e.decision.source !== 'tool-absent' };
+}
+
+function reviewBadge(e) {
+  const state = (cls, text, warn = null) => ({ cls, text, warn });
+  if (e.decision.kind === 'deferred') return state('warn', 'レビュー保留', 'レビュー保留');
+  if (e.decision.kind === 'not-required') return state('mute', 'レビュー不要');
+  if (e.record === 'unregistered') return state('mute', '');
+  if (e.conflict.length) return state('warn', '記録が食い違う', 'クロスレビューの記録が食い違う');
+  if (e.record === 'unavailable') return state('warn', '状態を確認できない', 'クロスレビューの状態を確認できない');
+  if (!e.headKnown) return state('mute', 'head を確かめられない', 'head を確かめられない');
+  if (e.record === 'none') return state('warn', 'レビュー未実施', 'クロスレビューの記録が無い');
+  if (e.awaitingConclusion) return state('warn', `${e.rounds.round} 往復目の結論待ち`, `クロスレビューの ${e.rounds.round} 往復目の結論がまだ出ていない`);
+  if (e.latest.outcome === 'fixing') return state('warn', '指摘の対応中', `クロスレビューの ${e.latest.round} 往復目の指摘に対応している途中`);
+  if (e.latest.outcome === 'halted') return state('warn', '開発者の判断待ち', 'クロスレビューは開発者の判断を待って止まっている');
+  if (e.atHead === 'converged') return state('ok', 'レビュー済み');
+  if (e.pushedAfterConvergence) return state('warn', `収束の後に変更あり (収束 ${e.latest.sha.slice(0, 7)})`,
+    `head ${e.headSha.slice(0, 7)} はクロスレビューの収束の後に変更されている (収束は ${e.latest.sha.slice(0, 7)})`);
+  if (!completeReviewSha(e.reviewedSha)) return state('mute', 'head を確かめられない', 'head を確かめられない');
+  if (e.reviewedSha !== e.headSha) return state('warn', `レビューの後に変更あり (レビュー済み ${e.reviewedSha.slice(0, 7)})`,
+    `head ${e.headSha.slice(0, 7)} はクロスレビューの後に変更されている (レビュー済みは ${e.reviewedSha.slice(0, 7)})`);
+  return state('mute', 'この head をレビューに回した');
+}
+
+/** 画面で描画する札とレビュー行の材料を返す。 */
+function reviewDisplay(e) {
+  const badge = reviewBadge(e);
+  const missing = e.decision.kind === 'none' && (e.record === 'none' || e.record === 'recorded' && e.covered === false && !e.conflict.length);
+  const notRequired = e.decision.kind === 'not-required';
+  const deferred = e.decision.kind === 'deferred';
+  const labels = { halted: '開発者の判断待ち', fixing: '指摘の対応中', 'in-progress': '結論待ち', converged: '収束' };
+  return { ...badge, visible: e.record !== 'unregistered' || e.decision.kind !== 'none',
+    missingText: missing ? '現在の head の記録がありません。クロスレビューを実施するか、レビュー不要にする操作で記録してください。' : null,
+    rounds: notRequired || deferred ? null : e.rounds,
+    roundsText: e.rounds ? `${e.rounds.round} / ${e.rounds.max} 往復、非対応 ${e.rounds.dismissed}` : null,
+    reason: e.decision.reason, deferred,
+    reasonText: deferred ? `理由: ${e.decision.reason}` : null, nextText: deferred ? `次の作業: ${e.decision.next}` : null,
+    skipControl: notRequired ? (e.decision.source === 'recorded' ? 'clear' : null) : missing || badge.cls === 'warn' ? 'set' : null,
+    conflict: e.conflict.map(record => ({ worktree: record.worktree, roundText: `${record.round} 往復目`, sha: record.sha, label: labels[record.outcome] || record.outcome })),
+    conflictText: notRequired ? 'レビュー不要として確定済みです。記録元の食い違いは残っています。'
+      : '古い worktree の記録を消すか、レビュー不要として確定してください' };
+}
+
+/** 配信用のレビュー評価と方針を組み立てる。 */
+function reviewPresentation(evaluation) {
+  return { evaluation, mergeCondition: mergeConditionReview(evaluation), display: reviewDisplay(evaluation),
+    reservation: reservationReviewDisplay(evaluation) };
+}
+
+if (typeof module !== 'undefined') module.exports = { evaluateReview, mergeConditionReview, reviewReminderNeeded,
+  reservationReview, reviewDisplay, reservationReviewDisplay, reviewPresentation };
+</script>
+<!-- review-evaluation:end -->
 <script>
 const DATA = {
   update: null,
@@ -2314,84 +2453,43 @@ function decisionCard(p, session, d, withTag) {
     ${summary ? `<div class="decision-summary">${summary}</div>` : ''}</article>`;
 }
 
-const CROSS_REVIEW_MAX_ROUNDS = 3;
-// モックの例示用 SHA は短縮形なので、完全 SHA の形式検証を行わない。
-function convergedAtHead(pr) {
-  const review = pr.xr;
-  const triage = review?.triage;
-  return !review?.conflict?.length && Number.isSafeInteger(review?.round) && triage?.round === review.round &&
-    triage.outcome === 'converged' && triage.sha === pr.sha;
+function expandMockReviewSha(value) {
+  if (typeof value === 'string') return /^[0-9a-f]{7}$/i.test(value) ? value.padEnd(40, '0') : value;
+  if (Array.isArray(value)) return value.map(expandMockReviewSha);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, expandMockReviewSha(item)]));
+  return value;
 }
 
-function pushedAfterConvergence(pr) {
-  const triage = pr.xr?.triage;
-  return !pr.xr?.conflict?.length && triage?.outcome === 'converged' && triage.sha !== pr.sha;
+function mockReview(p, pr) {
+  const skip = ui.reviewSkips[prKey(p, pr.number)];
+  const record = expandMockReviewSha(pr.xr);
+  const headSha = expandMockReviewSha(pr.sha);
+  return reviewPresentation(evaluateReview({ record: record?.deferred ? null : record && { max: 3, ...record }, headSha,
+    skip: skip ? { headRefOid: expandMockReviewSha(skip.sha), reason: skip.reason } : null,
+    deferral: record?.deferred ? { headRefOid: headSha, reason: record.reason, next: record.next } : null }));
 }
 
-// 未収束の往復状態を優先し、収束済みなら収束 SHA、それ以外の比較可能な記録なら reviewed SHA を現在の head と比べる。
-function crossReviewState(pr) {
-  if (pr.xr === undefined) return { cls: 'mute', text: '', warn: null };
-  if (pr.xr?.deferred === true) return { cls: 'warn', text: 'レビュー保留', warn: 'レビュー保留' };
-  if (pr.xr?.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null };
-  if (!pr.xr) return { cls: 'warn', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
-  if (pr.xr.conflict?.length) return { cls: 'warn', text: '記録が食い違う', warn: 'クロスレビューの記録が食い違う' };
-  if (pr.xr.unavailable === true) return { cls: 'warn', text: '状態を確認できない', warn: 'クロスレビューの状態を確認できない' };
-  const t = pr.xr.triage && pr.xr.triage.round <= pr.xr.round ? pr.xr.triage : null;
-  if (t && pr.xr.round > t.round) return { cls: 'warn', text: `${pr.xr.round} 往復目の結論待ち`, warn: `クロスレビューの ${pr.xr.round} 往復目の結論がまだ出ていない` };
-  if (t && t.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${t.round} 往復目の指摘に対応している途中` };
-  if (t && t.outcome === 'halted') return { cls: 'warn', text: '開発者の判断待ち', warn: 'クロスレビューは開発者の判断を待って止まっている' };
-  if (t && t.outcome === 'converged') {
-    if (convergedAtHead(pr)) return { cls: 'ok', text: 'レビュー済み', warn: null };
-    if (pushedAfterConvergence(pr)) {
-      return { cls: 'warn', text: `収束の後に変更あり (収束 ${t.sha})`, warn: `head ${pr.sha} はクロスレビューの収束の後に変更されている (収束は ${t.sha})` };
-    }
-  }
-  if (pr.xr.reviewedSha !== pr.sha) return { cls: 'warn', text: `レビューの後に変更あり (レビュー済み ${pr.xr.reviewedSha})`, warn: `head ${pr.sha} はクロスレビューの後に変更されている (レビュー済みは ${pr.xr.reviewedSha})` };
-  return { cls: 'mute', text: 'この head をレビューに回した', warn: null };
+function crossReviewState(pr, p) {
+  return mockReview(p, pr).display;
 }
 
 function crossReviewConflictDetails(p, pr) {
-  if (!pr.xr?.conflict?.length) return '';
-  const labels = { halted: '開発者の判断待ち', fixing: '指摘の対応中', 'in-progress': '結論待ち', converged: '収束' };
-  const skipped = pr.xr.notRequired === true || ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha;
-  const sources = pr.xr.conflict.map(record => `<li><code>${esc(record.worktree)}</code> / ${esc(record.round)} 往復目 / <code>${esc(record.sha.slice(0, 7))}</code> / ${esc(labels[record.outcome] || record.outcome)}</li>`).join('');
-  return `<div class="xr-conflict"><ul>${sources}</ul><p>${skipped
-    ? 'レビュー不要として確定済みです。記録元の食い違いは残っています。'
-    : '古い worktree の記録を消すか、レビュー不要として確定してください'}</p></div>`;
+  const display = mockReview(p, pr).display;
+  if (!display.conflict.length) return '';
+  const sources = display.conflict.map(record => `<li><code>${esc(record.worktree)}</code> / ${esc(record.roundText)} / <code>${esc(record.sha.slice(0, 7))}</code> / ${esc(record.label)}</li>`).join('');
+  return `<div class="xr-conflict"><ul>${sources}</ul><p>${esc(display.conflictText)}</p></div>`;
 }
 
 function crossReviewLine(p, pr) {
-  if (pr.xr === undefined) return '';
+  const display = mockReview(p, pr).display;
+  if (!display.visible) return '';
   const key = prKey(p, pr.number);
-  const skip = ui.reviewSkips[key];
-  // 不要の記録より、今の head で収束した記録を優先する。
-  if (skip?.sha === pr.sha && !convergedAtHead(pr)) {
-    return `<div class="xr">クロスレビュー <span class="badge mute" title="${esc(skip.reason)}">レビュー不要</span>
-      <button type="button" class="link-btn" data-review-skip="clear" data-review-key="${esc(key)}">レビュー不要を取り消す</button></div>`;
-  }
-  const state = crossReviewState(pr);
-  if (pr.xr?.deferred === true) return `<div class="xr">クロスレビュー <span class="badge warn">レビュー保留</span>
-    <span>理由: ${esc(pr.xr.reason)}</span><span>次の作業: ${esc(pr.xr.next)}</span>
-    <button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button></div>`;
-  const triage = pr.xr?.triage;
-  const coveredSha = triage?.round === pr.xr?.round
-    ? (['converged', 'halted', 'fixing'].includes(triage?.outcome) ? triage.sha : null) : pr.xr?.reviewedSha;
-  const missing = pr.xr === null || (pr.xr && !pr.xr.notRequired && !pr.xr.unavailable && !pr.xr.conflict?.length &&
-    coveredSha?.toLowerCase() !== pr.sha?.toLowerCase());
-  const nextAction = missing ? '<span>現在の head の記録がありません。クロスレビューを実施するか、レビュー不要にする操作で記録してください。</span>' : '';
-  if (pr.xr?.notRequired === true) {
-    const reason = pr.xr.reason ? ` title="${esc(pr.xr.reason)}"` : '';
-    const action = pr.xr.source === 'recorded'
-      ? `<button type="button" class="link-btn" data-review-skip="clear" data-review-key="${esc(key)}">レビュー不要を取り消す</button>` : '';
-    return `<div class="xr">クロスレビュー <span class="badge mute"${reason}>レビュー不要</span>${action}</div>`;
-  }
-  if (!pr.xr || pr.xr.unavailable === true) return `<div class="xr">クロスレビュー ${nextAction}<span class="badge ${state.cls}">${state.text}</span>
-    <button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button></div>`;
-  const rounds = Array.from({ length: CROSS_REVIEW_MAX_ROUNDS }, (_, i) => `<span class="${i < pr.xr.round ? 'used' : ''}"></span>`).join('');
-  const skipAction = missing || state.cls === 'warn'
-    ? `<button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button>` : '';
-  return `<div class="xr">クロスレビュー ${nextAction}<span class="rounds" aria-hidden="true">${rounds}</span>
-    <span>${pr.xr.round} / ${CROSS_REVIEW_MAX_ROUNDS} 往復、非対応 ${pr.xr.dismissed}</span><span class="badge ${state.cls}">${esc(state.text)}</span>${skipAction}</div>`;
+  const nextAction = display.missingText ? `<span>${esc(display.missingText)}</span>` : '';
+  const rounds = display.rounds ? `<span class="rounds" aria-hidden="true">${Array.from({ length: display.rounds.max }, (_, i) => `<span class="${i < display.rounds.round ? 'used' : ''}"></span>`).join('')}</span><span>${esc(display.roundsText)}</span>` : '';
+  const reason = display.reason && !display.deferred ? ` title="${esc(display.reason)}"` : '';
+  const deferred = display.deferred ? `<span>${esc(display.reasonText)}</span><span>${esc(display.nextText)}</span>` : '';
+  const action = display.skipControl ? `<button type="button" class="link-btn" data-review-skip="${display.skipControl}" data-review-key="${esc(key)}">${display.skipControl === 'clear' ? 'レビュー不要を取り消す' : 'レビュー不要にする'}</button>` : '';
+  return `<div class="xr">クロスレビュー ${nextAction}${rounds}<span class="badge ${display.cls}"${reason}>${esc(display.text)}</span>${deferred}${action}</div>`;
 }
 
 
@@ -2492,32 +2590,17 @@ function mergeBlocker(p, pr) {
 }
 
 function crossReviewSettled(p, pr) {
-  if (pr.xr?.notRequired === true || ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha) return true;
-  return convergedAtHead(pr);
+  return mockReview(p, pr).mergeCondition.met;
 }
 
 function crossReviewWaitReason(p, pr) {
-  const review = pr.xr;
-  if (review?.deferred === true) return 'レビュー保留';
-  if (review?.notRequired === true || ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha) return null;
-  if (review?.conflict?.length) return 'クロスレビューの記録が食い違う';
-  if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
-  if (!review) return 'クロスレビュー未実施';
-
-  const triage = review.triage;
-  if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
-  if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
-  if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
-  if (pushedAfterConvergence(pr)) return 'クロスレビュー後に push あり';
-  return review.round > 0 ? 'クロスレビュー対応中' : 'クロスレビュー未実施';
+  return mockReview(p, pr).mergeCondition.waitReason;
 }
 
 function reservationWaitReasons(p, pr, method = null) {
   const waiting = [];
-  if (pr.xr?.deferred === true) waiting.push('レビュー保留');
-  else if (pr.xr?.conflict?.length) waiting.push('クロスレビューの記録が食い違う');
-  else if (pr.xr?.notRequired === true || !convergedAtHead(pr)) waiting.push(pushedAfterConvergence(pr)
-    ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
+  const reason = mockReview(p, pr).reservation.waitReason;
+  if (reason) waiting.push(reason);
   if (pr.ci !== 'pass') waiting.push((CI_LABELS[pr.ci] || CI_LABELS.unknown).wait);
   const blocker = mergeOperationBlocker(p, pr);
   if (!['approved', 'none'].includes(pr.review) && !['レビューの承認待ち', '変更を求められている'].includes(blocker)) waiting.push('GitHub のレビュー承認待ち');
@@ -2667,7 +2750,7 @@ function mergeConfirm(p, pr) {
   const kids = childPrs(p, pr);
   const kidNames = kids.map(k => `#${k.number}`).join('、');
   const branchDeleted = !pr.isCrossRepository && (p.repo.autoDeleteBranch || o.del);
-  const reviewWarning = crossReviewState(pr).warn;
+  const reviewWarning = crossReviewState(pr, p).warn;
   const effects = [
     reviewWarning ? `<span>${esc(reviewWarning)}</span>` : '',
     branchUpdateWonRace ? '<span>モック: 削除前に head が更新されたためブランチを残す</span>' : '',
@@ -2758,7 +2841,7 @@ function prItem(p, pr, showOriginBands = true) {
   const waiting = operationBlocker ? [] : mergeConditionWaits(p, pr);
   const conditionMet = !operationBlocker && waiting.length === 0;
   // クロスレビューの行が黄の札で同じ待ちを示すときは、待ちの行から外して二重に出さない。
-  const shownWaits = crossReviewState(pr).cls === 'warn' ? waiting.filter((reason) => reason !== crossReviewWaitReason(p, pr)) : waiting;
+  const shownWaits = crossReviewState(pr, p).cls === 'warn' ? waiting.filter((reason) => reason !== crossReviewWaitReason(p, pr)) : waiting;
   const queued = Boolean(pr.mergeIntent);
   // 常駐サーバーが gh でマージしている間の印。確認欄から実行中の操作は確認欄の「処理中…」で示す。
   const shownInConfirmation = confirmManual && pullRequestMergeInFlight.has(k);
@@ -2771,7 +2854,7 @@ function prItem(p, pr, showOriginBands = true) {
   const classes = ['pr', rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : '', origin ? `origin-${origin}` : '']
     .filter(Boolean).join(' ');
   // 予約は収束の記録が無いと実行されないので、道具が無い PR には予約が残っているときだけ出す。
-  const reservationToggleShown = rsv || !(pr.xr?.notRequired === true && pr.xr.source === 'tool-absent');
+  const reservationToggleShown = rsv || mockReview(p, pr).reservation.showCheckbox;
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
     !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
@@ -2787,7 +2870,7 @@ function prItem(p, pr, showOriginBands = true) {
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${queued ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : mergeInProgress ? '<span class="badge accent">マージ処理中 (未マージ)</span>' : ''}${prBadges(p, pr)}</div>
     ${crossReviewLine(p, pr)}
-    ${pr.xr?.conflict?.length ? crossReviewConflictDetails(p, pr) : ''}
+    ${mockReview(p, pr).display.conflict.length ? crossReviewConflictDetails(p, pr) : ''}
     ${rsv ? `<div class="badges"><span class="badge accent long">レビュー収束後にマージ予約中 (${METHOD_LABEL[rsv.method]}、予約時 ${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))}、${esc(reservationWait(p, pr, rsv.method).join('、'))})</span>
       <button type="button" class="link-btn" data-ready-merge="${k}">モック: 待機条件を満たす</button></div>` : ''}
     ${operationBlocker && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(operationBlocker)}
@@ -3650,10 +3733,10 @@ document.addEventListener('click', e => {
     if (!pr || !['set', 'clear'].includes(t.dataset.reviewSkip)) return;
     if (t.dataset.reviewSkip === 'set') {
       ui.reviewSkips[key] = { sha: pr.sha, reason: '開発者がダッシュボードでこの head のレビューを不要と判断した' };
-      if (pr.xr?.deferred) pr.xr = null;
+      if (mockReview(p, pr).display.deferred) pr.xr = null;
     } else {
       delete ui.reviewSkips[key];
-      if (pr.xr?.notRequired && pr.xr.source === 'recorded') pr.xr = null;
+      if (mockReview(p, pr).evaluation.decision.source === 'recorded') pr.xr = null;
     }
   } else if (t.dataset.merge) {
     delete ui.mergeErrors[t.dataset.merge];
@@ -3701,9 +3784,9 @@ document.addEventListener('click', e => {
     const k = t.dataset.readyMerge;
     const [pid, n] = k.split('#');
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
-    const triage = pr.xr?.triage;
-    const round = Number.isSafeInteger(triage?.round) ? Math.max(pr.xr?.round || 1, triage.round) : Math.max(pr.xr?.round || 1, 1);
-    pr.xr = { ...(pr.xr && !pr.xr.notRequired ? pr.xr : {}), round, reviewedSha: pr.sha, dismissed: pr.xr?.dismissed || 0, triage: { round, sha: pr.sha, outcome: 'converged' } };
+    const evaluated = mockReview(p, pr).evaluation;
+    const round = Math.max(evaluated.rounds?.round || 1, 1);
+    pr.xr = { ...(evaluated.record === 'recorded' ? pr.xr : {}), round, reviewedSha: pr.sha, dismissed: pr.xr?.dismissed || 0, triage: { round, sha: pr.sha, outcome: 'converged' } };
     pr.review = 'approved';
     pr.ci = 'pass';
     finishMockMerge(p, pr, ui.reserved[k], true);

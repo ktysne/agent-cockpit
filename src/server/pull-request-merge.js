@@ -4,7 +4,8 @@ const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { isCompleteCommitSha, pullRequestKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
-const { safeRepo, crossReviewConvergedAtHead, ghFailureKind, matchingRepositoryCheckout, listWorktrees, gitRemotes } = require('./pull-requests');
+const { reservationReview } = require('../shared/review-evaluation');
+const { safeRepo, ghFailureKind, matchingRepositoryCheckout, listWorktrees, gitRemotes } = require('./pull-requests');
 
 const METHODS = new Set(['merge', 'squash', 'rebase']);
 const METHOD_LABELS = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
@@ -720,27 +721,23 @@ class PullRequestMergeManager {
         this.diagnosticReservationConditions.set(key, condition);
         this.diagnostics?.record('info', 'merge', 'merge.check', { operation: 'reservation',
           repository: safeRepo(reservation.owner, reservation.repo), number: reservation.number, condition,
-          head: pullRequest && isCompleteCommitSha(pullRequest.crossReview?.triage?.sha)
-            ? (pullRequest.headRefOid.toLowerCase() === pullRequest.crossReview.triage.sha.toLowerCase() ? 'match' : 'mismatch') : 'missing' });
+          head: pullRequest && isCompleteCommitSha(pullRequest.review?.evaluation.latest.sha)
+            ? (pullRequest.headRefOid.toLowerCase() === pullRequest.review.evaluation.latest.sha.toLowerCase() ? 'match' : 'mismatch') : 'missing' });
       }
       return null;
     };
     if (!candidate?.repository?.listAvailable || !candidate.repository.configAvailable || !pullRequest) return waiting('repository-unavailable');
-    const review = pullRequest.crossReview;
-    const triage = review?.triage;
-    if (review?.deferred === true) return waiting('review-deferred');
-    if (review?.conflict?.length) return waiting('review-conflict');
-    if (triage?.outcome === 'halted' && triage.round === review.round) {
-      waiting('review-halted');
+    const review = reservationReview(pullRequest.review.evaluation);
+    if (review.action === 'cancel') {
+      waiting(review.condition);
       return { halted: true };
     }
+    if (['review-deferred', 'review-conflict'].includes(review.condition)) return waiting(review.condition);
     if (pullRequest.mergeTarget !== (reservation.targetBranch || candidate.repository.defaultBranch)) return waiting('target-changed');
-    if (review?.notRequired === true || triage?.outcome !== 'converged' || triage.round !== review?.round ||
-      !crossReviewConvergedAtHead(pullRequest) || !isCompleteCommitSha(triage.sha) || pullRequest.ci !== 'pass' ||
-      !['approved', 'none'].includes(pullRequest.review)) return waiting(review?.notRequired === true ? 'review-required' : triage?.outcome !== 'converged' ? 'review-not-converged'
-        : triage.round !== review?.round ? 'review-round-mismatch' : !crossReviewConvergedAtHead(pullRequest) ? 'review-head-mismatch'
-        : !isCompleteCommitSha(triage.sha) ? 'review-head-missing' : pullRequest.ci !== 'pass' ? 'ci-not-pass' : 'review-unapproved');
-    const input = { headRefOid: triage.sha, method: reservation.method, deleteBranch: reservation.deleteBranch };
+    if (review.action !== 'merge') return waiting(review.condition);
+    if (pullRequest.ci !== 'pass') return waiting('ci-not-pass');
+    if (!['approved', 'none'].includes(pullRequest.githubReview)) return waiting('review-unapproved');
+    const input = { headRefOid: review.matchSha, method: reservation.method, deleteBranch: reservation.deleteBranch };
     if (mergeCandidateError(candidate, input, reservation.number)) return waiting('candidate-blocked');
     waiting('ready');
     return { input };

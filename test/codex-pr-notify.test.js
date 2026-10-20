@@ -1,3 +1,4 @@
+const { reviewPr } = require('./support/review');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -79,7 +80,7 @@ test('同じ PR の Claude と Codex の起点を木と「前回見てから」�
   tracker.productViews.set('test-product', {
     owner: 'example', repo: 'project', product, mergeMethods: [], autoDeleteBranch: false,
     checkedAt: null, fetchedAt: null, error: null, registeredCount: 2, openCount: 1,
-    mergeableCount: 0, trees: [tree], merged: [], mergeHistory: [], reservations: [], lastMethod: null,
+    mergeableCount: 0, trees: [reviewPr(tree)], merged: [], mergeHistory: [], reservations: [], lastMethod: null,
   });
 
   await c.runtime.state.flushPersistence();
