@@ -80,12 +80,17 @@ node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).ver
 対象は、Claude Code の `~/.claude/settings.json` と `claude mcp list`、Codex を使っているときの `~/.codex/hooks.json` と `~/.codex/config.toml` です。
 足りないイベントや、timeout の値の違いがあれば、差分を利用者に示して確認を取ってから直します。
 Codex の `hooks.json` を変えたときは、利用者に Codex の `/hooks` で信頼し直すよう伝えます。
+不一致の診断には、チェックアウトのルートで `node src/client/doctor.js` を実行します。
+`--json` を付けると JSON を出力し、不一致があれば終了コード `1` を返します。
+診断は MCP からの書き込みと質問への回答の往復を確かめないため、[導入手順](setup.md)の「確認」も実行してください。
+設定を直した後は、その後に開いたセッションだけが新しい内容で動きます。
 
 ## スキルのコピー
 
 [導入手順](setup.md#4-スキルを置く)と同じコマンドで、スキルをコピーし直します。
 Claude Code を使っていない環境では、Claude Code のスキルは飛ばします。
 リポジトリ外を書き換えるため、コピー先と内容を利用者に示して確認を取ります。
+スキルの写しが古いかどうかも、前の節の `node src/client/doctor.js` で確かめられます。
 
 PowerShell:
 

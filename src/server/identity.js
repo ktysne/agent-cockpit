@@ -200,4 +200,5 @@ function cockpitHomeFromOptions(options = {}) {
   return path.join(options.userHome || require('node:os').homedir(), '.agent-cockpit');
 }
 
-module.exports = { productFromCwd, codexWorktreeProduct, branchFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, codexAgentDefinitionPaths, cockpitHomeFromOptions };
+module.exports = { productFromCwd, codexWorktreeProduct, branchFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, codexAgentDefinitionPaths, cockpitHomeFromOptions,
+  gitDirectoryFromFile, repositoryRootFromGitDirectory };
