@@ -32,7 +32,7 @@ Claude のホームは `CLAUDE_CONFIG_DIR` があればその値、無ければ 
 
 agent-cockpit の checkout は、Claude のホームの `settings.json` のフック、`claude mcp list`、Codex のホームの `hooks.json` と `config.toml` に書かれた `src/` の手前のパスである。
 パスが `.claude/worktrees/` の下のものは除く。
-見つからなければ、agent-cockpit は未導入として扱い、bridge と ai-cross-review の写しの手順(手順 3 と手順 5)だけを行う。
+見つからなければ、このスキルでは扱わない。bridge と ai-cross-review は、それぞれの checkout の導入手順(bridge は `docs/setup.md` の「更新するとき」)に沿って更新するよう開発者に伝えて終える。各ツールの更新の規則を、agent-cockpit の外で書き写さないためである。
 
 checkout に `src/client/apply.js` が無いときは、古い版である。checkout の `docs/update.md` に沿って agent-cockpit を先に更新してから、このスキルを読み直す。
 
@@ -125,12 +125,13 @@ agent-cockpit の checkout の親ディレクトリと、今のリポジトリ�
    一括配布(`node tools/cross-review.sync-all.js --global-skill`)は、Claude のホームには写しが無くても新しく置き、Codex 側も `skills/` があれば新しく置く。
    そのため、`--dry-run` で配布先を確かめ、全配布先に写しがあるか、新しく置く先も開発者が認めたときだけ一括配布を使う。
    そうでないときは、写しのある配布先と認められた配布先だけに、`git show HEAD:.claude/skills/cross-review/SKILL.md` の内容を書く。
-4. **agent-cockpit**：checkout を更新したときは、診断をやり直して手順 4 と同じく項目を選んでもらう。更新していないときは、手順 4 で選んでもらった項目を使う。選んだ項目を、診断の JSON とともに適用する。
+4. **agent-cockpit**：開発者が内容を見て項目を選んだ診断の JSON を、そのまま `--from` に渡す。適用の直前に作り直さない。作り直すと、選んだ後にファイルが変わっても `apply.js` が検出できないためである。
 
    ```sh
-   node src/client/doctor.js --json > <一時ファイル>
-   node src/client/apply.js --from <一時ファイル> --item <id> [--item <id> ...] --json
+   node src/client/apply.js --from <選んでもらった診断の一時ファイル> --item <id> [--item <id> ...] --json
    ```
+
+   checkout を更新したときは、期待値が変わるので、手順 3 の診断を作り直し、`mismatch` の項目を示して選び直してもらってから、その JSON で適用する。
 
    常駐サーバーの再起動は、診断の `cockpit.server.running` の項目を選ぶと、ほかの項目を書き換えた後に行われる。
    `skipped` の項目は、診断の後にファイルか checkout が変わったものである。診断し直して、残っていれば選び直してもらう。
