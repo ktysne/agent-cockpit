@@ -5597,22 +5597,33 @@ test('再起動待ちの帯はバージョンが違えば配置済みのバー�
 });
 
 function restartNoteHarness(source, response = async () => ({ status: 202 }), clipboard = { writeText: async () => {} }) {
-  const buttons = [];
-  const contentNodes = [];
-  const note = { hidden: true, value: '', get textContent() { return contentNodes.map(node => typeof node === 'string' ? node : node.textContent).join(''); },
-    get message() { return this.value; },
-    set textContent(value) { this.value = value; contentNodes.length = 0; contentNodes.push(value); buttons.length = 0; activeElement = null; this.rebuilt += 1; }, rebuilt: 0,
-    contentNodes,
-    append(...nodes) { contentNodes.push(...nodes); buttons.push(...nodes.filter(node => typeof node !== 'string')); },
-    querySelectorAll: selector => selector === 'button' ? buttons : [] };
   let focused = null;
   let activeElement = null;
+  const nodeText = node => typeof node === 'string' ? node : node.textContent;
+  const element = tagName => ({
+    tagName, dataset: {}, className: '', ownText: '', children: [],
+    get textContent() { return this.ownText + this.children.map(nodeText).join(''); },
+    set textContent(value) { this.ownText = value; this.children = []; },
+    append(...nodes) { this.children.push(...nodes); },
+    querySelectorAll(selector) {
+      return this.children.filter(node => typeof node !== 'string')
+        .flatMap(node => [...(node.tagName === selector ? [node] : []), ...node.querySelectorAll(selector)]);
+    },
+    addEventListener(type, fn) { this.click = fn; },
+    focus() { focused = this.textContent; activeElement = this; },
+  });
+  const note = Object.assign(element('div'), { hidden: true, rebuilt: 0 });
+  Object.defineProperty(note, 'textContent', {
+    get() { return this.ownText + this.children.map(nodeText).join(''); },
+    set(value) { this.ownText = value; this.children = []; activeElement = null; this.rebuilt += 1; },
+  });
+  Object.defineProperty(note, 'message', { get() { return this.ownText; } });
   const timers = new Map();
   const context = pageContext(source, {
     document: {
       get activeElement() { return activeElement; },
       getElementById: () => note,
-      createElement: () => ({ tagName: 'button', dataset: {}, addEventListener(type, fn) { this.click = fn; }, focus() { focused = this.textContent; activeElement = this; } }),
+      createElement: element,
     },
     navigator: { clipboard },
     requestServerRestart: response,
@@ -5624,11 +5635,12 @@ function restartNoteHarness(source, response = async () => ({ status: 202 }), cl
   const render = () => context.renderRestartNote(state);
   render();
   const click = label => {
-    const button = buttons.find(item => item.textContent === label);
+    const button = note.querySelectorAll('button').find(item => item.textContent === label);
     button.focus();
     return button.click();
   };
-  return { note, buttons, timers, state, render, click, context, focused: () => focused };
+  const rows = () => note.children.map(row => ({ className: row.className, items: row.children.map(nodeText) }));
+  return { note, get buttons() { return note.querySelectorAll('button'); }, rows, timers, state, render, click, context, focused: () => focused };
 }
 
 const updateToolsPrompt = '/update-tools スキルを使って連携ツールを含めて最新化してください。';
@@ -5637,11 +5649,10 @@ const copiedPromptNotice = 'コピーされたプロンプトでAIエージェ�
 const failedPromptNotice = `コピーできませんでした。次の文を AI エージェントに渡してください: ${updateToolsPrompt}`;
 
 for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
-  test(`${label}の再起動待ちでは再起動と更新依頼のボタンを順に表示する`, () => {
+  test(`${label}の再起動待ちでは案内の下の 1 行に再起動と更新依頼のボタンを順に表示する`, () => {
     const f = restartNoteHarness(source);
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', copyPromptButton]);
-    assert.deepEqual(f.note.contentNodes.slice(1).map(node => typeof node === 'string' ? node : node.textContent), [
-      '常駐サーバーを再起動する', ' または ', copyPromptButton,
+    assert.deepEqual(f.rows(), [
+      { className: 'restart-note-actions', items: ['常駐サーバーを再起動する', 'または', copyPromptButton] },
     ]);
   });
 
@@ -5649,16 +5660,16 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     const f = restartNoteHarness(source);
     f.state.restartAvailable = false;
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), [copyPromptButton]);
-    assert.deepEqual(f.note.contentNodes.slice(1).map(node => typeof node === 'string' ? node : node.textContent), [copyPromptButton]);
+    assert.deepEqual(f.rows(), [{ className: 'restart-note-actions', items: [copyPromptButton] }]);
   });
 
-  test(`${label}は更新依頼のプロンプトをコピーして案内を保つ`, async () => {
+  test(`${label}は更新依頼のプロンプトをコピーしてボタンの下の行に案内を保つ`, async () => {
     const written = [];
     const f = restartNoteHarness(source, undefined, { writeText: async value => written.push(value) });
     await f.click(copyPromptButton);
     assert.deepEqual(written, [updateToolsPrompt]);
-    assert.ok(f.note.textContent.includes(copiedPromptNotice));
+    assert.deepEqual(f.rows()[1], { className: 'restart-note-status', items: [] });
+    assert.equal(f.note.children[1].textContent, copiedPromptNotice);
     assert.equal(f.focused(), copyPromptButton);
     const rebuilt = f.note.rebuilt;
     f.render();
