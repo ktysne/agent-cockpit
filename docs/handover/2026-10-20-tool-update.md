@@ -12,7 +12,7 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 新しい `update-tools` の手順は、本体の checkout と実機のホームで 1 回通した(2026-10-20)。checkout の確認と fast-forward の更新、診断の不一致の選択と適用、退避、常駐サーバーの再起動が動き、診断し直して不一致が残らないことを確かめた。
 段階 2b(#673)の前提の照会の入口は、2 つともそろった。bridge は `bash tools/codex-agent.sh --check-copies`、ai-cross-review は `node tools/cross-review.sync-all.js --global-skill --check --json` である。契約の正本は、bridge の `docs/gpt-agents.md` の「配置済みの写しを照合する」と、ai-cross-review の `docs/cross-review.md` の「グローバル SKILL の配布」にある。
 段階 2b(#673)は、診断と適用に ai-cross-review と bridge の写しの項目が入り、`update-tools` の手順もそれを使う形になった。bridge と ai-cross-review の写しは、ファイルを見比べず、診断の `copies` の項目を選んで適用する。
-次は、#673 の書き換えた `update-tools` を実機で通すことである。写しを 1 つ古くしてから、診断で `mismatch` になり、適用で一致に戻ることを確かめる。その後は、表の 7 行目と 8 行目を、前提の ai-cross-review の作業が終わってから起票する。
+次は、表の 7 行目(ktysne/agent-cockpit#684)を終えることである。8 行目は、前提の ai-cross-review の作業が終わってから起票する。
 
 ## 決定済みの判断
 
@@ -55,10 +55,10 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 | 4 | ktysne/ai-cross-review#87 グローバル SKILL の確認 | ai-cross-review の `tools/cross-review.sync-all.js` | ai-cross-review 側 | `fix/global-skill-check` | ai-cross-review の main | ktysne/ai-cross-review#88 でマージ済み、#87 は閉じた |
 | 5 | #673 段階 2b 連携ツールの写し | `src/client/doctor-observe.js`、`src/client/doctor-evaluate.js`、`src/client/apply.js`、`skills/update-tools/SKILL.md` | hard、3 段目はメインセッション | `claude/673-cross-review-copies`、`claude/673-bridge-copies`、`claude/673-update-tools-copies` | main | 1 段目は PR #681、2 段目は PR #682 でマージ済み。1 段目のマージ後に 2 段目を main から切ったので、スタックにはしていない。3 段目は `claude/673-update-tools-copies` の PR で対応中 |
 | 6 | 段階 3 ダッシュボードの入口 | 未定 | 未定 | 未定 | main | 未起票 |
-| 7 | update-tools の ai-cross-review の取り込み先の確認を新形式に合わせる | `skills/update-tools/SKILL.md` | light | 未定 | main | 未起票。ktysne/ai-cross-review#89 の 3 段目の後 |
+| 7 | update-tools の ai-cross-review の取り込み先の確認を新形式に合わせる | `skills/update-tools/SKILL.md` | light | `claude/684-update-tools-new-form` | main | ktysne/agent-cockpit#684。実装中 |
 | 8 | ai-cross-review#85 の検証データを revision を固定して取り込む | 未定 | 未定 | 未定 | main | 未起票。ktysne/ai-cross-review#85 の後 |
 
-- 7 は、ktysne/ai-cross-review#89 の移行で、導入先から `tools/cross-review.sync.js` が消えるために要る。手順 3 の「取り込み先」の確認を、`node tools/cross-review.js sync --check` と、ai-cross-review の `--register --check --json`、`--migrate --check --json` の照会を使う形にする。
+- 7 は、ktysne/ai-cross-review#89 の移行で、導入先から `tools/cross-review.sync.js` が消えたために要る。手順 3 の「取り込み先」の確認を、`node tools/cross-review.js sync --check` と、ai-cross-review の `--register --check --json`、`--migrate --check --json` の照会を使う形にする。
 - 8 は、ktysne/ai-cross-review#89 の計画で、#85 の契約の文書と検証データを導入先へ写さず、agent-cockpit が上流の revision を固定して取り込むと決まったために要る。#85 は ktysne/ai-cross-review#93 でマージ済み(マージコミット 1978f8f)。#667 で扱う見込みだが、未確認である。
 
 ## 落とし穴
