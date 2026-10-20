@@ -1,0 +1,10 @@
+{
+  "branches": {
+    "feature/other": {
+      "round": 1,
+      "lastReviewedSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dismissed": [],
+      "lastTriage": null
+    }
+  }
+}

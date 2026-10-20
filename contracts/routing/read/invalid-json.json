@@ -1,0 +1,8 @@
+{
+  "description": "JSON の構文誤りは全体を既定にする",
+  "input": "{invalid",
+  "expected": {
+    "agents": "default",
+    "review": "default"
+  }
+}

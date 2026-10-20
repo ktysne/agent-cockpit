@@ -35,6 +35,34 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | `skills/update-tools/` | agent-cockpit、ai-cross-review、claude-codex-bridge の更新を確かめて反映するスキル。Claude と Codex で共通 |
 | `test/` | テスト |
 
+## 共有データの読み取り
+
+クロスレビュー状態ファイルの本文は `src/server/cross-review-state.js` の `parseCrossReviewState` で正規化します。
+ファイルの有無と読み取り失敗、取得不能にする診断の範囲、古い記録かどうかの判断は、`src/server/pull-requests.js` の `readCrossReviewState` が担います。
+経路設定は `src/server/routing.js` の `readRouting` と `readRoutingSync` で読み、[経路設定の契約](contracts/routing.md)に従います。
+シェルのコマンドは `src/shared/shell-commands.js` の `commandSegmentParts` や `commandWords` で解析します。
+`src/` から `tools/` の実装を読み込まないようにします。
+
+新しい経路は、入口の入力を共通処理が受け取る形へ変換し、共通処理へ接続してから、用途固有の方針を適用する順で追加します。
+本文の解釈を入口ごとに複製しないためです。
+共通処理の迂回は `test/shared-input-boundaries.test.js` で、対象と名前を限定した依存の検査を行います。
+この検査は JavaScript 全体の意味解析ではありません。
+`pull-request-utils.js` の先頭の `cd … &&` のパス推測だけは、引用符の種類と生のエスケープが必要なため、行の内容を固定した許可リストに残しています。
+
+### 上流の検証データの写し直し
+
+ai-cross-review の状態ファイルの検証データは、上流の checkout と完全な SHA を指定して写し直します。
+ネットワークは使わず、`git ls-tree` と `git show` で固定した revision を読みます。
+上流の checkout は書き換えません。
+
+```powershell
+node tools/import-cross-review-contract.js --checkout D:/Desktop/Develop/ai-cross-review --revision ab29d557a952b74a21bce82d403494f45ee1d39e
+node --test test/cross-review-state-contract.test.js test/routing-contract.test.js test/shared-input-boundaries.test.js test/pull-requests.test.js
+```
+
+取り込み先の `test/fixtures/cross-review-state/` は丸ごと置き換わり、`SOURCE.json` に取得元の revision を記録します。
+写し直した後は、契約テストと読み手の入口のテストを実行し、期待値を自動修正せずに差分を確認します。
+
 ## 画面の骨格と部品
 
 常駐サーバーは `src/web/index.html` にある行全体の印を、同じディレクトリの部品のバイト列で置き換えます。

@@ -28,11 +28,7 @@ async function readRouting(homeDir, fileSystem = fs, readRetryOptions = {}) {
     if (error.code !== 'ENOENT') throw storageFailure(error, 'routing.json', 'read');
     return { ...DEFAULT_ROUTING };
   }
-  try {
-    return normalizeRouting(JSON.parse(contents));
-  } catch {
-    return { ...DEFAULT_ROUTING };
-  }
+  return parseRoutingText(contents);
 }
 
 function readRoutingSync(homeDir, fileSystem = fsSync, readRetryOptions = {}) {
@@ -43,6 +39,10 @@ function readRoutingSync(homeDir, fileSystem = fsSync, readRetryOptions = {}) {
     if (error.code !== 'ENOENT') return null;
     return { ...DEFAULT_ROUTING };
   }
+  return parseRoutingText(contents);
+}
+
+function parseRoutingText(contents) {
   try {
     return normalizeRouting(JSON.parse(contents));
   } catch {

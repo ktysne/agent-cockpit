@@ -1,0 +1,14 @@
+{
+  "branches": {
+    "feature/x": {
+      "round": 1,
+      "lastReviewedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "dismissed": [],
+      "lastTriage": {
+        "round": 1,
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outcome": "converged"
+      }
+    }
+  }
+}

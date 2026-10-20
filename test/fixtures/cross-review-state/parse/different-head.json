@@ -1,0 +1,18 @@
+{
+  "description": "head と異なる記録も SHA の値を保持する",
+  "input": "{\"branches\": {\"feature/x.y\": {\"round\": 3, \"lastReviewedSha\": \"  old-head  \"}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {
+        "feature/x.y": {
+          "round": 3,
+          "lastReviewedSha": "old-head",
+          "dismissed": [],
+          "lastTriage": null
+        }
+      }
+    },
+    "issues": []
+  }
+}

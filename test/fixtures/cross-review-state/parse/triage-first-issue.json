@@ -1,0 +1,28 @@
+{
+  "description": "最初の不正項目だけを報告して lastTriage 全体を破棄する",
+  "input": "{\"branches\": {\"feature/x.y\": {\"lastTriage\": {\"round\": 0, \"sha\": \"x\", \"outcome\": \"unknown\"}}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {
+        "feature/x.y": {
+          "round": 0,
+          "lastReviewedSha": null,
+          "dismissed": [],
+          "lastTriage": null
+        }
+      }
+    },
+    "issues": [
+      {
+        "path": [
+          "branches",
+          "feature/x.y",
+          "lastTriage",
+          "round"
+        ],
+        "code": "out-of-range"
+      }
+    ]
+  }
+}

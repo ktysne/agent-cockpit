@@ -1,0 +1,8 @@
+{
+  "description": "キーが欠けたら全体を既定にする",
+  "input": "{\"agents\":\"codex\"}",
+  "expected": {
+    "agents": "default",
+    "review": "default"
+  }
+}

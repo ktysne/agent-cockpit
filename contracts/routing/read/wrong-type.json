@@ -1,0 +1,8 @@
+{
+  "description": "値の型が違えば全体を既定にする",
+  "input": "{\"agents\":\"codex\",\"review\":1}",
+  "expected": {
+    "agents": "default",
+    "review": "default"
+  }
+}

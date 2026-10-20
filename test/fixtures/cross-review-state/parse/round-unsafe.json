@@ -1,0 +1,27 @@
+{
+  "description": "不正な round は 0 にする",
+  "input": "{\"branches\": {\"feature/x.y\": {\"round\": 9007199254740992}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {
+        "feature/x.y": {
+          "round": 0,
+          "lastReviewedSha": null,
+          "dismissed": [],
+          "lastTriage": null
+        }
+      }
+    },
+    "issues": [
+      {
+        "path": [
+          "branches",
+          "feature/x.y",
+          "round"
+        ],
+        "code": "out-of-range"
+      }
+    ]
+  }
+}

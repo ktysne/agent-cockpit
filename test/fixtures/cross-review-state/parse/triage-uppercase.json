@@ -1,0 +1,22 @@
+{
+  "description": "SHA を小文字にする",
+  "input": "{\"branches\": {\"feature/x.y\": {\"lastTriage\": {\"round\": 1, \"sha\": \"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\", \"outcome\": \"fixing\"}}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {
+        "feature/x.y": {
+          "round": 0,
+          "lastReviewedSha": null,
+          "dismissed": [],
+          "lastTriage": {
+            "round": 1,
+            "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "outcome": "fixing"
+          }
+        }
+      }
+    },
+    "issues": []
+  }
+}

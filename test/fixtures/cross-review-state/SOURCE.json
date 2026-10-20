@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/ktysne/ai-cross-review",
+  "revision": "ab29d557a952b74a21bce82d403494f45ee1d39e",
+  "path": "contracts/cross-review-state",
+  "contract": "docs/contracts/cross-review-state.md"
+}

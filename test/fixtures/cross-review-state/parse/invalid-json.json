@@ -1,0 +1,9 @@
+{
+  "description": "JSON の構文が不正",
+  "input": "{",
+  "expected": {
+    "kind": "invalid",
+    "state": null,
+    "issues": []
+  }
+}

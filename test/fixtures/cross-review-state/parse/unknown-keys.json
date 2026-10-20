@@ -1,0 +1,18 @@
+{
+  "description": "未知のキーを無視する",
+  "input": "{\"extra\": true, \"branches\": {\"x\": {\"extra\": true}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {
+        "x": {
+          "round": 0,
+          "lastReviewedSha": null,
+          "dismissed": [],
+          "lastTriage": null
+        }
+      }
+    },
+    "issues": []
+  }
+}

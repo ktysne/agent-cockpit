@@ -1,0 +1,34 @@
+{
+  "description": "複数ブランチの全フィールド",
+  "input": "{\"branches\": {\"feature/x.y\": {\"round\": 2, \"lastReviewedSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"dismissed\": [\"確認済み\"], \"lastTriage\": {\"round\": 2, \"sha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"outcome\": \"converged\"}}, \"other\": {\"round\": 0, \"lastReviewedSha\": null, \"dismissed\": [], \"lastTriage\": {\"round\": 1, \"sha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"outcome\": \"halted\"}}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {
+        "feature/x.y": {
+          "round": 2,
+          "lastReviewedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "dismissed": [
+            "確認済み"
+          ],
+          "lastTriage": {
+            "round": 2,
+            "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "outcome": "converged"
+          }
+        },
+        "other": {
+          "round": 0,
+          "lastReviewedSha": null,
+          "dismissed": [],
+          "lastTriage": {
+            "round": 1,
+            "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "outcome": "halted"
+          }
+        }
+      }
+    },
+    "issues": []
+  }
+}

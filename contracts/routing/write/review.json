@@ -1,0 +1,12 @@
+{
+  "description": "サブエージェントの指定を保ってレビューの経路を保存する",
+  "start": {
+    "agents": "claude",
+    "review": "codex"
+  },
+  "set": {
+    "key": "review",
+    "value": "default"
+  },
+  "expected": "{\n  \"agents\": \"claude\",\n  \"review\": \"default\"\n}\n"
+}

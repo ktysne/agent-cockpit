@@ -1,0 +1,19 @@
+{
+  "description": "空のブランチ名を破棄する",
+  "input": "{\"branches\": {\"\": {}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {}
+    },
+    "issues": [
+      {
+        "path": [
+          "branches",
+          ""
+        ],
+        "code": "invalid-format"
+      }
+    ]
+  }
+}

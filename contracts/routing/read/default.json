@@ -1,0 +1,8 @@
+{
+  "description": "既定の経路を採用する",
+  "input": "{\"agents\":\"default\",\"review\":\"default\"}",
+  "expected": {
+    "agents": "default",
+    "review": "default"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "description": "配列の lastTriage を破棄する",
+  "input": "{\"branches\": {\"feature/x.y\": {\"lastTriage\": []}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {
+        "feature/x.y": {
+          "round": 0,
+          "lastReviewedSha": null,
+          "dismissed": [],
+          "lastTriage": null
+        }
+      }
+    },
+    "issues": [
+      {
+        "path": [
+          "branches",
+          "feature/x.y",
+          "lastTriage"
+        ],
+        "code": "invalid-type"
+      }
+    ]
+  }
+}

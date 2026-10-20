@@ -1,0 +1,8 @@
+{
+  "description": "BOM 付きは全体を既定にする",
+  "input": "﻿{\"agents\":\"codex\",\"review\":\"claude\"}",
+  "expected": {
+    "agents": "default",
+    "review": "default"
+  }
+}

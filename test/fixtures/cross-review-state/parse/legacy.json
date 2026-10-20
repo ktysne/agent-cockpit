@@ -1,0 +1,18 @@
+{
+  "description": "dismissed と lastTriage のない旧記録",
+  "input": "{\"branches\": {\"feature/x.y\": {\"round\": 1, \"lastReviewedSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
+  "expected": {
+    "kind": "ok",
+    "state": {
+      "branches": {
+        "feature/x.y": {
+          "round": 1,
+          "lastReviewedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "dismissed": [],
+          "lastTriage": null
+        }
+      }
+    },
+    "issues": []
+  }
+}

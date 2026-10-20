@@ -16,6 +16,7 @@ const {
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { findWorktreeRoot } = require('./git-worktree');
 const { DISPLAY_SCHEMA } = require('./display-preferences');
+const { parseCrossReviewState } = require('./cross-review-state');
 const { evaluateReview, reviewPresentation, reviewReminderNeeded } = require('../shared/review-evaluation');
 
 const GH_TIMEOUT_MS = 20_000;
@@ -869,18 +870,22 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
     return error.code === 'ENOENT' ? null : { unavailable: true };
   }
   try {
-    const parsed = JSON.parse(contents);
+    const parsed = parseCrossReviewState(contents);
+    if (parsed.kind === 'invalid') {
+      report('present', 'missing', 'parse');
+      return { unavailable: true };
+    }
     if (!branch) { report('present'); return null; }
-    const branchState = parsed?.branches?.[branch];
-    if (!branchState) { report('present'); return null; }
-    if (!Number.isSafeInteger(branchState.round) || branchState.round < 0 || !Array.isArray(branchState.dismissed)) {
+    if (!Object.hasOwn(parsed.state.branches, branch)) { report('present'); return null; }
+    const branchState = parsed.state.branches[branch];
+    if (parsed.issues.some(({ path: issuePath }) => issuePath[0] === 'branches' && issuePath[1] === branch
+      && (issuePath.length === 2 || (issuePath.length === 3 && ['round', 'dismissed'].includes(issuePath[2]))))) {
       report('present', 'missing', 'invalid');
       return { unavailable: true };
     }
     const lastReviewedSha = branchState.lastReviewedSha;
     const lastTriage = branchState.lastTriage;
     const triageSha = lastTriage?.sha;
-    const triageOutcome = lastTriage?.outcome;
     // --uncommitted のレビューは lastReviewedSha を据え置くので、記録の SHA がすべて base に入っているときだけ前の PR の記録とみなす。
     const recordedShas = [lastReviewedSha, triageSha].filter(isCompleteCommitSha);
     let staleRecord = recordedShas.length > 0;
@@ -892,11 +897,7 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
       report('present', 'mismatch', 'stale-record');
       return null;
     }
-    const triage = Number.isSafeInteger(lastTriage?.round) && lastTriage.round >= 1
-      && isCompleteCommitSha(triageSha)
-      && ['fixing', 'converged', 'halted'].includes(triageOutcome)
-      ? { round: lastTriage.round, sha: triageSha.toLowerCase(), outcome: triageOutcome }
-      : null;
+    const triage = lastTriage;
     report('present', isCompleteCommitSha(lastReviewedSha)
       ? (lastReviewedSha.toLowerCase() === pullRequest.headRefOid?.toLowerCase() ? 'match' : 'mismatch') : 'missing', 'none',
       { round: branchState.round, outcome: triage?.outcome || 'missing', triageHead: triage

@@ -1,0 +1,12 @@
+{
+  "description": "サブエージェントの経路を保存する",
+  "start": {
+    "agents": "default",
+    "review": "default"
+  },
+  "set": {
+    "key": "agents",
+    "value": "codex"
+  },
+  "expected": "{\n  \"agents\": \"codex\",\n  \"review\": \"default\"\n}\n"
+}

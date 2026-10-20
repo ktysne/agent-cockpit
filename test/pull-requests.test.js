@@ -2315,7 +2315,52 @@ test('クロスレビュー状態は PR head ブランチの往復数、非対�
   assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'missing' }), null);
 });
 
-test('不正な lastTriage は null にする', async (t) => {
+test('クロスレビュー状態のブランチ、round、dismissed 自体の不正は取得不能にする', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  for (const branchState of [null, [], { round: -1, dismissed: [] }, { round: 1, dismissed: false }]) {
+    await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: { 'feat/pr': branchState } }));
+    const observations = [];
+    const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }, {
+      observeReview: (registration, observation) => observations.push(observation),
+    });
+    assert.deepEqual(value, { unavailable: true });
+    assert.equal(observations.at(-1).failure, 'invalid');
+  }
+});
+
+test('非対応要約の不正な要素は件数から除き、他のブランチの診断は採用を妨げない', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: {
+    'feat/pr': { round: 2, dismissed: [' 要約 ', 1, null, '  ', '要約'] },
+    'other': { round: -1, dismissed: false },
+  } }));
+  const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' });
+  assert.equal(value.dismissed, 2);
+  assert.equal(value.round, 2);
+});
+
+test('レビュー済み SHA の前後の空白を除いて今の head と照合する', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  const head = 'a'.repeat(40);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: {
+    'feat/pr': { round: 2, dismissed: [], lastReviewedSha: ` ${head.toUpperCase()}\n` },
+  } }));
+  const observations = [];
+  const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr', headRefOid: head }, {
+    observeReview: (registration, observation) => observations.push(observation),
+  });
+  assert.equal(value.reviewedSha, head);
+  assert.equal(observations.at(-1).head, 'match');
+  assert.equal(observations.at(-1).failure, 'none');
+});
+
+test('不正な lastTriage は記録を利用したまま null にする', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
   await installCrossReview(root);
@@ -2330,6 +2375,7 @@ test('不正な lastTriage は null にする', async (t) => {
       branches: { 'feat/pr': { round: 2, dismissed: [], lastTriage } },
     }));
     const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' });
+    assert.equal(value.round, 2);
     assert.equal(value.triage, null);
   }
 });
