@@ -104,7 +104,7 @@ function repositoryRootFromGitDirectory(gitDirectory, paths) {
 }
 
 function codexWorktreeRepositoryRoot(cwd, options, paths, fileSystem) {
-  const codexHome = options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  const codexHome = codexHomeFromOptions(options);
   const worktreesRoot = paths.resolve(codexHome, 'worktrees');
   if (!pathIsWithin(cwd, worktreesRoot, paths)) return null;
 
@@ -179,6 +179,13 @@ function claudeHomeFromOptions(options = {}) {
   return path.join(options.userHome || require('node:os').homedir(), '.claude');
 }
 
+function codexHomeFromOptions(options = {}) {
+  const environment = options.environment || process.env;
+  if (options.codexHome) return path.resolve(options.codexHome);
+  if (environment.CODEX_HOME) return path.resolve(environment.CODEX_HOME);
+  return path.join(options.userHome || os.homedir(), '.codex');
+}
+
 // bridge は CLAUDE_CONFIG_DIR を見ずに ~/.claude の tools/ と gpt-agents/ を使う作りなので、Claude のホームに加えて ~/.claude も探す。
 function pathsInClaudeHomes(claudeHome, userHome, ...segments) {
   const paths = [path.join(claudeHome, ...segments), path.join(userHome, '.claude', ...segments)];
@@ -200,5 +207,5 @@ function cockpitHomeFromOptions(options = {}) {
   return path.join(options.userHome || require('node:os').homedir(), '.agent-cockpit');
 }
 
-module.exports = { productFromCwd, codexWorktreeProduct, branchFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, codexAgentDefinitionPaths, cockpitHomeFromOptions,
+module.exports = { productFromCwd, codexWorktreeProduct, branchFromCwd, claudeHomeFromOptions, codexHomeFromOptions, codexAgentScriptPaths, codexAgentDefinitionPaths, cockpitHomeFromOptions,
   gitDirectoryFromFile, repositoryRootFromGitDirectory };
