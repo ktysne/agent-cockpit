@@ -2,7 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('../server/identity');
 const { ROUTE_VALUES, readRoutingSync } = require('../server/routing');
-const { commandSegments, commandWords, isPullRequestShellTool } = require('../server/pull-request-utils');
+const { isPullRequestShellTool } = require('../server/pull-request-utils');
+const { commandInvocationDetails: codexAgentInvocationDetails, commandInvocations: codexAgentInvocations } = require('../shared/shell-commands');
 const { atomicWriteJsonSync } = require('../server/json-storage');
 
 const ROUTE_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -12,90 +13,6 @@ const AGENTS_ROUTE_AGENT_TYPES = new Set(['impl-hard', 'impl-standard', 'impl-li
 const REVIEW_ROUTE_AGENT_TYPES = new Set(['codex-review']);
 const CODEX_AGENT_SCRIPT = /(?:^|[\\/])codex-agent\.sh$/i;
 const readRouting = readRoutingSync;
-const TRANSPARENT_COMMANDS = new Set(['command', 'nohup', 'time', 'builtin', '!']);
-const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
-
-function commandName(word) {
-  return (word || '').split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
-}
-
-function withoutEnvOptions(words) {
-  let rest = words;
-  while (rest[0] !== undefined && (rest[0].startsWith('-') || ASSIGNMENT_WORD.test(rest[0]))) {
-    rest = rest.slice(['-u', '--unset', '-C', '--chdir'].includes(rest[0]) ? 2 : 1);
-  }
-  return rest;
-}
-
-// 後ろのコマンドをそのまま実行するだけの前置きを外し、実際に起動されるコマンドの語から始める。
-// commandWords は先頭の代入と env を外すので、元の区切りが env で始まるかを startsWithEnv で受け、残った env のオプションを外す。
-function withoutCommandPrefixes(words, startsWithEnv) {
-  let rest = startsWithEnv ? withoutEnvOptions(words) : words;
-  for (;;) {
-    const name = commandName(rest[0]);
-    if (TRANSPARENT_COMMANDS.has(name)) {
-      rest = rest.slice(1);
-    } else if (name === 'exec' || name === 'nice' || name === 'timeout') {
-      rest = rest.slice(1);
-      while (rest[0]?.startsWith('-')) rest = rest.slice(['-a', '-n', '-s', '-k', '--signal', '--kill-after'].includes(rest[0]) ? 2 : 1);
-      if (name === 'timeout') rest = rest.slice(1);
-    } else if (name === 'env') {
-      rest = withoutEnvOptions(rest.slice(1));
-    } else {
-      return rest;
-    }
-  }
-}
-
-function segmentStartsWithEnv(segment) {
-  const firstCommand = segment.split(/\s+/).find((word) => !ASSIGNMENT_WORD.test(word));
-  return commandName(firstCommand) === 'env';
-}
-
-/**
- * 前置きとシェルの起動をたどり、isScript に合う語で始まる起動ごとに、その後ろの語の列を返す。
- * prepare は、各コマンドの文字列(シェルの -c の文字列を含む)を、探す範囲の文字列の列に変える。
- * toolName は区切りの規則だけに使い、シェルの -c の文字列は Bash として分ける。
- */
-function codexAgentInvocations(command, isScript, prepare = (text) => [text], depth = 0, toolName = 'Bash') {
-  return codexAgentInvocationDetails(command, isScript, prepare, depth, toolName).map((invocation) => invocation.argumentsList);
-}
-
-/** codexAgentInvocations と同じ起動ごとに、語の列と、その語を分けたシェルの種別(toolName)を返す。 */
-function codexAgentInvocationDetails(command, isScript, prepare = (text) => [text], depth = 0, toolName = 'Bash') {
-  if (typeof command !== 'string') return [];
-  if (depth >= 8) return [];
-  // PowerShell の行継続(逆引用符と改行)は、語の解析で引数として残らないよう空白にする。
-  const joined = toolName === 'PowerShell' ? command.replace(/`\r?\n/g, ' ') : command;
-  const invocation = (argumentsList) => [{ argumentsList, toolName }];
-  return prepare(joined).flatMap((text) => commandSegments(text, toolName)).flatMap((segment) => {
-    let ungrouped = segment.trim();
-    while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
-    while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
-    const words = withoutCommandPrefixes(commandWords(ungrouped, toolName), segmentStartsWithEnv(ungrouped));
-    if (isScript(words[0] || '')) return invocation(words.slice(1));
-    if (['source', '.'].includes(words[0])) return isScript(words[1] || '') ? invocation(words.slice(2)) : [];
-    const shell = commandName(words[0]);
-    if (!['bash', 'sh', 'dash', 'zsh'].includes(shell)) return [];
-    for (let index = 1; index < words.length;) {
-      const option = words[index];
-      if (option === '-c' || option === '--command' || /^-[^-]*c[^-]*$/.test(option)) {
-        return codexAgentInvocationDetails(words[index + 1] || '', isScript, prepare, depth + 1, 'Bash');
-      }
-      if (option === '--help' || option === '--version' || option === '-help' || option === '-version') return [];
-      if (option === '--') return isScript(words[index + 1] || '') ? invocation(words.slice(index + 2)) : [];
-      if (option === '-o' || option === '-O' || option === '--rcfile' || option === '--init-file') {
-        index += 2;
-      } else if (option.startsWith('-') && option !== '-') {
-        index += 1;
-      } else {
-        return isScript(option) ? invocation(words.slice(index + 1)) : [];
-      }
-    }
-    return [];
-  });
-}
-
 function commandInvokesCodexAgent(command, toolName = 'Bash') {
   return codexAgentInvocations(command, (word) => CODEX_AGENT_SCRIPT.test(word), undefined, 0, toolName).length > 0;
 }

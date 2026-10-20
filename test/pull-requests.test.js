@@ -28,6 +28,7 @@ const {
   countGhPrCreateCommands,
   findPullRequestUrl,
   firstPullRequestUrl,
+  hasGhCommandOtherThanPrCreate,
   isGhPrCreateCommand,
   isPullRequestShellTool,
   parsePullRequestUrl,
@@ -572,6 +573,37 @@ test('PR 作成と取り直しの対象は Bash と PowerShell に限る', () =>
   assert.equal(isPullRequestShellTool('Bash'), true);
   assert.equal(isPullRequestShellTool('PowerShell'), true);
   assert.equal(isPullRequestShellTool('Read'), false);
+});
+
+test('PR の作成とマージはコメントとデータを除き、その後の実行部分を検出する', () => {
+  for (const toolName of ['Bash', 'PowerShell']) {
+    for (const action of ['create', 'merge']) {
+      const gh = `gh pr ${action}`;
+      const data = toolName === 'Bash' ? `cat <<'EOF'\n${gh}\nEOF` : `$text = @'\n${gh}\n'@`;
+      for (const command of [`echo ok # ; ${gh} | ${gh}`, `echo "${gh}"`, data]) {
+        assert.equal(shouldRefreshPullRequests(command, toolName), false, command);
+        assert.equal(countGhPrCreateCommands(command, toolName), 0, command);
+      }
+      assert.equal(shouldRefreshPullRequests(`${data}\n${gh}`, toolName), true);
+      assert.equal(countGhPrCreateCommands(`${data}\n${gh}`, toolName), action === 'create' ? 1 : 0);
+      assert.equal(shouldRefreshPullRequests(`echo "$( ${gh} )"`, toolName), true);
+    }
+  }
+  assert.equal(shouldRefreshPullRequests('<# ; gh pr merge\n#>', 'PowerShell'), false);
+});
+
+test('PR 作成の本文にある入れ子のヒアドキュメントの後でマージを検出する', () => {
+  for (const command of [
+    "gh pr create --title x --body \"$(cat <<'EOF'\nIt's done (see #1\nEOF\n)\"",
+    "gh pr create --title x --body \"$(cat <<'EOF'\nbody )\nEOF\n)\"",
+    "gh pr create --title x --body \"$(cat <<-'EOF'\n\tIt's done (see #1\n\tEOF\n)\"",
+    "gh pr create --title x --body \"$(echo $(cat <<'EOF'\nIt's done (see #1\nEOF\n))\"",
+  ]) {
+    const commandWithMerge = command + ' && gh pr merge 5 --merge';
+    assert.equal(shouldRefreshPullRequests(commandWithMerge), true, commandWithMerge);
+    assert.equal(countGhPrCreateCommands(commandWithMerge), 1, commandWithMerge);
+    assert.equal(hasGhCommandOtherThanPrCreate(commandWithMerge), true, commandWithMerge);
+  }
 });
 
 test('PowerShell のコマンドは \\ をエスケープとせず、末尾が \\ の引用の後の gh pr create と git push を検出する', () => {
