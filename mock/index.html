@@ -1665,8 +1665,9 @@ function doctorSummaryText(doctor) {
 }
 
 // ファイルを書き換える対処はセッションの update-tools が適用するので、画面では手で行う操作だけを文で示す。
+// 未確認の項目は CLI 向けに理由の文へ案内を含めているので、同じ案内は繰り返さない。
 function doctorActionText(item) {
-  const manual = item.actions.filter(action => action.op === 'manual').map(action => action.text);
+  const manual = item.actions.filter(action => action.op === 'manual' && !item.reason.includes(action.text)).map(action => action.text);
   if (item.actions.some(action => action.op !== 'manual')) manual.unshift('update-tools スキルで直せます。');
   return manual.join(' ');
 }

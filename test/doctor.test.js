@@ -675,6 +675,31 @@ test('bridge の照会には bash と checkout と Claude ホームと三十秒�
   assert.equal((await run({ ...f.options, queryBridge })).code, 0);
 });
 
+test('Windows で PATH に bash が無ければ git の場所から Git for Windows の bash で照会する', async t => {
+  const f = await fixture(t);
+  await bridgeCheckout(f);
+  const { directory } = require('./support/temp').temporaryDirectory(t);
+  const gitBash = path.join(directory, 'bin', 'bash.exe');
+  await fs.mkdir(path.dirname(gitBash), { recursive: true });
+  await fs.writeFile(gitBash, "");
+  const commands = [];
+  const queryBridge = async (command, args) => {
+    commands.push(command);
+    if (command === 'bash') throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    if (command === 'git') {
+      assert.deepEqual(args, ['--exec-path']);
+      return { stdout: `${path.join(directory, 'mingw64', 'libexec', 'git-core')}\n` };
+    }
+    return { stdout: JSON.stringify(bridgeQuery('match', null)) };
+  };
+  assert.equal((await run({ ...f.options, platform: 'win32', queryBridge })).code, 0);
+  assert.deepEqual(commands, ['bash', 'git', gitBash]);
+  commands.length = 0;
+  const { report } = await run({ ...f.options, platform: 'linux', queryBridge });
+  assert.deepEqual(commands, ['bash']);
+  assert.match(report.items.find(item => item.id === 'bridge.copies.query').reason, /bash/);
+});
+
 test('bridge を照会できない各原因は一つの未確認にする', async t => {
   const f = await fixture(t);
   const root = await bridgeCheckout(f);
