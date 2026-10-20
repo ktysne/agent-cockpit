@@ -116,11 +116,11 @@ Codex を使っているときは、[導入手順](setup.md#3-スキルを置く
 PowerShell:
 
 ```powershell
-$codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
-$skillDirectory = Join-Path $codexHome 'skills\agent-cockpit'
+$agentsHome = Join-Path $env:USERPROFILE '.agents'
+$skillDirectory = Join-Path $agentsHome 'skills\agent-cockpit'
 New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
 Copy-Item .\skills\codex\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
-$updateSkillDirectory = Join-Path $codexHome 'skills\update-tools'
+$updateSkillDirectory = Join-Path $agentsHome 'skills\update-tools'
 New-Item -ItemType Directory -Path $updateSkillDirectory -Force | Out-Null
 Copy-Item .\skills\update-tools\SKILL.md (Join-Path $updateSkillDirectory 'SKILL.md') -Force
 ```
@@ -128,10 +128,13 @@ Copy-Item .\skills\update-tools\SKILL.md (Join-Path $updateSkillDirectory 'SKILL
 bash:
 
 ```bash
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit" "${CODEX_HOME:-$HOME/.codex}/skills/update-tools"
-cp skills/codex/agent-cockpit/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit/SKILL.md"
-cp skills/update-tools/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/update-tools/SKILL.md"
+mkdir -p "$HOME/.agents/skills/agent-cockpit" "$HOME/.agents/skills/update-tools"
+cp skills/codex/agent-cockpit/SKILL.md "$HOME/.agents/skills/agent-cockpit/SKILL.md"
+cp skills/update-tools/SKILL.md "$HOME/.agents/skills/update-tools/SKILL.md"
 ```
+
+古い置き場(`$CODEX_HOME/skills/agent-cockpit/`、`$CODEX_HOME/skills/update-tools/`、既定では `~/.codex/skills/` の下)に写しがあれば、その写しのフォルダーを消してください。
+ただし、`~/.codex/skills` を `~/.agents/skills` へのジャンクションやシンボリックリンクにしているときは、古い置き場と新しい置き場が同じフォルダーなので、消さないでください。消すと、配ったばかりのスキルも消えます。
 
 ## 常駐サーバーの再起動と確認
 

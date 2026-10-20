@@ -126,7 +126,7 @@ async function observe(options = {}) {
   const environment = options.environment || process.env;
   const userHome = options.userHome || os.homedir();
   const homes = { claude: claudeHomeFromOptions({ environment, userHome }),
-    codex: codexHomeFromOptions({ environment, userHome }),
+    codex: codexHomeFromOptions({ environment, userHome }), agents: path.join(userHome, '.agents'),
     cockpit: cockpitHomeFromOptions({ environment, userHome }) };
   const bridgeInstalled = options.isBridgeInstalled
     ? await options.isBridgeInstalled({ claudeHome: homes.claude, userHome })
@@ -156,12 +156,22 @@ async function observe(options = {}) {
   const skillPresent = {};
   for (const provider of ['claude', 'codex']) {
     skillPresent[provider] = (await Promise.all(Object.values(manifest[provider].skills)
-      .map(file => fs.stat(path.join(homes[provider], file)).then(() => true, () => false)))).some(Boolean);
+      .flatMap(file => (provider === 'codex' ? [homes.agents, homes.codex] : [homes.claude])
+        .map(home => fs.stat(path.join(home, file)).then(() => true, () => false))))).some(Boolean);
     skills[provider] = [];
     for (const [source, destination] of Object.entries(manifest[provider].skills)) {
-      const target = path.join(homes[provider], destination);
+      const target = path.join(provider === 'codex' ? homes.agents : homes.claude, destination);
       const [original, copy] = await Promise.all([readDocument(path.join(root, source), false), readDocument(target, false)]);
-      skills[provider].push({ source, destination, target, original, copy });
+      let legacy = null;
+      if (provider === 'codex') {
+        const oldCopy = await readDocument(path.join(homes.codex, destination), false);
+        if (!oldCopy.missing) {
+          const parents = await Promise.all([oldCopy.file, target]
+            .map(file => fs.realpath(path.dirname(file)).catch(() => null)));
+          if (parents.some(parent => parent === null) || normalizedPath(parents[0]) !== normalizedPath(parents[1])) legacy = oldCopy;
+        }
+      }
+      skills[provider].push({ source, destination, target, original, copy, legacy });
     }
   }
   const server = await observeServer(homes.cockpit, root, expected, options);

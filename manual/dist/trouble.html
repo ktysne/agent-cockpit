@@ -194,7 +194,7 @@
   <ul>
     <li>MCP サーバーを登録できているか。<code>claude mcp list</code> で、<code>agent-cockpit</code> が <code>Connected</code> と出れば登録できています</li>
     <li>Codex では <code>codex mcp list</code> で、<code>agent-cockpit</code> が <code>enabled</code> と出れば登録できています。あわせて <code>config.toml</code> の各ツールの <code>approval_mode = "approve"</code> を確かめます(<a href="start.html#start-hooks">セッションとのつながり</a>)</li>
-    <li>スキルを置けているか。Claude Code は <code>~/.claude/skills/agent-cockpit/SKILL.md</code>、Codex は <code>~/.codex/skills/agent-cockpit/SKILL.md</code> です</li>
+    <li>スキルを置けているか。Claude Code は <code>~/.claude/skills/agent-cockpit/SKILL.md</code>、Codex は <code>~/.agents/skills/agent-cockpit/SKILL.md</code> です</li>
     <li>MCP サーバーとスキルは、Claude Code と Codex のどちらでも、新しく開いたセッションから効きます。開いたままのセッションは、開き直します</li>
     <li>別のセッションの欄に出ていないか。MCP サーバーの登録が正しくないと、別のセッションの欄に出たり、どこにも出なかったりします</li>
     <li>Codex のセッションが「Codex のフックが届いていないため記録できなかった。」と返すときは、そのセッションのフックが常駐サーバーに届いていません。<a href="#trouble-sessions">セッションが一覧に出ない</a>と同じ点を確かめ、新しい会話で試します</li>

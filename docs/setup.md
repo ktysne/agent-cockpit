@@ -4,7 +4,7 @@
 
 ## 進め方の決まり
 
-- `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/`、Codex の `~/.codex/hooks.json`、`~/.codex/config.toml`、`~/.codex/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。
+- `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/`、Codex の `~/.codex/hooks.json`、`~/.codex/config.toml`、`~/.agents/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。
 - 既存の設定は消さずに統合します。同じイベントの配列がすでにあるときは、その配列へ要素を足します。
 - claude-codex-bridge と ai-cross-review は、最初に「始める前に: 連携ツールの確認」で導入済みかを確かめ、導入されていなければ開発者に導入するかを尋ねます。導入するときは、各ツールの手順書に従います。GitHub CLI と Codex は、導入されていなければ各ツールのドキュメントへ案内してください。この文書の各パターンは、連携ツールが導入済みのときに agent-cockpit 側で必要な設定だけを書いています。
 - 手順の中の `D:/path/to/agent-cockpit` は、このリポジトリを置いた絶対パスに置き換えます。worktree ではなく、残しておく本体のチェックアウトを指してください。worktree を消すと、フックの参照先が無くなります。
@@ -472,18 +472,18 @@ approval_mode = "approve"
 
 ### 3. スキルを置く
 
-Codex のメインセッションが MCP ツールの使い方を読むスキルを、`~/.codex/skills/agent-cockpit/` にコピーします。
+Codex のメインセッションが MCP ツールの使い方を読むスキルを、`~/.agents/skills/agent-cockpit/` にコピーします。
 Claude 向けの `skills/agent-cockpit/` ではなく、質問ツールの扱いを Codex に合わせた `skills/codex/agent-cockpit/` を使います。
-更新のスキル(`skills/update-tools/`)は Claude と共通なので、同じものを `~/.codex/skills/update-tools/` にコピーします。リポジトリのルートで実行します。
+更新のスキル(`skills/update-tools/`)は Claude と共通なので、同じものを `~/.agents/skills/update-tools/` にコピーします。リポジトリのルートで実行します。
 
 PowerShell:
 
 ```powershell
-$codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
-$skillDirectory = Join-Path $codexHome 'skills\agent-cockpit'
+$agentsHome = Join-Path $env:USERPROFILE '.agents'
+$skillDirectory = Join-Path $agentsHome 'skills\agent-cockpit'
 New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
 Copy-Item .\skills\codex\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
-$updateSkillDirectory = Join-Path $codexHome 'skills\update-tools'
+$updateSkillDirectory = Join-Path $agentsHome 'skills\update-tools'
 New-Item -ItemType Directory -Path $updateSkillDirectory -Force | Out-Null
 Copy-Item .\skills\update-tools\SKILL.md (Join-Path $updateSkillDirectory 'SKILL.md') -Force
 ```
@@ -491,10 +491,13 @@ Copy-Item .\skills\update-tools\SKILL.md (Join-Path $updateSkillDirectory 'SKILL
 bash:
 
 ```bash
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit" "${CODEX_HOME:-$HOME/.codex}/skills/update-tools"
-cp skills/codex/agent-cockpit/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/agent-cockpit/SKILL.md"
-cp skills/update-tools/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/update-tools/SKILL.md"
+mkdir -p "$HOME/.agents/skills/agent-cockpit" "$HOME/.agents/skills/update-tools"
+cp skills/codex/agent-cockpit/SKILL.md "$HOME/.agents/skills/agent-cockpit/SKILL.md"
+cp skills/update-tools/SKILL.md "$HOME/.agents/skills/update-tools/SKILL.md"
 ```
+
+古い置き場(`$CODEX_HOME/skills/agent-cockpit/`、`$CODEX_HOME/skills/update-tools/`、既定では `~/.codex/skills/` の下)に写しがあれば、その写しのフォルダーを消してください。
+ただし、`~/.codex/skills` を `~/.agents/skills` へのジャンクションやシンボリックリンクにしているときは、古い置き場と新しい置き場が同じフォルダーなので、消さないでください。消すと、配ったばかりのスキルも消えます。
 
 リポジトリを更新してスキルが変わったときは、コピーし直します。
 
@@ -508,7 +511,7 @@ Codex CLI を起動して `/hooks` を開き、1 で足したフックを信頼�
 ### 確認
 
 1. 新しい Codex のセッションを開き、ダッシュボードを再読み込みします。そのセッションの行が、左端に青紫の色帯を付けて出れば成功です。出ないときは、`/hooks` で信頼したかと、フックのパスと引数 `codex` を確かめます。
-2. `codex mcp list` を実行し、`agent-cockpit` の行の状態が `enabled` であることを確かめます。あわせて、`~/.codex/skills/agent-cockpit/SKILL.md` があることを確かめます。
+2. `codex mcp list` を実行し、`agent-cockpit` の行の状態が `enabled` であることを確かめます。あわせて、`~/.agents/skills/agent-cockpit/SKILL.md` があることを確かめます。
 3. Codex のセッションで「`cockpit_set_tasks` で確認用のタスクを 1 件登録して」と依頼します。そのセッションの欄にタスクが出れば、MCP サーバーとフックが同じセッションを指しています。「Codex のフックが届いていないため記録できなかった。」と返るときは、フックを信頼する前から開いていた会話か、フックが動いていません。1 を確かめてから、新しい会話で試します。
 4. 回答の経路を確かめるときは、画面上部の「離席中」をオンにしてから、Codex のセッションに「確認のために `request_user_input_async` で質問して」と依頼します。待つ形の `request_user_input` は Plan モードでだけ使えます。ダッシュボードに判断待ちとして出て、画面から回答するとセッションがその回答で進めば成功です。確かめ終わったら「離席中」をオフに戻します。
 5. パターン B も行っているときは、Codex のセッションで作った PR が、青紫の色帯を付けて PR の欄に出ることを確かめます。

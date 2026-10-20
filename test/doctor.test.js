@@ -43,7 +43,7 @@ async function fixture(t, providers = ['claude', 'codex'], environment = {}) {
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const root = path.join(directory, 'agent-cockpit');
   const userHome = path.join(directory, 'home');
-  const homes = { claude: environment.CLAUDE_CONFIG_DIR || path.join(userHome, '.claude'),
+  const homes = { agents: path.join(userHome, '.agents'), claude: environment.CLAUDE_CONFIG_DIR || path.join(userHome, '.claude'),
     codex: environment.CODEX_HOME || path.join(userHome, '.codex'), cockpit: environment.AGENT_COCKPIT_HOME || path.join(userHome, '.agent-cockpit') };
   await write(path.join(root, 'package.json'), { name: 'agent-cockpit', version: '1.8.0' });
   await write(path.join(root, '.git', 'HEAD'), COMMIT);
@@ -57,7 +57,7 @@ async function fixture(t, providers = ['claude', 'codex'], environment = {}) {
     } else await write(path.join(homes.codex, 'config.toml'), mcpToml(manifest.codex.mcp));
     for (const [source, destination] of Object.entries(manifest[provider].skills)) {
       await write(path.join(root, source), `スキル ${source}\n正本\n`);
-      await write(path.join(homes[provider], destination), `スキル ${source}\r\n正本\r\n`);
+      await write(path.join(provider === 'codex' ? homes.agents : homes.claude, destination), `スキル ${source}\r\n正本\r\n`);
     }
   }
   await write(path.join(homes.cockpit, 'server.json'), { port: 47821, pid: 123, startedAt: '2026-10-20T00:00:00.000Z', secret: SECRET });
@@ -203,7 +203,7 @@ test('MCP の実行先とスキルの古さと不存在を別々に報告する'
   const f = await fixture(t);
   await write(path.join(f.userHome, '.claude.json'), { mcpServers: { 'agent-cockpit': { command: 'node', args: ['/other/src/mcp/server.js'], env: { TOKEN: ENV_SECRET } } } });
   await write(path.join(f.homes.claude, 'skills/agent-cockpit/SKILL.md'), '古い内容');
-  await fs.unlink(path.join(f.homes.codex, 'skills/agent-cockpit/SKILL.md'));
+  await fs.unlink(path.join(f.homes.agents, 'skills/agent-cockpit/SKILL.md'));
   const { code, report } = await run(f.options);
   assert.equal(code, 1);
   assert.deepEqual(report.items.filter(item => item.result === 'mismatch').map(item => item.id),
@@ -585,9 +585,9 @@ test('照会できない各場合は写しを一つの未確認にまとめる',
 });
 
 test('Codex の配布先にだけ写しがあり checkout が見つからなくても未確認にする', async t => {
-  for (const home of ['codex', 'codex-subagent']) {
+  for (const home of ['agents', 'codex', 'codex-subagent']) {
     const f = await fixture(t);
-    const skill = home === 'codex' ? path.join(f.homes.codex, 'skills/cross-review/SKILL.md')
+    const skill = home !== 'codex-subagent' ? path.join(f.homes[home], 'skills/cross-review/SKILL.md')
       : path.join(f.userHome, '.codex-subagent/skills/cross-review/SKILL.md');
     await write(skill, 'installed');
     const { report } = await run(f.options);
@@ -707,4 +707,73 @@ test('bridge が未導入なら照会せず写しの項目を出さない', asyn
   const f = await fixture(t);
   const { report } = await run({ ...f.options, queryBridge: async () => assert.fail('未導入の照会') });
   assert.deepEqual(report.items.filter(item => item.id.startsWith('bridge.copies.')), []);
+});
+
+for (const customHome of [false, true]) {
+  test(`Codex のスキルは CODEX_HOME が${customHome ? '指定済み' : '既定'}でもユーザーホームの .agents で照合する`, async t => {
+    const codexHome = await fs.mkdtemp(path.join(ROOT, 'doctor-codex-fixture-'));
+    t.after(() => fs.rm(codexHome, { recursive: true, force: true }));
+    const f = await fixture(t, ['codex'], customHome ? { CODEX_HOME: codexHome } : {});
+    const { report } = await run(f.options);
+    for (const name of ['agent-cockpit', 'update-tools']) {
+      const item = report.items.find(item => item.id === `codex.skills.${name}`);
+      assert.equal(item.target, path.join(f.userHome, '.agents/skills', name, 'SKILL.md'));
+      assert.equal(item.result, 'ok');
+    }
+    assert.ok(!report.items.some(item => item.id.endsWith('-legacy')));
+  });
+}
+
+test('旧配置だけの Codex を導入済みとし新配置へのコピーと旧配置の手動削除を案内する', async t => {
+  const f = await fixture(t, ['codex']);
+  for (const destination of Object.values(f.manifest.codex.skills)) {
+    await write(path.join(f.homes.codex, destination), '旧配置の写し');
+  }
+  await fs.rm(f.homes.agents, { recursive: true });
+  await fs.unlink(path.join(f.homes.codex, 'hooks.json'));
+  await fs.unlink(path.join(f.homes.codex, 'config.toml'));
+  const { report } = await run(f.options);
+  for (const name of ['agent-cockpit', 'update-tools']) {
+    const item = report.items.find(item => item.id === `codex.skills.${name}`);
+    assert.equal(item.result, 'mismatch');
+    assert.equal(item.actions[0].op, 'copy');
+    const legacy = report.items.find(entry => entry.id === `${item.id}-legacy`);
+    const target = path.join(f.homes.codex, 'skills', name, 'SKILL.md');
+    assert.equal(legacy.provider, 'codex');
+    assert.equal(legacy.target, target);
+    assert.equal(legacy.result, 'mismatch');
+    assert.equal(legacy.expected, null);
+    assert.equal(legacy.observed, createHash('sha256').update('旧配置の写し').digest('hex'));
+    assert.equal(legacy.reason, '古い置き場に写しが残っているため、Codex の選択肢に同じスキルが 2 つ並びます。');
+    assert.deepEqual(legacy.actions, [{ op: 'manual', text: `${path.dirname(target)} が ${path.dirname(item.target)} と別のフォルダーであることを確かめてから消してください。スキルは ${item.target} に配っています。` }]);
+  }
+});
+
+test('新旧の配置が同じ実体なら旧配置の案内を出さない', async t => {
+  const f = await fixture(t, ['codex']);
+  const oldSkills = path.join(f.homes.codex, 'skills');
+  const newSkills = path.join(f.homes.agents, 'skills');
+  try { await fs.symlink(newSkills, oldSkills, 'junction'); }
+  catch (error) {
+    if (!['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) throw error;
+    for (const destination of Object.values(f.manifest.codex.skills)) {
+      await write(path.join(f.homes.codex, destination), '写し');
+    }
+    const realpath = fs.realpath;
+    t.mock.method(fs, 'realpath', file => realpath(file.startsWith(oldSkills) ? file.replace(oldSkills, newSkills) : file));
+  }
+  const { report } = await run(f.options);
+  assert.ok(!report.items.some(item => item.id.endsWith('-legacy')));
+});
+
+test('旧配置の実体を確かめられなくても手動削除の案内を出す', async t => {
+  const f = await fixture(t, ['codex']);
+  await write(path.join(f.homes.codex, 'skills/agent-cockpit/SKILL.md'), '写し');
+  const realpath = fs.realpath;
+  t.mock.method(fs, 'realpath', file => file.startsWith(f.homes.codex)
+    ? Promise.reject(Object.assign(new Error('アクセス拒否'), { code: 'EACCES' })) : realpath(file));
+  const { report } = await run(f.options);
+  const item = report.items.find(item => item.id === 'codex.skills.agent-cockpit-legacy');
+  assert.equal(item.result, 'mismatch');
+  assert.deepEqual(item.actions.map(action => action.op), ['manual']);
 });
