@@ -1,14 +1,15 @@
 # レビュー状態とコマンド解析の経路の計画(2026-10-20)
 
+2026-10-20 に 4 件とも完了した。
+
 2026-10-20 の 3 リポジトリ横断調査で起票した 4 件(agent-cockpit の #656、#657、#658 と、claude-codex-bridge の #164)の対応の計画である。
 起点は agent-cockpit が main の c6bf2320(v1.8.0)、claude-codex-bridge が main の 7a6422d である。
-ai-cross-review の正本のスキルは変えない。変える必要が出たら、別の PR として ai-cross-review で起票する。
+ai-cross-review の正本のスキルはこの計画では変えず、保留の記録の手順は ktysne/ai-cross-review#84 で別に足す。
 
 ## 現在地と次にやること
 
-4 件とも PR を作り、クロスレビューは収束した。開発者のマージを待っている。
-マージは、agent-cockpit の #659 を先に、次に #661 を merge commit で行う。#660 と claude-codex-bridge#165 は独立していて、順序を問わない。
-次のセッションは、下の表の状態の列を `gh pr view` で確かめる。#659 のマージの後に #661 の base が main へ変わったことを確かめ、変わっていなければ `gh pr edit 661 --base main` で付け替える。
+4 件とも main へマージし、Issue は閉じた。配置済みの agent-cockpit のスキルの写しも更新した。
+残る作業は ktysne/ai-cross-review#84 のレビューとマージ、マージ後のスキルの同期だけである。
 
 ## 決定済みの判断
 
@@ -33,10 +34,10 @@ ai-cross-review の正本のスキルは変えない。変える必要が出た�
 
 | 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-20 に確認) |
 |---|---|---|---|---|---|---|
-| 1 | agent-cockpit #657 worktree 間の記録の競合 | `src/server/pull-requests.js`、`src/server/pull-request-merge.js`、`src/web/index.html`、`mock/index.html` | hard | `claude/fix-657-review-conflict` | main | PR #659。1 往復で収束 |
-| 2 | agent-cockpit #656 レビュー不要の記録の未完了 | `src/server/decision-answers.js`、`src/server/pull-requests.js`、`src/mcp/server.js`、`skills/agent-cockpit/SKILL.md` | hard | `claude/fix-656-review-pending` | 1 | PR #661。3 往復で収束 |
-| 3 | agent-cockpit #658 シェルの解析の不一致 | `src/hooks/event.js`、`src/hooks/route.js`、`src/server/pull-request-utils.js` | hard | `claude/fix-658-shell-commands` | main | PR #660。3 往復で収束(worktree `.claude/worktrees/fix-658`) |
-| 4 | claude-codex-bridge #164 stderr を保持する子孫で終了を待ち続ける | `tools/codex-agent.sh` | hard | `fix/issue-164-stderr-holder` | main | PR claude-codex-bridge#165。収束 |
+| 1 | agent-cockpit #657 worktree 間の記録の競合 | `src/server/pull-requests.js`、`src/server/pull-request-merge.js`、`src/web/index.html`、`mock/index.html` | hard | `claude/fix-657-review-conflict` | main | PR #659。マージ済み |
+| 2 | agent-cockpit #656 レビュー不要の記録の未完了 | `src/server/decision-answers.js`、`src/server/pull-requests.js`、`src/mcp/server.js`、`skills/agent-cockpit/SKILL.md` | hard | `claude/fix-656-review-pending` | 1 | PR #661。マージ済み |
+| 3 | agent-cockpit #658 シェルの解析の不一致 | `src/hooks/event.js`、`src/hooks/route.js`、`src/server/pull-request-utils.js` | hard | `claude/fix-658-shell-commands` | main | PR #660。マージ済み |
+| 4 | claude-codex-bridge #164 stderr を保持する子孫で終了を待ち続ける | `tools/codex-agent.sh` | hard | `fix/issue-164-stderr-holder` | main | PR claude-codex-bridge#165。マージ済み |
 
 base の列の数字は、表の順の PR のブランチを指す。
 
