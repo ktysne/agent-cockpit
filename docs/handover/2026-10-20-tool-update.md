@@ -8,9 +8,9 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 ## 現在地と次にやること
 
 段階 1(診断)は終わった。仕様の正本は [導入の整合の診断の設計](../design/doctor.md) である。
-段階 2a(#671)は、項目 1〜4(Codex のホームの解決の集約、診断の読み取りと評価の分離、適用のコマンド、checkout の更新)が終わり、項目 5(`update-tools` スキルの書き換え)の PR を出している。項目 6(連携ツールが無い環境でエラーも警告も出さないこと)は、`test/apply-checkouts.test.js` と `test/apply.test.js`(bridge と ai-cross-review の無いホームで流す)で確かめてあり、項目 5 の PR で #671 を閉じる。
-適用のコマンドと checkout の更新は、実機のホームと checkout ではまだ確かめていない。手順は PR #676 と #677 の「確認して欲しいポイント」にある。
-段階 2b(#673)は、#671、ktysne/claude-codex-bridge#169、ktysne/ai-cross-review#87 がそろった側から進める。
+段階 2a(#671)は終わった。診断と適用(`src/client/doctor.js`、`src/client/apply.js`)、checkout の更新(`apply.js --update-checkouts`)、それを使う `update-tools` スキルが入っている。
+新しい `update-tools` の手順は、本体の checkout と実機のホームで 1 回通した(2026-10-20)。checkout の確認と fast-forward の更新、診断の不一致の選択と適用、退避、常駐サーバーの再起動が動き、診断し直して不一致が残らないことを確かめた。
+次は段階 2b(#673)の前提の、連携ツール側の照会の入口である。ktysne/claude-codex-bridge#169(ktysne/claude-codex-bridge#167 の後)と ktysne/ai-cross-review#87 を、それぞれのリポジトリで進める。#673 は、そろった側から進める。
 
 ## 決定済みの判断
 
@@ -39,10 +39,10 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 | 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-20 に確認) |
 |---|---|---|---|---|---|---|
 | 1 | #534 段階 1 診断 | `src/client/doctor.js`、`src/shared/integration-manifest.js`、`docs/setup.md`、`docs/update.md` | hard | `claude/integration-doctor` | main | PR #670。マージ済み、#534 は閉じた |
-| 2 | #671 段階 2a 適用、checkout の更新、Codex のホームの解決の集約 | `src/client/doctor.js`、`src/client/apply.js`、`src/server/identity.js`、`src/server/server.js`、`skills/update-tools/SKILL.md` | hard | 項目ごとに main から切る | main | 項目 1 は PR #674、項目 2 は PR #675、項目 3 は PR #676、項目 4 は PR #677 でマージ済み。項目 5 は `claude/update-tools-commands` で PR を出している。項目 6 は既存のテストで確かめた |
-| 3 | ktysne/claude-codex-bridge#169 写しの照会 | bridge の `tools/codex-agent.sh` | bridge 側 | 未定 | bridge の main | 起票済み、#167 の後 |
+| 2 | #671 段階 2a 適用、checkout の更新、Codex のホームの解決の集約 | `src/client/doctor.js`、`src/client/apply.js`、`src/server/identity.js`、`src/server/server.js`、`skills/update-tools/SKILL.md` | hard | 項目ごとに main から切る | main | PR #674、#675、#676、#677、#678 でマージ済み、#671 は閉じた。項目 6 は `test/apply-checkouts.test.js` と `test/apply.test.js` で確かめた。実機で `update-tools` を通した |
+| 3 | ktysne/claude-codex-bridge#169 写しの照会 | bridge の `tools/codex-agent.sh` | bridge 側 | 未定 | bridge の main | 起票済み、未着手。ktysne/claude-codex-bridge#167(未完了)の後 |
 | 4 | ktysne/ai-cross-review#87 グローバル SKILL の確認 | ai-cross-review の `tools/cross-review.sync-all.js` | ai-cross-review 側 | 未定 | ai-cross-review の main | 起票済み、未着手 |
-| 5 | #673 段階 2b 連携ツールの写し | `src/client/doctor.js`、`skills/update-tools/SKILL.md` | 未定 | 未定 | main | 起票済み、2〜4 の後 |
+| 5 | #673 段階 2b 連携ツールの写し | `src/client/doctor.js`、`skills/update-tools/SKILL.md` | 未定 | 未定 | main | 起票済み、未着手。3 と 4 の後 |
 | 6 | 段階 3 ダッシュボードの入口 | 未定 | 未定 | 未定 | main | 未起票 |
 
 ## 落とし穴
