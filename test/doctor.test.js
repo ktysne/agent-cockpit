@@ -208,6 +208,48 @@ test('Codex の MCP の実行先とツールの approval_mode を別々に照合
   assert.ok(report.items.find(item => item.id === 'codex.mcp.registration').actions.some(action => action.op === 'toml-set' && action.key === 'args'));
 });
 
+test('Codex のツールをインラインテーブルで書いた登録は未確認にし書き換えの対処を出さない', async t => {
+  const f = await fixture(t, ['codex']);
+  const mcp = f.manifest.codex.mcp;
+  const tools = Object.keys(mcp.tools).map(name => `${name} = { approval_mode = "approve" }`).join(', ');
+  await write(path.join(f.homes.codex, 'config.toml'),
+    `[mcp_servers.agent-cockpit]\ncommand = "node"\nargs = ${JSON.stringify(mcp.args)}\ntools = { ${tools} }\n`);
+  const { code, report } = await run(f.options);
+  assert.equal(code, 0);
+  const items = report.items.filter(item => item.category === 'mcp');
+  assert.deepEqual(items.map(item => [item.id, item.result]), [['codex.mcp.registration', 'unverified']]);
+  assert.deepEqual(items[0].actions, []);
+});
+
+test('Codex の MCP の env と信頼の記録と別のプロジェクトの表は照合を妨げない', async t => {
+  const f = await fixture(t, ['codex']);
+  const toml = mcpToml(f.manifest.codex.mcp).replace('[mcp_servers.agent-cockpit]\n', '[mcp_servers.agent-cockpit]\nenv = { TOKEN = "value" }\n')
+    + `\n[mcp_servers.agent-cockpit.env]\nOTHER = "value"\n\n[projects.'${f.root.replace(/\\/g, '/')}']\ntrust_level = "trusted"\n`
+    + `\n[hooks.state.'${f.root.replace(/\\/g, '/')}/src/hooks/event.js']\ntrusted_hash = "x"\n`;
+  await write(path.join(f.homes.codex, 'config.toml'), toml);
+  const { code, report } = await run(f.options);
+  assert.equal(code, 0);
+  assert.equal(report.items.find(item => item.id === 'codex.mcp.registration').result, 'ok');
+});
+
+test('同じグループに独自のフックがある登録の対処はフック 1 件だけを置き換えるか取り除く', async t => {
+  const f = await fixture(t, ['claude']);
+  await changeHooks(f, 'claude', hooks => {
+    hooks.SessionStart[1].hooks[0].timeout = 1;
+    hooks.SessionStart[1].hooks.push({ type: 'command', command: 'private-custom-command' });
+    hooks.Notification[0].hooks.push(structuredClone(hooks.SessionEnd[0].hooks[0]));
+    delete hooks.SessionEnd;
+  });
+  const { report } = await run(f.options);
+  const replaced = report.items.find(item => item.id === 'claude.hooks.SessionStart.all.away').actions[0];
+  assert.deepEqual([replaced.op, replaced.target], ['json-replace', 'hook']);
+  assert.deepEqual(replaced.value, f.manifest.claude.hooks.SessionStart[1].hooks[0]);
+  const ended = report.items.find(item => item.id === 'claude.hooks.SessionEnd.all.event');
+  assert.deepEqual([ended.actions[0].op, ended.actions[0].target], ['json-add', 'group']);
+  const extra = report.items.find(item => item.id.startsWith('claude.hooks.extra.Notification.event')).actions[0];
+  assert.deepEqual([extra.op, extra.target, extra.value], ['json-remove', 'hook', undefined]);
+});
+
 test('環境変数で変更した各ホームを使う', async t => {
   const base = await fs.mkdtemp(path.join(ROOT, 'doctor-homes-'));
   t.after(() => fs.rm(base, { recursive: true, force: true }));

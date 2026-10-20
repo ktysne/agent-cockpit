@@ -68,6 +68,7 @@ function hookEntries(document) {
 function parseMcpToml(text) {
   const tables = new Map();
   let current = null;
+  let tableName = '';
   let invalid = false;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -75,6 +76,7 @@ function parseMcpToml(text) {
     if (line.startsWith('[')) {
       const header = line.match(/^\[\s*(.*?)\s*\]\s*(?:#.*)?$/);
       const name = header?.[1].replace(/"([\w-]+)"|'([\w-]+)'/g, (_, basic, literal) => basic || literal).replace(/\s*\.\s*/g, '.');
+      tableName = name ?? '';
       current = name === 'mcp_servers.agent-cockpit' || name?.startsWith('mcp_servers.agent-cockpit.tools.') ? name : null;
       if (current) {
         if (tables.has(current)) invalid = true;
@@ -82,7 +84,15 @@ function parseMcpToml(text) {
       } else if (line.includes('mcp_servers.agent-cockpit') && !header) invalid = true;
       continue;
     }
-    if (!current) continue;
+    // インラインテーブルやドット付きのキーで書いた登録とツールの設定は読まないので、読めない設定として扱う。
+    const key = line.split('=')[0].trim().replace(/["']/g, '').replace(/\s*\.\s*/g, '.');
+    if (!current) {
+      const fullKey = tableName ? `${tableName}.${key}` : key;
+      const otherSubtable = tableName.startsWith('mcp_servers.agent-cockpit.') && tableName !== 'mcp_servers.agent-cockpit.tools';
+      if (!otherSubtable && (fullKey === 'mcp_servers.agent-cockpit' || fullKey.startsWith('mcp_servers.agent-cockpit.'))) invalid = true;
+      continue;
+    }
+    if (current === 'mcp_servers.agent-cockpit' && (key === 'tools' || key.startsWith('tools.'))) { invalid = true; continue; }
     const pair = line.match(/^(command|args|approval_mode)\s*=\s*(.*?)\s*$/);
     if (!pair) continue;
     const value = pair[2].replace(/#(?=(?:[^"']*["'][^"']*["'])*[^"']*$).*$/, '').trim();
@@ -101,11 +111,20 @@ async function fallbackRoot(root) {
   return repositoryRootFromGitDirectory(gitDir, paths) || root;
 }
 
-function hookActions(document, provider, entry, expected) {
-  const match = { matcher: entry.matcher, script: execution(entry.hook).script ?? null };
-  return [{ op: expected ? 'json-replace' : 'json-remove', file: document.file, path: ['hooks', entry.event], match,
-    ...(expected ? { value: expected } : {}), observedDigest: document.observedDigest },
-  ...(provider === 'codex' ? [TRUST_ACTION] : []), SESSION_ACTION];
+// 同じグループに利用者のフックが同居しうるため、置き換えと削除はフック 1 件だけを対象にする。
+// matcher はグループの属性なので、違うときはフックを外して期待するグループを足す。
+function hookActions(document, provider, entry, expectedGroup) {
+  const target = { file: document.file, path: ['hooks', entry.event], observedDigest: document.observedDigest };
+  const remove = { op: 'json-remove', target: 'hook', ...target, match: { matcher: entry.matcher, script: execution(entry.hook).script ?? null } };
+  const edits = !expectedGroup ? [remove]
+    : entry.matcherKey === matcherKey(expectedGroup.matcher) ? [{ ...remove, op: 'json-replace', value: expectedGroup.hooks[0] }]
+      : [remove, addGroupAction(document, entry.event, expectedGroup)];
+  return [...edits, ...(provider === 'codex' ? [TRUST_ACTION] : []), SESSION_ACTION];
+}
+
+function addGroupAction(document, event, group) {
+  return { op: 'json-add', target: 'group', file: document.file, path: ['hooks', event],
+    match: { matcher: group.matcher ?? null, script: execution(group.hooks[0]).script }, value: group, observedDigest: document.observedDigest };
 }
 
 function checkHooks(provider, document, entries, manifest, add, conflictingRoots, bridgeInstalled = false) {
@@ -132,8 +151,7 @@ function checkHooks(provider, document, entries, manifest, add, conflictingRoots
       const agrees = entry && entry.matcherKey === key && isDeepStrictEqual(hookValue(entry.hook), hookValue(expected));
       const otherCheckout = entry && entry.root && normalizedPath(entry.root) !== normalizedPath(path.dirname(path.dirname(path.dirname(execution(expected).script))));
       const actions = entry ? hookActions(document, provider, entry, group)
-        : [{ op: 'json-add', file: document.file, path: ['hooks', event], match: { matcher, script: execution(expected).script },
-          value: group, observedDigest: document.observedDigest }, ...(provider === 'codex' ? [TRUST_ACTION] : []), SESSION_ACTION];
+        : [addGroupAction(document, event, group), ...(provider === 'codex' ? [TRUST_ACTION] : []), SESSION_ACTION];
       const ok = agrees && !conflictingRoots.length;
       const reason = ok ? 'フックの登録は対象の checkout と一致しています。'
         : conflictingRoots.length ? 'フックが複数の checkout を指しているため、使う checkout にそろえてください。'

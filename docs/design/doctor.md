@@ -103,8 +103,15 @@ Codex のフックの `command` は、`node "<パス>" codex` の形の文字列
 
 | `op` | 内容 |
 |---|---|
-| `json-add`、`json-replace`、`json-remove` | `file`、`path`(例 `["hooks","PreToolUse"]`)、`match`(配列の中の要素を選ぶ条件。matcher とスクリプト)、`value`。配列の添字は持たない。利用者の独自のフックが混ざり、読み直すたびに添字が変わるため |
+| `json-add`、`json-replace`、`json-remove` | `file`、`path`(例 `["hooks","PreToolUse"]`)、`match`(配列の中の要素を選ぶ条件。matcher とスクリプト)、`target`、`value`。配列の添字は持たない。利用者の独自のフックが混ざり、読み直すたびに添字が変わるため |
 | `toml-set` | `file`、`table`(例 `mcp_servers.agent-cockpit`)、`key`、`value`。`[hooks.state]` は対象にしない |
+
+フックの対処の `target` は、`group`(matcher のグループを足す)か `hook`(`match` の matcher のグループの中で、`match` のスクリプトを指すフック 1 件を置き換えるか取り除く)である。
+同じグループに利用者のフックが同居することがあるため、置き換えと取り除きはグループ全体を対象にしない。取り除いてグループが空になったときだけ、グループも取り除く。
+matcher はグループの属性なので、matcher が違う登録は、フックを取り除く対処と、期待するグループを足す対処の 2 つにする。
+1 つの項目の対処は、同じ観測に対してまとめて適用する。
+
+Codex の `config.toml` のうち、agent-cockpit の登録をインラインテーブルやドット付きのキーで書いたもの(`tools = { … }` など)は読まないので、MCP の項目を `unverified` にし、書き換えの対処を出さない。
 | `copy` | `from`(対象の checkout からの相対パス)、`to`(絶対パス) |
 | `command` | `command`(例 `node src/client/restart-server.js --json`)と、実行する場所 |
 | `manual` | 開発者の操作(セッションの開き直し、Codex の `/hooks` での信頼し直し)を `text` で |
