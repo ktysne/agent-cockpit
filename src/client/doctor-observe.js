@@ -2,6 +2,8 @@ const fs = require('node:fs/promises');
 const syncFs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { createHash } = require('node:crypto');
 const { integrationManifest } = require('../shared/integration-manifest');
 const { cockpitHomeFromOptions, claudeHomeFromOptions, codexHomeFromOptions, codexAgentScriptPaths, gitDirectoryFromFile, repositoryRootFromGitDirectory } = require('../server/identity');
@@ -51,6 +53,33 @@ async function observeServer(home, root, expected, options) {
   return { port, pid, startedAt, health, sourceState, entries };
 }
 
+async function observeCrossReview(checkouts, homes, environment, options) {
+  const checkout = checkouts.find(entry => entry.tool === 'ai-cross-review');
+  if (!checkout) return null;
+  if (!checkout.root) return { error: 'ai-cross-review の checkout が見つかりません。' };
+  let stdout;
+  try {
+    ({ stdout } = await (options.queryCrossReview || promisify(execFile))(process.execPath,
+      ['tools/cross-review.sync-all.js', '--global-skill', '--check', '--json'],
+      { cwd: checkout.root, env: { ...environment, CLAUDE_CONFIG_DIR: homes.claude, CODEX_HOME: homes.codex },
+        timeout: 30000, windowsHide: true, encoding: 'utf8' }));
+  } catch (error) {
+    if (error.killed) return { error: 'ai-cross-review の照会が時間切れになりました。' };
+    if (![1, 3].includes(error.code)) return { error: `ai-cross-review の照会を実行できませんでした (終了コード: ${error.code ?? '不明'})。` };
+    stdout = error.stdout;
+  }
+  let value;
+  try { value = JSON.parse(stdout); }
+  catch { return { error: 'ai-cross-review の照会結果を JSON として読めませんでした。' }; }
+  if (value?.schemaVersion !== 1) return { error: 'ai-cross-review の照会結果の schemaVersion が 1 ではありません。' };
+  if (!Array.isArray(value.targets) || !value.targets.every(target => object(target) &&
+      ['claude', 'codex', 'codex-subagent'].includes(target.id) && typeof target.path === 'string' &&
+      ['match', 'stale', 'missing', 'unreadable', 'skipped'].includes(target.state))) {
+    return { error: 'ai-cross-review の照会結果の配布先を読めませんでした。' };
+  }
+  return value;
+}
+
 async function observe(options = {}) {
   const environment = options.environment || process.env;
   const userHome = options.userHome || os.homedir();
@@ -95,7 +124,8 @@ async function observe(options = {}) {
   }
   const server = await observeServer(homes.cockpit, root, expected, options);
   const checkouts = await observeCheckouts({ root, userHome, homes, bridgeInstalled, cwd: options.cwd });
-  return { homes, hooks, candidates, root, resolvedBy, expected, manifest, generatedAt, bridgeInstalled, checkouts,
+  const crossReview = await observeCrossReview(checkouts, homes, environment, options);
+  return { homes, hooks, candidates, root, resolvedBy, expected, manifest, generatedAt, bridgeInstalled, checkouts, crossReview,
     claudeHooks, codexHooks, claudeMcp, codexConfig, skills, skillPresent, server };
 }
 

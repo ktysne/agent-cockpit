@@ -113,7 +113,10 @@ async function editedContent(io, root, content, actions) {
   for (const action of actions) {
     if (action.op === 'toml-set') result = tomlEdit(result?.toString('utf8') || '', action);
     else if (action.op === 'copy') result = await io.readFile(path.join(root, action.from));
-    else throw new Error('対応していないファイルの対処です。');
+    else if (action.op === 'copy-file') {
+      result = await io.readFile(action.from);
+      if (digest(result) !== action.sourceDigest) return null;
+    } else throw new Error('対応していないファイルの対処です。');
   }
   return result;
 }
@@ -166,14 +169,14 @@ async function applySelected(from, ids, options) {
     const result = { id, status: 'applied', reason: '対処を適用しました。' };
     report.results.push(result);
     if (normalizedPath(current.checkout.root) !== normalizedPath(from.checkout.root)) Object.assign(result, { status: 'skipped', reason: 'checkout が変わりました。診断し直してください。' });
-    else if (previous.result !== 'mismatch') Object.assign(result, { status: 'skipped', reason: '診断の時点で不一致ではありませんでした。' });
+    else if (previous.result !== 'mismatch' && !(previous.result === 'not-installed' && previous.actions.some(action => action.op === 'copy-file'))) Object.assign(result, { status: 'skipped', reason: '診断の時点で適用できる対処がありませんでした。' });
     else if (!item) Object.assign(result, { status: 'skipped', reason: '項目が無くなりました。' });
     else if (item.result === 'ok') Object.assign(result, { status: 'already-ok', reason: '既に一致しています。' });
-    else if (item.result !== 'mismatch') Object.assign(result, { status: 'skipped', reason: '適用できる状態ではありません。' });
+    else if (item.result !== 'mismatch' && !(item.result === 'not-installed' && item.actions.some(action => action.op === 'copy-file'))) Object.assign(result, { status: 'skipped', reason: '適用できる状態ではありません。' });
     else if (!isDeepStrictEqual(previous.actions, item.actions)) Object.assign(result, { status: 'skipped', reason: CHANGED });
     else {
       const actions = item.actions.filter(action => !['manual', 'command'].includes(action.op));
-      const targets = [...new Set(actions.map(action => action.op === 'copy' ? action.to : action.file))];
+      const targets = [...new Set(actions.map(action => ['copy', 'copy-file'].includes(action.op) ? action.to : action.file))];
       if (targets.length > 1) Object.assign(result, { status: 'failed', reason: '1 つの項目が複数のファイルを対象にしています。' });
       else {
         candidates.push({ item, result });
@@ -193,8 +196,12 @@ async function applySelected(from, ids, options) {
         results.forEach(result => Object.assign(result, { status: 'skipped', reason: CHANGED }));
         continue;
       }
-      await backup.save(file, content);
       const edited = await editedContent(io, current.checkout.root, content, actions);
+      if (edited === null) {
+        results.forEach(result => Object.assign(result, { status: 'skipped', reason: CHANGED }));
+        continue;
+      }
+      await backup.save(file, content);
       await io.mkdir(path.dirname(file), { recursive: true });
       temporary = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
       const mode = content === null ? 0o600 : (await io.stat(file)).mode & 0o777;

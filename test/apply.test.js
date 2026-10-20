@@ -336,3 +336,120 @@ test('command は選んだときだけファイルを書いた後に execFile �
   assert.deepEqual(calls, [[process.execPath, [path.join(f.root, 'src/client/restart-server.js'), '--json'], { cwd: f.root }]]);
   assert.deepEqual(report.commands, [{ command: 'node src/client/restart-server.js --json', exitCode: 0 }]);
 });
+
+async function reviewCopy(f, state = 'stale') {
+  const root = path.join(f.directory, 'ai-cross-review');
+  const source = path.join(root, '.claude/skills/cross-review/SKILL.md');
+  const target = path.join(f.userHome, '.codex-subagent/skills/cross-review/SKILL.md');
+  const bytes = Buffer.from('正本\r\n');
+  await write(path.join(root, '.git/config'), '[remote "origin"]\nurl = https://github.com/ktysne/ai-cross-review.git\n');
+  await fs.mkdir(path.dirname(source), { recursive: true });
+  await fs.writeFile(source, bytes);
+  if (state === 'stale') await write(target, '古い写し');
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  const targetEntry = { id: 'codex-subagent', path: target, state, sourcePath: source,
+    sourceSha256: hash(bytes), sha256: state === 'stale' ? hash('古い写し') : null };
+  f.options.queryCrossReview = async () => ({ stdout: JSON.stringify({ schemaVersion: 1, targets: [targetEntry] }) });
+  return { source, target, bytes, targetEntry, id: 'cross-review.skills.codex-subagent' };
+}
+
+test('copy-file は正本のバイト列を写し元の写しを退避する', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f);
+  await save(f);
+  const { code, report } = await run(f, [copy.id]);
+  assert.equal(code, 0);
+  assert.deepEqual(await fs.readFile(copy.target), copy.bytes);
+  const manifest = JSON.parse(await fs.readFile(path.join(report.backupDir, 'manifest.json'), 'utf8'));
+  assert.equal(await fs.readFile(manifest[0].backup, 'utf8'), '古い写し');
+  assert.ok(report.manual.some(text => text.includes('セッション')));
+});
+
+test('copy-file の正本が照会後に変われば診断し直すよう案内して見送る', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f);
+  await save(f);
+  await write(copy.source, '別の正本');
+  const { code, report } = await run(f, [copy.id]);
+  assert.equal(code, 1);
+  assert.equal(report.results[0].status, 'skipped');
+  assert.match(report.results[0].reason, /診断し直/);
+  assert.equal(await fs.readFile(copy.target, 'utf8'), '古い写し');
+});
+
+test('copy-file の写しが照会後に変われば上書きしない', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f);
+  await save(f);
+  await write(copy.target, '利用者の変更');
+  const { report } = await run(f, [copy.id]);
+  assert.equal(report.results[0].status, 'skipped');
+  assert.equal(await fs.readFile(copy.target, 'utf8'), '利用者の変更');
+});
+
+test('未配置の配布先はその項目を明示して選んだときだけ置く', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f, 'missing');
+  await save(f);
+  assert.equal((await run(f, [MCP_ID])).code, 0);
+  await assert.rejects(fs.stat(copy.target), { code: 'ENOENT' });
+  const { code, report } = await run(f, [copy.id]);
+  assert.equal(code, 0);
+  assert.equal(report.results[0].status, 'applied');
+  assert.deepEqual(await fs.readFile(copy.target), copy.bytes);
+  assert.equal(report.backupDir, null);
+});
+
+test('配布条件を満たさない項目を選んでも配布先を作らない', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f, 'skipped');
+  await save(f);
+  const { code, report } = await run(f, [copy.id]);
+  assert.equal(code, 1);
+  assert.equal(report.results[0].status, 'skipped');
+  await assert.rejects(fs.stat(path.dirname(copy.target)), { code: 'ENOENT' });
+});
+
+test('未配置だった写しが一致済みなら already-ok にする', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f, 'missing');
+  await save(f);
+  copy.targetEntry.state = 'match';
+  copy.targetEntry.sha256 = copy.targetEntry.sourceSha256;
+  const { code, report } = await run(f, [copy.id]);
+  assert.equal(code, 0);
+  assert.equal(report.results[0].status, 'already-ok');
+});
+
+test('copy-file でも rename 直前に変わった写しを上書きしない', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f);
+  await save(f);
+  const io = { ...fs, writeFile: async (file, ...args) => {
+    await fs.writeFile(file, ...args);
+    if (file.endsWith('.tmp')) await write(copy.target, '同時更新');
+  } };
+  const { report } = await run(f, [copy.id], { fs: io });
+  assert.equal(report.results[0].status, 'skipped');
+  assert.equal(await fs.readFile(copy.target, 'utf8'), '同時更新');
+});
+
+test('未配置だった写しが再診断で対象外なら配布しない', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f, 'missing');
+  await save(f);
+  copy.targetEntry.state = 'skipped';
+  const { report } = await run(f, [copy.id]);
+  assert.equal(report.results[0].status, 'skipped');
+  await assert.rejects(fs.stat(copy.target), { code: 'ENOENT' });
+});
+
+test('再診断で正本の digest が変われば保存した対処を適用しない', async t => {
+  const f = await fixture(t);
+  const copy = await reviewCopy(f);
+  await save(f);
+  copy.targetEntry.sourceSha256 = 'c'.repeat(64);
+  const { report } = await run(f, [copy.id]);
+  assert.equal(report.results[0].status, 'skipped');
+  assert.equal(await fs.readFile(copy.target, 'utf8'), '古い写し');
+});
