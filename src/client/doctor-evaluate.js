@@ -7,6 +7,16 @@ const TRUST_ACTION = { op: 'manual', text: 'Codex の /hooks でフックを信�
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const digest = text => createHash('sha256').update(text).digest('hex');
 
+function subtreeDigest(value, keys) {
+  for (const key of keys) value = object(value) && Object.hasOwn(value, key) ? value[key] : null;
+  return digest(JSON.stringify(value ?? null));
+}
+
+function tomlTableName(line) {
+  return line.trim().match(/^\[\s*(.*?)\s*\]\s*(?:#.*)?$/)?.[1]
+    .replace(/"([\w-]+)"|'([\w-]+)'/g, (_, basic, literal) => basic || literal).replace(/\s*\.\s*/g, '.');
+}
+
 function normalizedPath(value) {
   const paths = path.sep === '\\' || /^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\') ? path.win32 : path.posix;
   const normalized = paths.normalize(value).replace(/\\/g, '/').replace(/\/+$/, '');
@@ -56,7 +66,7 @@ function parseMcpToml(text) {
     if (!line || line.startsWith('#')) continue;
     if (line.startsWith('[')) {
       const header = line.match(/^\[\s*(.*?)\s*\]\s*(?:#.*)?$/);
-      const name = header?.[1].replace(/"([\w-]+)"|'([\w-]+)'/g, (_, basic, literal) => basic || literal).replace(/\s*\.\s*/g, '.');
+      const name = tomlTableName(line);
       tableName = name ?? '';
       current = name === 'mcp_servers.agent-cockpit' || name?.startsWith('mcp_servers.agent-cockpit.tools.') ? name : null;
       if (current) {
@@ -161,7 +171,8 @@ function checkMcp(provider, document, registration, manifest, add, shadowed, inv
   const agrees = isDeepStrictEqual(expected, observed);
   const actions = ['command', 'args'].map(key => provider === 'claude'
     ? { op: registration && Object.hasOwn(registration, key) ? 'json-replace' : 'json-add', file: document.file,
-      path: ['mcpServers', 'agent-cockpit', key], match: { name: 'agent-cockpit' }, value: manifest.mcp[key], observedDigest: document.observedDigest }
+      path: ['mcpServers', 'agent-cockpit', key], match: { name: 'agent-cockpit' }, value: manifest.mcp[key],
+      digestPath: ['mcpServers', 'agent-cockpit'], observedDigest: subtreeDigest(document.value, ['mcpServers', 'agent-cockpit']) }
     : { op: 'toml-set', file: document.file, table: 'mcp_servers.agent-cockpit', key, value: manifest.mcp[key], observedDigest: document.observedDigest });
   add(provider, 'mcp', 'registration', document.file, expected, observed, agrees ? 'ok' : 'mismatch', agrees
     ? 'MCP サーバーの実行先は対象の checkout と一致しています。'
@@ -259,4 +270,4 @@ function evaluate(observation) {
   return { schemaVersion: 1, generatedAt, checkout: { root, ...expected, resolvedBy }, homes, summary, items };
 }
 
-module.exports = { evaluate, hookEntries, normalizedPath };
+module.exports = { evaluate, hookEntries, normalizedPath, execution, subtreeDigest, tomlTableName };
