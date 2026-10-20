@@ -6,7 +6,7 @@ Issue #534 の計画である。利用者が、連携ツール(ai-cross-review�
 
 ## 現在地と次にやること
 
-段階 1(診断)の実装に着手した。仕様の正本は [導入の整合の診断の設計](../design/doctor.md) である。
+段階 1(診断)を PR #670 で実装した。仕様の正本は [導入の整合の診断の設計](../design/doctor.md) である。
 段階 1 の PR がマージされたら、段階 2 の Issue を起票する。
 
 ## 決定済みの判断
@@ -26,7 +26,7 @@ Issue #534 の計画である。利用者が、連携ツール(ai-cross-review�
 
 | 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-20 に確認) |
 |---|---|---|---|---|---|---|
-| 1 | #534 段階 1 診断 | `src/client/doctor.js`、`src/shared/integration-manifest.js`、`docs/setup.md`、`docs/update.md` | hard | `claude/integration-doctor` | main | 実装中 |
+| 1 | #534 段階 1 診断 | `src/client/doctor.js`、`src/shared/integration-manifest.js`、`docs/setup.md`、`docs/update.md` | hard | `claude/integration-doctor` | main | PR #670。レビュー中 |
 | 2 | 段階 2 更新と反映 | 未定 | 未定 | 未定 | main | 未起票 |
 | 3 | 段階 3 ダッシュボードの入口 | 未定 | 未定 | 未定 | main | 未起票 |
 
