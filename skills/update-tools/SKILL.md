@@ -86,7 +86,8 @@ ai-cross-review が導入済みなら、レビューを回すリポジトリご�
    出力は `{ schemaVersion: 1, subject: "migrate", result, root, projects: [{ root, manifest, upstream, form, migratable, reason, message }] }` である。
    `form` が `legacy` で `migratable` が `true` のリポジトリは移行できるものとして控える。
    `migratable` が `false` のリポジトリは `reason` と `message` を添えて移行できないものとして控える。
-   `form` が `error` のものと `migratable` が `null` のものは、確かめられなかったものとして控える。
+   `form` が `error` のものと、`form` が `legacy` で `migratable` が `null` のものは、確かめられなかったものとして控える。
+   `form` が `new` のものは移行済み、`not-applicable` のものは対象外である。どちらも `migratable` は `null` になる。
    終了コードは、0 が移行の必要なし、1 が旧形式あり、3 が確かめられなかったリポジトリあり、2 が引数の誤り(JSON を出さない)である。
 
 2. 取り込み先の差分は、1 の `form` に応じて各リポジトリのルートで確かめる。
