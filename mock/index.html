@@ -134,6 +134,24 @@ header.top {
 .diagnostics-policy-dialog p { margin: 8px 0 0; }
 .diagnostics-policy-dialog ul { margin: 8px 0 0; padding-left: 20px; }
 .diagnostics-policy-callout { padding: 12px; border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-soft); color: var(--warn-text); }
+.doctor-dialog { width: min(760px, calc(100vw - 32px)); }
+.doctor-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; }
+.doctor-summary p { flex: 1 1 320px; margin: 0; }
+.doctor-stale { margin: 10px 0 0; padding: 8px 12px; border: 1px solid var(--warn); border-radius: var(--radius); background: var(--warn-soft); color: var(--warn-text); }
+.doctor-group { margin-top: 14px; }
+.doctor-group h3 { margin: 0 0 6px; font-size: 14px; }
+.doctor-items { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.doctor-item { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.doctor-item[data-result="mismatch"] { border-color: var(--danger); }
+.doctor-item[data-result="unverified"] { border-color: var(--warn); }
+.doctor-item-reason { margin: 0; }
+.doctor-item-meta { margin: 4px 0 0; color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.doctor-item-meta code { font-size: 12px; }
+.doctor-item-action { margin: 6px 0 0; font-size: 13px; }
+.doctor-rest { margin-top: 14px; }
+.doctor-rest summary { cursor: pointer; color: var(--text-2); }
+.doctor-homes { margin: 14px 0 0; color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.doctor-homes code { font-size: 12px; }
 .diagnostics-policy-table-wrap { overflow-x: auto; }
 .diagnostics-policy-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .diagnostics-policy-table th, .diagnostics-policy-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
@@ -557,7 +575,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
     </div>
   </section>
   <div class="settings-save-error" id="settings-save-error" role="alert" hidden></div>
-  <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="https://ktysne.info/agent-cockpit/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a><button type="button" class="link-btn settings-manual-link" id="update-check">更新を確認</button><span id="update-check-status" role="status" aria-live="polite"></span></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
+  <div class="settings-actions"><div class="settings-resource-links"><a class="link-btn settings-manual-link" href="https://ktysne.info/agent-cockpit/manual/#help-settings" target="_blank" rel="noopener">マニュアル</a><a class="link-btn settings-manual-link" id="diagnostics-open" href="#diagnostics-dialog" aria-haspopup="dialog">診断ログ</a><button type="button" class="link-btn settings-manual-link" id="doctor-open" aria-haspopup="dialog">導入の点検</button><button type="button" class="link-btn settings-manual-link" id="update-check">更新を確認</button><span id="update-check-status" role="status" aria-live="polite"></span></div><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
 <dialog class="settings-dialog" id="import-app-tasks-dialog" aria-labelledby="import-app-tasks-title" aria-describedby="import-app-tasks-description">
   <h2 id="import-app-tasks-title">デスクトップアプリのタスク一覧を取り込みますか</h2>
@@ -640,6 +658,22 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   </section>
   <div class="diagnostics-policy-close"><button id="diagnostics-policy-close" type="button" autofocus>閉じる</button></div>
 </dialog>
+<dialog class="diagnostics-dialog doctor-dialog" id="doctor-dialog" aria-labelledby="doctor-title">
+  <h2 id="doctor-title">導入の点検</h2>
+  <div class="doctor-summary">
+    <p id="doctor-summary-text" role="status" aria-live="polite"></p>
+    <button id="doctor-recheck" type="button">点検し直す</button>
+  </div>
+  <p class="doctor-stale" id="doctor-stale" hidden>この結果は、ファイルを更新する前のものです。点検し直しています。</p>
+  <div id="doctor-groups"></div>
+  <p class="doctor-homes" id="doctor-homes"></p>
+  <div class="diagnostics-actions">
+    <button id="doctor-copy" type="button">直す依頼文をコピー</button>
+  </div>
+  <p class="diagnostics-status" id="doctor-copy-status" role="status" aria-live="polite"></p>
+  <textarea id="doctor-prompt" aria-label="直す依頼文" readonly hidden></textarea>
+  <div class="settings-actions"><span></span><button id="doctor-close" type="button" autofocus>閉じる</button></div>
+</dialog>
 <main class="wrap">
   <div class="mode-row">
     <div class="seg" role="group" aria-label="表示モード">
@@ -651,6 +685,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="restart-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="persistence-note" role="status" aria-live="polite" hidden><span></span> <button type="button" class="link-btn">保存を再試行</button></div>
+  <div class="filter-note" id="doctor-note" role="status" aria-live="polite" hidden><span></span> <button type="button" class="link-btn">内容を見る</button></div>
   <div class="filter-note" id="update-note" role="status" aria-live="polite" hidden>
     <span id="update-message"></span>
     <button type="button" class="link-btn" id="update-copy">更新の依頼文をコピー</button>
@@ -1054,6 +1089,31 @@ const DATA = {
   // codexAgent は claude-codex-bridge の ~/.claude/tools/codex-agent.sh があるか。無ければサブエージェントの段と経路の札を出さない。
   // crossReview は稼働中のセッションか PR を登録したセッションの worktree のどれかに ai-cross-review の tools/cross-review.js があるか。無ければクロスレビューの段を出さない。
   integrations: { codexAgent: true, crossReview: true },
+  // 導入の点検の要約だけを配信に載せる。項目の全文はダイアログを開いたときに別に取る。
+  // staleBefore は、再起動待ちの帯が出たときのファイルの更新を指し、それより前の結果を古いものとして示す。
+  doctor: { running: false, generatedAt: '2026-10-21T01:30:00.000Z', error: null,
+    summary: { ok: 18, mismatch: 2, unverified: 1, notRun: 1, notInstalled: 1 }, staleBefore: null },
+};
+
+// 導入の点検の全文の見本。常駐サーバーが診断(src/client/doctor.js --json)を子プロセスで流した結果にあたる。
+const DOCTOR_RESULT = {
+  checkout: { root: 'D:/Desktop/Develop/agent-cockpit', version: '1.5.0' },
+  homes: { claude: 'C:/Users/you/.claude', codex: 'C:/Users/you/.codex', agents: 'C:/Users/you/.agents', cockpit: 'C:/Users/you/.agent-cockpit' },
+  items: [
+    { id: 'claude.skills.update-tools', tool: 'agent-cockpit', provider: 'claude', result: 'mismatch',
+      reason: 'スキル update-tools の写しが checkout と違います。', actions: [{ op: 'copy' }] },
+    { id: 'codex.hooks.PreToolUse', tool: 'agent-cockpit', provider: 'codex', result: 'mismatch',
+      reason: 'Codex のフック PreToolUse が、checkout のスクリプトを指していません。',
+      actions: [{ op: 'json-replace' }, { op: 'manual', text: 'Codex で /hooks を開き、書き換えたフックを信頼し直してください。' }] },
+    { id: 'claude-codex-bridge.copies.query', tool: 'claude-codex-bridge', provider: null, result: 'unverified',
+      reason: 'claude-codex-bridge の写しを照会できませんでした。bash が見つかりません。',
+      actions: [{ op: 'manual', text: 'claude-codex-bridge の導入手順の「更新するとき」を確かめてください。' }] },
+    { id: 'cockpit.runtime-check.roundtrip', tool: 'agent-cockpit', provider: null, result: 'not-run',
+      reason: 'MCP の書き込みと質問の回答の往復は実施していません。', actions: [] },
+    { id: 'codex.mcp', tool: 'agent-cockpit', provider: 'codex', result: 'not-installed',
+      reason: 'Codex は導入されていません。', actions: [] },
+    ...Array.from({ length: 18 }, (_, index) => ({ id: `claude.hooks.ok-${index + 1}`, tool: 'agent-cockpit', provider: 'claude', result: 'ok', reason: '一致しています。', actions: [] })),
+  ],
 };
 
 for (const p of DATA.products) {
@@ -1582,6 +1642,122 @@ document.getElementById('diagnostics-open').addEventListener('click', event => {
   openDiagnostics();
 });
 document.getElementById('diagnostics-close').addEventListener('click', () => diagnosticsDialog.close());
+
+const doctorDialog = document.getElementById('doctor-dialog');
+const DOCTOR_OPEN_GROUPS = [['mismatch', '不一致'], ['unverified', '未確認']];
+const DOCTOR_REST_LABELS = { 'not-run': '未実施', 'not-installed': '未導入', ok: '一致' };
+let doctorResult = DOCTOR_RESULT;
+
+function doctorIsStale(doctor) {
+  return Boolean(doctor.staleBefore && doctor.generatedAt && doctor.generatedAt < doctor.staleBefore);
+}
+
+function doctorSummaryText(doctor) {
+  if (doctor.running) return '点検しています…';
+  if (doctor.error) return '点検を完了できませんでした。時間をおいて点検し直してください。';
+  if (!doctor.generatedAt) return 'まだ点検していません。';
+  const at = formatUpdateSucceededAt(doctor.generatedAt);
+  const { mismatch, unverified } = doctor.summary;
+  if (!mismatch && !unverified) return `${at} に点検しました。直す必要のある項目はありません。`;
+  return `${at} に点検しました。不一致が ${mismatch} 件、確かめられなかった項目が ${unverified} 件あります。`;
+}
+
+// ファイルを書き換える対処はセッションの update-tools が適用するので、画面では手で行う操作だけを文で示す。
+function doctorActionText(item) {
+  const manual = item.actions.filter(action => action.op === 'manual').map(action => action.text);
+  if (item.actions.some(action => action.op !== 'manual')) manual.unshift('update-tools スキルで直せます。');
+  return manual.join(' ');
+}
+
+function doctorItemHtml(item) {
+  const provider = item.provider ? ` / ${item.provider === 'claude' ? 'Claude' : 'Codex'}` : '';
+  const action = doctorActionText(item);
+  return `<li class="doctor-item" data-result="${esc(item.result)}">
+    <p class="doctor-item-reason">${esc(item.reason)}</p>
+    ${action ? `<p class="doctor-item-action">${esc(action)}</p>` : ''}
+    <p class="doctor-item-meta">${esc(item.tool)}${esc(provider)} · <code>${esc(item.id)}</code></p>
+  </li>`;
+}
+
+function renderDoctorDialog() {
+  const doctor = DATA.doctor;
+  document.getElementById('doctor-summary-text').textContent = doctorSummaryText(doctor);
+  const recheck = document.getElementById('doctor-recheck');
+  recheck.disabled = doctor.running;
+  recheck.textContent = doctor.running ? '点検中…' : '点検し直す';
+  document.getElementById('doctor-stale').hidden = !doctorIsStale(doctor);
+  const items = doctorResult?.items || [];
+  const open = DOCTOR_OPEN_GROUPS.map(([result, label]) => {
+    const group = items.filter(item => item.result === result);
+    return group.length ? `<section class="doctor-group"><h3>${label}(${group.length} 件)</h3><ul class="doctor-items">${group.map(doctorItemHtml).join('')}</ul></section>` : '';
+  }).join('');
+  const rest = items.filter(item => DOCTOR_REST_LABELS[item.result]);
+  const restCounts = Object.entries(DOCTOR_REST_LABELS)
+    .map(([result, label]) => [label, rest.filter(item => item.result === result).length])
+    .filter(([, count]) => count).map(([label, count]) => `${label} ${count} 件`).join('、');
+  document.getElementById('doctor-groups').innerHTML = open + (rest.length
+    ? `<details class="doctor-rest"><summary>ほかの項目(${restCounts})</summary><ul class="doctor-items">${rest.map(doctorItemHtml).join('')}</ul></details>`
+    : '');
+  const homes = doctorResult?.homes;
+  document.getElementById('doctor-homes').innerHTML = homes
+    ? `照合した checkout: <code>${esc(doctorResult.checkout.root)}</code>(バージョン ${esc(doctorResult.checkout.version)})。ホーム: Claude <code>${esc(homes.claude)}</code>、Codex <code>${esc(homes.codex)}</code>、<code>${esc(homes.agents)}</code>`
+    : '';
+  const mismatches = items.filter(item => item.result === 'mismatch');
+  document.getElementById('doctor-copy').closest('.diagnostics-actions').hidden = !mismatches.length;
+}
+
+function runDoctorCheck() {
+  if (DATA.doctor.running) return;
+  DATA.doctor = { ...DATA.doctor, running: true, error: null };
+  renderDoctorDialog();
+  renderDoctorNote(DATA);
+  setTimeout(() => {
+    DATA.doctor = { ...DATA.doctor, running: false, generatedAt: new Date().toISOString() };
+    renderDoctorDialog();
+    renderDoctorNote(DATA);
+  }, 1500);
+}
+
+function openDoctorDialog() {
+  document.getElementById('doctor-copy-status').textContent = '';
+  document.getElementById('doctor-prompt').hidden = true;
+  renderDoctorDialog();
+  if (!doctorDialog.open) doctorDialog.showModal();
+  if (doctorIsStale(DATA.doctor)) runDoctorCheck();
+}
+
+async function copyDoctorPrompt() {
+  const ids = (doctorResult?.items || []).filter(item => item.result === 'mismatch').map(item => item.id);
+  const prompt = `/update-tools スキルで、導入の点検の不一致を直してください。対象: ${ids.join('、')}`;
+  const status = document.getElementById('doctor-copy-status');
+  const field = document.getElementById('doctor-prompt');
+  try {
+    if (!navigator.clipboard) throw new Error('Clipboard unavailable');
+    await navigator.clipboard.writeText(prompt);
+    status.textContent = '依頼文をコピーしました。セッションに貼り付けて依頼してください。';
+    field.hidden = true;
+  } catch {
+    field.value = prompt;
+    field.hidden = false;
+    field.focus();
+    field.select();
+    status.textContent = '依頼文を選択しました。コピーしてセッションに貼り付けてください。';
+  }
+}
+
+// 再起動待ちのあいだは、更新したファイルの反映前の不一致を再起動の帯と重ねて出さない。
+function renderDoctorNote(state) {
+  const note = document.getElementById('doctor-note');
+  const count = state.doctor?.summary?.mismatch || 0;
+  note.hidden = !count || state.restartRequired || state.doctor.running || doctorIsStale(state.doctor);
+  note.querySelector('span').textContent = note.hidden ? '' : `導入の点検で、直す必要のある項目が ${count} 件見つかりました。`;
+}
+
+document.getElementById('doctor-open').addEventListener('click', openDoctorDialog);
+document.querySelector('#doctor-note button').addEventListener('click', openDoctorDialog);
+document.getElementById('doctor-recheck').addEventListener('click', runDoctorCheck);
+document.getElementById('doctor-copy').addEventListener('click', copyDoctorPrompt);
+document.getElementById('doctor-close').addEventListener('click', () => doctorDialog.close());
 document.getElementById('diagnostics-policy-open').addEventListener('click', () => {
   if (!diagnosticsPolicyDialog.open) diagnosticsPolicyDialog.showModal();
 });
@@ -3148,6 +3324,7 @@ async function requestServerRestart() {
     DATA.runtime.version = DATA.installed.version;
     DATA.restartRequired = false;
     renderRestartNote(DATA);
+    runDoctorCheck();
   }, 1500);
   return { status: 202 };
 }
@@ -3255,22 +3432,7 @@ function renderRestartNote(state) {
       }]);
       separator = 'または';
     }
-    buttons.push(['/update-tools スキルでの更新依頼プロンプトをコピー', async () => {
-      const copySequence = ++ui.copySequence;
-      const prompt = '/update-tools スキルを使って連携ツールを含めて最新化してください。';
-      let copyStatus;
-      try {
-        if (!navigator.clipboard) throw new Error('Clipboard unavailable');
-        await navigator.clipboard.writeText(prompt);
-        copyStatus = 'コピーされたプロンプトでAIエージェントに更新を依頼してください。';
-      } catch {
-        copyStatus = `コピーできませんでした。次の文を AI エージェントに渡してください: ${prompt}`;
-      }
-      if (copySequence !== ui.copySequence || ui.phase !== 'idle') return;
-      ui.copyStatus = copyStatus;
-      renderRestartNote(ui.state);
-    }]);
-    showCopyStatus = true;
+    buttons.push(['導入の点検を開く', openDoctorDialog]);
   }
   // ポーリングのたびに作り直すとボタンのフォーカスが外れるため、表示が変わったときだけ作り直す。
   const view = JSON.stringify([text, buttons.map(([label]) => label), ui.phase === 'sending', separator, showCopyStatus ? ui.copyStatus : '']);
@@ -3502,6 +3664,7 @@ function render() {
   applyUpdateState(DATA.update);
   renderRestartNote(DATA);
   renderPersistenceNote(DATA);
+  renderDoctorNote(DATA);
   renderReloadNote();
   renderRouting();
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode(showOriginBands) : renderKindMode(showOriginBands);
