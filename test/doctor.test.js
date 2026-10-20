@@ -507,6 +507,22 @@ test('グローバル SKILL 版 2 の配布先と古い置き場の写しを診�
   assert.ok(items.slice(2).every(item => item.reason.includes('Codex の選択肢に cross-review が 2 つ')));
 });
 
+test('グローバル SKILL 版 2 で古い置き場を読めなくても、ほかの配布先は診断する', async t => {
+  const f = await fixture(t);
+  await reviewCheckout(f);
+  const target = (id, state, extra = {}) => ({ id, state, path: path.join(f.userHome, id, 'SKILL.md'),
+    sourcePath: path.join(f.directory, 'source.md'), sha256: 'a'.repeat(64), sourceSha256: 'b'.repeat(64), ...extra });
+  const targets = [target('agents', 'stale'), target('codex-legacy', 'unreadable', { removable: false })];
+  const queryCrossReview = async () => ({ stdout: JSON.stringify({ schemaVersion: 2, targets }) });
+  const { report } = await run({ ...f.options, queryCrossReview });
+  const items = report.items.filter(item => item.category === 'copies');
+  assert.deepEqual(items.map(item => [item.id, item.result]), [
+    ['cross-review.skills.agents', 'mismatch'], ['cross-review.skills.codex-legacy', 'unverified']]);
+  assert.deepEqual(items[0].actions[0], { op: 'copy-file', from: targets[0].sourcePath, to: targets[0].path,
+    observedDigest: targets[0].sha256, sourceDigest: targets[0].sourceSha256 });
+  assert.deepEqual(items[1].actions, []);
+});
+
 for (const [name, legacyTarget] of [
   ['removable が無い', { id: 'codex-legacy', state: 'legacy' }],
   ['legacy でない状態', { id: 'codex-legacy', state: 'stale', removable: true }],

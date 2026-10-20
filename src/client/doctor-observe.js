@@ -80,7 +80,7 @@ async function observeCrossReview(checkouts, homes, environment, options) {
     : Array.isArray(value.targets) && value.targets.every(target => object(target) &&
       ['claude', 'agents', 'codex-legacy', 'codex-subagent-legacy'].includes(target.id) && typeof target.path === 'string' &&
       (target.id.endsWith('-legacy')
-        ? target.state === 'legacy' && typeof target.removable === 'boolean'
+        ? ['legacy', 'unreadable'].includes(target.state) && typeof target.removable === 'boolean'
         : ['match', 'stale', 'missing', 'unreadable', 'skipped'].includes(target.state)));
   if (!validTargets) {
     return { error: 'ai-cross-review の照会結果の配布先を読めませんでした。' };
