@@ -20,6 +20,16 @@ node src/client/doctor.js [--json] [--root <checkout>]
 - 既定は人が読む一覧で、`--json` は下の「出力の形」の JSON を標準出力に書く。
 - 終了コードは、`mismatch` が 1 件でもあれば 1、無ければ 0、診断そのものが失敗したら 2 にする。`unverified` と `not-run` だけなら 0 である。
 
+## 読み取り、評価、出力の分担
+
+`src/client/doctor-observe.js` の `observe(options)` が、ファイルと常駐サーバーを読み、対象の checkout、期待値、観測した時刻を含む観測結果を返す。
+`server.json` の `secret` は観測結果に含めない。
+`src/client/doctor-evaluate.js` の `evaluate(observation)` が、観測結果だけから診断の項目と対処を作る。
+評価は I/O を持たず、時刻や環境変数も読み取らない。
+
+`src/client/doctor.js` は読み取りと評価を順に呼び、人が読む一覧か JSON を出力する。
+今後の適用コマンドも同じ読み取りと評価を使い、適用の直前に診断をやり直す。
+
 ## 照合する checkout
 
 期待値を作る checkout(以下、対象の checkout)は、次の順に決める。
