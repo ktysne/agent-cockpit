@@ -8,7 +8,8 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 ## 現在地と次にやること
 
 段階 1(診断)は終わった。仕様の正本は [導入の整合の診断の設計](../design/doctor.md) である。
-次は段階 2a(#671)である。最初に #671 の「設計で決める点」を決め、この資料の「決定済みの判断」に足してから実装に入る。最初の PR には、Codex のホームの解決の集約を入れる。
+段階 2a(#671)の「設計で決める点」は決めて、「決定済みの判断」に足した。Codex のホームの解決の集約(#671 の項目 1)は終わった。
+次は #671 の項目 2(診断を読み取り、評価、出力に分ける)で、その後に適用のコマンド(項目 3)、checkout の更新(項目 4)、スキルの書き換え(項目 5)の順に進める。
 段階 2b(#673)は、#671、ktysne/claude-codex-bridge#169、ktysne/ai-cross-review#87 がそろった側から進める。
 
 ## 決定済みの判断
@@ -27,13 +28,17 @@ Issue #534(段階 1)、#671(段階 2a)、#673(段階 2b)の計画である。利
 | 段階 2 の分け方 | 2a(#671)は agent-cockpit の項目の適用、checkout の更新、Codex のホームの解決の集約。2b(#673)は bridge と ai-cross-review の写し(開発者の決定、2026-10-20) | 連携ツールの写しの照合には、そのツールだけが決めている解釈が要るため |
 | 連携ツールの写しの照合 | agent-cockpit で解釈せず、各ツールの照会の入口(claude-codex-bridge#169、ai-cross-review#87)の結果を写す。照会を持たない古い版は `unverified` にし、独自の照合に戻らない | 照合の規則を各ツールの中だけに置き、規則が変わっても直す場所を 1 つにするため |
 | ai-cross-review の写しの反映 | ai-cross-review の一括配布の CLI に任せず、#671 の適用で選んだ配布先だけに置く | 今の CLI は配布先を選べず、写しの無い配布先にも置くため |
+| 適用の入口 | 診断と別のコマンド(`src/client/apply.js`)にし、診断と同じ評価の関数を呼ぶ(開発者の決定、2026-10-20) | 診断を読み取りだけに保ち、段階 3 でダッシュボードから診断だけを呼べるようにするため |
+| 適用する項目の選び方 | 診断の JSON のファイルと項目の id を渡す(`--from <ファイル> --item <id>`、`--item` は繰り返せる)。適用の直前に診断をやり直し、`observedDigest` が違う項目と、`ok` になった項目は適用しない(開発者の決定、2026-10-20) | id だけでは、開発者が結果を見てから適用するまでのファイルの変化に気付けないため |
+| 退避先 | `AGENT_COCKPIT_HOME/backups/<時刻>/` に 1 回の適用ごとにまとめ、元のパスと sha256 の対応表を置く。時刻は `store.json.broken-<時刻>` と同じ書き方にする。残すのは新しい 10 回分とする(開発者の決定、2026-10-20) | ツールが読むフォルダーに写しを散らさず、戻すときと片付けるときの置き場を 1 つにするため |
+| checkout の更新の置き場 | 適用の側(`apply.js --update-checkouts`)に置き、checkout の更新、常駐サーバーの再起動、診断、適用の順にする。診断は、ネットワークを使わずに分かる checkout の状態だけを項目に出す(開発者の決定、2026-10-20) | 期待値を checkout から読むので、古い checkout で診断して適用すると古い期待値で書くため。`git fetch` は書き込みとネットワークの操作で、読み取りだけの診断に入れないため |
 
 ## 対応順序、ブランチ、PR
 
 | 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-20 に確認) |
 |---|---|---|---|---|---|---|
 | 1 | #534 段階 1 診断 | `src/client/doctor.js`、`src/shared/integration-manifest.js`、`docs/setup.md`、`docs/update.md` | hard | `claude/integration-doctor` | main | PR #670。マージ済み、#534 は閉じた |
-| 2 | #671 段階 2a 適用、checkout の更新、Codex のホームの解決の集約 | `src/client/doctor.js`、`src/server/identity.js`、`src/server/server.js`、`skills/update-tools/SKILL.md` | 未定 | 未定 | main | 起票済み、未着手 |
+| 2 | #671 段階 2a 適用、checkout の更新、Codex のホームの解決の集約 | `src/client/doctor.js`、`src/client/apply.js`、`src/server/identity.js`、`src/server/server.js`、`skills/update-tools/SKILL.md` | hard | 項目ごとに main から切る(項目 1 は `claude/codex-home-resolution`、項目 2 は `claude/doctor-evaluate-split`) | main | 項目 1 は PR #674 でマージ済み。項目 2 は着手中 |
 | 3 | ktysne/claude-codex-bridge#169 写しの照会 | bridge の `tools/codex-agent.sh` | bridge 側 | 未定 | bridge の main | 起票済み、#167 の後 |
 | 4 | ktysne/ai-cross-review#87 グローバル SKILL の確認 | ai-cross-review の `tools/cross-review.sync-all.js` | ai-cross-review 側 | 未定 | ai-cross-review の main | 起票済み、未着手 |
 | 5 | #673 段階 2b 連携ツールの写し | `src/client/doctor.js`、`skills/update-tools/SKILL.md` | 未定 | 未定 | main | 起票済み、2〜4 の後 |
