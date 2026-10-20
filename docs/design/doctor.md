@@ -1,5 +1,7 @@
 # 導入の整合の診断の設計
 
+ダッシュボードでは、この診断を「導入の点検」と呼ぶ。
+
 この資料は、agent-cockpit の導入と更新の後に、フック、MCP サーバー、スキル、常駐サーバーが checkout と食い違っていないかを調べる診断(`src/client/doctor.js`)の仕様を定める。
 診断は、更新と反映を決定的な処理で行う後の段階の入力にもなる。段階の分け方と進みは [引き継ぎ資料](../handover/2026-10-20-tool-update.md) にある。
 
@@ -21,6 +23,37 @@ node src/client/doctor.js [--json] [--root <checkout>]
 
 - 既定は人が読む一覧で、`--json` は下の「出力の形」の JSON を標準出力に書く。
 - 終了コードは、`mismatch` が 1 件でもあれば 1、無ければ 0、診断そのものが失敗したら 2 にする。`unverified` と `not-run` だけなら 0 である。
+
+## 常駐サーバーからの点検
+
+常駐サーバーは、ソースの checkout にある `src/client/doctor.js --json` を `process.execPath` の子プロセスで実行する。
+worktree の実行先は、doctor.js が元の checkout に解決する。
+診断を require で読み込まないため、checkout を更新して再起動を待つ間も、新しいコードと期待値で照合できる。
+環境は `childEnvironment(process.env)` に `AGENT_COCKPIT_HOME: homeDir` を足し、ウィンドウを隠して実行する。
+期限は 90 秒、標準出力の上限は 8 MiB とする。
+終了コード 0 と 1 の JSON を受け取り、終了コード 2、時間切れ、不正な JSON、未対応の schemaVersion は失敗分類だけを残す。
+失敗しても、最後に成功した結果は残す。
+
+実行するのは、起動の 90 秒後に 1 回、画面の「点検し直す」、本体の SessionStart を受けたときである。
+SessionStart は最後のイベントから 10 秒待ってまとめ、前の点検の開始から 60 秒は空ける。
+サブエージェントの開始は対象にせず、定期の点検は行わない。
+実行中の要求には同じ Promise を返し、終了時はタイマーを解除して実行中の点検を待つ。
+結果はメモリーにだけ保持し、ディスクには保存しない。
+
+`GET /api/state` の `doctor` は `{running, generatedAt, error, summary, staleBefore}` の要約だけを持つ。
+`summary` は診断の件数をそのまま渡す。
+`staleBefore` は再起動待ちになった時刻で、再起動待ちでなければ null とする。
+ホーム、checkout、項目の全文は、状態の配信とその指紋に含めない。
+
+全文はダイアログを開いたときに `GET /api/doctor` で取得する。
+照合は既存の診断ログと同じ `auth: 'none'` とし、生成時刻、checkout の root と version、homes、items だけを返す。
+項目は id、tool、provider、result、reason と actions の op だけを返し、manual の対処に限り text も返す。
+expected、observed と、書き換えの value、content、from、to などは返さない。
+成功した結果が無い場合は null を返す。
+
+`POST /api/doctor/check` は画面用の秘密値と Origin を照合し、実行の完了後に要約を返す。
+点検を有効にしていない場合は 409 を返す。
+更新前の結果で開いたダイアログには、その旨を表示し、自動で点検し直す。
 
 ## 読み取り、評価、出力の分担
 

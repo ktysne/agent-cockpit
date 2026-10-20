@@ -3773,7 +3773,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     syncDisplayPreferences: async () => {},
     pullRequestExpirySignature: () => signature,
     renderedPullRequestExpirySignature: 'reservation:visible',
-    applyUpdateState() {},
+    applyUpdateState() {}, applyDoctorState() {},
     renderRestartNote() {},
     renderPersistenceNote() {},
     applyAppVersion() {},
@@ -4762,7 +4762,7 @@ test('離席の切り替えだけでは一覧を描き直さない', async () =>
       syncDisplayPreferences: async () => {},
       pullRequestExpirySignature: () => '',
       renderedPullRequestExpirySignature: '',
-      applyUpdateState() {},
+      applyUpdateState() {}, applyDoctorState() {},
     renderRestartNote() {},
     renderPersistenceNote() {},
       applyAppVersion() {},
@@ -5644,61 +5644,25 @@ function restartNoteHarness(source, response = async () => ({ status: 202 }), cl
   return { note, get buttons() { return note.querySelectorAll('button'); }, rows, timers, state, render, click, context, focused: () => focused };
 }
 
-const updateToolsPrompt = '/update-tools スキルを使って連携ツールを含めて最新化してください。';
-const copyPromptButton = '/update-tools スキルでの更新依頼プロンプトをコピー';
-const copiedPromptNotice = 'コピーされたプロンプトでAIエージェントに更新を依頼してください。';
-const failedPromptNotice = `コピーできませんでした。次の文を AI エージェントに渡してください: ${updateToolsPrompt}`;
-// 帯のボタンは、モックでは導入の点検を開き、画面ではその実装が入るまで依頼文をコピーする。
-const toolsButton = { 画面: copyPromptButton, モック: '導入の点検を開く' };
-
-test('モックの再起動待ちの帯から導入の点検を開く', () => {
-  const f = restartNoteHarness(mockHtml);
-  let opened = 0;
-  f.context.openDoctorDialog = () => { opened += 1; };
-  f.click('導入の点検を開く');
-  assert.equal(opened, 1);
-});
+const toolsButton = '導入の点検を開く';
 
 for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
-  test(`${label}の再起動待ちでは案内の下の 1 行に再起動と更新依頼のボタンを順に表示する`, () => {
+  test(`${label}の再起動待ちの帯から導入の点検を開く`, () => {
+    const f = restartNoteHarness(source);
+    let opened = 0;
+    f.context.openDoctorDialog = () => { opened += 1; };
+    f.click(toolsButton);
+    assert.equal(opened, 1);
+  });
+
+  test(`${label}の再起動待ちでは再起動と導入の点検のボタンを順に表示する`, () => {
     const f = restartNoteHarness(source);
     assert.deepEqual(f.rows(), [
-      { className: 'restart-note-actions', items: ['常駐サーバーを再起動する', 'または', toolsButton[label]] },
+      { className: 'restart-note-actions', items: ['常駐サーバーを再起動する', 'または', toolsButton] },
     ]);
-  });
-
-  test(`${label}は再起動できない状態でも更新依頼のボタンを表示する`, () => {
-    const f = restartNoteHarness(source);
     f.state.restartAvailable = false;
     f.render();
-    assert.deepEqual(f.rows(), [{ className: 'restart-note-actions', items: [toolsButton[label]] }]);
-  });
-
-  if (label === 'モック') continue;
-
-  test(`${label}は更新依頼のプロンプトをコピーしてボタンの下の行に案内を保つ`, async () => {
-    const written = [];
-    const f = restartNoteHarness(source, undefined, { writeText: async value => written.push(value) });
-    await f.click(copyPromptButton);
-    assert.deepEqual(written, [updateToolsPrompt]);
-    assert.deepEqual(f.rows()[1], { className: 'restart-note-status', items: [] });
-    assert.equal(f.note.children[1].textContent, copiedPromptNotice);
-    assert.equal(f.focused(), copyPromptButton);
-    const rebuilt = f.note.rebuilt;
-    f.render();
-    assert.ok(f.note.textContent.includes(copiedPromptNotice));
-    assert.equal(f.note.rebuilt, rebuilt);
-    f.click('常駐サーバーを再起動する');
-    assert.equal(f.note.message, '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。許可待ち 2 件は、再起動後に表示されません。');
-    assert.ok(!f.note.textContent.includes(copiedPromptNotice));
-  });
-
-  test(`${label}はクリップボードが使えないときにコピーする文を表示する`, async () => {
-    for (const clipboard of [null, { writeText: async () => { throw new Error('Clipboard failed'); } }]) {
-      const f = restartNoteHarness(source, undefined, clipboard);
-      await f.click(copyPromptButton);
-      assert.ok(f.note.textContent.includes(failedPromptNotice));
-    }
+    assert.deepEqual(f.rows(), [{ className: 'restart-note-actions', items: [toolsButton] }]);
   });
 }
 
@@ -5731,7 +5695,7 @@ test('保存失敗中は再起動操作を出さず、通常の保存待ちで�
     assert.equal(f.buttons.length, 0);
     f.state.persistence = { status: 'pending' };
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton]);
     f.click('常駐サーバーを再起動する');
     const rebuilt = f.note.rebuilt;
     f.state.persistence = { status: 'saved' };
@@ -5747,7 +5711,7 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     f.click('常駐サーバーを再起動する');
     await f.click('再起動する');
     assert.equal(f.note.message, '保存処理が進行中です。少し待ってから再起動してください。');
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton]);
   });
 
   test(`${label}の再起動は帯で消える行と許可待ちを確認し、やめると元に戻る`, () => {
@@ -5755,10 +5719,10 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     f.click('常駐サーバーを再起動する');
     assert.equal(f.note.message, '再起動すると、実行中のツールとサブエージェントの行は消え、次のイベントから組み立て直されます。許可待ち 2 件は、再起動後に表示されません。');
     f.click('やめる');
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton]);
     f.state.restartAvailable = false;
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), [toolsButton[label]]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), [toolsButton]);
   });
 
   test(`${label}の帯は同じ表示なら作り直さず、確認と取り消しで次に押すボタンへフォーカスを移す`, () => {
@@ -5807,7 +5771,7 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
       f.click('常駐サーバーを再起動する');
       await f.click('再起動する');
       assert.equal(f.note.message, '再起動を始められませんでした。タスクトレイのメニューから再起動してください。');
-      assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
+      assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton]);
     }
   });
 
@@ -5820,10 +5784,10 @@ for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
     assert.equal(ms, 30_000);
     timeout();
     assert.equal(f.note.message, '再起動できませんでした。タスクトレイのメニューから再起動してください。');
-    assert.deepEqual(f.buttons.map(button => button.textContent), [toolsButton[label]]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), [toolsButton]);
     f.state.restartAvailable = true;
     f.render();
-    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton[label]]);
+    assert.deepEqual(f.buttons.map(button => button.textContent), ['常駐サーバーを再起動する', toolsButton]);
   });
 }
 
@@ -6052,7 +6016,7 @@ test('前提が消えた衝突の確認欄と登録を外す確認は、条件�
       return { ok: true, status: 200, headers: { get: () => `"${etag}"` }, json: async () => state };
     },
     checkUiVersion: () => false, syncDisplayPreferences: async () => {}, updateConnectionNote() {}, hasUnsentAnswerDraft: () => false,
-    applyAwayState() {}, applyUpdateState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyAppVersion() {},
+    applyAwayState() {}, applyUpdateState() {}, applyDoctorState() {}, renderRestartNote() {}, renderPersistenceNote() {}, applyAppVersion() {},
     refreshConfirmPending: false, refreshSequence: 0, appliedRefreshSequence: 0, pendingStateReads: 0,
     pullRequestExpirySignature: () => '', renderedPullRequestExpirySignature: '',
     lastVersion: 1, lastState: null, lastStateEtag: null, liveStatus: { textContent: '' }, reportWebFailure() {}, hasRenderedState: true, connectionLost: false, lastStateAt: null, completedDisplaySaves: 0,
@@ -6103,4 +6067,109 @@ test('前提が消えた衝突の確認欄と登録を外す確認は、条件�
   await showState(groupWith());
   await showState(groupWith({ error: '取得できません' }));
   assert.ok(unregisterOpen());
+});
+
+test('導入の点検の HTML と CSS と共通の描画はモックと一致する', () => {
+  assert.equal(pageHtml.match(/<dialog class="diagnostics-dialog doctor-dialog"[^]*?<\/dialog>/)[0],
+    mockHtml.match(/<dialog class="diagnostics-dialog doctor-dialog"[^]*?<\/dialog>/)[0]);
+  assert.deepEqual(pageHtml.split('\n').filter(line => line.startsWith('.doctor-')),
+    mockHtml.split('\n').filter(line => line.startsWith('.doctor-')));
+  assert.deepEqual(pageHtml.split('\n').filter(line => line.startsWith('const esc = ')),
+    mockHtml.split('\n').filter(line => line.startsWith('const esc = ')));
+  for (const name of ['doctorIsStale', 'doctorSummaryText', 'doctorActionText', 'doctorItemHtml',
+    'renderDoctorDialog', 'copyDoctorPrompt', 'renderDoctorNote', 'renderRestartNote']) {
+    assert.equal(functionSource(pageHtml, name), functionSource(mockHtml, name).replaceAll('DATA.doctor', 'doctorState'), name);
+  }
+});
+
+for (const [label, source] of [['画面', pageHtml], ['モック', mockHtml]]) {
+  test(`${label}の点検通知は不一致だけを示し、点検中と再起動待ちと更新前の結果では隠す`, () => {
+    const span = { textContent: '' };
+    const note = { hidden: true, querySelector: () => span };
+    const context = pageContext(source, { document: { getElementById: () => note } });
+    vm.runInContext(['doctorIsStale', 'renderDoctorNote'].map(name => functionSource(source, name)).join('\n'), context);
+    for (const [doctor, restartRequired, hidden] of [
+      [{ summary: { mismatch: 2 } }, false, false], [{ summary: { mismatch: 0 } }, false, true],
+      [{ summary: { mismatch: 2 }, running: true }, false, true], [{ summary: { mismatch: 2 } }, true, true],
+      [{ summary: { mismatch: 2 }, generatedAt: '2026-10-20', staleBefore: '2026-10-21' }, false, true],
+    ]) {
+      context.renderDoctorNote({ doctor, restartRequired });
+      assert.equal(note.hidden, hidden);
+      assert.equal(span.textContent, hidden ? '' : '導入の点検で、直す必要のある項目が 2 件見つかりました。');
+    }
+  });
+
+  test(`${label}の点検の依頼文は不一致の ID だけを含み、コピーできないときは選択する`, async () => {
+    const status = {};
+    const field = { focus() { this.focused = true; }, select() { this.selected = true; } };
+    let written;
+    const context = pageContext(source, { doctorResult: { items: [{ id: 'a', result: 'mismatch' }, { id: 'b', result: 'ok' }] },
+      document: { getElementById: id => id === 'doctor-copy-status' ? status : field },
+      navigator: { clipboard: { writeText: async text => { written = text; } } } });
+    vm.runInContext(functionSource(source, 'copyDoctorPrompt'), context);
+    await context.copyDoctorPrompt();
+    assert.equal(written, '/update-tools スキルで、導入の点検の不一致を直してください。対象: a');
+    assert.equal(field.hidden, true);
+    context.navigator.clipboard = null;
+    await context.copyDoctorPrompt();
+    assert.equal(field.value, written);
+    assert.equal(field.hidden, false);
+    assert.equal(field.selected, true);
+    assert.equal(field.focused, true);
+  });
+}
+
+test('点検のダイアログは全文を取得し、更新前の結果なら点検し直す', async () => {
+  const fields = new Map(['doctor-copy-status', 'doctor-prompt'].map(id => [id, {}]));
+  let loaded = 0;
+  let checked = 0;
+  const context = pageContext(pageHtml, { document: { getElementById: id => fields.get(id) },
+    doctorState: { generatedAt: '2026-10-20', staleBefore: '2026-10-21' },
+    doctorDialog: { open: false, showModal() { this.open = true; } }, renderDoctorDialog() {},
+    loadDoctorResult: async () => { loaded += 1; }, runDoctorCheck: async () => { checked += 1; } });
+  vm.runInContext(['doctorIsStale', 'openDoctorDialog'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  await context.openDoctorDialog();
+  assert.equal(context.doctorDialog.open, true);
+  assert.equal(loaded, 1);
+  assert.equal(checked, 1);
+  context.doctorState.staleBefore = null;
+  await context.openDoctorDialog();
+  assert.equal(loaded, 2);
+  assert.equal(checked, 1);
+});
+
+test('点検し直す操作は画面用 POST を一度だけ送り、完了後に全文を読み直す', async () => {
+  let finish;
+  let posts = 0;
+  let loaded = 0;
+  const context = pageContext(pageHtml, { doctorChecking: null, doctorLoading: null,
+    doctorState: { running: false }, lastState: {}, renderDoctorDialog() {}, renderDoctorNote() {},
+    loadDoctorResult: async () => { loaded += 1; },
+    postUiAction: (url, body) => {
+      assert.equal(url, '/api/doctor/check');
+      assert.equal(JSON.stringify(body), '{}');
+      posts += 1;
+      return new Promise(resolve => { finish = () => resolve({ ok: true, json: async () => ({ running: false, error: null }) }); });
+    } });
+  vm.runInContext(functionSource(pageHtml, 'runDoctorCheck'), context);
+  const pending = context.runDoctorCheck();
+  assert.equal(context.runDoctorCheck(), pending);
+  assert.equal(context.doctorState.running, true);
+  assert.equal(posts, 1);
+  finish();
+  await pending;
+  assert.equal(loaded, 1);
+  assert.equal(context.doctorState.running, false);
+});
+
+test('点検の実行要求の失敗は前の結果を残して再試行できる表示に戻す', async () => {
+  const context = pageContext(pageHtml, { doctorChecking: null, doctorState: { running: false, generatedAt: 'before' },
+    lastState: {}, renderDoctorDialog() {}, renderDoctorNote() {},
+    postUiAction: async () => { throw new Error('offline'); } });
+  vm.runInContext(functionSource(pageHtml, 'runDoctorCheck'), context);
+  await context.runDoctorCheck();
+  assert.equal(context.doctorState.generatedAt, 'before');
+  assert.equal(context.doctorState.error, 'CHECK_FAILED');
+  assert.equal(context.doctorState.running, false);
+  assert.equal(context.doctorChecking, null);
 });

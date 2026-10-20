@@ -60,6 +60,18 @@
 - 終了するのは、生きているセッションがその時点で 0 件で、かつ直近 30 分に要求(フック、画面、`/health`)が 1 つも無いときだけにする。`~/.claude/sessions` が無いときは、Claude Code を使わない環境としてセッションのファイルが無いものと扱う。それ以外の理由で読めないときは終了しない。画面を開いている間はポーリングが要求になるので終了しない。
 - セッションファイルの定期取得は同時に一つだけ進め、取得中に重なった要求は同じ処理を共有する。終了処理は進行中の取得を待ち、終了処理を始めた後に完了した結果は状態へ反映しない。
 
+## 導入の点検
+
+`doctorCheck` を渡した常駐サーバーは、導入の診断を子プロセスで実行し、結果をメモリーに保持する。
+起動の 90 秒後、画面からの要求、本体の SessionStart を契機に実行する。
+SessionStart は最後のイベントから 10 秒まとめ、前の点検開始から 60 秒空ける。
+定期の点検はしない。
+呼び出しと出力の契約は [導入の整合の診断の設計](doctor.md#常駐サーバーからの点検) にある。
+
+- `GET /api/state` の `doctor` は実行中か、生成時刻、失敗分類、件数、再起動待ちになった時刻だけを持つ。
+- `GET /api/doctor` は最後に成功した点検の全文を返す。照合は `none` とし、期待値、観測値、書き換える対処の中身は省く。結果が無ければ null を返す。
+- `POST /api/doctor/check` は照合を `ui` とし、画面用の秘密値と Origin を確かめる。実行中なら同じ実行を待ち、完了後の要約を返す。点検を有効にしていない場合は 409 と `{"error":"doctor-check-disabled"}` を返す。
+
 ## 更新の確認
 
 公開するバージョンの正本は `vX.Y.Z` 形式の Git タグとし、リリース時に `package.json` の `version` を合わせる。
@@ -352,7 +364,7 @@ Windows のルート相対パスは `\` で始め、相対パスは実行環境�
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 10 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 10 分へ戻し、書き込み時は拒む。
 - 表示設定 `display.ghConcurrencyLimit` は GitHub CLI を同時に起動する上限数で、既定は 8、範囲は 1〜32 の整数とする。保存値が範囲外または整数でなければ読み込み時に 8 へ戻し、書き込み時は拒む。
 - 表示設定 `display.awayAnswerWaitMinutes` は離席中の質問への回答を待つ時間で、既定は 3 分、範囲は 1〜30 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 3 分へ戻し、書き込み時は拒む。
-- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, appVersion, runtime, routing, integrations, uiVersion, installed, restartRequired, restartAvailable}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は配信する HTML テンプレートのバイト列の SHA-256 先頭 16 桁で、秘密値と版の埋め込み前に計算する。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, doctor, appVersion, runtime, routing, integrations, uiVersion, installed, restartRequired, restartAvailable}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は配信する HTML テンプレートのバイト列の SHA-256 先頭 16 桁で、秘密値と版の埋め込み前に計算する。
   本番では起動時に listen の前に HTML を読み、そのテンプレートと版を再起動まで固定する。
   起動時に読めなかった場合、`GET /` は読み込みに失敗している間 500 を返し、最初の成功時に固定する。
   `GET /` は固定したテンプレートへ秘密値と版を埋め込み、ディスクを読み直さない。

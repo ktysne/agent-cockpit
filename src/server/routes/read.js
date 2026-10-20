@@ -18,11 +18,14 @@ function createReadRoutes(ctx) {
   let uiVersion = uiTemplate ? templateVersion(uiTemplate) : null;
   let templateReading = null;
   let installed = null;
+  let staleBefore = null;
   function restartRequired() {
-    if (!installed) return false;
+    if (!installed) { staleBefore = null; return false; }
     const running = { ...ctx.getRuntime(), uiVersion };
-    return ['version', 'commit', ...(dev ? [] : ['uiVersion'])].some(key =>
+    const required = ['version', 'commit', ...(dev ? [] : ['uiVersion'])].some(key =>
       installed[key] != null && running[key] != null && installed[key] !== running[key]);
+    staleBefore = required ? staleBefore || new Date(nowMs()).toISOString() : null;
+    return required;
   }
   const bootId = crypto.randomUUID();
   let generation = 0;
@@ -105,9 +108,14 @@ function createReadRoutes(ctx) {
     return integrations;
   }, INTEGRATION_CHECK_INTERVAL_MS);
 
+  ctx.doctorSnapshot = () => {
+    restartRequired();
+    return ctx.doctorChecker?.snapshot(staleBefore) || null;
+  };
+
   function fingerprint() {
     return JSON.stringify([state.version, pullRequestTracker?.inFlightSignature?.() || '',
-      away.snapshot(), routing.snapshot(), state.persistenceStatus?.(), ctx.updateChecker?.snapshot() || null, uiVersion, installed, restartRequired(), ctx.restartAvailable(), integrations, ctx.getSourceState()]);
+      away.snapshot(), routing.snapshot(), state.persistenceStatus?.(), ctx.updateChecker?.snapshot() || null, ctx.doctorSnapshot(), uiVersion, installed, restartRequired(), ctx.restartAvailable(), integrations, ctx.getSourceState()]);
   }
 
   function generateState(now) {
@@ -134,7 +142,7 @@ function createReadRoutes(ctx) {
     return { body: JSON.stringify({ ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen,
       runtime: { version: ctx.getRuntime().version, commit: ctx.getRuntime().commit,
         sourceState: ctx.getSourceState(), startedAt: ctx.getRuntime().startedAt },
-      away: awayState, persistence: state.persistenceStatus?.(), update: ctx.updateChecker?.snapshot() || null, appVersion: ctx.appVersion,
+      away: awayState, persistence: state.persistenceStatus?.(), update: ctx.updateChecker?.snapshot() || null, doctor: ctx.doctorSnapshot(), appVersion: ctx.appVersion,
       routing: routing.snapshot(), integrations, uiVersion, installed, restartRequired: restartRequired(), restartAvailable: ctx.restartAvailable() }), fingerprint: fingerprint(),
       expiresAt: Math.min(deadline.at, now + STATE_CACHE_MAX_AGE_MS) };
   }
