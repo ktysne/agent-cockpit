@@ -208,17 +208,23 @@ test('Codex の MCP の実行先とツールの approval_mode を別々に照合
   assert.ok(report.items.find(item => item.id === 'codex.mcp.registration').actions.some(action => action.op === 'toml-set' && action.key === 'args'));
 });
 
-test('Codex のツールをインラインテーブルで書いた登録は未確認にし書き換えの対処を出さない', async t => {
+test('Codex の登録をインラインテーブルで書いたものは未確認にし書き換えの対処を出さない', async t => {
   const f = await fixture(t, ['codex']);
   const mcp = f.manifest.codex.mcp;
   const tools = Object.keys(mcp.tools).map(name => `${name} = { approval_mode = "approve" }`).join(', ');
-  await write(path.join(f.homes.codex, 'config.toml'),
-    `[mcp_servers.agent-cockpit]\ncommand = "node"\nargs = ${JSON.stringify(mcp.args)}\ntools = { ${tools} }\n`);
-  const { code, report } = await run(f.options);
-  assert.equal(code, 0);
-  const items = report.items.filter(item => item.category === 'mcp');
-  assert.deepEqual(items.map(item => [item.id, item.result]), [['codex.mcp.registration', 'unverified']]);
-  assert.deepEqual(items[0].actions, []);
+  const server = `command = "node", args = ${JSON.stringify(mcp.args)}`;
+  for (const toml of [
+    `[mcp_servers.agent-cockpit]\ncommand = "node"\nargs = ${JSON.stringify(mcp.args)}\ntools = { ${tools} }\n`,
+    `mcp_servers = { agent-cockpit = { ${server} } }\n`,
+    `[mcp_servers]\nagent-cockpit = { ${server} }\n`,
+  ]) {
+    await write(path.join(f.homes.codex, 'config.toml'), toml);
+    const { code, report } = await run(f.options);
+    assert.equal(code, 0);
+    const items = report.items.filter(item => item.category === 'mcp');
+    assert.deepEqual(items.map(item => [item.id, item.result]), [['codex.mcp.registration', 'unverified']]);
+    assert.deepEqual(items[0].actions, []);
+  }
 });
 
 test('Codex の MCP の env と信頼の記録と別のプロジェクトの表は照合を妨げない', async t => {

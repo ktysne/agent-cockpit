@@ -89,7 +89,8 @@ function parseMcpToml(text) {
     if (!current) {
       const fullKey = tableName ? `${tableName}.${key}` : key;
       const otherSubtable = tableName.startsWith('mcp_servers.agent-cockpit.') && tableName !== 'mcp_servers.agent-cockpit.tools';
-      if (!otherSubtable && (fullKey === 'mcp_servers.agent-cockpit' || fullKey.startsWith('mcp_servers.agent-cockpit.'))) invalid = true;
+      if (!otherSubtable && (fullKey === 'mcp_servers.agent-cockpit' || fullKey.startsWith('mcp_servers.agent-cockpit.')
+        || (fullKey === 'mcp_servers' && line.includes('agent-cockpit')))) invalid = true;
       continue;
     }
     if (current === 'mcp_servers.agent-cockpit' && (key === 'tools' || key.startsWith('tools.'))) { invalid = true; continue; }
