@@ -925,6 +925,24 @@ test('クローズされた PR の予約を取り消して画面と作成元へ�
   assert.match(fixture.tracker.snapshot()[0].reservationNotices[0].message, /PR #1 がクローズされたため/);
 });
 
+for (const outcome of ['halted', 'fixing', 'converged']) {
+  test(`記録が競合する ${outcome} の予約はマージも取り消しもしない`, async (t) => {
+    const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' })]);
+    await fixture.manager.reserve(mergeInput(1));
+    fixture.control.crossReviews.set(1, { round: 2, triage: { round: 2, sha: sha(1), outcome }, conflict: [
+      { worktree: '/old', round: 1, sha: sha(1), outcome: 'converged' },
+      { worktree: '/current', round: 2, sha: sha(1), outcome: 'halted' },
+    ] });
+    fixture.github.openPullRequests[0] = ghPullRequest(1, 'feature/one', 'main');
+    await fixture.tracker.refreshRepo('example', 'project');
+    await fixture.manager.checkReservations();
+    assert.ok(fixture.state.pullRequestMergeReservation('example', 'project', 1));
+    assert.equal(fixture.calls.some(args => args[0] === 'pr' && args[1] === 'merge'), false);
+    assert.equal(fixture.notices.some(notice => /予約を取り消し/.test(notice.message)), false);
+    assert.equal([...fixture.manager.diagnosticReservationConditions.values()].includes('review-conflict'), true);
+  });
+}
+
 test('最後のクロスレビュー記録が halted なら予約を取り消して画面と作成元へ知らせる', async (t) => {
   const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' })]);
   await fixture.manager.reserve(mergeInput(1));

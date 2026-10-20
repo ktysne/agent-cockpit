@@ -2534,6 +2534,142 @@ test('同じ PR のクロスレビュー登録は、今の head で収束した�
   assert.deepEqual(group.trees[0].crossReview.triage, { round: 2, sha: headSha, outcome: 'converged' });
 });
 
+async function reviewCandidatesFixture(t, records, topology = 'worktrees') {
+  const head = 'a'.repeat(40);
+  const roots = [];
+  for (const record of records) {
+    const root = await temporaryDirectory(t);
+    roots.push(root);
+    await fs.mkdir(path.join(root, '.git'));
+    await installCrossReview(root);
+    await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: {
+      'feat/open': { round: record.round, dismissed: [], lastReviewedSha: record.sha || head,
+        ...(record.outcome ? { lastTriage: { round: record.round, sha: record.sha || head, outcome: record.outcome } } : {}),
+      },
+    } }));
+  }
+  const f = await trackerFixture(t, []);
+  const register = (index, number = 31) => f.tracker.state.registerPullRequest(`review-${index}`, {
+    url: `https://github.com/example/project/pull/${number}`,
+  }, { cwd: roots[index], product: { key: 'project', name: 'project' } });
+  if (topology === 'mismatch') {
+    const wrong = await temporaryDirectory(t);
+    await fs.mkdir(path.join(wrong, '.git'));
+    await installCrossReview(wrong);
+    f.tracker.state.registerPullRequest('wrong', { url: 'https://github.com/example/project/pull/31' }, {
+      cwd: wrong, product: { key: 'project', name: 'project' },
+    });
+    register(0, 32);
+    register(2);
+  } else roots.forEach((_, index) => register(index));
+  let reversed = false;
+  const registrationsForRepo = f.tracker.state.pullRequestRegistrationsForRepo.bind(f.tracker.state);
+  f.tracker.state.pullRequestRegistrationsForRepo = (...args) => {
+    const registrations = registrationsForRepo(...args);
+    return reversed ? registrations.reverse() : registrations;
+  };
+  f.tracker.gitExecFileImpl = (_file, args, _options, callback) => {
+    if (args[2] === 'config') {
+      const matches = roots.includes(args[1]);
+      return callback(null, `remote.origin.url https://github.com/example/${matches ? 'project' : 'other'}.git\n`);
+    }
+    if (args[2] !== 'worktree' || topology === 'registrations') return callback(null, '');
+    const group = topology === 'mismatch' && args[1] === roots[2] ? [roots[2]] : roots.slice(0, topology === 'mismatch' ? 2 : roots.length);
+    if (reversed) group.reverse();
+    callback(null, group.map(root => `worktree ${root}\nbranch refs/heads/feat/open\n`).join('\n'));
+  };
+  f.github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', head)];
+  f.github.comparisons.set(head, compareResult([head]));
+  return { ...f, roots, head, async read(reverse = false) {
+    reversed = reverse;
+    await f.tracker.refreshRepo('example', 'project');
+    return f.tracker.snapshot()[0].trees[0];
+  } };
+}
+
+for (const scenario of [
+  { name: 'halted と収束', round: 1, outcome: 'halted', conflict: true },
+  { name: 'fixing と収束', round: 1, outcome: 'fixing', conflict: true },
+  { name: '大きい round の進行中と収束', round: 3, conflict: true },
+  { name: '同じ round の進行中と収束', round: 2, conflict: false },
+  { name: '小さい round の進行中と収束', round: 1, conflict: false },
+  { name: '同じ結論の重複', round: 3, outcome: 'converged', conflict: false },
+  { name: '別 head の halted と収束', round: 3, outcome: 'halted', sha: 'b'.repeat(40), conflict: false },
+  { name: '別 head の収束と今の head の進行中', round: 3, sha: 'a'.repeat(40), convergedSha: 'b'.repeat(40), conflict: false, settled: false },
+]) {
+  test(`PR の再計算は ${scenario.name} を走査順に依存せず判定する`, async (t) => {
+    const f = await reviewCandidatesFixture(t, [
+      { round: 2, outcome: 'converged', sha: scenario.convergedSha }, scenario,
+    ]);
+    const forward = await f.read();
+    const backward = await f.read(true);
+    assert.deepEqual(backward.crossReview, forward.crossReview);
+    assert.equal(Boolean(forward.crossReview.conflict), scenario.conflict);
+    assert.equal(forward.mergeConditionMet, scenario.settled !== false && !scenario.conflict);
+    if (scenario.conflict) {
+      assert.equal(forward.crossReview.conflict.length, 2);
+      assert.equal(forward.crossReview.conflict[0].worktree, f.roots[1]);
+      assert.equal(forward.crossReview.conflict[0].outcome, scenario.outcome || 'in-progress');
+    }
+  });
+}
+
+for (const topology of ['registrations', 'mismatch']) {
+  test(`PR の再計算は ${topology} の合流で見つけた競合をほかの収束で隠さない`, async (t) => {
+    const f = await reviewCandidatesFixture(t, [
+      { round: 1, outcome: 'converged' }, { round: 2, outcome: 'halted' }, { round: 5, outcome: 'converged' },
+    ], topology);
+    const pr = await f.read();
+    assert.equal(pr.crossReview.conflict.length, 3);
+    assert.equal(pr.crossReview.triage.outcome, 'halted');
+    assert.equal(pr.mergeConditionMet, false);
+    assert.deepEqual((await f.read(true)).crossReview, pr.crossReview);
+  });
+}
+
+test('競合の代表は結論の優先順位、round、パスで選ぶ', async (t) => {
+  const f = await reviewCandidatesFixture(t, [
+    { round: 2, outcome: 'converged' }, { round: 1, outcome: 'halted' },
+    { round: 9, outcome: 'fixing' }, { round: 10 },
+    { round: 3, outcome: 'halted' }, { round: 3, outcome: 'halted' },
+  ]);
+  const pr = await f.read();
+  const paths = f.roots.slice(4).sort((left, right) => {
+    const a = process.platform === 'win32' ? left.toLowerCase() : left;
+    const b = process.platform === 'win32' ? right.toLowerCase() : right;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  assert.equal(pr.crossReview.triage.outcome, 'halted');
+  assert.equal(pr.crossReview.round, 3);
+  assert.deepEqual(pr.crossReview.conflict.map(record => record.worktree), [
+    ...paths, f.roots[1], f.roots[2], f.roots[3], f.roots[0],
+  ]);
+  assert.deepEqual((await f.read(true)).crossReview, pr.crossReview);
+});
+
+test('PR の不要記録は競合の一覧を残してレビュー条件を満たす', async (t) => {
+  const f = await reviewCandidatesFixture(t, [{ round: 1, outcome: 'converged' }, { round: 2, outcome: 'halted' }]);
+  const before = await f.read();
+  assert.ok(f.tracker.state.setCrossReviewSkip({ owner: 'example', repo: 'project', number: 31,
+    headRefOid: f.head, reason: '開発者が確認済み', recordedAt: new Date().toISOString(),
+  }));
+  const after = await f.read();
+  assert.equal(after.crossReview.notRequired, true);
+  assert.deepEqual(after.crossReview.conflict, before.crossReview.conflict);
+  assert.equal(after.mergeConditionMet, true);
+});
+
+test('/api/state は worktree 間の競合と記録元を PR に返す', async (t) => {
+  const f = await reviewCandidatesFixture(t, [{ round: 1, outcome: 'converged' }, { round: 2, outcome: 'halted' }]);
+  const pr = await f.read();
+  const { startTestServer, request, jsonBody } = require('./support/server');
+  const runtime = await startTestServer(t, { state: f.tracker.state, pullRequestTracker: f.tracker });
+  const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const exposed = snapshot.pullRequests[0].trees[0];
+  assert.deepEqual(exposed.crossReview.conflict, pr.crossReview.conflict);
+  assert.equal(exposed.mergeConditionMet, false);
+});
+
 test('登録の cwd とは別の worktree が PR のブランチをチェックアウトしていれば、その worktree のクロスレビュー状態を読む', async (t) => {
   const base = await temporaryDirectory(t);
   const sessionRoot = path.join(base, 'session');

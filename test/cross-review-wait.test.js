@@ -9,11 +9,22 @@ const { readWebPage, functionSource } = require('./support/page-context');
 const web = readWebPage().replace(/\r\n/g, '\n');
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
+const fakeElement = (tag, className = '', text = '') => {
+  const node = { tag, className, children: [], attributes: {}, title: '' };
+  node.append = (...items) => node.children.push(...items);
+  node.setAttribute = (name, value) => { node.attributes[name] = value; };
+  Object.defineProperty(node, 'textContent', {
+    get: () => text + node.children.map((child) => (typeof child === 'string' ? child : child.textContent)).join(''),
+  });
+  return node;
+};
+
 test('クロスレビューの記録状態ごとに待ち理由を表示する', () => {
   const headSha = 'a'.repeat(40);
   const staleSha = 'b'.repeat(40);
   const cases = [
     [null, headSha, 'クロスレビュー未実施'],
+    [{ round: 2, triage: { round: 2, outcome: 'converged', sha: headSha }, conflict: [{ outcome: 'halted' }] }, headSha, 'クロスレビューの記録が食い違う'],
     [{ round: 2, triage: null }, headSha, 'クロスレビュー対応中'],
     [{ round: 2, triage: { round: 2, outcome: 'fixing', sha: headSha } }, headSha, 'クロスレビュー対応中'],
     [{ round: 2, triage: { round: 2, outcome: 'halted', sha: headSha } }, headSha, 'クロスレビューが開発者の判断待ち'],
@@ -44,15 +55,6 @@ test('クロスレビューの記録状態ごとに待ち理由を表示する',
 });
 
 test('クロスレビューの状態を確認できない PR は、往復の数を出さずに札だけを出す', () => {
-  const fakeElement = (tag, className = '', text = '') => {
-    const node = { tag, className, children: [], attributes: {}, title: '' };
-    node.append = (...items) => node.children.push(...items);
-    node.setAttribute = (name, value) => { node.attributes[name] = value; };
-    Object.defineProperty(node, 'textContent', {
-      get: () => text + node.children.map((child) => (typeof child === 'string' ? child : child.textContent)).join(''),
-    });
-    return node;
-  };
   const context = vm.createContext({
     element: fakeElement,
     badge: (text, cls) => fakeElement('span', `badge ${cls}`, text),
@@ -64,4 +66,28 @@ test('クロスレビューの状態を確認できない PR は、往復の数�
   const text = context.line({ crossReview: { unavailable: true }, headRefOid: 'a'.repeat(40) }).textContent;
   assert.match(text, /状態を確認できない/);
   assert.doesNotMatch(text, /undefined|往復/);
+});
+
+test('競合する PR は収束と表示せず記録元と解消の案内をテキストで表示する', () => {
+  const headSha = 'a'.repeat(40);
+  const review = { round: 2, max: 3, dismissed: 0, triage: { round: 2, sha: headSha, outcome: 'converged' }, conflict: [
+    { worktree: '<img src=x onerror=alert(1)>', round: 2, sha: headSha, outcome: 'halted' },
+    { worktree: '/old', round: 1, sha: headSha, outcome: 'converged' },
+  ] };
+  const context = vm.createContext({ element: fakeElement, document: { createTextNode: text => text } });
+  for (const name of ['isCompleteCommitSha', 'shortShaElement', 'convergedAtHead', 'pushedAfterConvergence',
+    'crossReviewState', 'crossReviewConflictDetails', 'pullRequestCrossReviewSettled', 'pullRequestReservationWaitReasons']) {
+    vm.runInContext(functionSource(web, name), context);
+  }
+  const pr = { crossReview: review, headRefOid: headSha, ci: 'pass', review: 'approved', canMerge: true };
+  assert.equal(context.pullRequestCrossReviewSettled(pr), false);
+  assert.equal(context.convergedAtHead(pr), false);
+  assert.equal(context.pushedAfterConvergence(pr), false);
+  assert.equal(context.crossReviewState(pr).text, '記録が食い違う');
+  assert.equal(context.pullRequestReservationWaitReasons(pr)[0], 'クロスレビューの記録が食い違う');
+  const details = context.crossReviewConflictDetails(review);
+  assert.match(details.textContent, /<img src=x onerror=alert\(1\)>/);
+  assert.match(details.textContent, /2 往復目 \/ aaaaaaa \/ 開発者の判断待ち/);
+  assert.match(details.textContent, /古い worktree の記録を消すか、レビュー不要として確定してください/);
+  assert.ok(details.children[0].children.every(node => node.tag === 'li' && node.children[0].tag === 'code'));
 });
