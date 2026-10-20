@@ -10,6 +10,8 @@ const { readExpected } = require('./server-verification');
 const { readServerInfo, requestFromServer } = require('./server-connection');
 const { hookEntries, normalizedPath } = require('./doctor-evaluate');
 
+const { observeCheckouts } = require('./checkouts');
+
 const CHECKOUT_ROOT = path.resolve(__dirname, '../..');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const digest = text => createHash('sha256').update(text).digest('hex');
@@ -92,7 +94,8 @@ async function observe(options = {}) {
     }
   }
   const server = await observeServer(homes.cockpit, root, expected, options);
-  return { homes, hooks, candidates, root, resolvedBy, expected, manifest, generatedAt, bridgeInstalled,
+  const checkouts = await observeCheckouts({ root, userHome, homes, bridgeInstalled, cwd: options.cwd });
+  return { homes, hooks, candidates, root, resolvedBy, expected, manifest, generatedAt, bridgeInstalled, checkouts,
     claudeHooks, codexHooks, claudeMcp, codexConfig, skills, skillPresent, server };
 }
 

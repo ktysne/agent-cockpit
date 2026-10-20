@@ -99,7 +99,7 @@ Codex のフックの `command` は、`node "<パス>" codex` の形の文字列
 | キー | 内容 |
 |---|---|
 | `id` | 項目を一意に指す文字列(例: `claude.hooks.PreToolUse.AskUserQuestion.away`) |
-| `tool` | 対象のツール。今は `agent-cockpit` だけ |
+| `tool` | 対象のツール。`agent-cockpit`、`claude-codex-bridge`、`ai-cross-review` |
 | `provider` | `claude`、`codex`、または provider によらない項目では `null` |
 | `category` | 上の表の区分 |
 | `target` | 対象のファイルのパスか、名前 |
@@ -182,3 +182,53 @@ node src/client/apply.js --from diagnosis.json --item claude.mcp.registration [-
 ```
 
 `commands` は実行した対処の `command` と `exitCode` を持つ。
+
+## checkout の更新
+
+```sh
+node src/client/apply.js --update-checkouts --check [--json]
+node src/client/apply.js --update-checkouts --tool <名前> [--tool <名前> ...] [--json]
+```
+
+名前は `agent-cockpit`、`claude-codex-bridge`、`ai-cross-review` から選ぶ。
+`--check` は見つけた checkout の確認だけを行い、`--tool` は選んだものだけを更新する。
+両方の同時指定、`--from` または `--item` との併用、更新対象の指定漏れは終了コード 2 にする。
+checkout の更新、常駐サーバーの再起動、診断、選んだ対処の適用の順に実行する。
+
+agent-cockpit は診断と同じ checkout を対象とする。
+連携ツールは、その checkout の親、現在のディレクトリが属する git リポジトリのルートの親、ユーザーホームの順に、直下のディレクトリを名前順で探す。
+`.git/config` の origin が `github.com/ktysne/<名前>` を指す最初のディレクトリを使う。
+HTTPS と SSH の `git@github.com:` 形式、末尾の `.git` の有無を許す。
+探索とブランチの読み取りは `checkouts.js` で行い、git を起動しない。
+bridge は `codexAgentScriptPaths` のいずれか、ai-cross-review は Claude ホームの `skills/cross-review/SKILL.md` を導入の印とする。
+印があるのに checkout が無ければ `not-found` とし、両方無ければ出力しない。
+ただし `--tool` で選んだツールは、両方無くても `not-found` として出力する。選んだ更新の取りこぼしを成功に見せないためである。
+
+確認と更新の直前には、未コミットの変更が無く、ブランチが `main` であることを確かめ、`fetch origin` を行う。
+`origin/main` に無いローカルのコミットがあれば `blocked` にする。
+agent-cockpit のパスが `.claude/worktrees/` の下なら、区切りと大文字小文字の違いを除いて判定し、本体の checkout で行うよう案内して `blocked` にする。
+git は `execFile('git', ['-C', root, ...])` で起動し、シェルを使わない。
+
+連携ツールと、HEAD に `v*` タグが無い agent-cockpit は `origin/main` を追う。
+HEAD にタグがある agent-cockpit は配布元のリリースを追い、`package.json` の version より新しいタグのうち最も新しいものを選ぶ。
+版は `compareVersions` で比較し、配布元の既定値は `https://github.com/ktysne/agent-cockpit.git` とする。
+選んだタグだけを force なしで取得し、コミット内の `package.json` の version がタグと一致することを確かめる。
+更新先が無ければ `up-to-date`、遅れていれば `updatable` とし、遅れているコミットを最大 20 件報告する。
+遅れていても、`merge-base --is-ancestor HEAD <更新先>` が成り立たなければ `blocked` にする。配布元のタグの履歴がフォークの `origin/main` から分かれていると、件数だけでは fast-forward できるかを判定できないためである。
+
+更新は `updatable` のものだけに `merge --ff-only <更新先のコミット>` を行う。
+更新後の HEAD が更新先と一致すれば `updated`、fetch、タグの検証、merge の失敗や HEAD の不一致は `failed` にする。
+変更の破棄、ブランチの切り替え、force、タグの削除は行わない。
+agent-cockpit の更新後は再起動、診断、適用を案内し、version が変われば `docs/update.md` の「バージョンごとの追加作業」も案内する。
+連携ツールの写しは更新せず、それぞれの手順へ案内する。
+
+既定の出力は人が読む一覧で、`--json` は `{ schemaVersion: 1, checkouts: [...], manual: [...] }` を返す。
+各 checkout は `tool`、`root`、`status`、`reason`、`track` (`main`、`release`、または `null`)、`from`、`to`、`commits` を持つ。
+`from` と `to` は確認したコミットを、`commits` は遅れているコミットの一覧を持ち、未確認のコミットは `null` にする。
+`blocked`、`not-found`、`failed` があれば終了コード 1、それ以外は 0 とする。
+
+診断では、見つけた checkout ごとに `<tool>.checkout.state` (agent-cockpit は `cockpit.checkout.state`) を `not-run` で追加する。
+ブランチは `branchFromCwd` で読み、理由と `manual` に更新確認コマンドを載せる。
+導入の印だけがある場合は `unverified` にする。
+観測は observe、項目の作成は I/O を持たない evaluate が担当し、診断はネットワークで更新の有無を調べない。
+これらの項目は診断の終了コードと `mismatch` の数を変えない。

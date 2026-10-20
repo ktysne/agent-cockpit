@@ -79,6 +79,7 @@ for (const providers of [['claude'], ['codex'], ['claude', 'codex']]) {
     const { code, report } = await run(f.options);
     assert.equal(code, 0);
     assert.equal(report.summary.mismatch, 0);
+    assert.equal(report.items.find(item => item.id === 'cockpit.checkout.state').result, 'not-run');
     assert.equal(report.items.find(item => item.category === 'server').result, 'ok');
     assert.equal(report.items.find(item => item.category === 'mcp-runtime').result, 'ok');
     assert.equal(report.summary.notInstalled, 2 - providers.length);

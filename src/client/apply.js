@@ -5,6 +5,7 @@ const { execFile } = require('node:child_process');
 const { promisify, isDeepStrictEqual } = require('node:util');
 const { observe } = require('./doctor-observe');
 const { evaluate, normalizedPath, execution, subtreeDigest, tomlTableName } = require('./doctor-evaluate');
+const { compareVersions } = require('../server/update-check');
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -232,10 +233,91 @@ async function applySelected(from, ids, options) {
   return report;
 }
 
+async function updateCheckout(checkout, check, options, manual) {
+  const result = { tool: checkout.tool, root: checkout.root, status: 'failed', reason: '', track: null, from: null, to: null, commits: [] };
+  const git = async (...args) => (await (options.execFile || promisify(execFile))('git', ['-C', checkout.root, ...args],
+    { windowsHide: true, encoding: 'utf8' })).stdout.trim();
+  const finish = (status, reason) => Object.assign(result, { status, reason });
+  if (!checkout.root) return finish('not-found', 'checkout の場所が分かりません。');
+  if (checkout.tool === 'agent-cockpit' && /(?:^|\/)\.claude\/worktrees\//i.test(checkout.root.replace(/\\/g, '/'))) {
+    return finish('blocked', 'worktree なので本体の checkout で行ってください。');
+  }
+  try {
+    if (await git('status', '--porcelain')) return finish('blocked', '未コミットの変更があります。');
+    if (await git('branch', '--show-current') !== 'main') return finish('blocked', 'ブランチが main ではありません。');
+    await git('fetch', 'origin');
+    result.from = await git('rev-parse', 'HEAD');
+    if (await git('rev-list', '--count', 'origin/main..HEAD') !== '0') return finish('blocked', 'origin/main に無いローカルのコミットがあります。');
+    result.track = 'main';
+    result.to = await git('rev-parse', 'origin/main');
+    let beforeVersion;
+    if (checkout.tool === 'agent-cockpit') {
+      beforeVersion = JSON.parse(await fs.readFile(path.join(checkout.root, 'package.json'), 'utf8')).version;
+      if (await git('tag', '--points-at', 'HEAD', 'v*')) {
+        result.track = 'release';
+        const distribution = options.distributionUrl || 'https://github.com/ktysne/agent-cockpit.git';
+        const tags = await git('ls-remote', '--tags', '--refs', distribution, 'v*');
+        let latest = beforeVersion;
+        for (const line of tags.split(/\r?\n/)) {
+          const version = line.match(/\srefs\/tags\/v(\d+\.\d+\.\d+)$/)?.[1];
+          if (version && compareVersions(version, latest) > 0) latest = version;
+        }
+        result.to = result.from;
+        if (compareVersions(latest, beforeVersion) > 0) {
+          const ref = `refs/tags/v${latest}`;
+          await git('fetch', '--no-tags', distribution, `${ref}:${ref}`);
+          result.to = await git('rev-list', '-n', '1', ref);
+          if (JSON.parse(await git('show', `${result.to}:package.json`)).version !== latest) {
+            return finish('failed', '更新先の package.json の version がタグと一致しません。');
+          }
+        }
+      }
+    }
+    if (await git('rev-list', '--count', `HEAD..${result.to}`) === '0') return finish('up-to-date', '最新です。');
+    try { await git('merge-base', '--is-ancestor', 'HEAD', result.to); }
+    catch { return finish('blocked', '更新先の履歴が今の HEAD から分かれていて、fast-forward できません。'); }
+    result.commits = (await git('log', '--oneline', '-n', '20', `HEAD..${result.to}`)).split(/\r?\n/).filter(Boolean);
+    if (check) return finish('updatable', 'fast-forward で更新できます。');
+    await git('merge', '--ff-only', result.to);
+    if (await git('rev-parse', 'HEAD') !== result.to) return finish('failed', '更新後の HEAD が更新先と一致しません。');
+    if (checkout.tool === 'agent-cockpit') {
+      manual.push('常駐サーバーを再起動してから診断をやり直し、適用してください。');
+      if (JSON.parse(await fs.readFile(path.join(checkout.root, 'package.json'), 'utf8')).version !== beforeVersion) {
+        manual.push('docs/update.md の「バージョンごとの追加作業」を確かめてください。');
+      }
+    } else manual.push(`${checkout.tool} の写しの更新は、それぞれの手順に従ってください。`);
+    return finish('updated', 'fast-forward で更新しました。');
+  } catch {
+    return finish('failed', 'git による確認または更新に失敗しました。checkout と接続先を確認してください。');
+  }
+}
+
+async function updateCheckouts(argv, options, log) {
+  const tools = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (['--update-checkouts', '--check', '--json'].includes(argv[index])) continue;
+    if (argv[index] !== '--tool' || !['agent-cockpit', 'claude-codex-bridge', 'ai-cross-review'].includes(argv[index + 1])) throw new Error('引数が不正です。');
+    tools.push(argv[++index]);
+  }
+  const check = argv.includes('--check');
+  if (check ? tools.length : !tools.length) throw new Error('確認か更新対象を選んでください。');
+  const observation = await observe(options);
+  const report = { schemaVersion: 1, checkouts: [], manual: [] };
+  const targets = check ? observation.checkouts
+    : [...new Set(tools)].map(tool => observation.checkouts.find(checkout => checkout.tool === tool) || { tool, root: null });
+  for (const checkout of targets) report.checkouts.push(await updateCheckout(checkout, check, options, report.manual));
+  log(argv.includes('--json') ? JSON.stringify(report) : [
+    ...report.checkouts.flatMap(item => [`${item.tool}: ${item.root || '場所不明'}: ${item.status}: ${item.reason}`,
+      ...(item.to ? [`  更新先 (${item.track}): ${item.to}`] : []), ...item.commits]), ...report.manual,
+  ].join('\n'));
+  return report.checkouts.some(item => ['blocked', 'not-found', 'failed'].includes(item.status)) ? 1 : 0;
+}
+
 async function main(argv = process.argv.slice(2), options = {}) {
   const log = options.log || console.log;
   const logError = options.logError || console.error;
   try {
+    if (argv.includes('--update-checkouts')) return await updateCheckouts(argv, options, log);
     let source;
     const ids = [];
     for (let index = 0; index < argv.length; index += 1) {
@@ -258,7 +340,7 @@ async function main(argv = process.argv.slice(2), options = {}) {
     ].join('\n'));
     return report.results.some(result => ['skipped', 'failed'].includes(result.status)) ? 1 : 0;
   } catch {
-    const reason = '適用を開始できませんでした。使い方: node src/client/apply.js --from <診断の JSON> --item <id> [--item <id> ...] [--json]。入力と checkout を確認してください。';
+    const reason = '適用を開始できませんでした。使い方: node src/client/apply.js --from <診断の JSON> --item <id> [--item <id> ...] [--json]、または --update-checkouts (--check | --tool <名前> [--tool <名前> ...]) [--json]。入力と checkout を確認してください。';
     if (argv.includes('--json')) log(JSON.stringify({ schemaVersion: 1, error: reason }));
     else logError(reason);
     return 2;
