@@ -13,16 +13,16 @@ agent-cockpit、ai-cross-review、claude-codex-bridge(以下、bridge)のうち�
 - **checkout**：GitHub から clone した作業コピー。
 - **写し**：checkout から Claude と Codex のホームへコピーしたスキル、定義、スクリプトと、フックと MCP の登録。checkout を更新しても自動では変わらない。
 
-checkout の確認と更新、agent-cockpit の写しと登録の照合と反映は、agent-cockpit の checkout にあるコマンドで行う。
-判定の規則はコマンドの中にあり、このスキルでは書き写さない。モデルが行うのは、コマンドの結果を開発者に示して選んでもらうことと、報告である。
-bridge と ai-cross-review の写しの照合と反映は、まだコマンドが無いので、手順 3 の表に沿ってファイルを見比べて行う。
+checkout の確認と更新、写しと登録の照合と反映は、agent-cockpit の checkout にあるコマンドで行う。
+bridge と ai-cross-review の写しは、診断が各ツールの照会の入口を呼んで照合する。
+判定の規則はコマンドと各ツールの中にあり、このスキルでは書き写さない。モデルが行うのは、コマンドの結果を開発者に示して選んでもらうことと、報告である。
 
 ## 守ること
 
 - checkout も写しも、今のリポジトリの外にあり、開発者のすべてのセッションに効く。調べるところまでは確認なしで進め、書き換える前に、対象と差分の一覧を示して開発者の確認を取る。
 - checkout は `apply.js --update-checkouts` でだけ更新する。コマンドが更新しないと報告した checkout(`blocked`)を、変更を消す、ブランチを切り替える、`--force`、タグの削除で更新し直さない。
-- agent-cockpit の写しと登録は、`apply.js --from` でだけ書き換える。コマンドが適用しなかった項目(`skipped`、`failed`)を手で書き換えない。診断し直して、もう一度選んでもらう。
-- 開発者が値を変えて使っている bridge の写し(手順 3 の設定のキー)は、上書きの前に差分を示し、変えた値を引き継ぐ。
+- 写しと登録は、3 ツールとも `apply.js --from` でだけ書き換える。コマンドが適用しなかった項目(`skipped`、`failed`)を手で書き換えない。診断し直して、もう一度選んでもらう。
+- bridge の写しを置き直す内容は、bridge の照会が返す。開発者が設定コンソールや手で変えた定義のキーの引き継ぎも bridge が行うので、内容を手で直さない。
 - 診断の結果には、開発者の設定のパスが出る。診断の JSON は、リポジトリの外の一時ファイルに置く。
 - 手順の細部は各ツールの文書が正本である。
 
@@ -56,7 +56,7 @@ node src/client/apply.js --update-checkouts --check --json
 
 ## 3. 写しを checkout と見比べる
 
-agent-cockpit の写し、フックと MCP の登録、常駐サーバーは、診断で見比べる。
+3 ツールの写し、フックと MCP の登録、常駐サーバーは、診断で見比べる。
 
 ```sh
 node src/client/doctor.js --json > <一時ファイル>
@@ -66,31 +66,11 @@ node src/client/doctor.js --json > <一時ファイル>
 `unverified` は、コマンドでは一致を確かめられなかった項目である。`reason` を伝え、手で確かめてもらう。
 `not-run` の項目は、診断が確かめていないことの案内である(MCP の往復の確認、checkout の更新の有無)。
 
-bridge と ai-cross-review の写しは、checkout の正本とホームの写しを、行末の違いを除いて比べる。
-正本は作業ツリーのファイルではなく、各 checkout のルートで `git show <ref>:<パス>` が出す内容を使う。`<ref>` は今の比較では `HEAD`、更新後の見込みでは手順 2 の `to` である。
-Windows の checkout は作業ツリーの行末が CRLF になることがあり、LF の写しとそのまま比べるとすべて差分に見えるため。
+bridge と ai-cross-review の写しは、区分(`category`)が `copies` の項目である。
 
-```sh
-git show HEAD:<パス> | diff --strip-trailing-cr - <写し>
-```
-
-フロントマターの次のキーだけが違う定義は、開発者が設定コンソールや手で変えた設定として扱い、古いとは判定しない。
-
-- bridge の Claude 側定義(`agents/`)：`model`、`effort`
-- bridge の GPT 側定義(`gpt-agents/`)：`codex_home`、`codex_enabled`、`codex_model`、`codex_reasoning_effort`
-
-これらのキー以外にも差分があるものを、更新の対象にする。置き直すときは、これらのキーの今の値を引き継ぐ。
-
-写しが無いものは、導入時に置かなかったものとして扱い、新しく置かない。ただし、正本が新しく増えたものは、置くかどうかを開発者に尋ねる。
-
-| ツール | 正本(checkout) | 写し |
-|---|---|---|
-| bridge | `tools/codex-agent.sh`、`tools/codex-agent-hook.js` | `~/.claude/tools/` の同名のファイル |
-| bridge | `.claude/agents/*.md` | Claude のホームの `agents/` の同名のファイル |
-| bridge | `.claude/gpt-agents/*.md` | `~/.claude/gpt-agents/` の同名のファイル |
-| ai-cross-review | `.claude/skills/cross-review/SKILL.md` | Claude のホーム、`~/.codex`、`~/.codex-subagent` の `skills/cross-review/SKILL.md` |
-
-ai-cross-review のグローバル SKILL は、その checkout のルートで `node tools/cross-review.sync-all.js --global-skill --check` を実行しても確かめられる。
+- bridge の項目の id は `bridge.copies.<kind>.<name>` である。`requires` に、その項目を置くときに一致している必要がある項目の id が並ぶ。`requires` の中に `mismatch` の項目があれば、それも一緒に選んでもらう。選び漏れがあると、`apply.js` は足りない id を理由に書いて適用しない。
+- ai-cross-review の項目の id は `cross-review.skills.<配布先>` である。`not-installed` のうち、`actions` に `copy-file` があるものは、写しの無い配布先である。新しく置くかは開発者に尋ね、認められたときだけ選ぶ。`actions` が空のものは配布の対象外なので、`reason` を伝えるだけにして選ばない。
+- `bridge.copies.query` と `cross-review.skills.query` の `unverified` は、そのツールの照会ができなかったことを表す。checkout が古いと照会の入口が無いので、手順 2 で checkout を更新してから診断し直す。
 
 ai-cross-review は、レビューを回すリポジトリごとに `tools/cross-review.sync.json` で GitHub から直接取り込む形でも入っている。
 agent-cockpit の checkout の親ディレクトリと、今のリポジトリの親ディレクトリにあるリポジトリのうち、このマニフェストを持つものでは `node tools/cross-review.sync.js --check` を実行し、差分の有無を控える。
@@ -101,12 +81,11 @@ agent-cockpit の checkout の親ディレクトリと、今のリポジトリ�
 ツールごとに、次をまとめて開発者に示す。
 
 - checkout：手順 2 の `status`、`from`、`to`、`commits`、更新できない理由
-- agent-cockpit の写し、登録、常駐サーバー：手順 3 の診断の `mismatch` の項目の id、`reason`、`actions`
-- bridge と ai-cross-review の写し：差分のあるファイルと、更新後に差分が出る見込みのファイル
+- 写し、登録、常駐サーバー：手順 3 の診断の `mismatch` の項目と、ai-cross-review の `not-installed` のうち `copy-file` の対処がある項目の id、`reason`、`actions`
 - ai-cross-review の取り込み先：差分のあるリポジトリ
 
 すべて最新なら、そう報告して終える。
-更新するものがあれば、checkout はツールごとに、agent-cockpit の診断は項目の id ごとに選べる形で確認を取る。推奨は、更新できるものをすべて更新することである。
+更新するものがあれば、checkout はツールごとに、診断は項目の id ごとに選べる形で確認を取る。推奨は、更新できるものをすべて更新することである。
 
 ## 5. 更新して反映する
 
@@ -120,25 +99,21 @@ agent-cockpit の checkout の親ディレクトリと、今のリポジトリ�
 
    `updated` にならなかったツールは、その理由を控え、そのツールの残りの手順を行わない。
    出力の `manual` に、agent-cockpit の `docs/update.md` の「バージョンごとの追加作業」を確かめる案内があれば、その節を読んで行う。
-2. **bridge**：bridge の checkout の `docs/setup.md` の「更新するとき」に従い、写しを置き直す。スクリプトを定義より先に置く。`.claude/agents/` の写しを変えたら、手順 6 で Claude Code の再起動を案内する。
-3. **ai-cross-review**：グローバル SKILL を配り直す。
-   一括配布(`node tools/cross-review.sync-all.js --global-skill`)は、Claude のホームには写しが無くても新しく置き、Codex 側も `skills/` があれば新しく置く。
-   そのため、`--dry-run` で配布先を確かめ、全配布先に写しがあるか、新しく置く先も開発者が認めたときだけ一括配布を使う。
-   そうでないときは、写しのある配布先と認められた配布先だけに、`git show HEAD:.claude/skills/cross-review/SKILL.md` の内容を書く。
-4. **agent-cockpit**：開発者が内容を見て項目を選んだ診断の JSON を、そのまま `--from` に渡す。適用の直前に作り直さない。作り直すと、選んだ後にファイルが変わっても `apply.js` が検出できないためである。
+2. **写しと登録**：開発者が内容を見て項目を選んだ診断の JSON を、そのまま `--from` に渡す。適用の直前に作り直さない。作り直すと、選んだ後にファイルが変わっても `apply.js` が検出できないためである。
 
    ```sh
    node src/client/apply.js --from <選んでもらった診断の一時ファイル> --item <id> [--item <id> ...] --json
    ```
 
-   checkout を更新したときは、期待値が変わるので、手順 3 の診断を作り直し、`mismatch` の項目を示して選び直してもらってから、その JSON で適用する。
+   checkout を更新したときは、期待値と照会の結果が変わるので、手順 3 の診断を作り直し、項目を示して選び直してもらってから、その JSON で適用する。
 
    常駐サーバーの再起動は、診断の `cockpit.server.running` の項目を選ぶと、ほかの項目を書き換えた後に行われる。
-   `skipped` の項目は、診断の後にファイルか checkout が変わったものである。診断し直して、残っていれば選び直してもらう。
+   bridge の項目は、bridge の照会が返す順(スクリプト、GPT 側定義、Claude 側定義)に置かれる。前提の項目が置けなかったときは、後の項目は `skipped` になる。
+   `skipped` の項目は、診断の後にファイルか checkout が変わったか、前提を満たさなかったものである。`reason` を伝え、診断し直して、残っていれば選び直してもらう。
    `failed` の項目は、`reason` を開発者に伝える。
    出力の `backupDir` は、書き換える前のファイルの退避先である。
 
-各ツールの更新後に、手順 3 の比較をやり直し、差分が残っていないことを確かめる。agent-cockpit は、診断をやり直して `mismatch` が残っていないことを確かめる。
+適用の後に診断をやり直し、選んだ項目に `mismatch` が残っていないことを確かめる。
 agent-cockpit を更新して `skills/update-tools/SKILL.md` が変わったときは、写しを置いた後にこのスキルを読み直し、残りの手順を新しい内容で進める。
 
 ## 6. 報告する
@@ -147,7 +122,6 @@ agent-cockpit を更新して `skills/update-tools/SKILL.md` が変わったと�
 次のものは、開発者に行ってもらう作業として最後にまとめる。
 
 - `apply.js` の出力の `manual`(セッションの開き直し、Codex の `/hooks` での信頼し直しなど)
-- bridge と ai-cross-review の写しを変えたときは、それを使う実行中の Claude Code と Codex のセッションを開き直すこと
 - agent-cockpit を更新したときは、ダッシュボードのタイトルのバージョンと、再起動待ちの帯が出ていないことを画面で確かめること
 - 診断の `cockpit.runtime-check.roundtrip` の案内(導入手順の「確認」で MCP の書き込みと質問の回答を試すこと)
 - 更新できなかった checkout と適用できなかった項目と、その理由
