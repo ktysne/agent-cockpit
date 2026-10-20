@@ -1,13 +1,14 @@
 # 連携ツールの更新と反映の計画(2026-10-20)
 
-Issue #534 の計画である。利用者が、連携ツール(ai-cross-review、claude-codex-bridge)も含めて、最新のツールを簡単に使える状態にすることを最終目標にする。
+Issue #534(段階 1)と #671(段階 2)の計画である。利用者が、連携ツール(ai-cross-review、claude-codex-bridge)も含めて、最新のツールを簡単に使える状態にすることを最終目標にする。
 起点は main の 558e7480 である。
 各リポジトリが `tools/cross-review.sync.json` で取り込む ai-cross-review の写しは、リポジトリの中身でホームの設定ではないので、対象に入れない。
 
 ## 現在地と次にやること
 
-段階 1(診断)を PR #670 で実装した。仕様の正本は [導入の整合の診断の設計](../design/doctor.md) である。
-段階 1 の PR がマージされたら、段階 2 の Issue を起票する。
+段階 1(診断)は終わった。仕様の正本は [導入の整合の診断の設計](../design/doctor.md) である。
+次は段階 2(#671)である。最初に #671 の「設計で決める点」を決め、この資料の「決定済みの判断」に足してから実装に入る。
+bridge の写しの一覧の正本は、ktysne/claude-codex-bridge#167 の出力を使えるかで決まるので、#669 の計画の表で #167 の状態を先に確かめる。
 
 ## 決定済みの判断
 
@@ -26,8 +27,8 @@ Issue #534 の計画である。利用者が、連携ツール(ai-cross-review�
 
 | 順 | 対象 | 主な変更先 | 委譲の区分 | ブランチ | base | 状態(2026-10-20 に確認) |
 |---|---|---|---|---|---|---|
-| 1 | #534 段階 1 診断 | `src/client/doctor.js`、`src/shared/integration-manifest.js`、`docs/setup.md`、`docs/update.md` | hard | `claude/integration-doctor` | main | PR #670。レビュー中 |
-| 2 | 段階 2 更新と反映 | 未定 | 未定 | 未定 | main | 未起票 |
+| 1 | #534 段階 1 診断 | `src/client/doctor.js`、`src/shared/integration-manifest.js`、`docs/setup.md`、`docs/update.md` | hard | `claude/integration-doctor` | main | PR #670。マージ済み、#534 は閉じた |
+| 2 | #671 段階 2 更新と反映 | 未定 | 未定 | 未定 | main | 起票済み、未着手 |
 | 3 | 段階 3 ダッシュボードの入口 | 未定 | 未定 | 未定 | main | 未起票 |
 
 ## 落とし穴
