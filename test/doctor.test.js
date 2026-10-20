@@ -11,6 +11,23 @@ const COMMIT = 'a'.repeat(40);
 const SECRET = 'doctor-test-server-secret';
 const ENV_SECRET = 'doctor-test-mcp-environment';
 
+function bridgeQuery(status = 'stale', reason = 'content-differs') {
+  return { protocol: 1, order: ['script', 'gpt-agent', 'claude-agent'], after: [
+    { id: 'restart-claude-code', when: 'claude-agent' }, { id: 'review-role-section', when: 'any' },
+    { id: 'future-step', when: 'script' },
+  ], items: ['script', 'gpt-agent', 'claude-agent'].map(kind => ({ id: `${kind}:example.md`, kind, name: 'example.md',
+    source: '/checkout/example.md', target: `/home/${kind}/example.md`, status, reason,
+    source_sha256: 'a'.repeat(64), observed_sha256: ['missing', 'not-deployed'].includes(status) ? null : 'b'.repeat(64),
+    content: ['stale', 'missing'].includes(status) ? '配置する内容\n' : null,
+    requires: kind === 'claude-agent' ? ['script:example.md', 'gpt-agent:example.md'] : [] })) };
+}
+
+async function bridgeCheckout(f) {
+  const root = path.join(f.directory, 'claude-codex-bridge');
+  await write(path.join(root, '.git/config'), '[remote "origin"]\nurl = https://github.com/ktysne/claude-codex-bridge.git\n');
+  return root;
+}
+
 async function write(file, value) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, typeof value === 'string' ? value : JSON.stringify(value));
@@ -540,4 +557,99 @@ test('ai-cross-review が未導入なら照会も写しの項目も作らない'
   const queryCrossReview = async () => { assert.fail('未導入の照会'); };
   const { report } = await run({ ...f.options, queryCrossReview });
   assert.deepEqual(report.items.filter(item => item.category === 'copies'), []);
+});
+
+test('bridge の五つの状態と理由を診断項目と対処へ写す', async t => {
+  const f = await fixture(t);
+  await bridgeCheckout(f);
+  for (const [status, reason, result] of [
+    ['match', null, 'ok'], ['stale', 'content-differs', 'mismatch'], ['stale', 'line-ending', 'mismatch'],
+    ['missing', 'required', 'mismatch'], ['not-deployed', null, 'not-installed'],
+    ['unreadable', 'unreadable-file', 'unverified'], ['unreadable', 'front-matter-unreadable', 'unverified'],
+  ]) {
+    const query = bridgeQuery(status, reason);
+    const { report } = await run({ ...f.options, queryBridge: async () => ({ stdout: JSON.stringify(query) }) });
+    const items = report.items.filter(item => item.id.startsWith('bridge.copies.'));
+    assert.equal(items.length, 3);
+    for (const [index, item] of items.entries()) {
+      const source = query.items[index];
+      assert.equal(item.id, `bridge.copies.${source.kind}.${source.name}`);
+      assert.equal(item.tool, 'claude-codex-bridge');
+      assert.equal(item.provider, source.kind === 'claude-agent' ? 'claude' : null);
+      assert.equal(item.target, source.target);
+      assert.equal(item.expected, source.source_sha256);
+      assert.equal(item.observed, source.observed_sha256);
+      assert.equal(item.result, result);
+      assert.equal(item.copyOrder, index);
+      assert.deepEqual(item.requires, source.requires.map(id => `bridge.copies.${id.replace(':', '.')}`));
+      assert.deepEqual(item.actions.filter(action => action.op !== 'manual'), result === 'mismatch'
+        ? [{ op: 'write', to: source.target, content: source.content, observedDigest: source.observed_sha256,
+          source: source.source, sourceDigest: source.source_sha256 }] : []);
+      if (reason) assert.match(item.reason, /ください/);
+    }
+  }
+});
+
+test('bridge の after は when に一致する項目にだけ手作業の案内を付ける', async t => {
+  const f = await fixture(t);
+  await bridgeCheckout(f);
+  const { report } = await run({ ...f.options, queryBridge: async () => ({ stdout: JSON.stringify(bridgeQuery()) }) });
+  const items = report.items.filter(item => item.id.startsWith('bridge.copies.'));
+  for (const item of items) {
+    const manual = item.actions.filter(action => action.op === 'manual').map(action => action.text).join('\n');
+    assert.match(manual, /5\. メインセッションに役割分担を指示する/);
+    assert.equal(manual.includes('再起動'), item.provider === 'claude');
+    assert.equal(manual.includes('bridge の導入手順を確かめてください (future-step)'), item.copyOrder === 0);
+  }
+  const { output } = await run({ ...f.options, queryBridge: async () => ({ stdout: JSON.stringify(bridgeQuery()) }) }, []);
+  assert.match(output, /照会が返した内容で置き直します/);
+});
+
+test('bridge の照会には bash と checkout と Claude ホームと三十秒の時間切れを渡す', async t => {
+  const f = await fixture(t);
+  const root = await bridgeCheckout(f);
+  const queryBridge = async (command, args, options) => {
+    assert.equal(command, 'bash');
+    assert.deepEqual(args, ['tools/codex-agent.sh', '--check-copies']);
+    assert.equal(options.cwd, root);
+    assert.equal(options.env.CLAUDE_CONFIG_DIR, f.homes.claude);
+    assert.equal(options.timeout, 30000);
+    assert.equal(options.windowsHide, true);
+    return { stdout: JSON.stringify(bridgeQuery('match', null)) };
+  };
+  assert.equal((await run({ ...f.options, queryBridge })).code, 0);
+});
+
+test('bridge を照会できない各原因は一つの未確認にする', async t => {
+  const f = await fixture(t);
+  const root = await bridgeCheckout(f);
+  const failures = [
+    [{ code: 'ENOENT' }, /bash/], [{ killed: true }, /時間切れ/], [{ code: 'ETIMEDOUT' }, /時間切れ/],
+    [{ code: 2, stderr: '不明なオプションである: --check-copies' }, /古い版/], [{ code: 1 }, /終了コード: 1/],
+    [{ stdout: 'invalid' }, /JSON/], [{ stdout: '{"protocol":2}' }, /protocol/],
+    [{ stdout: '{"protocol":"1"}' }, /protocol/],
+  ];
+  for (const mutate of [q => { q.items = null; }, q => { q.order = [1]; }, q => { q.after = [{}]; },
+    ...['id', 'kind', 'name', 'target', 'status', 'requires', 'content'].map(key => q => { q.items[0][key] = 1; })]) {
+    const query = bridgeQuery();
+    mutate(query);
+    failures.push([{ stdout: JSON.stringify(query) }, /形/]);
+  }
+  for (const [response, message] of failures) {
+    const queryBridge = async () => { if (!response.stdout) throw Object.assign(new Error(), response); return response; };
+    const { report } = await run({ ...f.options, queryBridge });
+    const items = report.items.filter(item => item.id.startsWith('bridge.copies.'));
+    assert.deepEqual(items.map(item => [item.id, item.result]), [['bridge.copies.query', 'unverified']]);
+    assert.match(items[0].reason, message);
+    assert.match(items[0].actions[0].text, /更新するとき/);
+  }
+  await fs.rm(root, { recursive: true });
+  const { report } = await run({ ...f.options, isBridgeInstalled: async () => true });
+  assert.equal(report.items.find(item => item.id === 'bridge.copies.query').result, 'unverified');
+});
+
+test('bridge が未導入なら照会せず写しの項目を出さない', async t => {
+  const f = await fixture(t);
+  const { report } = await run({ ...f.options, queryBridge: async () => assert.fail('未導入の照会') });
+  assert.deepEqual(report.items.filter(item => item.id.startsWith('bridge.copies.')), []);
 });

@@ -22,7 +22,7 @@ function matches(content, actions) {
   try {
     return actions.every(action => action.observedDigest === (action.digestPath
       ? subtreeDigest(content === null ? null : JSON.parse(content.toString('utf8')), action.digestPath)
-      : content === null ? null : digest(action.op === 'copy-file' ? content : content.toString('utf8'))));
+      : content === null ? null : digest(['copy-file', 'write'].includes(action.op) ? content : content.toString('utf8'))));
   } catch (error) {
     if (error instanceof SyntaxError) return false;
     throw error;
@@ -116,6 +116,10 @@ async function editedContent(io, root, content, actions) {
     else if (action.op === 'copy-file') {
       result = await io.readFile(action.from);
       if (digest(result) !== action.sourceDigest) return null;
+    } else if (action.op === 'write') {
+      const source = await readFile(io, action.source);
+      if (source === null || digest(source) !== action.sourceDigest) return null;
+      result = Buffer.from(action.content, 'utf8');
     } else throw new Error('対応していないファイルの対処です。');
   }
   return result;
@@ -155,6 +159,20 @@ function backups(io, home, now) {
   };
 }
 
+function bridgeDependencies(item, items) {
+  const dependencies = new Map();
+  const visit = entry => {
+    for (const id of entry.requires || []) {
+      if (dependencies.has(id)) continue;
+      const dependency = items.find(candidate => candidate.id === id);
+      dependencies.set(id, dependency);
+      if (dependency) visit(dependency);
+    }
+  };
+  visit(item);
+  return dependencies;
+}
+
 async function applySelected(from, ids, options) {
   const observation = await observe({ ...options, root: from.checkout.resolvedBy === 'root' ? from.checkout.root : undefined });
   const current = evaluate(observation);
@@ -163,6 +181,13 @@ async function applySelected(from, ids, options) {
   const report = { schemaVersion: 1, backupDir: null, results: [], commands: [], manual: [] };
   const candidates = [];
   const files = new Map();
+  const bridgeItems = current.items.filter(item => item.tool === 'claude-codex-bridge' && item.category === 'copies');
+  const bridgeIds = ids.filter(id => bridgeItems.some(item => item.id === id)).sort((a, b) => {
+    const left = bridgeItems.find(item => item.id === a);
+    const right = bridgeItems.find(item => item.id === b);
+    return left.copyOrder - right.copyOrder || (a < b ? -1 : a > b ? 1 : 0);
+  });
+  ids = ids.map(id => bridgeItems.some(item => item.id === id) ? bridgeIds.shift() : id);
   for (const id of ids) {
     const previous = from.items.find(item => item.id === id);
     const item = current.items.find(item => item.id === id);
@@ -175,8 +200,19 @@ async function applySelected(from, ids, options) {
     else if (item.result !== 'mismatch' && !(item.result === 'not-installed' && item.actions.some(action => action.op === 'copy-file'))) Object.assign(result, { status: 'skipped', reason: '適用できる状態ではありません。' });
     else if (!isDeepStrictEqual(previous.actions, item.actions)) Object.assign(result, { status: 'skipped', reason: CHANGED });
     else {
+      if (bridgeItems.includes(item)) {
+        const dependencies = bridgeDependencies(item, current.items);
+        const blocked = [...dependencies].filter(([, dependency]) => !dependency || ['unverified', 'not-installed'].includes(dependency.result))
+          .map(([dependencyId]) => dependencyId);
+        const missing = [...dependencies].filter(([dependencyId, dependency]) => dependency?.result === 'mismatch' && !ids.includes(dependencyId))
+          .map(([dependencyId]) => dependencyId);
+        if (blocked.length || missing.length) {
+          Object.assign(result, { status: 'skipped', reason: `依存を満たせません。未確認または未配置: ${blocked.join(', ') || 'なし'}。選択が必要: ${missing.join(', ') || 'なし'}。` });
+          continue;
+        }
+      }
       const actions = item.actions.filter(action => !['manual', 'command'].includes(action.op));
-      const targets = [...new Set(actions.map(action => ['copy', 'copy-file'].includes(action.op) ? action.to : action.file))];
+      const targets = [...new Set(actions.map(action => ['copy', 'copy-file', 'write'].includes(action.op) ? action.to : action.file))];
       if (targets.length > 1) Object.assign(result, { status: 'failed', reason: '1 つの項目が複数のファイルを対象にしています。' });
       else {
         candidates.push({ item, result });
@@ -188,9 +224,19 @@ async function applySelected(from, ids, options) {
       }
     }
   }
+  const completed = new Set(report.results.filter(result => result.status === 'already-ok').map(result => result.id));
   for (const [file, { actions, results }] of files) {
     let temporary;
     try {
+      const blocked = results.flatMap(result => {
+        const item = bridgeItems.find(entry => entry.id === result.id);
+        return item ? [...bridgeDependencies(item, current.items)]
+          .filter(([id, dependency]) => ids.includes(id) && dependency?.result !== 'ok' && !completed.has(id)).map(([id]) => id) : [];
+      });
+      if (blocked.length) {
+        results.forEach(result => Object.assign(result, { status: 'skipped', reason: `前提の適用が完了していません: ${[...new Set(blocked)].join(', ')}。` }));
+        continue;
+      }
       const content = await readFile(io, file);
       if (!matches(content, actions)) {
         results.forEach(result => Object.assign(result, { status: 'skipped', reason: CHANGED }));
@@ -211,7 +257,17 @@ async function applySelected(from, ids, options) {
         results.forEach(result => Object.assign(result, { status: 'skipped', reason: CHANGED }));
         continue;
       }
+      let sourceChanged = false;
+      for (const action of actions.filter(action => action.op === 'write')) {
+        const source = await readFile(io, action.source);
+        if (source === null || digest(source) !== action.sourceDigest) sourceChanged = true;
+      }
+      if (sourceChanged) {
+        results.forEach(result => Object.assign(result, { status: 'skipped', reason: CHANGED }));
+        continue;
+      }
       await io.rename(temporary, file);
+      results.forEach(result => completed.add(result.id));
     } catch {
       results.forEach(result => Object.assign(result, { status: 'failed', reason: '退避またはファイルの対処に失敗しました。設定の形とアクセス権を確認してください。' }));
     } finally {

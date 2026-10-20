@@ -81,6 +81,40 @@ async function observeCrossReview(checkouts, homes, environment, options) {
   return value;
 }
 
+async function observeBridge(checkouts, homes, environment, options) {
+  const checkout = checkouts.find(entry => entry.tool === 'claude-codex-bridge');
+  if (!checkout) return null;
+  if (!checkout.root) return { error: 'claude-codex-bridge の checkout が見つかりません。' };
+  let stdout;
+  try {
+    ({ stdout } = await (options.queryBridge || promisify(execFile))('bash', ['tools/codex-agent.sh', '--check-copies'],
+      { cwd: checkout.root, env: { ...environment, CLAUDE_CONFIG_DIR: homes.claude },
+        timeout: 30000, windowsHide: true, encoding: 'utf8' }));
+  } catch (error) {
+    if (error.code === 'ENOENT') return { error: 'bash が見つからないため、bridge の照会を実行できませんでした。' };
+    if (error.killed || error.code === 'ETIMEDOUT') return { error: 'bridge の照会が時間切れになりました。' };
+    if (error.code === 2 && error.stderr?.includes('不明なオプションである: --check-copies')) {
+      return { error: 'bridge は照会の入口を持たない古い版です。' };
+    }
+    return { error: `bridge の照会を実行できませんでした (終了コード: ${error.code ?? '不明'})。` };
+  }
+  let value;
+  try { value = JSON.parse(stdout); }
+  catch { return { error: 'bridge の照会結果を JSON として読めませんでした。' }; }
+  if (value?.protocol !== 1) return { error: 'bridge の照会結果の protocol が整数 1 ではありません。' };
+  if (!Array.isArray(value.items) || !value.items.every(item => object(item) &&
+      ['id', 'kind', 'name', 'target'].every(key => typeof item[key] === 'string') &&
+      ['match', 'stale', 'missing', 'not-deployed', 'unreadable'].includes(item.status) &&
+      Array.isArray(item.requires) && item.requires.every(id => typeof id === 'string') &&
+      (!['stale', 'missing'].includes(item.status) || typeof item.content === 'string')) ||
+      !Array.isArray(value.order) || !value.order.every(kind => typeof kind === 'string') ||
+      !Array.isArray(value.after) || !value.after.every(action => object(action) &&
+        typeof action.id === 'string' && typeof action.when === 'string')) {
+    return { error: 'bridge の照会結果の items、order、after の形を読めませんでした。' };
+  }
+  return value;
+}
+
 async function observe(options = {}) {
   const environment = options.environment || process.env;
   const userHome = options.userHome || os.homedir();
@@ -126,7 +160,8 @@ async function observe(options = {}) {
   const server = await observeServer(homes.cockpit, root, expected, options);
   const checkouts = await observeCheckouts({ root, userHome, homes, bridgeInstalled, cwd: options.cwd });
   const crossReview = await observeCrossReview(checkouts, homes, environment, options);
-  return { homes, hooks, candidates, root, resolvedBy, expected, manifest, generatedAt, bridgeInstalled, checkouts, crossReview,
+  const bridge = await observeBridge(checkouts, homes, environment, options);
+  return { homes, hooks, candidates, root, resolvedBy, expected, manifest, generatedAt, bridgeInstalled, checkouts, crossReview, bridge,
     claudeHooks, codexHooks, claudeMcp, codexConfig, skills, skillPresent, server };
 }
 
