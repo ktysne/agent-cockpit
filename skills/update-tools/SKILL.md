@@ -22,6 +22,7 @@ bridge と ai-cross-review の写しは、診断が各ツールの照会の入�
 - checkout も写しも、今のリポジトリの外にあり、開発者のすべてのセッションに効く。調べるところまでは確認なしで進め、書き換える前に、対象と差分の一覧を示して開発者の確認を取る。
 - checkout は `apply.js --update-checkouts` でだけ更新する。コマンドが更新しないと報告した checkout(`blocked`)を、変更を消す、ブランチを切り替える、`--force`、タグの削除で更新し直さない。
 - 写しと登録は、3 ツールとも `apply.js --from` でだけ書き換える。コマンドが適用しなかった項目(`skipped`、`failed`)を手で書き換えない。診断し直して、もう一度選んでもらう。
+- ai-cross-review の移行(`--migrate`)、取り込み(`sync`)、登録(`--register`)は、このスキルでは実行しない。移行と取り込みは対象リポジトリの作業ブランチと PR で行うよう伝え、ホームのファイルを書く登録は手順だけを示す。
 - bridge の写しを置き直す内容は、bridge の照会が返す。開発者が設定コンソールや手で変えた定義のキーの引き継ぎも bridge が行うので、内容を手で直さない。
 - 診断の結果には、開発者の設定のパスが出る。診断の JSON は、リポジトリの外の一時ファイルに置く。
 - 手順の細部は各ツールの文書が正本である。
@@ -72,9 +73,40 @@ bridge と ai-cross-review の写しは、区分(`category`)が `copies` の項�
 - ai-cross-review の項目の id は `cross-review.skills.<配布先>` である。`not-installed` のうち、`actions` に `copy-file` があるものは、写しの無い配布先である。新しく置くかは開発者に尋ね、認められたときだけ選ぶ。`actions` が空のものは配布の対象外なので、`reason` を伝えるだけにして選ばない。
 - `bridge.copies.query` と `cross-review.skills.query` の `unverified` は、そのツールの照会ができなかったことを表す。checkout が古いと照会の入口が無いので、手順 2 で checkout を更新してから診断し直す。
 
-ai-cross-review は、レビューを回すリポジトリごとに `tools/cross-review.sync.json` で GitHub から直接取り込む形でも入っている。
-agent-cockpit の checkout の親ディレクトリと、今のリポジトリの親ディレクトリにあるリポジトリのうち、このマニフェストを持つものでは `node tools/cross-review.sync.js --check` を実行し、差分の有無を控える。
-取り込みはそのリポジトリへの変更なので、このスキルでは行わない。差分があるリポジトリを報告に挙げ、そのリポジトリの運用(作業ブランチと PR)で取り込むよう伝える。
+ai-cross-review が導入済みなら、レビューを回すリポジトリごとの取り込みと、本体の登録も確かめる。
+`<checkout>` は、手順 2 の結果の ai-cross-review の `root` である。
+走査ルートは、agent-cockpit の checkout の親ディレクトリと、今のリポジトリの親ディレクトリとする。
+
+1. 移行の要否は、ai-cross-review の checkout で走査ルートごとに次を実行して確かめる。
+
+   ```sh
+   node <checkout>/tools/cross-review.sync-all.js --migrate --check --json --root <走査ルート>
+   ```
+
+   出力は `{ schemaVersion: 1, subject: "migrate", result, root, projects: [{ root, manifest, upstream, form, migratable, reason, message }] }` である。
+   `form` が `legacy` で `migratable` が `true` のリポジトリは移行できるものとして控える。
+   `migratable` が `false` のリポジトリは `reason` と `message` を添えて移行できないものとして控える。
+   `form` が `error` のものと、`form` が `legacy` で `migratable` が `null` のものは、確かめられなかったものとして控える。
+   `form` が `new` のものは移行済み、`not-applicable` のものは対象外である。どちらも `migratable` は `null` になる。
+   終了コードは、0 が移行の必要なし、1 が旧形式あり、3 が確かめられなかったリポジトリあり、2 が引数の誤り(JSON を出さない)である。
+
+2. 取り込み先の差分は、1 の `form` に応じて各リポジトリのルートで確かめる。
+   新形式では `node tools/cross-review.js sync --check` を実行する。終了コードは、0 が一致、1 が差分あり、2 がマニフェストの誤り、3 が確かめられなかったことを表す。
+   旧形式では `node tools/cross-review.sync.js --check` を実行する。
+   結果は控え、終了コード 1 の差分ありと、3 の確かめられなかったものを分ける。前者はそのリポジトリで取り込み、後者は原因を直すよう伝える。
+
+3. ai-cross-review 本体の登録は、ai-cross-review の checkout で次を実行して確かめる。
+
+   ```sh
+   node <checkout>/tools/cross-review.sync-all.js --register --check --json
+   ```
+
+   出力は `{ schemaVersion: 1, subject: "register", result: clean|drift|error, registry, checkout, issues }` であり、終了コードは 0、1、3 である(2 は引数の誤りである)。
+   `drift` なら `issues`(既定のブランチでない、未コミットの変更がある)を控える。
+   `error` なら `issues` の `message` と、登録し直す手順 `node <checkout>/tools/cross-review.sync-all.js --register` を控える。
+   登録した checkout(`checkout.path`)が `<checkout>` と異なる場合は、そのことを控える。手順 2 で `<checkout>` を更新しても、新形式のリポジトリのレビューは、登録した checkout の本体で動くためである。
+
+照会の結果は解釈し直さず、そのまま示す。判定規則の正本は ai-cross-review の checkout の `docs/cross-review.md` である。
 
 ## 4. 結果を示して確認を取る
 
@@ -82,7 +114,7 @@ agent-cockpit の checkout の親ディレクトリと、今のリポジトリ�
 
 - checkout：手順 2 の `status`、`from`、`to`、`commits`、更新できない理由
 - 写し、登録、常駐サーバー：手順 3 の診断の `mismatch` の項目と、ai-cross-review の `not-installed` のうち `copy-file` の対処がある項目の id、`reason`、`actions`
-- ai-cross-review の取り込み先：差分のあるリポジトリ
+- ai-cross-review：移行の要否、取り込み先の差分、本体の登録の結果
 
 すべて最新なら、そう報告して終える。
 更新するものがあれば、checkout はツールごとに、診断は項目の id ごとに選べる形で確認を取る。推奨は、更新できるものをすべて更新することである。
@@ -125,4 +157,4 @@ agent-cockpit を更新して `skills/update-tools/SKILL.md` が変わったと�
 - agent-cockpit を更新したときは、ダッシュボードのタイトルのバージョンと、再起動待ちの帯が出ていないことを画面で確かめること
 - 診断の `cockpit.runtime-check.roundtrip` の案内(導入手順の「確認」で MCP の書き込みと質問の回答を試すこと)
 - 更新できなかった checkout と適用できなかった項目と、その理由
-- ai-cross-review の取り込み先のうち、差分があるリポジトリ
+- ai-cross-review の移行の要否、取り込み先の差分、本体の登録の結果
