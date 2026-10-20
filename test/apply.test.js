@@ -134,6 +134,32 @@ test('一時ファイル作成後に対象が変わると rename せず skipped 
   assert.ok(!(await fs.readdir(path.dirname(f.mcp))).some(file => file.endsWith('.tmp')));
 });
 
+test('一時ファイル作成後に MCP の登録以外だけが変わっても上書きせず skipped にする', async t => {
+  const f = await fixture(t);
+  await save(f);
+  const value = JSON.parse(await fs.readFile(f.mcp, 'utf8'));
+  const changed = JSON.stringify({ ...value, projects: { current: { count: 42 } } });
+  const io = { ...fs, writeFile: async (file, ...args) => {
+    await fs.writeFile(file, ...args);
+    if (file.endsWith('.tmp')) await fs.writeFile(f.mcp, changed);
+  } };
+  const { code, report } = await run(f, [MCP_ID], { fs: io });
+  assert.equal(code, 1);
+  assert.equal(report.results[0].status, 'skipped');
+  assert.equal(await fs.readFile(f.mcp, 'utf8'), changed);
+});
+
+test('正しいフックの後ろにある古い重複を取り除くと正しいフックが残る', async t => {
+  const f = await fixture(t);
+  await changeHook(f, group => { group.hooks.push({ ...structuredClone(group.hooks[0]), timeout: 1 }); });
+  const before = await save(f);
+  const extra = before.items.find(item => item.id.startsWith('claude.hooks.extra.SessionStart.event'));
+  assert.equal(before.items.find(item => item.id === HOOK_ID).result, 'ok');
+  assert.equal((await run(f, [extra.id])).code, 0);
+  const after = JSON.parse(await fs.readFile(f.settings, 'utf8'));
+  assert.deepEqual(after.hooks.SessionStart[0].hooks, f.manifest.claude.hooks.SessionStart[0].hooks);
+});
+
 test('同じ古いフックの置き換えと余分な登録の取り除きで期待する 1 件だけ残る', async t => {
   const f = await fixture(t);
   await changeHook(f, group => { group.hooks[0].timeout = 1; group.hooks.push(structuredClone(group.hooks[0])); });

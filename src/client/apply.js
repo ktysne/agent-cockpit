@@ -53,21 +53,25 @@ function jsonEdit(value, action) {
     parent[key].push(action.value);
     return;
   }
-  const groups = parent[key];
-  if (!Array.isArray(groups)) throw new Error('対象の値が配列ではありません。');
-  for (let index = 0; index < groups.length; index += 1) {
-    const group = groups[index];
-    if ((group.matcher ?? null) !== action.match.matcher || !Array.isArray(group.hooks)) continue;
-    const hook = group.hooks.findIndex(entry => execution(entry).script === action.match.script);
-    if (hook < 0) continue;
-    if (action.op === 'json-replace') group.hooks[hook] = action.value;
-    else if (action.op === 'json-remove') {
-      group.hooks.splice(hook, 1);
-      if (!group.hooks.length) groups.splice(index, 1);
-    } else throw new Error('対応していないフックの対処です。');
-    return;
+  const { groups, group, hook } = action.resolved;
+  const hookIndex = group.hooks.indexOf(hook);
+  if (hookIndex < 0) throw new Error('対象のフックがありません。');
+  if (action.op === 'json-replace') group.hooks[hookIndex] = action.value;
+  else if (action.op === 'json-remove') {
+    group.hooks.splice(hookIndex, 1);
+    if (!group.hooks.length) groups.splice(groups.indexOf(group), 1);
+  } else throw new Error('対応していないフックの対処です。');
+}
+
+// 位置は編集前の配列で解決し、要素の参照で書き換える。先に取り除いた要素で後の位置がずれないようにするため。
+function resolveHook(value, action) {
+  const groups = parentAt(value, action.path.slice(0, -1), false)[action.path.at(-1)];
+  const group = Array.isArray(groups) ? groups[action.match.groupIndex] : undefined;
+  const hook = Array.isArray(group?.hooks) ? group.hooks[action.match.hookIndex] : undefined;
+  if (!object(hook) || (group.matcher ?? null) !== action.match.matcher || execution(hook).script !== action.match.script) {
+    throw new Error('対象のフックがありません。');
   }
-  throw new Error('対象のフックがありません。');
+  return { groups, group, hook };
 }
 
 function tomlEdit(text, action) {
@@ -95,7 +99,11 @@ async function editedContent(io, root, content, actions) {
   if (actions.every(action => action.op.startsWith('json-'))) {
     const value = content === null ? {} : JSON.parse(text);
     const order = { 'json-remove': 0, 'json-replace': 1, 'json-add': 2 };
-    for (const action of [...actions].sort((a, b) => order[a.op] - order[b.op])) jsonEdit(value, action);
+    const resolved = actions.map(action => action.target === 'hook' ? { ...action, resolved: resolveHook(value, action) } : action);
+    if (new Set(resolved.filter(action => action.resolved).map(action => action.resolved.hook)).size !== resolved.filter(action => action.resolved).length) {
+      throw new Error('同じフックに複数の対処があります。');
+    }
+    for (const action of resolved.sort((a, b) => order[a.op] - order[b.op])) jsonEdit(value, action);
     const indent = text.match(/\r?\n([\t ]+)\S/)?.[1] || 2;
     const newline = text.includes('\r\n') ? '\r\n' : '\n';
     return JSON.stringify(value, null, indent).replace(/\n/g, newline) + (text.endsWith('\n') ? newline : '');
@@ -190,7 +198,8 @@ async function applySelected(from, ids, options) {
       temporary = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
       const mode = content === null ? 0o600 : (await io.stat(file)).mode & 0o777;
       await io.writeFile(temporary, edited, { flag: 'wx', mode });
-      if (!matches(await readFile(io, file), actions)) {
+      const latest = await readFile(io, file);
+      if (latest === null ? content !== null : content === null || !latest.equals(content)) {
         results.forEach(result => Object.assign(result, { status: 'skipped', reason: CHANGED }));
         continue;
       }

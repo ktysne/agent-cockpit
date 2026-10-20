@@ -119,6 +119,7 @@ Codex のフックの `command` は、`node "<パス>" codex` の形の文字列
 | `toml-set` | `file`、`table`(例 `mcp_servers.agent-cockpit`)、`key`、`value`。`[hooks.state]` は対象にしない |
 
 フックの対処の `target` は、`group`(matcher のグループを足す)か `hook`(`match` の matcher のグループの中で、`match` のスクリプトを指すフック 1 件を置き換えるか取り除く)である。
+`hook` の `match` は、観測したときのグループとフックの位置(`groupIndex`、`hookIndex`)も持つ。同じ matcher とスクリプトのフックが重複しうるため、適用する側は、編集前の配列でこの位置の要素を選び、matcher とスクリプトが `match` と一致することを確かめてから書き換える。位置は `observedDigest` が一致する間だけ有効である。
 `target` が無い JSON の対処はオブジェクトのキーを対象とし、`path` の最後のキーの値だけを書き換える。
 `json-add` は無い途中のオブジェクトを作るが、途中にオブジェクト以外の値があれば適用できない。
 この形を使い、Claude の MCP の `command` と `args` を直しても、同じ登録の `env` とほかの MCP の登録を残す。
@@ -157,7 +158,7 @@ node src/client/apply.js --from diagnosis.json --item claude.mcp.registration [-
 2. 元が `mismatch` の項目だけを候補とする。今は `ok` なら `already-ok`、項目が消えたか適用できる状態でなければ `skipped` にする。今の対処と保存した対処を `isDeepStrictEqual` で比べ、違えば診断し直すよう案内して `skipped` にする。
 3. ファイルの対処をファイルごとにまとめる。1 項目が複数のファイルを対象にしていれば `failed` にする。ファイルを読み、各対処の digest を確かめ、違えばそのファイルの項目をすべて `skipped` にする。
 4. 元のバイト列を退避して、メモリー上で `json-remove`、`json-replace`、`json-add` の順に適用する。同じ操作の中と TOML、copy は選んだ項目の順、項目内の順にする。どれかが適用できなければ、そのファイルを書かずに対象の項目をすべて `failed` にする。
-5. 同じフォルダーの一時ファイルに書き、対象をもう一度読んで同じ digest 照合を行う。違えば一時ファイルを消して `skipped` にし、一致すれば rename で 1 回だけ書き換える。JSON は字下げ、改行コード、末尾の改行の有無を保つ。TOML は対象の表のキーだけを書き換え、ほかの表と `[hooks.state]` を残す。copy は checkout の正本のバイト列を写す。
+5. 同じフォルダーの一時ファイルに書き、対象をもう一度読んで、手順 3 で読んだバイト列と同じかを確かめる。`digestPath` の対処でも、ここではファイル全体で比べる。手順 3 の後の登録以外の書き込みも、上書きで失わないためである。違えば一時ファイルを消して `skipped` にし、一致すれば rename で 1 回だけ書き換える。JSON は字下げ、改行コード、末尾の改行の有無を保つ。TOML は対象の表のキーだけを書き換え、ほかの表と `[hooks.state]` を残す。copy は checkout の正本のバイト列を写す。
 6. ファイルへの適用が終わってから、選んだ `command` を実行する。許すのは checkout を cwd とする `node src/client/restart-server.js --json` だけで、`execFile` に実行ファイルと引数を分けて渡す。適用した項目の `manual` は重複を除いて最後に案内する。
 
 退避先は `AGENT_COCKPIT_HOME/backups/<時刻>/` とする。

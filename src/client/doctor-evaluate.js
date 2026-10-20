@@ -49,10 +49,12 @@ function hookValue(hook) {
 function hookEntries(document) {
   if (!object(document.value?.hooks)) return [];
   return Object.entries(document.value.hooks).flatMap(([event, groups]) => Array.isArray(groups)
-    ? groups.flatMap(group => Array.isArray(group?.hooks) ? group.hooks.filter(object).map(hook => {
+    ? groups.flatMap((group, groupIndex) => Array.isArray(group?.hooks) ? group.hooks.flatMap((hook, hookIndex) => {
+      if (!object(hook)) return [];
       const run = execution(hook);
       const match = typeof run.script === 'string' && run.script.replace(/\\/g, '/').match(/^(.*)\/src\/hooks\/([^/]+)\.js$/i);
-      return { event, matcher: group.matcher ?? null, matcherKey: matcherKey(group.matcher), hook, root: match ? match[1] : null, name: match ? match[2] : null };
+      return [{ event, matcher: group.matcher ?? null, matcherKey: matcherKey(group.matcher), hook, groupIndex, hookIndex,
+        root: match ? match[1] : null, name: match ? match[2] : null }];
     }) : []) : []);
 }
 
@@ -101,7 +103,9 @@ function parseMcpToml(text) {
 // matcher はグループの属性なので、違うときはフックを外して期待するグループを足す。
 function hookActions(document, provider, entry, expectedGroup) {
   const target = { file: document.file, path: ['hooks', entry.event], observedDigest: document.observedDigest };
-  const remove = { op: 'json-remove', target: 'hook', ...target, match: { matcher: entry.matcher, script: execution(entry.hook).script ?? null } };
+  // 同じ matcher とスクリプトのフックが重複しうるので、観測した位置で 1 件を指す。位置は observedDigest が一致する間だけ有効である。
+  const remove = { op: 'json-remove', target: 'hook', ...target, match: { matcher: entry.matcher, script: execution(entry.hook).script ?? null,
+    groupIndex: entry.groupIndex, hookIndex: entry.hookIndex } };
   const edits = !expectedGroup ? [remove]
     : entry.matcherKey === matcherKey(expectedGroup.matcher) ? [{ ...remove, op: 'json-replace', value: expectedGroup.hooks[0] }]
       : [remove, addGroupAction(document, entry.event, expectedGroup)];
