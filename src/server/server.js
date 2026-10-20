@@ -30,6 +30,7 @@ const { createUiSessionRoutes } = require('./routes/ui-sessions');
 const { createSettingsRoutes } = require('./routes/settings');
 const { composeUiTemplate } = require('./ui-template');
 const { Diagnostics } = require('./diagnostics');
+const { DoctorChecker } = require('./doctor-check');
 const { UpdateChecker } = require('./update-check');
 const { readSourceCommit, readSourceState } = require('./source-revision');
 const { recordClientEntries, MAX_DIAGNOSTICS_PER_EVENT, MAX_DIAGNOSTICS_BODY_BYTES } = require('../client/diagnostic-events');
@@ -187,6 +188,7 @@ function createRequestHandler(options) {
 
   const ctx = {
     updateChecker: options.updateChecker,
+    doctorChecker: options.doctorChecker,
     getRuntime: options.getRuntime,
     getSourceState: options.getSourceState,
     appVersion: options.appVersion,
@@ -301,6 +303,17 @@ function createRequestHandler(options) {
     { method: 'POST', path: '/api/away', auth: 'ui-optional-origin', body: 'json', handler: handleAway },
     { method: 'POST', path: '/api/routing', auth: 'ui', body: 'json', handler: handleRouting },
     { method: 'POST', path: '/api/open-url', auth: 'ui', body: 'json', handler: handleOpenUrl },
+    { method: 'GET', path: '/api/doctor', auth: 'none', body: 'none', handler: ({ response }) => {
+      jsonResponse(response, 200, ctx.doctorChecker?.details() || null);
+    } },
+    { method: 'POST', path: '/api/doctor/check', auth: 'ui', body: 'json', handler: async ({ response }) => {
+      if (!ctx.doctorChecker) {
+        jsonResponse(response, 409, { error: 'doctor-check-disabled' });
+        return;
+      }
+      await ctx.doctorChecker.check();
+      jsonResponse(response, 200, ctx.doctorSnapshot());
+    } },
     { method: 'POST', path: '/api/update/check', auth: 'ui', body: 'json', handler: handleUpdateCheck },
     { method: 'POST', path: '/api/events', auth: 'hook', body: 'json', handler: handleEvents },
     { method: 'POST', path: /^\/api\/sessions\/([^/]+)\/plan$/, auth: 'hook', body: 'json', idCheck: invalidSessionId, handler: handlePlan },
@@ -482,6 +495,7 @@ async function startServer(options = {}) {
   const diagnostics = new Diagnostics({ ...options.diagnosticsOptions, homeDir, userHome: options.userHome,
     getLevel: () => state.getDisplayPreferences?.()?.diagnosticsLevel || 'info' });
   state.diagnostics = diagnostics;
+  const doctorChecker = options.doctorCheck ? new DoctorChecker({ ...options.doctorCheck, homeDir }) : null;
   const updateChecker = options.updateCheck ? new UpdateChecker({ diagnostics, ...options.updateCheck }) : null;
   state.attachWriter?.(storageWriter);
   away.attachWriter?.(storageWriter);
@@ -731,6 +745,7 @@ async function startServer(options = {}) {
   const handler = createRequestHandler({
     serverRestart: options.serverRestart,
     updateChecker,
+    doctorChecker,
     appVersion,
     getRuntime: () => runtime,
     getSourceState: () => sourceState,
@@ -800,6 +815,7 @@ async function startServer(options = {}) {
   });
   pullRequestTracker.start();
   updateChecker?.start();
+  doctorChecker?.start();
   pullRequestMergeManager.start?.();
   async function refreshSessionFiles(now = Date.now()) {
     if (closing) return;
@@ -877,6 +893,7 @@ async function startServer(options = {}) {
       pullRequestMergeManager.close?.();
       pullRequestTracker.close();
       await updateChecker?.close();
+      await doctorChecker?.close();
       await sourceReading;
       if (server.listening) await new Promise((resolve) => server.close(resolve));
       await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
@@ -889,7 +906,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, updateChecker, diagnostics, info, homeDir, close, refreshSessionFiles };
+  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, updateChecker, doctorChecker, diagnostics, info, homeDir, close, refreshSessionFiles };
 }
 
 function parseArguments(argv) {
@@ -902,7 +919,7 @@ function parseArguments(argv) {
 }
 
 if (require.main === module) {
-  startServer({ ...parseArguments(process.argv.slice(2)), updateCheck: {}, serverRestart: {} })
+  startServer({ ...parseArguments(process.argv.slice(2)), updateCheck: {}, doctorCheck: {}, serverRestart: {} })
     .then((runtime) => {
       console.log(`Agent Cockpit listening at http://127.0.0.1:${runtime.info.port}/`);
       const stop = () => runtime.close().finally(() => { process.exitCode = 0; });

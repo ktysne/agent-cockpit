@@ -259,6 +259,8 @@ function createHookRoutes(ctx) {
     }
     const event = sanitizeEvent(body, eventMetadata);
     if (event && !rejected) {
+      if (event.hook_event_name === 'SessionStart' && !event.agent_id
+        && !state.isDelegatedCodexThread(event.session_id)) ctx.doctorChecker?.sessionStarted();
       const data = { event: event.hook_event_name, provider: event.provider, tool: event.tool_name,
         session: event.session_id.slice(0, 8), product: product?.name, delayMs: receivedAt - event.hookAt };
       ctx.diagnostics?.record('debug', 'server', 'event.accepted', data);
