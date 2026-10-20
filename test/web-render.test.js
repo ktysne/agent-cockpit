@@ -6138,6 +6138,27 @@ test('点検のダイアログは全文を取得し、更新前の結果なら�
   assert.equal(checked, 1);
 });
 
+test('点検の全文を取得できなければ前の項目を消し、要約と同じ点検の全文が取れるまで取り直す', async () => {
+  let response = { ok: false };
+  let fetches = 0;
+  const context = pageContext(pageHtml, { doctorLoading: null, doctorChecking: null,
+    doctorResult: { generatedAt: 'before', items: [{ id: 'old', result: 'mismatch' }] },
+    doctorState: { generatedAt: 'after', error: null },
+    doctorDialog: { open: true }, renderDoctorDialog() {}, renderDoctorNote() {},
+    fetch: async () => { fetches += 1; return { ok: response.ok, json: async () => response.body }; } });
+  vm.runInContext(['loadDoctorResult', 'applyDoctorState'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  await context.loadDoctorResult();
+  assert.equal(context.doctorResult, null);
+  assert.equal(context.doctorState.error, 'FETCH_FAILED');
+  response = { ok: true, body: { generatedAt: 'after', items: [] } };
+  context.applyDoctorState({ doctor: { generatedAt: 'after', error: null } });
+  await context.doctorLoading;
+  assert.equal(fetches, 2);
+  assert.equal(context.doctorResult.generatedAt, 'after');
+  context.applyDoctorState({ doctor: { generatedAt: 'after', error: null } });
+  assert.equal(fetches, 2);
+});
+
 test('点検し直す操作は画面用 POST を一度だけ送り、完了後に全文を読み直す', async () => {
   let finish;
   let posts = 0;

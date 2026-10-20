@@ -194,6 +194,12 @@ test('再起動待ちになった時刻は維持し、更新を戻すと点検�
   assert.equal((await get()).doctor.staleBefore, at);
   now += 6000;
   assert.equal((await get()).doctor.staleBefore, at);
+  await fs.writeFile(path.join(directory, 'package.json'), '{"version":"999.0.1"}');
+  now += 6000;
+  const updatedAgain = new Date(now).toISOString();
+  assert.equal((await get()).doctor.staleBefore, updatedAgain);
+  now += 6000;
+  assert.equal((await get()).doctor.staleBefore, updatedAgain);
   await fs.writeFile(path.join(directory, 'package.json'), JSON.stringify({ version }));
   now += 6000;
   assert.equal((await get()).doctor.staleBefore, null);

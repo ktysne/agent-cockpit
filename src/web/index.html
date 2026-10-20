@@ -5349,16 +5349,12 @@ function loadDoctorResult() {
   if (doctorLoading) return doctorLoading;
   doctorLoading = (async () => {
     try {
-      let generatedAt;
-      let result;
-      do {
-        generatedAt = doctorState.generatedAt;
-        const response = await fetch('/api/doctor', { cache: 'no-store' });
-        if (!response.ok) throw new Error('Doctor result unavailable');
-        result = await response.json();
-      } while (generatedAt !== doctorState.generatedAt);
-      doctorResult = result;
+      const response = await fetch('/api/doctor', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Doctor result unavailable');
+      doctorResult = await response.json();
     } catch {
+      // 前の項目を残すと、新しい件数と古い不一致の ID を並べて見せるため、取得できなければ項目を出さない。
+      doctorResult = null;
       doctorState = { ...doctorState, error: 'FETCH_FAILED' };
     } finally {
       doctorLoading = null;
@@ -5369,13 +5365,13 @@ function loadDoctorResult() {
 }
 
 function applyDoctorState(state) {
-  const previousAt = doctorState.generatedAt;
   doctorState = state.doctor || { running: false, generatedAt: null, error: null, summary: null, staleBefore: null };
   if (doctorChecking) doctorState = { ...doctorState, running: true };
   renderDoctorNote({ ...state, doctor: doctorState });
   if (doctorDialog.open) {
     renderDoctorDialog();
-    if (doctorState.generatedAt !== previousAt) void loadDoctorResult();
+    // 取得に失敗した後も、手元の項目が要約と同じ点検のものになるまで取り直す。
+    if ((doctorResult?.generatedAt ?? null) !== doctorState.generatedAt) void loadDoctorResult();
   }
 }
 

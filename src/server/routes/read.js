@@ -19,12 +19,19 @@ function createReadRoutes(ctx) {
   let templateReading = null;
   let installed = null;
   let staleBefore = null;
+  let staleInstalled = null;
   function restartRequired() {
-    if (!installed) { staleBefore = null; return false; }
+    if (!installed) { staleBefore = null; staleInstalled = null; return false; }
     const running = { ...ctx.getRuntime(), uiVersion };
     const required = ['version', 'commit', ...(dev ? [] : ['uiVersion'])].some(key =>
       installed[key] != null && running[key] != null && installed[key] !== running[key]);
-    staleBefore = required ? staleBefore || new Date(nowMs()).toISOString() : null;
+    // 再起動待ちの間にさらに更新されたら、その間の点検の結果も古いので、配置済みの版が変わるたびに基準を進める。
+    const installedKey = JSON.stringify([installed.version, installed.commit, installed.uiVersion]);
+    if (!required) staleBefore = staleInstalled = null;
+    else if (installedKey !== staleInstalled) {
+      staleBefore = new Date(nowMs()).toISOString();
+      staleInstalled = installedKey;
+    }
     return required;
   }
   const bootId = crypto.randomUUID();

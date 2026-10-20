@@ -42,7 +42,8 @@ SessionStart は最後のイベントから 10 秒待ってまとめ、前の点
 
 `GET /api/state` の `doctor` は `{running, generatedAt, error, summary, staleBefore}` の要約だけを持つ。
 `summary` は診断の件数をそのまま渡す。
-`staleBefore` は再起動待ちになった時刻で、再起動待ちでなければ null とする。
+`staleBefore` は再起動待ちになった時刻で、再起動待ちの間に配置済みの版(version、commit、画面の版)が変われば、その時刻に進める。再起動待ちでなければ null とする。
+画面は、手元の項目の `generatedAt` が要約と違う間は全文を取り直し、取得に失敗したら前の項目を出さない。
 ホーム、checkout、項目の全文は、状態の配信とその指紋に含めない。
 
 全文はダイアログを開いたときに `GET /api/doctor` で取得する。
