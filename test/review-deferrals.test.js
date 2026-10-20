@@ -85,8 +85,8 @@ for (const outcome of ['converged', 'halted']) {
     review = { round: 1, max: 3, dismissed: 0, reviewedSha: head, triage: { round: 1, sha: head, outcome } };
     await f.runtime.pullRequestTracker.refreshRepoFresh('example', 'project');
     const [tree] = (await f.snapshot()).pullRequests.flatMap(group => group.trees);
-    assert.equal(tree.crossReview.deferred, undefined);
-    assert.equal(tree.crossReview.triage.outcome, outcome);
+    assert.equal(tree.review.evaluation.decision.kind, 'none');
+    assert.equal(tree.review.evaluation.latest.outcome, outcome);
   });
 }
 
@@ -132,10 +132,10 @@ test('MCP の不要記録と保留は後から記録したほうだけを残す'
   assert.equal((await f.mcp('cockpit_defer_review')).isError, undefined);
   let state = JSON.stringify(await f.snapshot());
   assert.match(state, /"deferred":true/);
-  assert.doesNotMatch(state, /"notRequired":true/);
+  assert.doesNotMatch(state, /"kind":"not-required"/);
   assert.equal((await f.skip()).isError, undefined);
   state = JSON.stringify(await f.snapshot());
-  assert.match(state, /"notRequired":true/);
+  assert.match(state, /"kind":"not-required"/);
   assert.doesNotMatch(state, /"deferred":true/);
 });
 

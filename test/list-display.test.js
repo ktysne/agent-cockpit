@@ -1,3 +1,6 @@
+const { reviewPr } = require('./support/review');
+const settledReview = reviewPr({ headRefOid: 'a'.repeat(40), crossReview: { round: 1,
+  triage: { round: 1, outcome: 'converged', sha: 'a'.repeat(40) } } }).review;
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -718,10 +721,10 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   });
   vm.runInContext(`${webQueued}\n${webTree}\nthis.renderPullRequest = appendPullRequestTree;`, webContext);
   const webTarget = fakeElement('div');
-  webContext.renderPullRequest(webTarget, {}, {
+  webContext.renderPullRequest(webTarget, {}, reviewPr({
     number: 1, title: 'キュー中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
     mergeSessionId: 'session-1', canMerge: true, mergeIntent: { at: '12:00' }, blocker: 'CI 実行中', ci: 'pending', children: [],
-  });
+  }));
   const webText = webTarget.textContent;
   assert.equal((webText.match(/マージ処理中 \(未マージ\)/g) || []).length, 1);
   assert.doesNotMatch(webText, /マージキューに追加済み/);
@@ -730,20 +733,20 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
 
   webContext.queuedPullRequestMerges.set('repo#1', { headRefOid: 'abc' });
   const queuedTarget = fakeElement('div');
-  webContext.renderPullRequest(queuedTarget, {}, {
+  webContext.renderPullRequest(queuedTarget, {}, reviewPr({
     number: 1, title: 'キュー中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
     mergeSessionId: 'session-1', canMerge: true, mergeIntent: null, headRefOid: 'abc', children: [],
-  });
+  }));
   assert.equal((queuedTarget.textContent.match(/マージキューに追加済み \(未マージ\)/g) || []).length, 1);
   assert.doesNotMatch(queuedTarget.textContent, /マージ処理中/);
   assert.doesNotMatch(queuedTarget.textContent, /マージする|マージできます/);
   assert.match(queuedTarget.textContent, /キューから外れた/);
 
   const pushedTarget = fakeElement('div');
-  webContext.renderPullRequest(pushedTarget, {}, {
+  webContext.renderPullRequest(pushedTarget, {}, reviewPr({
     number: 1, title: 'キュー中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
     mergeSessionId: 'session-1', canMerge: true, mergeIntent: null, headRefOid: 'def', children: [],
-  });
+  }));
   assert.doesNotMatch(pushedTarget.textContent, /マージキューに追加済み/);
   assert.match(pushedTarget.textContent, /マージする/);
   assert.equal(webContext.queuedPullRequestMerges.has('repo#1'), false);
@@ -751,43 +754,44 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   webContext.pullRequestMergeInFlight.add('repo#1');
   webContext.pullRequestMergeConfirmations.set('repo#1', { method: 'merge' });
   const inFlightTarget = fakeElement('div');
-  webContext.renderPullRequest(inFlightTarget, {}, {
+  webContext.renderPullRequest(inFlightTarget, {}, reviewPr({
     number: 1, title: '処理中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
     mergeSessionId: 'session-1', canMerge: false, operationBlocker: 'GitHub がマージできるかを計算中',
     mergeIntent: { at: '12:00' }, headRefOid: 'abc', children: [],
-  });
+  }));
   assert.match(inFlightTarget.textContent, /処理中…/);
   assert.doesNotMatch(inFlightTarget.textContent, /マージ処理中|マージキューに追加済み/);
   assert.equal(webContext.pullRequestMergeConfirmations.has('repo#1'), true);
   const mergeableInFlightTarget = fakeElement('div');
-  webContext.renderPullRequest(mergeableInFlightTarget, {}, {
+  webContext.renderPullRequest(mergeableInFlightTarget, {}, reviewPr({
     number: 1, title: '処理中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
     mergeSessionId: 'session-1', canMerge: true, mergeIntent: null, headRefOid: 'abc', children: [],
-  });
+  }));
   assert.match(mergeableInFlightTarget.textContent, /処理中…/);
   assert.doesNotMatch(mergeableInFlightTarget.textContent, /マージする|マージできます|収束後マージ/);
 
   webContext.pullRequestMergeConfirmations.delete('repo#1');
   const reservingTarget = fakeElement('div');
-  webContext.renderPullRequest(reservingTarget, {}, {
+  webContext.renderPullRequest(reservingTarget, {}, reviewPr({
     number: 1, title: '予約から即時マージ', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
     mergeSessionId: 'session-1', canMerge: false, mergeIntent: { at: '12:00' }, headRefOid: 'abc', children: [],
-  });
+  }));
   assert.equal((reservingTarget.textContent.match(/マージ処理中 \(未マージ\)/g) || []).length, 1);
   webContext.pullRequestMergeInFlight.delete('repo#1');
 
   webContext.pullRequestMergeConfirmations.set('repo#1', { method: 'merge' });
   const blockedTarget = fakeElement('div');
-  webContext.renderPullRequest(blockedTarget, {}, {
+  webContext.renderPullRequest(blockedTarget, {}, reviewPr({
     number: 1, title: '計算中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
     mergeSessionId: 'session-1', canMerge: false, operationBlocker: 'GitHub がマージできるかを計算中', children: [],
-  });
+  }));
   assert.doesNotMatch(blockedTarget.textContent, /処理中…/);
   assert.equal(webContext.pullRequestMergeConfirmations.has('repo#1'), false);
 
   const mockItem = functionSource(mock, 'prItem');
   assert.ok(mockItem);
   const mockContext = pageContext(mock, {
+    mockReview: () => settledReview,
     providerOrigin: () => '',
     prKey: () => 'repo#1',
     mergeBlocker: () => 'GitHub のマージキュー',
@@ -911,19 +915,19 @@ test('マージの成功後に状態を取り直せない間は、古い mergeIn
     mergeSessionId: 'session-1', canMerge: true, mergeIntent: { at: '12:00' }, headRefOid: 'abc', children: [],
   };
   const staleTarget = fakeElement('div');
-  context.renderPullRequest(staleTarget, {}, pullRequest);
+  context.renderPullRequest(staleTarget, {}, reviewPr(pullRequest));
   assert.doesNotMatch(staleTarget.textContent, /マージ処理中|マージする|収束後マージ/);
   assert.match(staleTarget.textContent, /操作は完了しましたが、最新の PR の状態を取得できていません/);
 
   // 操作の前に始めて遅れて届いた取得の応答では解除しない。
   context.lastState = { pullRequests: [] };
   const delayedTarget = fakeElement('div');
-  context.renderPullRequest(delayedTarget, {}, pullRequest);
+  context.renderPullRequest(delayedTarget, {}, reviewPr(pullRequest));
   assert.doesNotMatch(delayedTarget.textContent, /マージ処理中|マージする/);
 
   context.appliedRefreshSequence = 6;
   const freshTarget = fakeElement('div');
-  context.renderPullRequest(freshTarget, {}, pullRequest);
+  context.renderPullRequest(freshTarget, {}, reviewPr(pullRequest));
   assert.match(freshTarget.textContent, /マージ処理中 \(未マージ\)/);
   assert.doesNotMatch(freshTarget.textContent, /最新の PR の状態を取得できていません/);
   assert.equal(context.pullRequestUnconfirmedResults.size, 0);
@@ -939,6 +943,7 @@ test('モックの予約チェックは PR 行にあり、確認欄は即時マ�
   assert.doesNotMatch(item, /data-unreserve/);
   const key = 'example/project#42';
   const context = pageContext(mock, {
+    mockReview: () => settledReview,
     pullRequestMergeInFlight: new Set(),
     providerOrigin: () => '',
     prKey: () => key,
@@ -1163,7 +1168,8 @@ test('マージ結果の一行と予約時の SHA 違いを完了表示の設定
   assert.match(mock, /visibleMerged = hidesFinished\(\) \? mergedNewestFirst\.filter\(\(\{ pr \}\) => pr\.headMismatch === true\)/);
   const mockLine = functionSource(mock, 'pullRequestMergeResultLine');
   assert.ok(mockLine);
-  const mockContext = pageContext(mock, { METHOD_LABEL: { squash: 'スカッシュ' } });
+  const mockContext = pageContext(mock, {
+ METHOD_LABEL: { squash: 'スカッシュ' } });
   vm.runInContext(`${mockLine}\nthis.resultLine = pullRequestMergeResultLine;`, mockContext);
   assert.equal(mockContext.resultLine({ method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }),
     context.resultLine({ method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }));
@@ -1219,11 +1225,11 @@ test('予約中の PR は状態チェックとマージ操作を出し、マー�
   });
   vm.runInContext(`${treeSource}\nthis.renderTree = appendPullRequestTree;`, context);
   const target = fakeElement('div');
-  context.renderTree(target, { defaultBranch: 'main', mergeMethods: ['squash'] }, {
+  context.renderTree(target, { defaultBranch: 'main', mergeMethods: ['squash'] }, reviewPr({
     number: 7, url: 'https://github.com/example/repo/pull/7', title: 'Feature', headRefName: 'feature', effectiveBase: 'main',
     canMerge: false, blocker: 'ドラフト', operationBlocker: 'ドラフト', ci: 'pending', review: 'required',
     reservation: { method: 'squash', createdAt: '2026-10-04T01:00:00.000Z' }, children: [], mergeSessionId: 'session-a',
-  });
+  }));
   const rendered = target.children[0];
   assert.match(rendered.textContent, /レビュー収束後にマージ予約中 \(スカッシュ、予約時 2026\/10\/04 10:00、クロスレビューの収束待ち、CI 実行中、GitHub のレビュー承認待ち\)/);
   assert.doesNotMatch(rendered.textContent, /予約を取り消す/);
@@ -1242,16 +1248,13 @@ test('予約待ち条件は承認任意ならレビュー承認を待たない',
 
   const webContext = pageContext(web, {
     CI_LABELS: { unknown: { wait: 'CI 状態不明' } },
-    convergedAtHead: () => true,
-    pushedAfterConvergence: () => false,
   });
   const mockContext = pageContext(mock, {
+    mockReview: () => settledReview,
     CI_LABELS: { unknown: { wait: 'CI 状態不明' } },
-    convergedAtHead: () => true,
     mergeOperationBlocker: (_product, pullRequest) => pullRequest.operationBlocker,
     effective: (_product, pullRequest) => ({ base: pullRequest.effectiveBase }),
     prKey: () => 'product#1',
-    pushedAfterConvergence: () => false,
     ui: { reviewSkips: {}, reserved: {} },
   });
   vm.runInContext(`${webWaitReasonsSource}\n${webWaitSource}\nthis.reservationWaits = pullRequestReservationWaits;`, webContext);
@@ -1273,7 +1276,7 @@ test('予約待ち条件は承認任意ならレビュー承認を待たない',
       ci: 'pass', review: scenario.review, operationBlocker, blocker: operationBlocker,
       canMerge: !operationBlocker, baseRefName: 'main', effectiveBase: 'main',
     };
-    const webWaits = webContext.reservationWaits(pullRequest, group, 'squash');
+    const webWaits = webContext.reservationWaits(reviewPr({ ...pullRequest, headRefOid: 'a'.repeat(40), crossReview: { round: 1, triage: { round: 1, outcome: 'converged', sha: 'a'.repeat(40) } } }), group, 'squash');
     const mockWaits = mockContext.reservationWaits(product, pullRequest, 'squash');
     const reviewWait = 'GitHub のレビュー承認待ち';
     const reportsReviewWait = (waiting) => waiting.includes(reviewWait) || Boolean(operationBlocker && waiting.includes(`マージ条件待ち: ${operationBlocker}`));
@@ -1898,9 +1901,10 @@ test('モックで指示欄を編集すると同じカードのエラーを消�
 });
 
 test('予約のマージ先が変わった理由は画面とモックで同じ名前を表示する', () => {
-  const webContext = pageContext(web, { convergedAtHead: () => true });
+  const webContext = pageContext(web, {});
   const mockContext = pageContext(mock, {
-    convergedAtHead: () => true, prKey: () => 'product#1',
+    mockReview: () => settledReview,
+    prKey: () => 'product#1',
     mergeOperationBlocker: () => null, effective: () => ({ base: 'aggregate' }),
     ui: { reviewSkips: {}, reserved: {} },
   });
@@ -1908,8 +1912,8 @@ test('予約のマージ先が変わった理由は画面とモックで同じ�
   vm.runInContext(['mergeTarget', 'mergeMethodFixed', 'reservationWaitReasons'].map(name => functionSource(mock, name)).join('\n'), mockContext);
   for (const reservation of [{ targetBranch: 'main' }, {}]) {
     mockContext.ui.reserved['product#1'] = reservation;
-    const webWaits = webContext.pullRequestReservationWaitReasons({ reservation, mergeTarget: 'aggregate', ci: 'pass', review: 'none',
-      canMerge: true, baseRefName: 'aggregate', effectiveBase: 'aggregate' }, { defaultBranch: 'main', mergeMethods: ['merge'] }, 'merge');
+    const webWaits = webContext.pullRequestReservationWaitReasons(reviewPr({ headRefOid: 'a'.repeat(40), crossReview: { round: 1, triage: { round: 1, outcome: 'converged', sha: 'a'.repeat(40) } }, reservation, mergeTarget: 'aggregate', ci: 'pass', review: 'none',
+      canMerge: true, baseRefName: 'aggregate', effectiveBase: 'aggregate' }), { defaultBranch: 'main', mergeMethods: ['merge'] }, 'merge');
     const mockWaits = mockContext.reservationWaitReasons({ prs: [], repo: { defaultBranch: 'main', methods: ['merge'] } },
       { number: 1, sha: 'a'.repeat(40), ci: 'pass', review: 'none', base: 'aggregate' }, 'merge');
     assert.deepEqual(Array.from(webWaits), ['予約時のマージ先 main と現在のマージ先 aggregate が異なる']);

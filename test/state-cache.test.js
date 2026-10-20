@@ -128,7 +128,7 @@ test('/api/state は再計算後にレビュー不要の表示を返す', async 
     release();
     await recalculating;
     const after = await server.get();
-    assert.deepEqual(jsonBody(after).pullRequests[0].trees[0].crossReview, { notRequired: true, source: 'recorded' });
+    assert.equal(jsonBody(after).pullRequests[0].trees[0].review.evaluation.decision.kind, 'not-required');
   } finally {
     if (verifyCache !== undefined) process.env.AGENT_COCKPIT_VERIFY_STATE_CACHE = verifyCache;
   }

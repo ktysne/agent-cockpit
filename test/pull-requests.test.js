@@ -1,4 +1,6 @@
 const test = require('node:test');
+const { evaluateReview } = require('../src/shared/review-evaluation');
+const { reviewPr } = require('./support/review');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
@@ -1636,7 +1638,7 @@ test('マージ可能件数は選択した条件に従い、レビュー不要�
   });
   await tracker.refreshReviewGroups('example', 'project');
   [group] = tracker.snapshot();
-  assert.deepEqual(group.trees[0].crossReview.triage, { round: 2, sha: headSha, outcome: 'converged' });
+  assert.deepEqual(group.trees[0].review.evaluation.latest, { round: 2, sha: headSha, outcome: 'converged' });
   assert.equal(group.mergeableCount, 1);
 
   const nextHead = 'b'.repeat(40);
@@ -1645,7 +1647,7 @@ test('マージ可能件数は選択した条件に従い、レビュー不要�
   await tracker.refreshRepo('example', 'project');
   [group] = tracker.snapshot();
   assert.equal(state.crossReviewSkip('example', 'project', 31), null);
-  assert.notDeepEqual(group.trees[0].crossReview, { notRequired: true, source: 'recorded', reason: '変更が文言だけのため' });
+  assert.equal(group.trees[0].review.evaluation.decision.kind, 'none');
   assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビュー後に push あり']);
 });
 
@@ -1798,7 +1800,7 @@ test('PR の衝突依頼スナップショットは登録セッションの稼�
     requestedAt: new Date(1_790_000_000_000).toISOString(), sessionIds: ['conflict-live'],
   });
 
-  const pullRequest = {
+  const pullRequest = reviewPr({
     number: 42,
     title: 'PR 42',
     url,
@@ -1808,7 +1810,7 @@ test('PR の衝突依頼スナップショットは登録セッションの稼�
     conflict: true,
     canMerge: false,
     children: [],
-  };
+  });
   const tracker = new PullRequestTracker({ state });
   tracker.productViews = new Map([['project', {
     owner: 'example', repo: 'project', product: { key: 'project', name: 'Project' },
@@ -2178,9 +2180,9 @@ for (const merged of [true, false]) {
     const reports = [];
     tracker.diagnostics = { record: (...args) => reports.push(args) };
     await tracker.refreshRepo('example', 'project');
-    const review = tracker.snapshot()[0].trees[0].crossReview;
+    const review = tracker.snapshot()[0].trees[0].review.evaluation;
     if (merged) {
-      assert.equal(review, null);
+      assert.equal(review.record, 'none');
       assert.ok(reports.some(args => args[3]?.failure === 'stale-record'));
     } else assert.equal(review.reviewedSha, reviewedSha);
   });
@@ -2469,11 +2471,11 @@ test('クロスレビュー状態は開いている PR のスタックに付き�
   await tracker.refreshRepo('example', 'project');
 
   const [group] = tracker.snapshot();
-  assert.deepEqual(group.trees[0].crossReview, {
+  assert.deepEqual(group.trees[0].review.evaluation, evaluateReview({ record: {
     round: 2, max: 3, dismissed: 1, reviewedSha: openSha,
     triage: { round: 2, sha: openSha, outcome: 'fixing' },
-  });
-  assert.equal(group.trees.find((pullRequest) => pullRequest.number === 33).crossReview, null);
+  }, headSha: openSha }));
+  assert.equal(group.trees.find((pullRequest) => pullRequest.number === 33).review.evaluation.record, 'none');
   const merged = group.merged.find((pullRequest) => pullRequest.number === 32);
   assert.ok(merged);
   assert.equal(Object.hasOwn(merged, 'crossReview'), false);
@@ -2492,7 +2494,7 @@ test('tools/cross-review.js が無い worktree の PR はレビュー不要の�
   await tracker.refreshRepo('example', 'project');
 
   const [group] = tracker.snapshot();
-  assert.deepEqual(group.trees[0].crossReview, { notRequired: true, source: 'tool-absent' });
+  assert.equal(group.trees[0].review.evaluation.decision.source, 'tool-absent');
   assert.equal(group.mergeableCount, 1);
 });
 
@@ -2528,11 +2530,11 @@ for (const [higher, lower] of [['valid', 'missing'], ['valid', 'null'], ['null',
 
       const [group] = tracker.snapshot();
       if (higher === 'valid') {
-        assert.deepEqual(group.trees[0].crossReview, {
+        assert.deepEqual(group.trees[0].review.evaluation, evaluateReview({ record: {
           round: 1, max: 3, dismissed: 0, reviewedSha: headSha, triage: null,
-        });
+        }, headSha }));
       } else {
-        assert.equal(group.trees[0].crossReview, null);
+        assert.equal(group.trees[0].review.evaluation.record, 'none');
       }
     });
   }
@@ -2563,7 +2565,7 @@ test('同じ PR のクロスレビュー登録は、今の head で収束した�
   await tracker.refreshRepo('example', 'project');
 
   const [group] = tracker.snapshot();
-  assert.deepEqual(group.trees[0].crossReview.triage, { round: 2, sha: headSha, outcome: 'converged' });
+  assert.deepEqual(group.trees[0].review.evaluation.latest, { round: 2, sha: headSha, outcome: 'converged' });
 });
 
 async function reviewCandidatesFixture(t, records, topology = 'worktrees') {
@@ -2635,13 +2637,13 @@ for (const scenario of [
     ]);
     const forward = await f.read();
     const backward = await f.read(true);
-    assert.deepEqual(backward.crossReview, forward.crossReview);
-    assert.equal(Boolean(forward.crossReview.conflict), scenario.conflict);
+    assert.deepEqual(backward.review.evaluation, forward.review.evaluation);
+    assert.equal(Boolean(forward.review.evaluation.conflict.length), scenario.conflict);
     assert.equal(forward.mergeConditionMet, scenario.settled !== false && !scenario.conflict);
     if (scenario.conflict) {
-      assert.equal(forward.crossReview.conflict.length, 2);
-      assert.equal(forward.crossReview.conflict[0].worktree, f.roots[1]);
-      assert.equal(forward.crossReview.conflict[0].outcome, scenario.outcome || 'in-progress');
+      assert.equal(forward.review.evaluation.conflict.length, 2);
+      assert.equal(forward.review.evaluation.conflict[0].worktree, f.roots[1]);
+      assert.equal(forward.review.evaluation.conflict[0].outcome, scenario.outcome || 'in-progress');
     }
   });
 }
@@ -2652,10 +2654,10 @@ for (const topology of ['registrations', 'mismatch']) {
       { round: 1, outcome: 'converged' }, { round: 2, outcome: 'halted' }, { round: 5, outcome: 'converged' },
     ], topology);
     const pr = await f.read();
-    assert.equal(pr.crossReview.conflict.length, 3);
-    assert.equal(pr.crossReview.triage.outcome, 'halted');
+    assert.equal(pr.review.evaluation.conflict.length, 3);
+    assert.equal(pr.review.evaluation.latest.outcome, 'halted');
     assert.equal(pr.mergeConditionMet, false);
-    assert.deepEqual((await f.read(true)).crossReview, pr.crossReview);
+    assert.deepEqual((await f.read(true)).review.evaluation, pr.review.evaluation);
   });
 }
 
@@ -2671,12 +2673,12 @@ test('競合の代表は結論の優先順位、round、パスで選ぶ', async 
     const b = process.platform === 'win32' ? right.toLowerCase() : right;
     return a < b ? -1 : a > b ? 1 : 0;
   });
-  assert.equal(pr.crossReview.triage.outcome, 'halted');
-  assert.equal(pr.crossReview.round, 3);
-  assert.deepEqual(pr.crossReview.conflict.map(record => record.worktree), [
+  assert.equal(pr.review.evaluation.latest.outcome, 'halted');
+  assert.equal(pr.review.evaluation.rounds.round, 3);
+  assert.deepEqual(pr.review.evaluation.conflict.map(record => record.worktree), [
     ...paths, f.roots[1], f.roots[2], f.roots[3], f.roots[0],
   ]);
-  assert.deepEqual((await f.read(true)).crossReview, pr.crossReview);
+  assert.deepEqual((await f.read(true)).review.evaluation, pr.review.evaluation);
 });
 
 test('PR の不要記録は競合の一覧を残してレビュー条件を満たす', async (t) => {
@@ -2686,8 +2688,8 @@ test('PR の不要記録は競合の一覧を残してレビュー条件を満�
     headRefOid: f.head, reason: '開発者が確認済み', recordedAt: new Date().toISOString(),
   }));
   const after = await f.read();
-  assert.equal(after.crossReview.notRequired, true);
-  assert.deepEqual(after.crossReview.conflict, before.crossReview.conflict);
+  assert.equal(after.review.evaluation.decision.kind, 'not-required');
+  assert.deepEqual(after.review.evaluation.conflict, before.review.evaluation.conflict);
   assert.equal(after.mergeConditionMet, true);
 });
 
@@ -2698,7 +2700,7 @@ test('/api/state は worktree 間の競合と記録元を PR に返す', async (
   const runtime = await startTestServer(t, { state: f.tracker.state, pullRequestTracker: f.tracker });
   const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   const exposed = snapshot.pullRequests[0].trees[0];
-  assert.deepEqual(exposed.crossReview.conflict, pr.crossReview.conflict);
+  assert.deepEqual(exposed.review.evaluation.conflict, pr.review.evaluation.conflict);
   assert.equal(exposed.mergeConditionMet, false);
 });
 
@@ -2739,9 +2741,9 @@ test('登録の cwd とは別の worktree が PR のブランチをチェック�
     ['git', '-C', sessionRoot, 'worktree', 'list', '--porcelain'],
     ['git', '-C', reviewRoot, 'config', '--get-regexp', '^remote\\..*\\.url$'],
   ]);
-  assert.deepEqual(group.trees[0].crossReview, {
+  assert.deepEqual(group.trees[0].review.evaluation, evaluateReview({ record: {
     round: 2, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' },
-  });
+  }, headSha }));
 });
 
 test('PR のブランチをどの worktree もチェックアウトしていなくても、そのブランチの記録を持つ worktree のクロスレビュー状態を読む', async (t) => {
@@ -3891,7 +3893,7 @@ test('prunable の worktree が残っていても PR の取り直しは例外に
     ? `worktree ${f.root}\nbranch refs/heads/main\n\nworktree ${path.join(f.root, 'deleted')}\nbranch refs/heads/feat/open\nprunable gitdir file points to non-existent location\n`
     : '');
   await tracker.refreshRepo('example', 'project');
-  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { unavailable: true });
+  assert.equal(tracker.snapshot()[0].trees[0].review.evaluation.record, 'unavailable');
   assert.deepEqual(observed, [f.root]);
 });
 
@@ -3902,7 +3904,7 @@ test('同じ PR の登録が両方確認不能でも取り直しは例外にな�
   github.openPullRequests = [f.pr];
   tracker.gitExecFileImpl = f.options.execFileImpl;
   await tracker.refreshRepo('example', 'project');
-  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { unavailable: true });
+  assert.equal(tracker.snapshot()[0].trees[0].review.evaluation.record, 'unavailable');
 });
 
 for (const order of [['missing', 'valid'], ['valid', 'missing']]) {
@@ -3915,7 +3917,7 @@ for (const order of [['missing', 'valid'], ['valid', 'missing']]) {
     github.openPullRequests = [f.pr];
     tracker.gitExecFileImpl = (_file, _args, _options, callback) => callback(new Error('unavailable'));
     await tracker.refreshRepo('example', 'project');
-    assert.equal(tracker.snapshot()[0].trees[0].crossReview, null);
+    assert.equal(tracker.snapshot()[0].trees[0].review.evaluation.record, 'none');
     assert.deepEqual(await tracker.missingReviewRecords('session-valid'), [{ owner: 'example', repo: 'project', number: 31, headRefOid: f.pr.headRefOid }]);
   });
 }
@@ -3927,7 +3929,7 @@ test('同じ根と head の道具確認を一度の取り直しで使い回す',
   github.openPullRequests = [f.pr];
   tracker.gitExecFileImpl = f.options.execFileImpl;
   await tracker.refreshRepo('example', 'project');
-  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { notRequired: true, source: 'tool-absent' });
+  assert.equal(tracker.snapshot()[0].trees[0].review.evaluation.decision.source, 'tool-absent');
   assert.equal(f.calls.filter(({ args }) => args[2] === 'ls-tree').length, 1);
 });
 
@@ -3938,7 +3940,7 @@ test('確かめた head の道具の有無を次の取り直しでも使う', as
   tracker.gitExecFileImpl = f.options.execFileImpl;
   await tracker.refreshRepo('example', 'project');
   await tracker.refreshRepo('example', 'project');
-  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { notRequired: true, source: 'tool-absent' });
+  assert.equal(tracker.snapshot()[0].trees[0].review.evaluation.decision.source, 'tool-absent');
   assert.equal(f.calls.filter(({ args }) => args[2] === 'ls-tree').length, 1);
 });
 
@@ -3954,10 +3956,10 @@ test('確かめられなかった head の道具の有無は次の取り直し�
     callback(lsTreeError, '');
   };
   await tracker.refreshRepo('example', 'project');
-  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { unavailable: true });
+  assert.equal(tracker.snapshot()[0].trees[0].review.evaluation.record, 'unavailable');
   lsTreeError = null;
   await tracker.refreshRepo('example', 'project');
-  assert.deepEqual(tracker.snapshot()[0].trees[0].crossReview, { notRequired: true, source: 'tool-absent' });
+  assert.equal(tracker.snapshot()[0].trees[0].review.evaluation.decision.source, 'tool-absent');
   assert.equal(headLsTreeCalls, 2);
 });
 
@@ -4004,8 +4006,8 @@ for (const scenario of [
     github.openPullRequests = [f.pr];
     tracker.gitExecFileImpl = f.options.execFileImpl;
     await tracker.refreshRepo('example', 'project');
-    const review = tracker.snapshot()[0].trees[0].crossReview;
-    if (scenario.keepRecord) assert.deepEqual(review.triage, { round: 2, sha: headSha, outcome: 'converged' });
-    else assert.deepEqual(review, { notRequired: true, source: 'recorded', reason: '文言だけの変更' });
+    const review = tracker.snapshot()[0].trees[0].review.evaluation;
+    if (scenario.keepRecord) assert.deepEqual(review.latest, { round: 2, sha: headSha, outcome: 'converged' });
+    else assert.deepEqual(review.decision, { kind: 'not-required', source: 'recorded', reason: '文言だけの変更', next: null });
   });
 }

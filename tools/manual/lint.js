@@ -212,12 +212,21 @@ function lintManual({ manualRoot = MANUAL_ROOT, distRoot = path.join(manualRoot,
     errors.push(`${path.relative(repoRoot, dashboardPath).replace(/\\/g, '/')}: ファイルがありません`);
   }
 
+  const reviewEvaluationPath = path.join(repoRoot, 'src/shared/review-evaluation.js');
+  let reviewSource = '';
+  try {
+    reviewSource = fs.readFileSync(reviewEvaluationPath, 'utf8');
+  } catch {
+    errors.push('src/shared/review-evaluation.js: ファイルがありません');
+  }
+  const uiSource = `${dashboardSource}\n${reviewSource}`;
+
   if (preparedManual) {
     for (const page of site.pages) {
       const prepared = preparedManual.byId.get(page.id);
       if (!prepared) continue;
       for (const label of uiLabels(prepared.content)) {
-        if (!dashboardSource.includes(label)) errors.push(`manual/${page.source}: span.ui の文言が src/web/index.html にありません: ${label}`);
+        if (!uiSource.includes(label)) errors.push(`manual/${page.source}: span.ui の文言が src/web/index.html と src/shared/review-evaluation.js にありません: ${label}`);
       }
       inspectLinks(page, prepared.content, new Map(preparedManual.pages.map(item => [pageOutput(item), item])), errors);
     }

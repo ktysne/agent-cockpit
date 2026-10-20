@@ -3,122 +3,67 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { crossReviewWaitReason } = require('../src/server/pull-requests');
-const { readWebPage, functionSource } = require('./support/page-context');
-
-const web = readWebPage().replace(/\r\n/g, '\n');
+const { pageContext, readWebPage, sourceBetween } = require('./support/page-context');
+const { reviewPr } = require('./support/review');
+const source = fs.readFileSync(path.join(__dirname, '../src/shared/review-evaluation.js'), 'utf8').replace(/\r\n/g, '\n');
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
-const fakeElement = (tag, className = '', text = '') => {
-  const node = { tag, className, children: [], attributes: {}, title: '' };
-  node.append = (...items) => node.children.push(...items);
-  node.setAttribute = (name, value) => { node.attributes[name] = value; };
-  Object.defineProperty(node, 'textContent', {
-    get: () => text + node.children.map((child) => (typeof child === 'string' ? child : child.textContent)).join(''),
-  });
-  return node;
-};
+test('モックは共通の評価モジュールの本文を使う', () => {
+  const embedded = mock.split('<!-- review-evaluation:begin -->\n<script>\n')[1]?.split('</script>\n<!-- review-evaluation:end -->')[0];
+  assert.equal(embedded, source);
+  assert.doesNotMatch(source, /require\s*\(/);
+});
 
-test('クロスレビューの記録状態ごとに待ち理由を表示する', () => {
-  const headSha = 'a'.repeat(40);
-  const staleSha = 'b'.repeat(40);
-  const cases = [
-    [null, headSha, 'クロスレビュー未実施'],
-    [{ round: 2, triage: { round: 2, outcome: 'converged', sha: headSha }, conflict: [{ outcome: 'halted' }] }, headSha, 'クロスレビューの記録が食い違う'],
-    [{ round: 2, triage: null }, headSha, 'クロスレビュー対応中'],
-    [{ round: 2, triage: { round: 2, outcome: 'fixing', sha: headSha } }, headSha, 'クロスレビュー対応中'],
-    [{ round: 2, triage: { round: 2, outcome: 'halted', sha: headSha } }, headSha, 'クロスレビューが開発者の判断待ち'],
-    [{ round: 3, triage: { round: 2, outcome: 'halted', sha: headSha } }, headSha, 'クロスレビュー対応中'],
-    [{ round: 3, triage: { round: 2, outcome: 'fixing', sha: headSha } }, headSha, 'クロスレビュー対応中'],
-    [{ round: 2, triage: { round: 2, outcome: 'converged', sha: staleSha } }, headSha, 'クロスレビュー後に push あり'],
-    [{ unavailable: true }, headSha, 'クロスレビューの状態を確認できない'],
-    [{ deferred: true, reason: '実機待ち', next: '実機で確認する' }, headSha, 'レビュー保留'],
+test('レビューの生の記録の読み取りは評価と読み取り関数に限る', () => {
+  const removeFunctions = (text, names) => {
+    for (const name of names) text = text.replace(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`, 'g'), '');
+    return text;
+  };
+  const sources = [
+    ['web', readWebPage()],
+    ['mock', mock.replace(/<!-- review-evaluation:begin -->[^]*?<!-- review-evaluation:end -->/, '')],
+    ...fs.readdirSync(path.join(__dirname, '../src/server'), { recursive: true }).filter(name => name.endsWith('.js')).map(name => [name,
+      removeFunctions(fs.readFileSync(path.join(__dirname, '../src/server', name), 'utf8'), ['readCrossReviewState', 'selectCrossReview'])]),
   ];
-
-  const webReason = functionSource(web, 'pullRequestCrossReviewWaitReason');
-  const webConverged = functionSource(web, 'convergedAtHead');
-  const webPushed = functionSource(web, 'pushedAfterConvergence');
-  const completeSha = functionSource(web, 'isCompleteCommitSha');
-  const mockReason = functionSource(mock, 'crossReviewWaitReason');
-  const mockConverged = functionSource(mock, 'convergedAtHead');
-  const mockPushed = functionSource(mock, 'pushedAfterConvergence');
-  assert.ok(webReason && webConverged && webPushed && completeSha && mockReason && mockConverged && mockPushed);
-  const webContext = vm.createContext({ isCompleteCommitSha: (value) => typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value) });
-  vm.runInContext(`${completeSha}\n${webConverged}\n${webPushed}\n${webReason}\nthis.reason = pullRequestCrossReviewWaitReason;`, webContext);
-  const mockContext = vm.createContext({ ui: { reviewSkips: {} }, prKey: () => 'repo/1' });
-  vm.runInContext(`${mockConverged}\n${mockPushed}\n${mockReason}\nthis.reason = crossReviewWaitReason;`, mockContext);
-
-  for (const [review, sha, expected] of cases) {
-    assert.equal(crossReviewWaitReason(review, sha), expected);
-    assert.equal(webContext.reason({ crossReview: review, headRefOid: sha }), expected);
-    assert.equal(mockContext.reason({}, { number: 1, sha, xr: review }), expected);
+  for (const [name, text] of sources) {
+    assert.doesNotMatch(text, /\.triage(?:\?\.|\.)\s*(?:outcome|sha|round)|\btriage(?:\?\.|\.)\s*(?:outcome|sha|round)|\.reviewedSha\b/, name);
+    assert.doesNotMatch(text, /classifyReviewAtHead\s*\(/, name);
   }
 });
 
-test('保留のカードは理由と次の作業をテキストで示しマージの条件を待たせる', () => {
-  const context = vm.createContext({
-    element: fakeElement, badge: (text, cls) => fakeElement('span', `badge ${cls}`, text),
-    document: { createTextNode: text => text }, appendCrossReviewSkipControl() {},
-  });
-  for (const name of ['crossReviewState', 'crossReviewLine', 'pullRequestCrossReviewWaitReason', 'pullRequestReservationWaitReasons']) {
-    vm.runInContext(functionSource(web, name), context);
-  }
-  const pr = { crossReview: { deferred: true, reason: '<img src=x onerror=alert(1)>', next: '実機で確認する' },
-    ci: 'pass', review: 'none', canMerge: true };
+test('画面は保留の理由と次の作業を評価結果からテキストとして表示する', () => {
+  const element = (tag, className = '', textContent = '') => ({ tag, className, textContent, children: [],
+    append(...items) { this.children.push(...items); }, setAttribute() {} });
+  const context = pageContext(readWebPage(), { element, badge: (text, cls) => element('span', cls, text),
+    document: { createTextNode: text => element('text', '', text) }, appendCrossReviewSkipControl() {} });
+  vm.runInContext(sourceBetween(readWebPage(), 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock'), context);
+  const pr = reviewPr({ headRefOid: 'a'.repeat(40), crossReview: { deferred: true, reason: '<img src=x>', next: '実機で確認する' } });
   const line = context.crossReviewLine(pr);
-  assert.match(line.textContent, /レビュー保留/);
-  assert.match(line.textContent, /理由: <img src=x onerror=alert\(1\)>/);
-  assert.match(line.textContent, /次の作業: 実機で確認する/);
-  assert.equal(context.pullRequestCrossReviewWaitReason(pr), 'レビュー保留');
-  assert.equal(context.pullRequestReservationWaitReasons(pr)[0], 'レビュー保留');
-  assert.ok(line.children.every(node => typeof node === 'string' || node.tag === 'span'));
-  const mockContext = vm.createContext({ ui: { reviewSkips: {} }, prKey: () => 'repo/1' });
-  vm.runInContext(mock.match(/^const esc = .+$/m)[0], mockContext);
-  for (const name of ['crossReviewState', 'crossReviewLine']) {
-    vm.runInContext(functionSource(mock, name), mockContext);
-  }
-  const mockPr = { ...pr, sha: 'a'.repeat(40), xr: pr.crossReview };
-  const mockLine = mockContext.crossReviewLine({}, mockPr);
-  assert.match(mockLine, /レビュー保留/);
-  assert.match(mockLine, /次の作業: 実機で確認する/);
-  assert.match(mockLine, /&lt;img/);
-  assert.doesNotMatch(mockLine, /<img/);
+  const text = node => node.textContent + node.children.map(text).join('');
+  assert.match(text(line), /レビュー保留理由: <img src=x>次の作業: 実機で確認する/);
+  assert.ok(line.children.every(node => node.tag === 'span' || node.tag === 'text'));
 });
 
-test('クロスレビューの状態を確認できない PR は、往復の数を出さずに札だけを出す', () => {
-  const context = vm.createContext({
-    element: fakeElement,
-    badge: (text, cls) => fakeElement('span', `badge ${cls}`, text),
-    document: { createTextNode: (text) => text },
-    appendCrossReviewSkipControl() {},
-    isCompleteCommitSha: () => true,
-  });
-  vm.runInContext(`${functionSource(web, 'crossReviewState')}\n${functionSource(web, 'crossReviewLine')}\nthis.line = crossReviewLine;`, context);
-  const text = context.line({ crossReview: { unavailable: true }, headRefOid: 'a'.repeat(40) }).textContent;
-  assert.match(text, /状態を確認できない/);
-  assert.doesNotMatch(text, /undefined|往復/);
-});
 
-test('競合する PR は収束と表示せず記録元と解消の案内をテキストで表示する', () => {
-  const headSha = 'a'.repeat(40);
-  const review = { round: 2, max: 3, dismissed: 0, triage: { round: 2, sha: headSha, outcome: 'converged' }, conflict: [
-    { worktree: '<img src=x onerror=alert(1)>', round: 2, sha: headSha, outcome: 'halted' },
-    { worktree: '/old', round: 1, sha: headSha, outcome: 'converged' },
-  ] };
-  const context = vm.createContext({ element: fakeElement, document: { createTextNode: text => text } });
-  for (const name of ['isCompleteCommitSha', 'shortShaElement', 'convergedAtHead', 'pushedAfterConvergence',
-    'crossReviewState', 'crossReviewConflictDetails', 'pullRequestCrossReviewSettled', 'pullRequestReservationWaitReasons']) {
-    vm.runInContext(functionSource(web, name), context);
-  }
-  const pr = { crossReview: review, headRefOid: headSha, ci: 'pass', review: 'approved', canMerge: true };
-  assert.equal(context.pullRequestCrossReviewSettled(pr), false);
-  assert.equal(context.convergedAtHead(pr), false);
-  assert.equal(context.pushedAfterConvergence(pr), false);
-  assert.equal(context.crossReviewState(pr).text, '記録が食い違う');
-  assert.equal(context.pullRequestReservationWaitReasons(pr)[0], 'クロスレビューの記録が食い違う');
-  const details = context.crossReviewConflictDetails(review);
-  assert.match(details.textContent, /<img src=x onerror=alert\(1\)>/);
-  assert.match(details.textContent, /2 往復目 \/ aaaaaaa \/ 開発者の判断待ち/);
-  assert.match(details.textContent, /古い worktree の記録を消すか、レビュー不要として確定してください/);
-  assert.ok(details.children[0].children.every(node => node.tag === 'li' && node.children[0].tag === 'code'));
+test('競合の記録元と解消の案内は画面とモックで安全に表示する', () => {
+  const raw = { round: 2, max: 3, dismissed: 0, reviewedSha: 'a'.repeat(40),
+    triage: { round: 2, outcome: 'halted', sha: 'a'.repeat(40) }, conflict: [
+      { worktree: '<img src=x>', round: 2, outcome: 'halted', sha: 'a'.repeat(40) },
+    ] };
+  const element = (tag, className = '', textContent = '') => ({ tag, className, textContent, children: [], title: '',
+    append(...items) { this.children.push(...items); }, setAttribute() {} });
+  const context = pageContext(readWebPage(), { element, document: { createTextNode: text => element('text', '', text) } });
+  vm.runInContext(sourceBetween(readWebPage(), 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock'), context);
+  const pr = reviewPr({ headRefOid: 'a'.repeat(40), crossReview: raw });
+  const details = context.crossReviewConflictDetails(pr.review.display);
+  const text = node => node.textContent + node.children.map(text).join('');
+  assert.match(text(details), /<img src=x> \/ 2 往復目 \/ aaaaaaa \/ 開発者の判断待ち/);
+  assert.match(text(details), /古い worktree の記録を消すか、レビュー不要として確定してください/);
+  const mockContext = pageContext(mock, { ui: { reviewSkips: {} }, prKey: () => 'p#1' });
+  vm.runInContext(source, mockContext);
+  vm.runInContext(mock.split('\n').find(line => line.startsWith('const esc =')), mockContext);
+  vm.runInContext(sourceBetween(mock, 'function expandMockReviewSha', '// ---- プルリクエスト(スタック)'), mockContext);
+  const rendered = mockContext.crossReviewConflictDetails({ id: 'p' }, { number: 1, sha: 'a'.repeat(40), xr: raw });
+  assert.match(rendered, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(rendered, /<img/);
 });

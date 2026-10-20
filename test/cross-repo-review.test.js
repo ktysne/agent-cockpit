@@ -66,7 +66,7 @@ for (const worktree of [false, true]) {
     await f.add(32, f.roots.checkout, 'checkout-session');
     const snapshot = await f.snapshot();
     const pr = snapshot.pullRequests.flatMap(group => group.trees).find(pr => pr.number === 31);
-    assert.equal(pr.crossReview.triage.outcome, 'converged');
+    assert.equal(pr.review.evaluation.latest.outcome, 'converged');
     assert.equal(pr.mergeConditionMet, true);
     assert.ok(f.gitCalls.some(args => args[2] === 'ls-tree' && args[1] === f.roots.checkout));
     assert.ok(!f.gitCalls.some(args => args[1] === f.roots.session && args[2] === 'ls-tree'));
@@ -79,7 +79,7 @@ test('別登録の checkout の head に道具が無ければレビュー不要�
   await f.add(32, f.roots.checkout, 'checkout-session');
   const snapshot = await f.snapshot();
   const pr = snapshot.pullRequests.flatMap(group => group.trees).find(pr => pr.number === 31);
-  assert.deepEqual(pr.crossReview, { notRequired: true, source: 'tool-absent' });
+  assert.equal(pr.review.evaluation.decision.source, 'tool-absent');
 });
 
 test('別登録の checkout の remote が変わっていればクロスレビューは確認不能を保つ', async t => {
@@ -91,7 +91,7 @@ test('別登録の checkout の remote が変わっていればクロスレビ�
       ppid: 123, claudeCodeSessionId: 'checkout-session', cwd: f.roots.checkout }) });
   const snapshot = await f.snapshot();
   const pr = snapshot.pullRequests.flatMap(group => group.trees).find(pr => pr.number === 31);
-  assert.deepEqual(pr.crossReview, { unavailable: true });
+  assert.equal(pr.review.evaluation.record, 'unavailable');
   assert.ok(pr.mergeConditionWaits.includes('クロスレビューの状態を確認できない'));
 });
 

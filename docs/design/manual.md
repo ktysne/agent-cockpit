@@ -192,6 +192,11 @@ rec-studio の `build.js` と `guide-map.js` を写し、置き場とナビの�
 撮影のたびに、隔離した保存先で常駐サーバーを起動し、デモの状態を流し込む。
 開発者が普段使っている常駐サーバー、`~/.agent-cockpit/`、`~/.claude/` には触れない。
 
+デモの `crossReview` は worktree に置く道具と状態ファイルの入力であり、PR の画面用の値ではない。
+本体と同じ読み取りと評価を通し、PR の応答は `review = { evaluation, mergeCondition, display, reservation }` と `githubReview` を持つ。
+画面は `crossReview` の生の記録を読まない。
+評価と方針の契約は [サーバー設計の「PR の表示」](server.md#pr-の表示) に従う。
+
 ### 起動
 
 `tools/manual/demo-server.js` が、`startServer` を同じプロセスで呼んで起動する。
@@ -389,7 +394,7 @@ PR の取得とマージは `gh` を子プロセスで呼ぶ。
 `npm run lint:manual` は次を調べる。
 
 - **組み立ての結果**:原稿と画像から組み立て直した結果が、コミットした `manual/dist/` と一致する。原稿を直して組み立てを忘れたときと、結果を直接直したときを検出する。
-- **画面の文言**:原稿で `<span class="ui">…</span>` で囲んだ文言が、`src/web/index.html` に文字列として現れる。画面の文言を変えて原稿が古くなったときを検出する。
+- **画面の文言**:原稿で `<span class="ui">…</span>` で囲んだ文言が、`src/web/index.html` または `src/shared/review-evaluation.js` に文字列として現れる。画面の文言を変えて原稿が古くなったときを検出する。
 - **画像**:原稿が指す画像があり、どこからも指されない画像が無い。撮影の定義ごとに画像がある。
 - **ガイドマップ**:一覧の項目が指す部品の鍵が、その画像の矩形の一覧にある。
 - **リンク**:ページ内とページ間のリンク先の節がある。`helpAnchors` の行き先の節がある。画面が持つ鍵がすべて `helpAnchors` にある。`manual/` の外を相対パスで指すリンクが無い。

@@ -48,6 +48,7 @@ function makeFixture(t) {
   writeFile(repoRoot, 'manual/img/screen/overview.png', Buffer.from([137, 80, 78, 71]));
   writeFile(repoRoot, 'manual/img/sample/panel.png', Buffer.from([137, 80, 78, 71]));
   writeFile(repoRoot, 'src/web/index.html', '<a href="/manual/#help-guide">Open</a>');
+  writeFile(repoRoot, 'src/shared/review-evaluation.js', '');
   buildManual(distRoot, manualRoot, repoRoot);
   return { fixtureRoot, repoRoot, manualRoot, distRoot, dashboardPath, site, indexSource };
 }
