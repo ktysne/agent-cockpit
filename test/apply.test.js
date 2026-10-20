@@ -465,3 +465,177 @@ test('再診断で正本の digest が変われば保存した対処を適用し
   assert.equal(report.results[0].status, 'skipped');
   assert.equal(await fs.readFile(copy.target, 'utf8'), '古い写し');
 });
+
+async function bridgeCopies(f) {
+  const root = path.join(f.directory, 'claude-codex-bridge');
+  await write(path.join(root, '.git/config'), '[remote "origin"]\nurl = https://github.com/ktysne/claude-codex-bridge.git\n');
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  const items = [];
+  for (const [kind, name, requires] of [
+    ['script', 'b.sh', []], ['script', 'a.sh', []], ['gpt-agent', 'agent.md', ['script:b.sh']],
+    ['claude-agent', 'agent.md', ['gpt-agent:agent.md']],
+  ]) {
+    const source = path.join(root, kind, name);
+    const target = path.join(f.userHome, kind, name);
+    await write(source, '正本\r\n');
+    await write(target, '古い写し');
+    items.push({ id: `${kind}:${name}`, kind, name, source, target, requires, status: 'stale', reason: 'content-differs',
+      source_sha256: hash('正本\r\n'), observed_sha256: hash('古い写し'), content: '配置内容\n' });
+  }
+  const query = { protocol: 1, items, order: ['script', 'gpt-agent', 'claude-agent'], after: [{ id: 'review-role-section', when: 'any' }] };
+  f.options.queryBridge = async () => ({ stdout: JSON.stringify(query) });
+  return { items, query, ids: items.map(item => `bridge.copies.${item.kind}.${item.name}`), hash };
+}
+
+test('write は照会の内容を UTF-8 で加工せず書いて元のバイト列を退避する', async t => {
+  const f = await fixture(t);
+  const copy = await bridgeCopies(f);
+  const item = copy.items[0];
+  const bytes = Buffer.from('古い写し', 'utf16le');
+  await fs.writeFile(item.target, bytes);
+  item.observed_sha256 = copy.hash(bytes);
+  await save(f);
+  const { code, report } = await run(f, [copy.ids[0]]);
+  assert.equal(code, 0);
+  assert.deepEqual(await fs.readFile(item.target), Buffer.from(item.content, 'utf8'));
+  const manifest = JSON.parse(await fs.readFile(path.join(report.backupDir, 'manifest.json'), 'utf8'));
+  assert.deepEqual(await fs.readFile(manifest[0].backup), bytes);
+  assert.ok(report.manual.some(text => text.includes('役割分担')));
+});
+
+test('必須の写しが無い項目は新しく置く', async t => {
+  const f = await fixture(t);
+  const copy = await bridgeCopies(f);
+  Object.assign(copy.items[0], { status: 'missing', reason: 'required', observed_sha256: null });
+  await fs.rm(copy.items[0].target);
+  await save(f);
+  const { code, report } = await run(f, [copy.ids[0]]);
+  assert.equal(code, 0);
+  assert.equal(report.backupDir, null);
+  assert.equal(await fs.readFile(copy.items[0].target, 'utf8'), copy.items[0].content);
+});
+
+test('write の正本か写しが照会後に変われば上書きせず見送る', async t => {
+  for (const field of ['source', 'target']) {
+    const f = await fixture(t);
+    const copy = await bridgeCopies(f);
+    await save(f);
+    await write(copy.items[0][field], '利用者の変更');
+    const { code, report } = await run(f, [copy.ids[0]]);
+    assert.equal(code, 1);
+    assert.equal(report.results[0].status, 'skipped');
+    assert.match(report.results[0].reason, /診断し直/);
+    assert.equal(await fs.readFile(copy.items[0].target, 'utf8'), field === 'target' ? '利用者の変更' : '古い写し');
+  }
+});
+
+test('write の一時ファイルを書いた後に正本か写しが変わっても見送る', async t => {
+  for (const field of ['source', 'target']) {
+    const f = await fixture(t);
+    const copy = await bridgeCopies(f);
+    await save(f);
+    const io = { ...fs, writeFile: async (file, ...args) => {
+      await fs.writeFile(file, ...args);
+      if (file.endsWith('.tmp')) await write(copy.items[0][field], '同時更新');
+    } };
+    const { report } = await run(f, [copy.ids[0]], { fs: io });
+    assert.equal(report.results[0].status, 'skipped');
+    assert.equal(await fs.readFile(copy.items[0].target, 'utf8'), field === 'target' ? '同時更新' : '古い写し');
+  }
+});
+
+test('bridge の依存の閉包に選び漏れがあれば足りない id を案内する', async t => {
+  const f = await fixture(t);
+  const copy = await bridgeCopies(f);
+  await save(f);
+  const { report } = await run(f, [copy.ids[3]]);
+  assert.equal(report.results[0].status, 'skipped');
+  assert.ok(report.results[0].reason.includes(copy.ids[0]));
+  assert.ok(report.results[0].reason.includes(copy.ids[2]));
+  assert.equal(await fs.readFile(copy.items[3].target, 'utf8'), '古い写し');
+});
+
+test('bridge の依存に未確認か未配置があれば明示して選んでも見送る', async t => {
+  for (const status of ['unreadable', 'not-deployed']) {
+    const f = await fixture(t);
+    const copy = await bridgeCopies(f);
+    copy.items[0].status = status;
+    await save(f);
+    const { report } = await run(f, [copy.ids[3], copy.ids[2], copy.ids[0]]);
+    assert.ok(report.results.every(result => result.status === 'skipped'));
+    assert.ok(report.results.find(result => result.id === copy.ids[3]).reason.includes(copy.ids[0]));
+  }
+});
+
+test('bridge は order と同じ kind の id の順に置く', async t => {
+  const f = await fixture(t);
+  const copy = await bridgeCopies(f);
+  const renamed = [];
+  await save(f);
+  const io = { ...fs, rename: async (from, to) => { renamed.push(to); await fs.rename(from, to); } };
+  const { code, report } = await run(f, [...copy.ids].reverse(), { fs: io });
+  assert.equal(code, 0);
+  assert.ok(report.results.every(result => result.status === 'applied'));
+  assert.deepEqual(renamed, [1, 0, 2, 3].map(index => copy.items[index].target));
+});
+
+test('bridge の前提の適用が失敗したら後の項目を見送る', async t => {
+  const f = await fixture(t);
+  const copy = await bridgeCopies(f);
+  await save(f);
+  const io = { ...fs, rename: async (from, to) => {
+    if (to === copy.items[0].target) throw Object.assign(new Error(), { code: 'EACCES' });
+    await fs.rename(from, to);
+  } };
+  const { report } = await run(f, [copy.ids[3], copy.ids[2], copy.ids[0]], { fs: io });
+  assert.equal(report.results.find(result => result.id === copy.ids[0]).status, 'failed');
+  for (const id of [copy.ids[2], copy.ids[3]]) {
+    const result = report.results.find(result => result.id === id);
+    assert.equal(result.status, 'skipped');
+    assert.ok(result.reason.includes(copy.ids[0]));
+  }
+});
+
+test('bridge の前提が既に一致していれば選択されていなくても適用できる', async t => {
+  const f = await fixture(t);
+  const copy = await bridgeCopies(f);
+  copy.items[0].status = 'match';
+  await save(f);
+  const { code } = await run(f, [copy.ids[2]]);
+  assert.equal(code, 0);
+  assert.equal(await fs.readFile(copy.items[2].target, 'utf8'), copy.items[2].content);
+});
+
+test('bridge の前提が再診断で一致済みなら already-ok として後を適用できる', async t => {
+  const f = await fixture(t);
+  const copy = await bridgeCopies(f);
+  await save(f);
+  copy.items[0].status = 'match';
+  const { code, report } = await run(f, [copy.ids[2], copy.ids[0]]);
+  assert.equal(code, 0);
+  assert.equal(report.results.find(result => result.id === copy.ids[0]).status, 'already-ok');
+  assert.equal(report.results.find(result => result.id === copy.ids[2]).status, 'applied');
+});
+
+test('bridge の前提が変化で見送られたら後の項目も見送る', async t => {
+  const f = await fixture(t);
+  const copy = await bridgeCopies(f);
+  await save(f);
+  await write(copy.items[0].source, '正本の変更');
+  const { report } = await run(f, [copy.ids[3], copy.ids[2], copy.ids[0]]);
+  assert.ok(report.results.every(result => result.status === 'skipped'));
+  assert.ok(report.results.find(result => result.id === copy.ids[3]).reason.includes(copy.ids[0]));
+  assert.equal(await fs.readFile(copy.items[3].target, 'utf8'), '古い写し');
+});
+
+test('bridge の順を並べ替えてもほかのツールの項目の順を保つ', async t => {
+  const f = await fixture(t);
+  const copy = await bridgeCopies(f);
+  const review = await reviewCopy(f);
+  await save(f);
+  const renamed = [];
+  const io = { ...fs, rename: async (from, to) => { renamed.push(to); await fs.rename(from, to); } };
+  const { code } = await run(f, [copy.ids[3], MCP_ID, copy.ids[2], review.id, copy.ids[0]], { fs: io });
+  assert.equal(code, 0);
+  assert.deepEqual(renamed, [copy.items[0].target, f.mcp, copy.items[2].target, review.target, copy.items[3].target]);
+});

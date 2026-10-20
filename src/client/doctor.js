@@ -10,6 +10,7 @@ function formatReport(report) {
     .map(([result, title]) => [title, ...report.items.filter(item => item.result === result).flatMap(item => [
       `- ${item.id}: ${item.reason}`, ...(['mismatch', 'not-installed'].includes(result) ? item.actions.map(action => `  対処: ${action.op === 'manual' ? action.text
         : ['copy', 'copy-file'].includes(action.op) ? `${action.from} を ${action.to} へコピーします。`
+          : action.op === 'write' ? `${action.to} を照会が返した内容で置き直します。`
           : action.op === 'command' ? `${action.cwd} で ${action.command} を実行します。`
             : `${action.file} の ${action.path?.join('.') || `${action.table}.${action.key}`} を ${action.op} で直します。`}`) : []),
     ])].join('\n')).join('\n\n');

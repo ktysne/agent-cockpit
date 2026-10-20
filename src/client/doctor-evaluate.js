@@ -232,6 +232,44 @@ function checkCrossReview(query, observedAt, items) {
   }
 }
 
+function checkBridge(query, observedAt, items) {
+  if (!query) return;
+  const base = { tool: 'claude-codex-bridge', category: 'copies', observedAt };
+  if (query.error) {
+    const guidance = 'node src/client/apply.js --update-checkouts --check と claude-codex-bridge の docs/setup.md の「更新するとき」を確かめてください。';
+    items.push({ ...base, id: 'bridge.copies.query', provider: null, target: null,
+      expected: null, observed: null, result: 'unverified', reason: `${query.error} ${guidance}`,
+      actions: [{ op: 'manual', text: guidance }] });
+    return;
+  }
+  const results = { match: 'ok', stale: 'mismatch', missing: 'mismatch', 'not-deployed': 'not-installed', unreadable: 'unverified' };
+  const reasons = {
+    'content-differs': '写しの内容が正本と違うため、この項目を選んで置き直してください。',
+    'line-ending': '写しの改行コードが適切でないため、この項目を選んで置き直してください。',
+    required: '必須の写しが無いため、依存する項目と合わせて選んで配置してください。',
+    'unreadable-file': '写しを読めないため、ファイルのアクセス権を確認して診断し直してください。',
+    'front-matter-unreadable': '定義のフロントマターを読めないため、bridge の導入手順に沿って定義を確認してください。',
+  };
+  const afterText = {
+    'restart-claude-code': 'Claude Code を再起動して新しいセッションを開いてください。',
+    'review-role-section': 'claude-codex-bridge の docs/setup.md の「5. メインセッションに役割分担を指示する」に沿って役割分担の節を見直してください。',
+  };
+  for (const item of query.items) {
+    const actions = ['stale', 'missing'].includes(item.status) ? [
+      { op: 'write', to: item.target, content: item.content, observedDigest: item.observed_sha256,
+        source: item.source, sourceDigest: item.source_sha256 },
+      ...query.after.filter(action => action.when === 'any' || action.when === item.kind)
+        .map(action => ({ op: 'manual', text: afterText[action.id] || `bridge の導入手順を確かめてください (${action.id})` })),
+    ] : [];
+    items.push({ ...base, id: `bridge.copies.${item.kind}.${item.name}`,
+      provider: item.kind === 'claude-agent' ? 'claude' : null, target: item.target,
+      expected: item.source_sha256, observed: item.observed_sha256, result: results[item.status],
+      reason: reasons[item.reason] || (item.status === 'match' ? '写しは正本と一致しています。' : '任意の写しは未配置です。'),
+      requires: item.requires.map(id => `bridge.copies.${id.replace(':', '.')}`),
+      copyOrder: query.order.indexOf(item.kind), actions });
+  }
+}
+
 function checkServer(home, root, expected, server, add) {
   const { port, pid, startedAt, health, sourceState, entries } = server;
   const observed = health ? { version: health.version ?? null, commit: health.commit ?? null, sourceState: health.sourceState ?? null,
@@ -298,6 +336,7 @@ function evaluate(observation) {
       actions: [{ op: 'manual', text: 'node src/client/apply.js --update-checkouts --check' }] });
   }
   checkCrossReview(observation.crossReview, generatedAt, items);
+  checkBridge(observation.bridge, generatedAt, items);
   checkServer(homes.cockpit, root, expected, server, add);
   add(null, 'runtime-check', 'roundtrip', 'docs/setup.md', null, null, 'not-run',
     'MCP の書き込みと質問の回答の往復は実施していません。導入手順の「確認」で実際に操作してください。',
