@@ -7,6 +7,7 @@ const ANSWER_WAIT_MS = 5 * 60_000;
 const MAX_LONG_POLL_MS = 25_000;
 const REVIEW_REMINDER_WAIT_MS = 3_000;
 const REVIEW_REMINDER_REPEAT_MS = 30 * 60_000;
+const REVIEW_RUN_REMINDER_HOLD_MS = 60 * 60_000;
 const MAX_REVIEW_REMINDERS_PER_HEAD = 3;
 const MAX_ASK_POLL_GAP_MS = 30_000;
 const HOOK_DELIVERY_TTL_MS = 10 * 60_000;
@@ -595,7 +596,6 @@ class DecisionAnswerDelivery {
     this.stopReviewReminders.delete(sessionId);
     const candidates = await pending.candidates;
     if (!candidates?.length || this.closed || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation) return null;
-    if (this.state.decisionsFor(sessionId).some((decision) => decision.state === 'waiting')) return null;
     const seen = this.remindedReviewHeads.get(sessionId) || new Map();
     const promptVersion = this.reviewPromptVersions.get(sessionId) || 0;
     const targets = candidates.filter(({ owner, repo, number, headRefOid }) => {
@@ -604,6 +604,11 @@ class DecisionAnswerDelivery {
         (promptVersion > previous.promptVersion || this.now() - previous.deliveredAt >= REVIEW_REMINDER_REPEAT_MS));
     });
     if (!targets.length) return null;
+    if (this.state.decisionsFor(sessionId).some((decision) => decision.state === 'waiting')) return null;
+    const now = this.now();
+    if (this.state.sessions.get(sessionId)?.reviewRuns?.some(({ startedAt }) => (
+      now - Date.parse(startedAt) <= REVIEW_RUN_REMINDER_HOLD_MS
+    ))) return null;
     this.pendingHookReminders.set(sessionId, {
       createdAt: this.now(),
       promptVersion,
