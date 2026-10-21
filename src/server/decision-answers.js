@@ -770,7 +770,8 @@ class DecisionAnswerDelivery {
     const isWrapUp = event.tool_name === 'mcp__ccd_turn__wrap_up';
     if (!['PostToolUse', 'PostToolUseFailure'].includes(eventName) ||
       (event.tool_name !== 'AskUserQuestion' && !isWrapUp) || !toolUseId || event.agent_id) return;
-    if (isWrapUp && this.state.isWrapUpAskFinished(sessionId, toolUseId)) return;
+    if (isWrapUp && (this.state.isWrapUpAskFinished(sessionId, toolUseId) ||
+      !this.state.isAskLifecycleOwnedBy(sessionId, toolUseId))) return;
     const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
     const decision = decisionId && this.state.decisionFor(sessionId, decisionId);
     if (!decision) return;

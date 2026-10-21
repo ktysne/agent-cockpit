@@ -1972,6 +1972,12 @@ class DashboardState {
       (lifecycle.state === 'provisional' || Boolean(lifecycle.answer?.sentAt));
   }
 
+  // 判断事項の回答待ちが別の呼び出しへ移っていれば、遅れて届いた古い呼び出しの終わりで書き換えないため。
+  isAskLifecycleOwnedBy(sessionId, toolUseId) {
+    const lifecycle = this.decisionLifecycles.get(sessionId)?.get(this.decisionIdForToolUse(sessionId, toolUseId));
+    return !lifecycle?.askToolUseId || lifecycle.askToolUseId === toolUseId;
+  }
+
   persistAskDecisionState(sessionId, session) {
     const plan = this.plans.get(sessionId);
     const storedAskDecisions = new Map((plan?.decisions || [])

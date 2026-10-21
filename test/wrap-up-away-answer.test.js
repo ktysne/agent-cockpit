@@ -86,6 +86,23 @@ test('wrap_up の回答待ち中の失敗は中断の印が無くても判断事
   }
 });
 
+test('同じ質問の次の wrap_up は別の判断事項になり前の呼び出しの遅れた失敗で回答待ちを消さない', async t => {
+  const c = await fixture(t);
+  await c.run();
+  const decision = id => c.runtime.state.decisionsFor('session').find(item => item.id === id);
+  const result = await c.run({ tool_use_id: 'wrap-2' }, async () => {
+    await c.post({ hook_event_name: 'PostToolUseFailure', error: 'hook denied' });
+    assert.equal(decision('wrap-1').state, 'provisional');
+    assert.equal(decision('wrap-2').state, 'waiting');
+    assert.ok(decision('wrap-2').awaitingAnswerUntil);
+    const answered = await request(c.info.port, { method: 'POST', path: '/api/decisions/wrap-2/answer',
+      headers: uiHeaders(c.info, `http://127.0.0.1:${c.info.port}`), body: JSON.stringify({ session_id: 'session', choice: 'ok', note: '' }) });
+    assert.equal(answered.status, 200);
+  });
+  assert.match(result.hookSpecificOutput.permissionDecisionReason, /^開発者の回答の知らせです/);
+  assert.equal(decision('wrap-2').state, 'resolved');
+});
+
 test('actions の無い wrap_up の時間切れは推奨を判断できないと伝える', async t => {
   const c = await fixture(t);
   const result = await c.run({ tool_input: { ask: '保存先は' } });

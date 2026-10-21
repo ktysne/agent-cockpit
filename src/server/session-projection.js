@@ -441,9 +441,10 @@ function applyAskQuestionStart(session, event) {
     session.startedAskToolUseIds.add(toolUseId);
     // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
     const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
-    const existing = boundDecision || session.decisions.find((decision) => (
+    // wrap_up は呼び出しごとに別の判断事項にする。使い回すと、遅れて届いた前の呼び出しの終わりが次の回答待ちを消すため。
+    const existing = boundDecision || (event.tool_name === 'mcp__ccd_turn__wrap_up' ? null : session.decisions.find((decision) => (
       ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
-    ));
+    )));
     // 最初の呼び出しか判断事項を終えた呼び出しの開始と、終わった時点より古い開始の知らせは、
     // 遅れて届いたか重複なので、状態と解決の内容を変えない。
     const staleStart = existing === boundDecision && isFinishedAskDecision(existing) && (
