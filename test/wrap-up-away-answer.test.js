@@ -20,6 +20,8 @@ async function fixture(t, enabled = true) {
     tool_use_id: 'wrap-1', tool_input: INPUT, ...fields });
   const answer = body => request(c.info.port, { method: 'POST', path: '/api/decisions/wrap-1/answer',
     headers: uiHeaders(c.info, `http://127.0.0.1:${c.info.port}`), body: JSON.stringify({ session_id: 'session', ...body }) });
+  const post = fields => request(c.info.port, { method: 'POST', path: '/api/events',
+    headers: hookHeaders(c.info.secret), body: JSON.stringify(makeHookEvent(input(fields))) });
   const run = (fields = {}, beforePoll = () => { now += 1001; }) => runAwayHook(input(fields), {
     homeDir: c.homeDir, now: () => now,
     fetchImpl: async (url, init) => {
@@ -29,7 +31,7 @@ async function fixture(t, enabled = true) {
       return { ok: response.status === 200, status: response.status, json: async () => jsonBody(response) };
     },
   });
-  return { ...c, input, answer, run, decision: () => c.runtime.state.decisionsFor('session')[0] };
+  return { ...c, input, answer, post, run, decision: () => c.runtime.state.decisionsFor('session')[0] };
 }
 
 test('wrap_up は判断事項に質問と recap と先頭が推奨の選択肢を出し回答を拒否理由で返す', async t => {
@@ -49,6 +51,9 @@ test('wrap_up は判断事項に質問と recap と先頭が推奨の選択肢�
   assert.match(result.hookSpecificOutput.permissionDecisionReason, /ask を付けずに/);
   assert.equal(c.decision().state, 'resolved');
   assert.ok(c.decision().answer.deliveredAt);
+  await c.post({ hook_event_name: 'PostToolUseFailure', error: 'hook denied' });
+  assert.equal(c.decision().state, 'resolved');
+  assert.ok(c.decision().answer.deliveredAt);
 });
 
 test('wrap_up の時間切れは先頭の推奨と message で継続させ仮適用を残す', async t => {
@@ -59,8 +64,26 @@ test('wrap_up の時間切れは先頭の推奨と message で継続させ仮適
   assert.match(result.hookSpecificOutput.permissionDecisionReason, /推奨「JSON」.*構造を保って保存する/);
   assert.match(result.hookSpecificOutput.permissionDecisionReason, /あなたの判断が必要なこと/);
   assert.match(result.hookSpecificOutput.permissionDecisionReason, /ask を付けずに/);
-  c.runtime.state.addEvent(makeHookEvent(c.input({ hook_event_name: 'PostToolUseFailure', error: 'hook denied' })));
+  await c.post({ hook_event_name: 'PostToolUseFailure', error: 'hook denied' });
   assert.equal(c.decision().state, 'provisional');
+});
+
+test('wrap_up の回答待ち中の失敗は中断の印が無くても判断事項を取り下げ待ちと回答期限を解く', async t => {
+  for (const answerPending of [false, true]) {
+    const c = await fixture(t);
+    const result = await c.run({}, async () => {
+      assert.equal(c.decision().state, 'waiting');
+      assert.ok(c.decision().awaitingAnswerUntil);
+      if (answerPending) assert.equal((await c.answer({ choice: 'ok', note: '' })).status, 200);
+      assert.equal((await c.post({ hook_event_name: 'PostToolUseFailure', error: 'cancelled' })).status, 202);
+      assert.equal(c.decision().state, 'withdrawn');
+      assert.equal(c.decision().awaitingAnswerUntil, undefined);
+    });
+    assert.equal(result, null);
+    await c.post({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'next-1', tool_input: {} });
+    assert.equal(c.decision().state, 'withdrawn');
+    assert.equal(c.decision().awaitingAnswerUntil, undefined);
+  }
 });
 
 test('actions の無い wrap_up の時間切れは推奨を判断できないと伝える', async t => {

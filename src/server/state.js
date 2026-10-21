@@ -1958,7 +1958,18 @@ class DashboardState {
       bindings: Object.fromEntries(this.askDecisionBindings.get(sessionId) || []),
       finishedOutsideEventsIds: [...(this.finishedOutsideEventsAskDecisionIds.get(sessionId) || [])],
       awayHandledIds: this.awayHandledDecisionIds(sessionId),
+      finishedWrapUpToolUseIds: [...(this.decisionLifecycles.get(sessionId)?.values() || [])]
+        .map((lifecycle) => lifecycle.askToolUseId)
+        .filter((toolUseId) => this.isWrapUpAskFinished(sessionId, toolUseId)),
     };
+  }
+
+  isWrapUpAskFinished(sessionId, toolUseId) {
+    if (!toolUseId) return false;
+    const decisionId = this.decisionIdForToolUse(sessionId, toolUseId);
+    const lifecycle = this.decisionLifecycles.get(sessionId)?.get(decisionId);
+    return lifecycle?.askToolUseId === toolUseId && !lifecycle.awaitingAnswerUntil &&
+      (lifecycle.state === 'provisional' || Boolean(lifecycle.answer?.sentAt));
   }
 
   persistAskDecisionState(sessionId, session) {

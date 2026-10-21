@@ -71,13 +71,13 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>, codexReviewAgentIds: Set<string>}} SessionCodex */
 
-/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>}} SessionDecisions */
+/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>, finishedWrapUpToolUseIds: Set<string>}} SessionDecisions */
 
 /** @typedef {{permissionWaits: PermissionWait[], permissionBoundaries: Set<string|null>}} SessionPermissions */
 
 /** @typedef {SessionIdentity & SessionTools & SessionAgents & SessionCodex & SessionDecisions & SessionPermissions} DerivedSession */
 
-/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[], awayHandledIds?: string[]}} AskDecisionState */
+/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[], awayHandledIds?: string[], finishedWrapUpToolUseIds?: string[]}} AskDecisionState */
 
 /** @returns {DerivedSession} */
 function newSession(event, askDecisionState = {}) {
@@ -100,6 +100,7 @@ function newSession(event, askDecisionState = {}) {
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     awayHandledIds: new Set(askDecisionState.awayHandledIds || []),
+    finishedWrapUpToolUseIds: new Set(askDecisionState.finishedWrapUpToolUseIds || []),
     codexQuestionTools: Object.create(null),
     startedAskToolUseIds: new Set(),
     stopped: false,
@@ -308,6 +309,7 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
     decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
     bindings: askDecisionState.bindings || {},
     awayHandledIds: askDecisionState.awayHandledIds || [],
+    finishedWrapUpToolUseIds: askDecisionState.finishedWrapUpToolUseIds || [],
   };
 }
 
@@ -664,8 +666,9 @@ function applyBackgroundTaskEnds(session, event) {
  * @param {SessionDecisions} session
  */
 function applyAskQuestionCompletion(session, event) {
-  // wrap_up の拒否後も、仮適用または回答の記録を判断事項に残す。
-  if (event.tool_name === 'mcp__ccd_turn__wrap_up' && event.hook_event_name === 'PostToolUseFailure') return;
+  // 回答待ちを終えた wrap_up の拒否では、仮適用または回答の記録を残す。
+  if (event.tool_name === 'mcp__ccd_turn__wrap_up' && event.hook_event_name === 'PostToolUseFailure' &&
+    session.finishedWrapUpToolUseIds.has(event.tool_use_id)) return;
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;

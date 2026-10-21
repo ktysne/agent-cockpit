@@ -767,12 +767,16 @@ class DecisionAnswerDelivery {
       }
       return;
     }
-    if (!['PostToolUse', 'PostToolUseFailure'].includes(eventName) || event.tool_name !== 'AskUserQuestion' || !toolUseId || event.agent_id) return;
+    const isWrapUp = event.tool_name === 'mcp__ccd_turn__wrap_up';
+    if (!['PostToolUse', 'PostToolUseFailure'].includes(eventName) ||
+      (event.tool_name !== 'AskUserQuestion' && !isWrapUp) || !toolUseId || event.agent_id) return;
+    if (isWrapUp && this.state.isWrapUpAskFinished(sessionId, toolUseId)) return;
     const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
     const decision = decisionId && this.state.decisionFor(sessionId, decisionId);
     if (!decision) return;
     if (eventName === 'PostToolUseFailure') {
       this.state.setDecisionLifecycle(sessionId, decisionId, {
+        ...(isWrapUp ? { answer: null } : {}),
         ...(decision.state === 'provisional' ? {} : { state: null }),
         awaitingAnswerUntil: null,
       }, this.now());
