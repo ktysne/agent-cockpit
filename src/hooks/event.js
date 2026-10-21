@@ -151,10 +151,13 @@ function extractCodexWaitRunId(command, toolName = 'Bash') {
 }
 
 const NPM_VALUE_OPTIONS = new Set(['-C', '--prefix', '-w', '--workspace', '--loglevel', '--userconfig', '--cache', '--registry']);
+const NPM_NON_RUNNING_OPTIONS = new Set(['-h', '--help', '-v', '--version', '--usage']);
 
+// ヘルプかバージョンの指定があると npm はスクリプトを実行しないので、null を返す。
 function withoutNpmOptions(words) {
   let index = 0;
   while (words[index]?.startsWith('-') && words[index] !== '--') {
+    if (NPM_NON_RUNNING_OPTIONS.has(words[index])) return null;
     index += NPM_VALUE_OPTIONS.has(words[index]) ? 2 : 1;
   }
   return words.slice(index);
@@ -162,9 +165,9 @@ function withoutNpmOptions(words) {
 
 // `npm -s run review:codex` や `npm run --silent review:codex` のように、npm のオプションが run の前後に入っても起動として扱う。
 function npmRunScript(words) {
-  const [subcommand, ...rest] = withoutNpmOptions(words);
+  const [subcommand, ...rest] = withoutNpmOptions(words) || [];
   if (!['run', 'run-script'].includes(subcommand)) return [];
-  return withoutNpmOptions(rest);
+  return withoutNpmOptions(rest) || [];
 }
 
 function extractCodexReviewDefinition(command, toolName = 'Bash') {
