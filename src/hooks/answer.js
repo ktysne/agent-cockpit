@@ -215,7 +215,7 @@ async function runCodexStopCheck(input, options) {
     provider: 'codex',
   }, { ...options, timeoutMs: STOP_CHECK_TIMEOUT_MS });
   if (result?.hookOutput) return { exitCode: 0, output: result.hookOutput, stderrText: null };
-  if (result?.wait !== true || !Number.isInteger(result.generation)) {
+  if (options.noninteractive || result?.wait !== true || !Number.isInteger(result.generation)) {
     return { exitCode: 0, output: null, stderrText: null };
   }
 
