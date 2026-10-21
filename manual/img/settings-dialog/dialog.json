@@ -95,6 +95,16 @@
       "visible": true
     },
     {
+      "key": "settings.pull-default-branch",
+      "bounds": {
+        "x": 474,
+        "y": 1694,
+        "width": 752,
+        "height": 90
+      },
+      "visible": true
+    },
+    {
       "key": "settings.import-app-tasks",
       "bounds": {
         "x": 474,

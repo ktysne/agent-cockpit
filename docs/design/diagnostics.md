@@ -141,8 +141,15 @@ MCP と画面は診断の応答を本来の処理で待たず、250 ms で打ち
 | `merge.check` | `merge` | 予約と実行で満たさなかった条件の分類と、head の `match` / `mismatch` / `missing`。`info` で残す |
 | `merge.reserved` / `merge.cancelled` | `merge` | 保存した予約と取り消しのリポジトリ、PR 番号。`info` で残す |
 | `merge.result` | `merge` | gh の成功・失敗と、マージ済み・キュー待ち・未マージの分類。失敗は `warn`、それ以外は `info` で残す |
+| `merge.local-update` | `merge` | マージ後のローカル既定ブランチの更新結果。更新成功は `info`、更新しなかった場合と失敗は `warn` で残す |
+| `review.reminder` | `merge` | レビューの記録を促した PR のリポジトリ、番号、登録セッション ID の先頭。`info` で残す |
 | `session.ended` | `server` / `codex` | `SessionEnd`、Codex のプロセス終了とロック消失、セッション一覧からの消失による判定。`info` で残す。ロック消失は、ロックが戻るまで 1 回だけ残す |
 | `review.state` | `merge` | 状態ファイルの `present` / `missing` / `unknown`、レビュー済み head と収束判定の head の照合、回数、判断結果、失敗分類。失敗は `warn`、それ以外は `info` で残す |
+| `server.stop` | `server` | 停止した常駐サーバーのプロセス ID。`mark` で残す |
+| `update.checked` | `server` | 更新確認時の現在と最新の版、更新の有無、確認時刻。`info` で残す |
+| `update.failed` | `server` | 更新確認の失敗分類。`warn` で残す |
+| `request.failed` | `server` | 失敗した HTTP 要求のメソッド、パス、状態コード、エラー分類、秘密値と Origin の照合結果。`error` で残す |
+| `diagnostics.pruned` | `server` | 診断ログの整理で削除したファイル数。`mark` で残す |
 
 gh の連続失敗回数は操作・リポジトリ・PR 番号ごとに数え、同じ組み合わせの成功でリセットする。
 API 操作は設定取得、比較、head 取得、PR 取得、ブランチ削除の種類で区別する。

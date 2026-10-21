@@ -63,6 +63,9 @@ ktysne/ai-cross-review#89 で、すべての導入先が新形式(入口だけ�
 | 6 | #694 段階 3 ダッシュボードの入口 | 1 段目は `mock/index.html`。2 段目は常駐サーバーの診断の呼び出しと `src/web/index.html` | 1 段目はメインセッション、2 段目は hard | `claude/694-doctor-mock`、`claude/694-doctor-dashboard` | main | 1 段目は PR #695、2 段目は PR #696 でマージ済み、#694 は閉じた。PATH に bash が無い常駐サーバーでの bridge の照会は PR #697 でマージ済み |
 | 7 | update-tools の ai-cross-review の取り込み先の確認を新形式に合わせる | `skills/update-tools/SKILL.md` | light | `claude/684-update-tools-new-form` | main | PR #686 でマージ済み、#684 は閉じた |
 | 8 | ai-cross-review#85 の検証データを revision を固定して取り込む | `test/fixtures/cross-review-state/`、`tools/import-cross-review-contract.js` | メインセッション | `claude/667-shared-contracts` | main | #667 として PR #692 でマージ済み、#667 は閉じた |
+| 9 | #688 ai-cross-review のグローバル SKILL の照会の版 2 を読む | `src/client/doctor-observe.js`、`src/client/doctor-evaluate.js` | — | `claude/688-doctor-global-skill-v2` | main | PR #689 でマージ済み、#688 は閉じた |
+| 10 | #691 Codex 向けのスキルを `~/.agents/skills` で照合する | `src/client/doctor-observe.js`、`src/client/doctor-evaluate.js`、`src/client/checkouts.js`、`docs/setup.md`、`docs/update.md` | — | `claude/691-codex-agents-skills` | main | PR #693 でマージ済み、#691 は閉じた |
+| 11 | #703 点検の mcp-runtime の理由に古い記録の時刻とコミットを示す | `src/client/doctor-evaluate.js` | — | `claude/703-mcp-runtime-wording` | main | PR #704 でマージ済み、#703 は閉じた |
 
 - 7 は、ktysne/ai-cross-review#89 の移行で、導入先から `tools/cross-review.sync.js` が消えたために要る。手順 3 の「取り込み先」の確認を、`node tools/cross-review.js sync --check` と、ai-cross-review の `--register --check --json`、`--migrate --check --json` の照会を使う形にする。
 - 8 は、ktysne/ai-cross-review#89 の計画で、#85 の契約の文書と検証データを導入先へ写さず、agent-cockpit が上流の revision を固定して取り込むと決まったために要る。#85 は ktysne/ai-cross-review#93 でマージ済み(マージコミット 1978f8f)。#667 の項目 1 が、この検証データの取り込みを含む。
@@ -74,9 +77,3 @@ ktysne/ai-cross-review#89 で、すべての導入先が新形式(入口だけ�
 - bridge の `--check-copies` は、ホームに置いた写しからは動かず、checkout の `tools/codex-agent.sh` から実行する必要がある。ホームの写しから実行すると、終了コード 2 で JSON を出さない。
 - bridge の `--check-copies` は、`HOME` と `USERPROFILE` が違う環境では、フックが使う写しと照合先が異なる(bridge の `docs/gpt-agents.md` の「配置済みの写しを照合する」)。
 - ai-cross-review の SKILL の正本は、`.gitattributes` で LF に固定されている(ktysne/ai-cross-review#88)。固定より前に取り出した checkout には CRLF の SKILL が残るので、照会がすべての配布先を `stale` と返すことがある。その checkout では SKILL を削除して `git checkout --` で取り出し直す。
-
-## 次のセッションの開始用プロンプト
-
-```text
-docs/handover/2026-10-20-tool-update.md を読み、「現在地と次にやること」から再開してください。
-```

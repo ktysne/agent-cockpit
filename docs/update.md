@@ -69,10 +69,14 @@ node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).ver
 
 ## バージョンごとの追加作業
 
-今はありません。
 追加作業がある場合は、更新前のバージョンより新しく、更新先のバージョン以下の節だけを、バージョンの小さい順に実行します。
 バージョンはピリオドで区切った 3 つの整数で比較します。
 節の見出しは `### vX.Y.Z` の形で書きます。
+
+### v1.9.0
+
+Codex 向けのスキルの置き場が `~/.codex/skills/` から `~/.agents/skills/` に変わりました。
+[スキルのコピー](#スキルのコピー)を行い、古い置き場にスキルの写しが残っていれば、同節の注意に従って片付けます。
 
 ## フックと MCP サーバーの登録の見比べ
 
@@ -81,7 +85,11 @@ node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).ver
 足りないイベントや、timeout の値の違いがあれば、差分を利用者に示して確認を取ってから直します。
 Codex の `hooks.json` を変えたときは、利用者に Codex の `/hooks` で信頼し直すよう伝えます。
 不一致の診断には、チェックアウトのルートで `node src/client/doctor.js` を実行します。
-`--json` を付けると JSON を出力し、不一致があれば終了コード `1` を返します。
+`--root <checkout>` で診断対象を指定できます。
+`--json` は JSON を出力し、不一致があれば終了コード `1`、引数の誤りや診断の失敗では `2` を返します。
+不一致は [update-tools スキル](../skills/update-tools/SKILL.md)(内部で `src/client/apply.js` を使います)で直せます。
+ダッシュボードの設定にある「導入の点検」でも結果を確認できます。
+詳しくは[導入の点検の設計](design/doctor.md)を参照してください。
 診断は MCP からの書き込みと質問への回答の往復を確かめないため、[導入手順](setup.md)の「確認」も実行してください。
 設定を直した後は、その後に開いたセッションだけが新しい内容で動きます。
 
@@ -110,6 +118,8 @@ for name in agent-cockpit update-tools; do
   cp skills/$name/SKILL.md ~/.claude/skills/$name/SKILL.md
 done
 ```
+
+`CLAUDE_CONFIG_DIR` を設定している環境では、`~/.claude` をそのディレクトリに読み替え、コピー先も同じように置き換えます。
 
 Codex を使っているときは、[導入手順](setup.md#3-スキルを置く)と同じコマンドで、Codex のスキルもコピーし直します。
 

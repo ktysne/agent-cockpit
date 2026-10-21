@@ -19,6 +19,7 @@ description: メインセッションのタスク、完了条件、判断事項�
 - 省略と保留は、ツールが成功を返したことを確かめてから完了報告する。失敗したらツールの応答に従い、未記録であることか、記録できたかを確かめられなかったことを、理由と一緒に完了報告に書く。
 - 不要記録と保留は登録元のセッションからだけ記録でき、現在の head にだけ適用される。head が変われば無効になり、同じ head では後からの記録だけが残る。
 - 呼び出す前に PR の最新 head SHA を確認する。PR がこのセッションに登録されていない場合は `cockpit_add_pr` で登録してから記録する。
+- 別のリポジトリの PR や、フックが PR のリポジトリを cwd から読めなかった場合は、`cockpit_add_pr` の `cwd` にそのリポジトリの checkout の絶対パスを渡す。
 - 記録は指定した head だけに有効である。push で head が変わったら、必要に応じて改めてレビューするか、新しい head に対する判断を記録する。
 - ダッシュボードの PR カードでも「レビュー不要にする」と取り消しを操作できる。こちらの記録も現在表示している head だけに有効である。
 
@@ -27,9 +28,10 @@ description: メインセッションのタスク、完了条件、判断事項�
 - 開発者に選んでもらう内容は `AskUserQuestion` で尋ねる。
 - 推奨する選択肢は label の先頭に「(推奨)」を付け、理由を description に書く。
 - `AskUserQuestion` の判断事項は自動で記録されるため、`cockpit_add_decision` で重ねて登録しない。
-- 尋ねずに推奨を適用する判断は `cockpit_add_decision` で `provisional` として登録し、推奨する選択肢を明示する。
+- 尋ねずに推奨を適用する判断は `cockpit_add_decision` で `provisional` として登録し、推奨する選択肢に `recommended: true` を付ける。
 - 適用した選択肢も残す場合は、返された id を `cockpit_update_decision` に渡し、state を `provisional` にして chosen と note を更新する。
 - 離席中に `AskUserQuestion` が止められた場合は、示された id を `cockpit_update_decision` に渡し、state を `provisional` にして選んだ選択肢を書く。
+- 離席中に ask 付きの `mcp__ccd_turn__wrap_up` が止められたら、拒否理由に従って作業し、ask を付けずに呼び直す。`cockpit_update_decision` は不要。
 - 判断が完了したら `cockpit_update_decision` で state を `resolved` にする。
 
 ## 確認依頼

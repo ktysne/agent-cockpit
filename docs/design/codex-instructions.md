@@ -37,6 +37,7 @@ Codex には `PostToolBatch` が無いので、`PostToolUse` の `additionalCont
 
 Codex には裏で待つ仕組み(`asyncRewake`)が無い。
 同期の `Stop` のフックで待つと、その間 Codex の画面は作業中になり、`Esc` で中断できる。
+単発実行(`AGENT_COCKPIT_NONINTERACTIVE=1`)では離席中も待たない([Claude と Codex の単発実行](server.md#claude-と-codex-の単発実行))。
 離席中だけ `Stop` で待ち、届いたら届けた内容を理由に続行(`decision: block`)させる(開発者の決定)。
 離席中は Codex の画面を見る人がいないので、作業中の表示が続いても困らないためである。
 在席中は待たず、ターンの終わりの時点で未配信のものがあれば一度だけ続行させ、後から届いたものは次の入力かツールの後に届ける。
@@ -58,4 +59,4 @@ Codex には裏で待つ仕組み(`asyncRewake`)が無い。
 ## 範囲の外
 
 - Issue #175 の配信台帳(送信中、受付、適用、未確認の区別と、結果が不明な配信の再送の禁止)は、app-server を使う旧設計の要件である。フックによる配信では、Claude と同じ `deliveredAt` と `reflectedAt` の区別にとどめる。
-- 常駐サーバーの再起動の後の配信は順序 7 で扱う。
+- 常駐サーバーの再起動の後の配信は [codex-recovery.md](codex-recovery.md) で扱う。

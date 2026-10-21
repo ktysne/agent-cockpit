@@ -157,10 +157,11 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text x="76" y="312"><tspan font-weight="600">route.js</tspan><tspan class="sub">　経路を伝えて守らせる（Claude）</tspan></text>
       <text class="sub" x="76" y="344">Codex は同じスクリプトを引数 codex で登録</text>
 
-      <rect class="b-in" x="60" y="384" width="280" height="88" rx="8"/>
+      <rect class="b-in" x="60" y="384" width="280" height="96" rx="8"/>
       <text class="title" x="76" y="410">MCP サーバー（src/mcp・stdio）</text>
       <text class="sub" x="76" y="432">cockpit_set_tasks / add_decision /</text>
-      <text class="sub" x="76" y="452">update_decision / add_pr / skip_review</text>
+      <text class="sub" x="76" y="450">update_decision / add_pr / skip_review</text>
+      <text class="sub" x="76" y="468">defer_review / report_launch</text>
 
       <!-- セッション内のつながり -->
       <path class="ln gray" d="M200,152 L200,190" marker-start="url(#m-gray)" marker-end="url(#m-gray)"/>
@@ -180,6 +181,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text x="460" y="342">・診断ログを記録</text>
       <text x="460" y="364">・新しいバージョンのタグを確認</text>
       <text x="460" y="386">・URL を既定のブラウザーで開く</text>
+      <text x="460" y="408">・導入の点検を流す</text>
       <text class="sub" x="460" y="424">書き込みは起動ごとの秘密値と</text>
       <text class="sub" x="460" y="442">Origin を照合する</text>
 
@@ -200,6 +202,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text x="808" y="320">・離席中 / 経路 / 表示の設定</text>
       <text x="808" y="342">・新しいバージョンの通知と診断ログ</text>
       <text x="808" y="364">・マニュアルへの入口</text>
+      <text x="808" y="386">・導入の点検と直す依頼文のコピー</text>
       <text class="sub" x="808" y="424">Claude は橙、Codex は青紫の色帯で</text>
       <text class="sub" x="808" y="442">見分ける</text>
 
@@ -250,10 +253,10 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
 
       <rect class="b-opt" x="665" y="550" width="200" height="120" rx="10"/>
       <text class="title" x="681" y="578">連携（任意）</text>
-      <text class="sub" x="681" y="602">codex-agent.sh の有無と</text>
-      <text class="sub" x="681" y="620">出力</text>
-      <text class="sub" x="681" y="642">ai-cross-review の</text>
-      <text class="sub" x="681" y="660">レビュー状態</text>
+      <text class="sub" x="681" y="602">tools/codex-agent.sh</text>
+      <text class="sub" x="681" y="620">--check-copies で写しを照合</text>
+      <text class="sub" x="681" y="642">ai-cross-review の写しを点検</text>
+      <text class="sub" x="681" y="660">レビュー状態も確認</text>
 
       <rect class="b-ext" x="880" y="550" width="200" height="120" rx="10"/>
       <text class="title" x="896" y="578">GitHub</text>
@@ -277,10 +280,10 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
   <h2>データの流れ</h2>
   <ol class="flows">
     <li><b>イベント（フック → サーバー）</b>：<code>event.js</code> がツール実行、通知、サブエージェントの開始と終了などを <code>POST /api/events</code> で送る。サーバーはここからセッションの状態を組み立てる。常駐サーバーが動いていなければ、<code>SessionStart</code> の <code>event.js</code> が起動する。Codex のセッションは、同じスクリプトを最後の引数 <code>codex</code> 付きで登録して送る。</li>
-    <li><b>回答・知らせ（サーバー → フック → セッション）</b>：<code>answer.js</code> がサーバーに問い合わせ、ダッシュボードで書かれた回答、PR のマージ結果の知らせ、衝突の解消の依頼、タスクの登録の催促をセッションの文脈として渡す。離席中は、<code>away.js</code> が質問ツール（Claude は <code>AskUserQuestion</code>、Codex は <code>request_user_input</code>）を止めてダッシュボードの回答を待ち、その回答を質問の答えとして返す。待機中の Claude のセッションは <code>Stop</code> のフック（<code>asyncRewake</code>）で起こす。Codex には同じ仕組みが無いので、<code>PostToolUse</code> と <code>Stop</code> のフックで渡し、離席中は <code>Stop</code> で回答を待つ。</li>
-    <li><b>計画・PR（MCP → サーバー）</b>：メインセッションが MCP ツールを呼ぶと、MCP サーバーが計画（タスク、完了条件、判断事項）、PR、クロスレビュー不要の記録を常駐サーバーへ送る。</li>
+    <li><b>回答・知らせ（サーバー → フック → セッション）</b>：<code>answer.js</code> がサーバーに問い合わせ、ダッシュボードで書かれた回答、PR のマージ結果の知らせ、衝突の解消の依頼、タスクの登録の催促をセッションの文脈として渡す。離席中は、<code>away.js</code> が質問ツール（Claude は <code>AskUserQuestion</code> と ask 付き <code>mcp__ccd_turn__wrap_up</code>、Codex は <code>request_user_input</code>）を止めてダッシュボードの回答を待ち、その回答を質問の答えとして返す。待機中の Claude のセッションは <code>Stop</code> のフック（<code>asyncRewake</code>）で起こす。Codex には同じ仕組みが無いので、<code>PostToolUse</code> と <code>Stop</code> のフックで渡し、離席中は <code>Stop</code> で回答を待つ。</li>
+    <li><b>計画・PR（MCP → サーバー）</b>：メインセッションが MCP ツールを呼ぶと、MCP サーバーが計画（タスク、完了条件、判断事項）、PR、クロスレビューを不要とする記録と保留の記録を常駐サーバーへ送る。起動の報告では、未解決の確認依頼に起動したアプリの URL またはプロセス名を記録し、判断事項の状態は変えない。</li>
     <li><b>状態の表示（サーバー → ダッシュボード）</b>：ダッシュボードは <code>GET /api/state</code> を 2 秒ごとに取得して画面を描き直す。</li>
-    <li><b>回答・操作（ダッシュボード → サーバー）</b>：回答、離席中の切り替え、経路と表示の設定、PR のマージ確認と予約、衝突の解消の依頼、診断ログの削除などを送る。回答と依頼はサーバーの配信待ちに置かれ、②で届く。マニュアルと外部のページ（PR など）は、サーバーに頼んで既定のブラウザーで開く。</li>
+    <li><b>回答・操作（ダッシュボード → サーバー）</b>：回答、離席中の切り替え、経路と表示の設定、PR のマージ確認と予約、衝突の解消の依頼、診断ログの削除を送る。導入の点検を実行し、結果から直す依頼文をコピーできる。回答と依頼はサーバーの配信待ちに置かれ、②で届く。マニュアルと外部のページ（PR など）は、サーバーに頼んで既定のブラウザーで開く。</li>
     <li><b>GitHub（サーバー ⇄ GitHub）</b>：<code>gh</code> CLI で PR と CI の状態を 60 秒ごとに取得する。マージできるのは、開発者が画面で確認したスタック最下段の PR だけで、画面で見た head の SHA を照合する。レビュー収束後マージの予約は、クロスレビューの収束を記録した head の SHA で照合する。新しいバージョンのタグは <code>git ls-remote</code> で 6 時間ごとに確かめ、画面で知らせる。</li>
     <li><b>読み取り（ファイル → サーバー）</b>：<code>~/.claude</code> と <code>~/.codex</code> を 10 秒ごとに読み、稼働中のセッション、利用者の中断、Codex のスレッド名と会話の終了を拾う。どちらも公開仕様ではないので、読めなくても本体は動く。</li>
   </ol>
@@ -296,7 +299,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
     <div class="card"><h3>マニュアル</h3><p><code>manual/</code> で組み立てた利用者向けの説明。紹介ページと一緒に https://ktysne.info/agent-cockpit/manual/ へ配信し、設定画面の入口から既定のブラウザーで開く。</p></div>
   </div>
 
-  <p class="note">フック、MCP サーバー、トレイの起動処理は、共通の接続処理（<code>src/client</code>）で常駐サーバーを探し、動いていなければ起動する。許可待ち（パーミッションのダイアログ）は表示するだけで、ダッシュボードから許可を出す経路は無い。連携（任意）の道具が無くても本体は動く。</p>
+  <p class="note">フック、MCP サーバー、トレイの起動処理は、共通の接続処理（<code>src/client</code>）で常駐サーバーを探し、動いていなければ起動する。設定画面の「導入の点検」では各連携の状態を確認し、直す依頼文をコピーできる。許可待ち（パーミッションのダイアログ）は表示するだけで、ダッシュボードから許可を出す経路は無い。連携（任意）の道具が無くても本体は動く。</p>
 </main>
 </body>
 </html>

@@ -9,6 +9,7 @@
   <ul>
     <li>Codex の質問ツール(<code>request_user_input_async</code>、Plan モードの <code>request_user_input</code>)で出した質問</li>
     <li>Claude Code のメインセッションが、質問のツールで開発者に尋ねた質問。フックが自動で判断事項にします</li>
+    <li>離席中のメインセッションが <code>mcp__ccd_turn__wrap_up</code> に <code>ask</code> を付けたときの質問</li>
     <li>メインセッションが、Agent Cockpit のツール(<code>cockpit_add_decision</code>)で記録した判断。開発者に確認中の判断と、推奨案を仮に適用して進めた判断を残すのに使います</li>
   </ul>
 
@@ -19,7 +20,7 @@
       <li data-part="card.title"><b>題</b>：質問の文、または記録した判断の題です。</li>
       <li data-part="card.state"><b>状態の札</b>：<span class="ui">止めて待っている</span>、<span class="ui">仮に推奨案で進行中</span>、<span class="ui">解決済み</span>、<span class="ui">取り下げ</span> のどれかです(<a href="#decisions-states">判断事項の状態</a>)。</li>
       <li data-part="card.time"><b>経過時間</b>：待っている時間などです(<a href="#decisions-time">経過時間と強調</a>)。</li>
-      <li data-part="card.context"><b>背景</b>：セッションが書いた、判断が必要になった状況の説明です。質問のツールから作った判断事項には、背景がありません。</li>
+      <li data-part="card.context"><b>背景</b>：セッションが書いた、判断が必要になった状況の説明です。<code>wrap_up</code> から作った判断事項では、<code>recap</code> が背景になります。</li>
       <li data-part="card.options"><b>選択肢</b>：選択肢の名前と説明です。複数の質問を持つ判断事項では、質問ごとに並びます。複数選択の質問には、<span class="ui">複数選択できます。</span> と出ます。</li>
       <li data-part="card.recommended" data-place="left"><b><span class="ui">推奨</span> の札</b>：推奨と判定した選択肢に付きます(<a href="#decisions-recommended">推奨の判定</a>)。</li>
       <li data-part="card.meta" data-place="right"><b>回答する場所</b>：回答するアプリと、プロダクトとセッションを示します。</li>
@@ -65,7 +66,7 @@
   </details>
 
   <h3 id="decisions-recommended">推奨の判定</h3>
-  <p>Codex のすぐ戻る質問(<code>request_user_input_async</code>)は、先頭の選択肢を推奨にします。
+  <p>Codex のすぐ戻る質問(<code>request_user_input_async</code>)と、離席中の <code>wrap_up</code> は、先頭の選択肢を推奨にします。
   選択肢の無い質問には、指示だけで答えます。
   待つ質問(<code>request_user_input</code>)と Claude Code の質問の推奨は、質問ごとに、次の条件をすべて満たすときに決まります。</p>
   <ul>
@@ -219,13 +220,15 @@
     </ol>
   </figure>
   <p>仮に進めている判断事項では、セッションが判断事項を更新したときに、反映されたことになります。
-  離席中の質問では、質問のツールが回答つきで終わったときです。</p>
+  離席中の <code>AskUserQuestion</code> では、質問のツールが回答つきで終わったときです。
+  <code>wrap_up</code> では、回答を受けた呼び出しを拒否したときです。</p>
 
   <h3 id="decisions-route">回答が届く経路</h3>
   <p>回答は、セッションの状態に合わせて、次のどれかの経路で届きます。
   どの経路でも、渡した時点で <span class="ui">に渡した</span> が付きます。</p>
   <ul>
-    <li>離席中に待っている質問への回答：質問を待っているフックが受け取り、質問の答えとして渡します。デスクトップアプリに質問のダイアログは出ません(<a href="away.html#away-questions">離席中の質問</a>)</li>
+    <li>離席中に待っている <code>AskUserQuestion</code> への回答：質問を待っているフックが受け取り、質問の答えとして渡します。デスクトップアプリに質問のダイアログは出ません(<a href="away.html#away-questions">離席中の質問</a>)</li>
+    <li>離席中の <code>wrap_up</code> への回答：回答を理由に含めて呼び出しを拒否し、その理由をセッションに返します</li>
     <li>セッションが作業中のとき：ツールの実行がひと区切りしたところで、回答の文をセッションに差し込みます</li>
     <li>Claude Code のセッションが待機中のとき：待機中のセッションに回答を渡し、作業を再開させます</li>
     <li>開発者が新しいプロンプトを送ったとき：渡した回答がまだ反映されていなければ、プロンプトに添えて渡し直します。渡し直しは最大 3 回までです</li>
@@ -234,6 +237,7 @@
   在席中は、ターンの終わりに未配信の回答があれば一度だけ続行します。
   ターンが終わった後に回答が届いても、セッションを起こせないので、次の入力か次のツールの実行後に届きます。
   離席中にターンが終わったときは、回答や通知を最大 59 分待って届けます。
+  単発実行(<code>AGENT_COCKPIT_NONINTERACTIVE=1</code>)では、<code>Stop</code> で待ちません。
   待つ間は Codex の画面が作業中になり、<code>Esc</code> で中断できます。
   離席中を解除すると待つのをやめます。</p>
   <details class="more">
@@ -251,6 +255,9 @@
       <li>作業中の差し込み：<code>PostToolBatch</code> が無いので、ツールが 1 つ終わるたびのフック(<code>PostToolUse</code>)が渡します</li>
       <li>待機中の起こし：ターンの終わりのフック(<code>Stop</code>)が待つのは離席中だけで、届いた回答で続行させます。在席中は、ターンの終わりに未配信の回答があれば一度だけ続行させます</li>
     </ul>
+    <p>離席中の <code>wrap_up</code> は、回答を <code>PreToolUse</code> の拒否理由で返します。
+    時間切れでは先頭の選択肢を推奨として返し、選択肢が無ければ判断待ちとして最後の報告に書くよう伝えます。
+    どちらの場合も、作業を終えた後に <code>ask</code> を付けずに呼び直すよう伝えます。</p>
     <p>渡す回答の文には、判断事項の id と題、回答の種類、指示が入ります。
     セッションは、回答に沿って作業を直し、判断事項を更新します。</p>
     <p>回答の種類ごとに、質問への答えは次のとおりです。</p>
