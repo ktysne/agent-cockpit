@@ -78,7 +78,7 @@ function createHookRoutes(ctx) {
   const hookAnswerActions = [
     {
       matches: (body) => body.action === 'delivery-ack' && validText(body.delivery_id, 256),
-      run: (body) => ({ acknowledged: answerDelivery.acknowledgeHookDelivery(body.session_id, body.delivery_id) }),
+      run: (body) => ({ acknowledged: answerDelivery.intakeHookDelivery({ type: 'ack', sessionId: body.session_id, deliveryId: body.delivery_id }, answerDelivery.now()) }),
     },
     {
       matches: (body) => body.action === 'ask-register' && body.event_name === 'PreToolUse' && Array.isArray(body.questions),
@@ -155,12 +155,6 @@ function createHookRoutes(ctx) {
     },
   ];
 
-  const deliveryActions = new Set(['ask-finish', 'post-tool-batch', 'post-tool-use', 'user-prompt-submit', 'stop-check', 'stop-poll']);
-
-  function hasHookOutput(result) {
-    return Boolean(result?.hookOutput || (typeof result?.stderrText === 'string' && result.stderrText));
-  }
-
   async function handleHookAnswers({ request, response, body }) {
     if (!body || typeof body !== 'object' || Array.isArray(body) || !validSessionId(body.session_id) || !validText(body.id, 256)) {
       jsonResponse(response, 400, { error: 'Invalid request' });
@@ -175,37 +169,28 @@ function createHookRoutes(ctx) {
       const action = hookAnswerActions.find((candidate) => candidate.matches(body));
       let result = INVALID_ANSWER_REQUEST;
       if (action) {
-        const generation = body.action === 'stop-poll' ? body.generation : null;
-        const cached = deliveryActions.has(body.action)
-          ? answerDelivery.getHookDelivery(body.session_id, body.action, body.id, generation)
-          : null;
-        const replayAllowed = cached && (!['stop-check', 'stop-poll'].includes(body.action) ||
-          answerDelivery.canReplayStopDelivery(body.session_id, cached, body.parent_alive !== false));
-        if (replayAllowed) result = cached.response;
-        else if (cached && body.action === 'stop-check') result = { hookOutput: null, generation: null, wait: false };
-        else if (cached && body.action === 'stop-poll') result = { stderrText: null, done: true };
+        const deliveryRequest = {
+          sessionId: body.session_id, action: body.action, requestId: body.id,
+          generation: body.action === 'stop-poll' ? body.generation : null,
+          parentAlive: body.parent_alive !== false,
+        };
+        const intake = answerDelivery.intakeHookDelivery({ type: 'request', ...deliveryRequest }, answerDelivery.now());
+        if (intake.handled) result = intake.response;
         else {
-          if (deliveryActions.has(body.action) || body.action === 'stop-start') {
-            answerDelivery.cancelHookReminders(body.session_id);
-          }
           result = await action.run(body);
-        }
-        if (result !== INVALID_ANSWER_REQUEST && deliveryActions.has(body.action) && hasHookOutput(result) && !replayAllowed &&
-          !result[UNRECORDED_DELIVERY]) {
-          const delivery = answerDelivery.recordHookDelivery({
-            sessionId: body.session_id,
-            action: body.action,
-            requestId: body.id,
-            response: result,
-            requestGeneration: body.action === 'stop-poll' ? body.generation : null,
-            generation: body.action === 'stop-check' ? result.generation : body.action === 'stop-poll' ? body.generation : null,
-            decisionId: body.action === 'ask-finish' ? body.decision_id : null,
-          });
-          if (!delivery) {
-            jsonResponse(response, 503, { error: 'Delivery capacity reached' });
-            return;
+          if (result !== INVALID_ANSWER_REQUEST) {
+            const completed = answerDelivery.intakeHookDelivery({
+              ...deliveryRequest, type: 'response', response: result, unrecorded: result[UNRECORDED_DELIVERY],
+              requestGeneration: body.action === 'stop-poll' ? body.generation : null,
+              generation: body.action === 'stop-check' ? result.generation : deliveryRequest.generation,
+              decisionId: body.action === 'ask-finish' ? body.decision_id : null,
+            }, answerDelivery.now());
+            if (completed.capacityReached) {
+              jsonResponse(response, 503, { error: 'Delivery capacity reached' });
+              return;
+            }
+            result = completed.response;
           }
-          result = delivery.response;
         }
       }
       if (result === INVALID_ANSWER_REQUEST) {
