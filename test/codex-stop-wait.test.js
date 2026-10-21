@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
 const { runAnswerHook } = require('../src/hooks/answer');
 const { runAwayHook } = require('../src/hooks/away');
 const { jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
@@ -158,4 +159,43 @@ test('離席中の Stop は待機上限に達すると何も返さずに終わ�
   assert.equal(result.exitCode, 0);
   assert.equal(result.output, null);
   assert.ok(c.actions.includes('stop-poll'));
+});
+
+
+test('非対話の Codex Stop は離席中でも新しい回答を待たない', async (t) => {
+  const c = await fixture(t);
+  c.duringStopWait(async () => c.advance(5_000));
+  const result = await c.run({ hook_event_name: 'Stop' }, { noninteractive: true });
+  assert.equal(result.output, null);
+  assert.ok(c.actions.includes('stop-check'));
+  assert.equal(c.actions.includes('stop-poll'), false);
+});
+
+test('非対話の Codex Stop も届いている通知は返す', async (t) => {
+  const c = await fixture(t);
+  c.runtime.answerDelivery.notifySessions(['thread'], 'PR の確認が完了しました。');
+  const result = await c.run({ hook_event_name: 'Stop' }, { noninteractive: true });
+  assert.equal(result.output.decision, 'block');
+  assert.match(result.output.reason, /PR の確認が完了しました。/);
+  assert.equal(c.actions.includes('stop-poll'), false);
+});
+
+test('非対話の Codex Stop フック実プロセスは離席中も終了する', async (t) => {
+  const c = await fixture(t);
+  const child = spawn(process.execPath, [require.resolve('../src/hooks/answer'), 'codex'], {
+    env: { ...process.env, AGENT_COCKPIT_HOME: c.homeDir, AGENT_COCKPIT_NONINTERACTIVE: '1' },
+    stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+  });
+  t.after(() => { if (child.exitCode === null) child.kill(); });
+  let stdout = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.resume();
+  const exitCode = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill(); reject(new Error('単発フックが終了しませんでした')); }, 5_000);
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('close', code => { clearTimeout(timer); resolve(code); });
+  });
+  child.stdin.end(JSON.stringify({ session_id: 'thread', hook_event_name: 'Stop' }));
+  assert.equal(await exitCode, 0);
+  assert.equal(stdout, '');
 });

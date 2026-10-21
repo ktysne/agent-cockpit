@@ -173,7 +173,7 @@ git clone https://github.com/ktysne/agent-cockpit.git
 - `UserPromptSubmit` と `SessionStart` の `away.js` は同期で、timeout は 5 秒です。
 - `PostToolBatch` の `answer.js` は同期で timeout 2 秒、`UserPromptSubmit` の `answer.js` は同期で timeout 5 秒です。作業中のセッションへ回答を差し込みます。
 - `Stop` の `answer.js` は `asyncRewake: true` と timeout 3600 秒です。待機中のセッションを、回答が届いたときに起こします。
-- 単発の `claude -p` を起動するツールは、その子プロセスの環境にだけ `AGENT_COCKPIT_NONINTERACTIVE=1` を渡します。Stop で待ち続けず結果を回収するための指定で、契約は[「Claude の単発実行」](design/server.md#claude-の単発実行)にあります。
+- 単発の `claude -p` を起動するツールは、その子プロセスの環境にだけ `AGENT_COCKPIT_NONINTERACTIVE=1` を渡します。Stop で待ち続けず結果を回収するための指定で、契約は[「Claude と Codex の単発実行」](design/server.md#claude-と-codex-の単発実行)にあります。
 - そのほかの `event.js` は `async: true` で、作業を止めません。
 
 ### 3. MCP サーバーを登録する

@@ -1157,9 +1157,9 @@ Stop の応答を再送する前に、現行の世代とセッション終了条
 
 フック設定の例は [導入手順](../setup.md) に記載し、`~/.claude/settings.json` は自動で変更しない。
 
-### Claude の単発実行
+### Claude と Codex の単発実行
 
-一回で完結する Claude の呼び出し元は、起動する子プロセスの環境に `AGENT_COCKPIT_NONINTERACTIVE=1` を設定する。
+一回で完結する Claude と Codex の呼び出し元は、起動する子プロセスの環境に `AGENT_COCKPIT_NONINTERACTIVE=1` を設定する。
 Claude Code 2.1.302 の `-p` は `asyncRewake` フックの終了を待つため、回答の到着を待ち続けると呼び出し元が結果を回収できない。
 実行形態は呼び出し元が明示し、Claude の非公開環境変数やフックの端末接続から推測しない。
 
@@ -1167,6 +1167,8 @@ Claude Code 2.1.302 の `-p` は `asyncRewake` フックの終了を待つため
 返す内容があれば標準エラーへ書いて終了コード 2 で続行させ、無ければ終了コード 0 で終える。
 新たな回答の到着を long-poll で待たず、レビュー記録の確認には上の応答上限を使う。
 `AGENT_COCKPIT_NONINTERACTIVE=1` の `PostToolBatch` はタスク催促を求めず、`SessionStart` と `UserPromptSubmit` もタスク登録を案内しない。
+Codex の `Stop` も同じマーカーを受け取り、`stop-check` を一度だけ行う。
+未配信の内容があれば既存のJSON形式で返し、無ければlong-pollへ入らず終了する。
 マーカーを指定しない対話セッションは、停止中の待機を続ける。
 
 ## 登録

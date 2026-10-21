@@ -22,7 +22,7 @@ Issue #175 は、cockpit が管理する app-server で自由な指示を送る�
 
 - 作業中: ツールの区切り(`PostToolBatch`)の `additionalContext` で届ける。
 - 入力のとき: `UserPromptSubmit` の `additionalContext` で届ける。判断事項の回答は、反映の記録(`cockpit_update_decision`)が来るまで最大 3 回届ける。
-- ターンの後: 対話セッションでは `Stop` のフックが裏(`asyncRewake`)で最大 3600 秒待ち、届いたらセッションを起こして続けさせる。在席中も離席中も待つ。単発の呼び出し元が指定する待機方法は[「Claude の単発実行」](server.md#claude-の単発実行)に従う。
+- ターンの後: 対話セッションでは `Stop` のフックが裏(`asyncRewake`)で最大 3600 秒待ち、届いたらセッションを起こして続けさせる。在席中も離席中も待つ。単発の呼び出し元が指定する待機方法は[「Claude と Codex の単発実行」](server.md#claude-と-codex-の単発実行)に従う。
 - 届けた時刻(`deliveredAt`)と反映の時刻(`reflectedAt`)を分けて記録し、届けただけでは反映済みにしない。
 
 ## 差と決定
