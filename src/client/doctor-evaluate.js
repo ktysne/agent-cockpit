@@ -294,8 +294,11 @@ function checkServer(home, root, expected, server, add) {
       ? '常駐サーバーが対象の checkout と違うため、対象の checkout から再起動してください。'
       : '常駐サーバーの一致を確認できませんでした。停止中なら新しいセッションの SessionStart が起動します。', result === 'mismatch'
       ? [{ op: 'command', command: 'node src/client/restart-server.js --json', cwd: root }] : []);
-  const writes = entries.filter(entry => entry.msg === 'mcp.write' && typeof entry.data?.version === 'string')
-    .map(entry => ({ ts: entry.ts, identity: { version: entry.data.version, commit: entry.data.commit ?? null } }));
+  // 同じ内容の書き込みは diagnostics.repeated にまとめられ、その ts は書き出した時刻なので、どの記録の ts も「この時刻までに書いた」として扱う。
+  const writes = entries.flatMap(entry => {
+    const data = entry.msg === 'mcp.write' ? entry.data : entry.msg === 'diagnostics.repeated' && entry.data?.msg === 'mcp.write' ? entry.data.data : null;
+    return typeof data?.version === 'string' ? [{ ts: entry.ts, identity: { version: data.version, commit: data.commit ?? null } }] : [];
+  });
   const unique = [...new Map(writes.map(({ identity }) => [JSON.stringify(identity), identity])).values()];
   const stale = identity => identity.version !== expected.version || (expected.commit !== null && identity.commit !== null && identity.commit !== expected.commit);
   const latestStale = writes.filter(write => stale(write.identity)).reduce((latest, write) => !latest || write.ts > latest.ts ? write : latest, null);
@@ -314,7 +317,7 @@ function staleWriteText({ ts, identity }, expected) {
   if (!Number.isFinite(ts)) return `今の起動に、${writer}の記録があります。`;
   const at = new Date(ts);
   const pad = value => String(value).padStart(2, '0');
-  return `${pad(at.getMonth() + 1)}/${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())} に、${writer}が書き込んでいます。この時刻より前から動いているアプリのセッションが、古い MCP で動いている見込みです。`;
+  return `${pad(at.getMonth() + 1)}/${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())} までに、${writer}が書き込んでいます。この時刻より前から動いているアプリのセッションが、古い MCP で動いている見込みです。`;
 }
 
 function evaluate(observation) {

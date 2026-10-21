@@ -412,11 +412,28 @@ test('今の起動の古い MCP の記録は最後の時刻とコミットを示
   assert.equal(code, 0);
   const item = report.items.find(item => item.category === 'mcp-runtime');
   assert.equal(item.result, 'unverified');
-  assert.match(item.reason, /^10\/21 11:48 に、対象の checkout と違う MCP プロセス\(バージョン 1\.7\.0、コミット ccccccc\)が書き込んでいます。/);
+  assert.match(item.reason, /^10\/21 11:48 までに、対象の checkout と違う MCP プロセス\(バージョン 1\.7\.0、コミット ccccccc\)が書き込んでいます。/);
   assert.equal(item.actions.length, 1);
   assert.equal(item.actions[0].op, 'manual');
   assert.ok(item.reason.endsWith(item.actions[0].text));
   assert.ok(item.actions[0].text.includes(`${f.root} で node src/client/restart-server.js --json を実行`));
+});
+
+test('まとめられた古い MCP の書き込みは書き出しの時刻までの書き込みとして示す', async t => {
+  const f = await fixture(t, []);
+  const first = new Date(2026, 9, 21, 11, 40).getTime();
+  const flushed = new Date(2026, 9, 21, 11, 50).getTime();
+  const data = { tool: 'cockpit_set_tasks', phase: 'attempt', version: '1.8.0', commit: 'b'.repeat(40) };
+  const fetchImpl = async (url, init) => url.includes('?run=')
+    ? { ok: true, status: 200, json: async () => ({ entries: [
+      { ts: first, msg: 'mcp.write', data },
+      { ts: flushed, msg: 'diagnostics.repeated', data: { msg: 'mcp.write', count: 3, since: new Date(first).toISOString(), data } },
+    ] }) }
+    : f.options.fetchImpl(url, init);
+  const { report } = await run({ ...f.options, fetchImpl });
+  const item = report.items.find(item => item.category === 'mcp-runtime');
+  assert.equal(item.result, 'unverified');
+  assert.match(item.reason, /^10\/21 11:50 までに、対象の checkout と違う MCP プロセス\(コミット bbbbbbb\)が書き込んでいます。/);
 });
 
 test('時刻の無い古い MCP の記録は時刻を省いて示す', async t => {
