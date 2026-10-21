@@ -114,11 +114,12 @@ test('取り直しの対象のコマンドから、指すリポジトリを 1 �
     'gh --repo o/r pr view 1',
     'gh --repo=o/r pr view 1',
     'gh pr view 1 -R o/r && gh pr checks 1 --repo O/R',
+    'command gh --repo=o/r pr merge 1',
   ]) {
     assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { repository: 'o/r' }, command);
   }
   const targetCwd = path.resolve(os.tmpdir(), 'target-repo').replaceAll('\\', '/');
-  for (const command of ['git push', `cd "${targetCwd}" && git push && gh pr view 1`, 'echo "gh pr view 1 --repo o/r" && git push']) {
+  for (const command of ['git push', 'timeout 60 git.exe push', `cd "${targetCwd}" && git push && gh pr view 1`, 'echo "gh pr view 1 --repo o/r" && git push']) {
     assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { cwd: true }, command);
   }
   for (const command of [
@@ -131,6 +132,11 @@ test('取り直しの対象のコマンドから、指すリポジトリを 1 �
     'git push && gh pr view 1 -R o/b',
     'git push && cd /work/b && git push',
     'gh pr view 1 --repo o/r/extra',
+    'bash -c "cd /work/b && git push"',
+    "bash -lc 'gh pr view 1 -R o/r'",
+    'env -C /work/b git push',
+    'env -u DEBUG --chdir /work/b git push',
+    'timeout 60 env -C /work/b git push',
   ]) {
     assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { unknown: true }, command);
   }
@@ -569,6 +575,30 @@ test('gh pr create と git push の検出は引用した説明文をコマンド
   assert.equal(shouldRefreshPullRequests('git -C repo push origin feature'), true);
   assert.equal(shouldRefreshPullRequests('gh --repo example/project pr view 42'), true);
   assert.equal(shouldRefreshPullRequests('echo "git push"'), false);
+});
+
+test('gh pr create と git push は前置き、.exe の名前、別名でも検出し、取り直しはシェルの中も検出する', () => {
+  for (const command of ['command gh pr create', 'timeout 60 gh pr create', 'gh.exe pr create', 'env -u DEBUG gh pr create', 'gh pr new --fill']) {
+    assert.equal(isGhPrCreateCommand(command), true, command);
+  }
+  for (const command of ['command git push', 'timeout 60 git push', 'git.exe push', "bash -lc 'git push'", 'nohup gh pr view 1']) {
+    assert.equal(shouldRefreshPullRequests(command), true, command);
+  }
+  assert.equal(countGhPrCreateCommands('command gh pr create && gh pr view 1'), 1);
+});
+
+test('作業ディレクトリをコマンドの外から決められない gh pr create は作成として数えない', () => {
+  for (const command of [
+    "bash -c 'cd /work/B && gh pr create --fill'",
+    "bash -c 'cd /work/A && gh pr create --fill && cd /work/B && gh pr create --fill'",
+    'env -C /work/B gh pr create',
+    'env -u DEBUG --chdir=/work/B gh pr create',
+    'command env -C /work/B gh pr create --fill',
+  ]) {
+    assert.equal(isGhPrCreateCommand(command), false, command);
+    assert.equal(countGhPrCreateCommands(command), 0, command);
+    assert.equal(shouldRefreshPullRequests(command), true, command);
+  }
 });
 
 test('PR 作成と取り直しの対象は Bash と PowerShell に限る', () => {

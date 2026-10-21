@@ -321,9 +321,11 @@ function commandName(word) {
   return (word || '').split(/[\\/]/).pop().toLowerCase().replace(/\.(?:exe|cmd)$/, '');
 }
 
-function withoutEnvOptions(words) {
+// env の -C と --chdir は作業ディレクトリを変えるので、外したときに state.changesDirectory へ記録する。
+function withoutEnvOptions(words, state = {}) {
   let rest = words;
   while (rest[0] !== undefined && (rest[0].startsWith('-') || ASSIGNMENT_WORD.test(rest[0]))) {
+    if (rest[0] === '--chdir' || rest[0].startsWith('--chdir=') || /^-[^-]*C/.test(rest[0])) state.changesDirectory = true;
     rest = rest.slice(['-u', '--unset', '-C', '--chdir'].includes(rest[0]) ? 2 : 1);
   }
   return rest;
@@ -331,8 +333,8 @@ function withoutEnvOptions(words) {
 
 // 後ろのコマンドをそのまま実行するだけの前置きを外し、実際に起動されるコマンドの語から始める。
 // commandWords は先頭の代入と env を外すので、元の区切りが env で始まるかを startsWithEnv で受け、残った env のオプションを外す。
-function withoutCommandPrefixes(words, startsWithEnv) {
-  let rest = startsWithEnv ? withoutEnvOptions(words) : words;
+function withoutCommandPrefixes(words, startsWithEnv, state = {}) {
+  let rest = startsWithEnv ? withoutEnvOptions(words, state) : words;
   for (;;) {
     const name = commandName(rest[0]);
     if (TRANSPARENT_COMMANDS.has(name)) {
@@ -342,7 +344,7 @@ function withoutCommandPrefixes(words, startsWithEnv) {
       while (rest[0]?.startsWith('-')) rest = rest.slice(['-a', '-n', '-s', '-k', '--signal', '--kill-after'].includes(rest[0]) ? 2 : 1);
       if (name === 'timeout') rest = rest.slice(1);
     } else if (name === 'env') {
-      rest = withoutEnvOptions(rest.slice(1));
+      rest = withoutEnvOptions(rest.slice(1), state);
     } else {
       return rest;
     }
@@ -361,7 +363,10 @@ function commandInvocations(command, isScript, prepare = (text) => [text], depth
   return commandInvocationDetails(command, isScript, prepare, depth, toolName).map((invocation) => invocation.argumentsList);
 }
 
-/** commandInvocations と同じ起動ごとに、語の列と、その語を分けたシェルの種別(toolName)を返す。 */
+/**
+ * commandInvocations と同じ起動ごとに、語の列と、その語を分けたシェルの種別(toolName)を返す。
+ * nested は `bash -c` などの中の起動か、changesDirectory は前置きの env が -C か --chdir で作業ディレクトリを変えるかを表す。
+ */
 function commandInvocationDetails(command, isScript, prepare = (text) => [text], depth = 0, toolName = 'Bash', stripRedirections = false) {
   if (typeof command !== 'string') return [];
   if (depth >= 8) return [];
@@ -369,8 +374,11 @@ function commandInvocationDetails(command, isScript, prepare = (text) => [text],
     let ungrouped = segment.trim();
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
-    const words = withoutCommandPrefixes(commandWords(ungrouped, toolName, stripRedirections), segmentStartsWithEnv(ungrouped));
-    const invocation = (argumentsList) => [{ argumentsList, toolName, executable: commandName(words[0]) }];
+    const prefixState = {};
+    const words = withoutCommandPrefixes(commandWords(ungrouped, toolName, stripRedirections), segmentStartsWithEnv(ungrouped), prefixState);
+    const invocation = (argumentsList) => [{
+      argumentsList, toolName, executable: commandName(words[0]), nested: depth > 0, changesDirectory: Boolean(prefixState.changesDirectory),
+    }];
     if (isScript(words[0] || '')) return invocation(words.slice(1));
     if (['source', '.'].includes(words[0])) return isScript(words[1] || '') ? invocation(words.slice(2)) : [];
     const shell = commandName(words[0]);
