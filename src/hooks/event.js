@@ -170,12 +170,26 @@ function npmRunScript(words) {
   return withoutNpmOptions(rest) || [];
 }
 
+const NODE_VALUE_OPTIONS = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--env-file', '--conditions', '-C', '--title']);
+const NODE_NON_SCRIPT_OPTIONS = new Set(['-e', '--eval', '-p', '--print', '-c', '--check', '-i', '--interactive', '-h', '--help', '-v', '--version', '--test', '--run']);
+
+// `node --use-system-ca tools/cross-review.js codex` のように node のオプションが前に入っても、スクリプトと引数を返す。
+function nodeScriptArguments(words) {
+  let index = 0;
+  while (words[index]?.startsWith('-') && words[index] !== '--') {
+    if (NODE_NON_SCRIPT_OPTIONS.has(words[index])) return [];
+    index += NODE_VALUE_OPTIONS.has(words[index]) ? 2 : 1;
+  }
+  return words.slice(words[index] === '--' ? index + 1 : index);
+}
+
 function extractCodexReviewDefinition(command, toolName = 'Bash') {
   const invocations = codexAgentInvocationDetails(command, (word) => ['npm', 'node'].includes(commandName(word)), undefined, 0, toolName, true);
   for (const { argumentsList: words, executable } of invocations) {
-    const [first, second, ...argumentsList] = executable === 'npm' ? ['run', ...npmRunScript(words)] : words;
+    const [first, second, ...argumentsList] = executable === 'npm' ? ['run', ...npmRunScript(words)] : nodeScriptArguments(words);
     const npmReview = executable === 'npm' && first === 'run' && ['review:codex', 'review:codex:fix'].includes(second);
-    const nodeReview = executable === 'node' && /^(?:\.[\\/])?tools[\\/]cross-review\.js$/i.test(first || '') && second === 'codex';
+    // 別のフォルダーから起動する形があるので、場所は問わず tools/cross-review.js で終わるスクリプトを入口とみなす。
+    const nodeReview = executable === 'node' && /(?:^|[\\/])tools[\\/]cross-review\.js$/i.test(first || '') && second === 'codex';
     if (!npmReview && !nodeReview) continue;
     if (['--help', '-h'].some((option) => argumentsList.includes(option))) continue;
     return second === 'review:codex:fix' || argumentsList.includes('--fix') ? 'codex-subagent' : 'codex-review';

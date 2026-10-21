@@ -16,7 +16,7 @@ const {
 const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
 
-test('レビュー起動は heredoc 後と前置きとシェル内部と npm のオプション付きでも検出する', () => {
+test('レビュー起動は heredoc 後と前置きとシェル内部と npm や node のオプション付きと別の場所の入口でも検出する', () => {
   for (const [tool_name, command, expected] of [
     ['Bash', "cat > req.md <<'EOF'\nDo work.\nEOF\nnpm run review:codex", 'codex-review'],
     ['Bash', 'CROSS_REVIEW_NO_FETCH=1 npm run review:codex', 'codex-review'],
@@ -30,6 +30,10 @@ test('レビュー起動は heredoc 後と前置きとシェル内部と npm の
     ['Bash', 'npm -s run review:codex', 'codex-review'],
     ['Bash', 'npm --prefix ./repo run-script review:codex:fix', 'codex-subagent'],
     ['Bash', 'npm -w app --loglevel=warn run -s review:codex -- --fix', 'codex-subagent'],
+    ['Bash', 'node --use-system-ca tools/cross-review.js codex', 'codex-review'],
+    ['Bash', 'node -r ./preload.js --no-warnings tools/cross-review.js codex --fix', 'codex-subagent'],
+    ['Bash', 'node D:/Desktop/Develop/agent-cockpit/tools/cross-review.js codex', 'codex-review'],
+    ['Bash', 'cd sub && node ../tools/cross-review.js codex', 'codex-review'],
     ['PowerShell', 'npm.cmd run review:codex', 'codex-review'],
     ['PowerShell', 'Write-Output a#b; npm.cmd run review:codex', 'codex-review'],
     ['PowerShell', '& "C:\\tools\\npm.exe" run review:codex -- --fix', 'codex-subagent'],
@@ -57,6 +61,10 @@ test('レビューの説明文とコメントとヘルプだけの起動は検�
     ['Bash', 'npm --help run review:codex'],
     ['Bash', 'npm run --help review:codex'],
     ['Bash', 'npm -v run -s review:codex'],
+    ['Bash', 'node -e "require(\'./tools/cross-review.js\')" tools/cross-review.js codex'],
+    ['Bash', 'node --check tools/cross-review.js codex'],
+    ['Bash', 'node -r tools/cross-review.js codex'],
+    ['Bash', 'node tools/my-cross-review.js codex'],
     ['PowerShell', "$request = @'\nnpm.cmd run review:codex\n'@"],
     ['PowerShell', 'Write-Output ok # ; npm.cmd run review:codex'],
     ['PowerShell', '<# ; npm.cmd run review:codex\n#>'],
