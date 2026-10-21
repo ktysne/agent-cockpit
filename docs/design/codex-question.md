@@ -68,8 +68,8 @@ Claude の質問には必ず選択肢と推奨があるので、同じ場面が�
 
 Codex にはセッションを起こす手段が無い。
 ターンの途中なら次の `PostToolUse` の `additionalContext` で、ターンの後なら次の `UserPromptSubmit` の `additionalContext` で届ける(開発者の決定)。
-対話セッションでは `Stop` の時点で届けていない回答があれば、その回答を理由にして一度だけ続行(`decision: block`)させる。
-単発実行(`AGENT_COCKPIT_NONINTERACTIVE=1`)では離席中も待たない。離席中の `Stop` の待機は [codex-instructions.md](codex-instructions.md) にある。
+`Stop` の時点で届けていない回答があれば、その回答を理由にして一度だけ続行(`decision: block`)させる。これは単発実行でも同じである。
+単発実行(`AGENT_COCKPIT_NONINTERACTIVE=1`)では、離席中も回答を待たない。離席中の `Stop` の待機は [codex-instructions.md](codex-instructions.md) にある。
 
 ### フックの上限
 

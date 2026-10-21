@@ -234,7 +234,7 @@
   <ul>
     <li>回答欄が無いとき：デスクトップアプリのダイアログで答える判断事項です(<a href="decisions.html#decisions-desktop">デスクトップアプリで答える判断事項</a>)</li>
     <li><span class="ui">送信済み</span> で止まっているとき：セッションに渡す機会を待っています。セッションが作業中ならツールの実行のひと区切りで、Claude Code が待機中なら回答を待つフックが、渡します。Codex のターン終了後の待ちは、次の項目を見ます。セッションが閉じていると、届きません(<a href="decisions.html#decisions-route">回答が届く経路</a>)</li>
-    <li>Codex でターンが終わった後：在席中は、後から届いた回答でセッションを起こせません。離席中にターンが終わったときは最大 59 分待ちます。その間 Codex は作業中の表示で、<code>Esc</code> で中断できます。単発実行(<code>AGENT_COCKPIT_NONINTERACTIVE=1</code>)では <code>Stop</code> で待たないため、回答は次の入力かツール実行後に届きます(<a href="decisions.html#decisions-route">回答が届く経路</a>)</li>
+    <li>Codex でターンが終わった後：在席中は、後から届いた回答でセッションを起こせません。離席中にターンが終わったときは最大 59 分待ちます。その間 Codex は作業中の表示で、<code>Esc</code> で中断できます。単発実行(<code>AGENT_COCKPIT_NONINTERACTIVE=1</code>)では、<code>Stop</code> の時点で届いている回答だけを渡して続けさせ、後から届く回答は待ちません(<a href="decisions.html#decisions-route">回答が届く経路</a>)</li>
     <li>常駐サーバーを再起動した後：送信済みの回答は残りますが、次のプロンプトを送るか、ツールの実行がひと区切りするまで、渡りません(<a href="server.html#server-restart">再起動で残るものと消えるもの</a>)</li>
     <li>離席中の質問に答えたのに、デスクトップアプリに質問が出たとき：質問を預かるフックと連絡が取れなかったときの動きです(<a href="away.html#away-lost">常駐サーバーと連絡が取れないとき</a>)</li>
     <li><span class="ui">回答を送信できませんでした</span> と出たとき：常駐サーバーに接続できているかを確かめます(<a href="#trouble-connect">画面がつながらない</a>)</li>
