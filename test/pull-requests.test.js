@@ -136,6 +136,7 @@ test('取り直しの対象のコマンドから、指すリポジトリを 1 �
     "bash -lc 'gh pr view 1 -R o/r'",
     'env -C /work/b git push',
     'env -u DEBUG --chdir /work/b git push',
+    'timeout 60 env -C /work/b git push',
   ]) {
     assert.deepEqual(pullRequestRefreshScope(command, hookCwd), { unknown: true }, command);
   }
@@ -592,6 +593,7 @@ test('作業ディレクトリをコマンドの外から決められない gh p
     "bash -c 'cd /work/A && gh pr create --fill && cd /work/B && gh pr create --fill'",
     'env -C /work/B gh pr create',
     'env -u DEBUG --chdir=/work/B gh pr create',
+    'command env -C /work/B gh pr create --fill',
   ]) {
     assert.equal(isGhPrCreateCommand(command), false, command);
     assert.equal(countGhPrCreateCommands(command), 0, command);
