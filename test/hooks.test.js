@@ -38,6 +38,7 @@ test('レビュー起動は heredoc 後と前置きとシェル内部と npm や
     ['PowerShell', 'Write-Output a#b; npm.cmd run review:codex', 'codex-review'],
     ['PowerShell', '& "C:\\tools\\npm.exe" run review:codex -- --fix', 'codex-subagent'],
     ['PowerShell', 'node.exe .\\tools\\cross-review.js codex', 'codex-review'],
+    ['Bash', 'node --require=./setup.js -r./other.js tools/cross-review.js codex', 'codex-review'],
     ['PowerShell', "bash -lc 'CROSS_REVIEW_NO_FETCH=1 npm run review:codex'", 'codex-review'],
     ['PowerShell', "$request = @'\nDo work.\n'@\nnpm.cmd run review:codex", 'codex-review'],
   ]) {
@@ -63,6 +64,10 @@ test('レビューの説明文とコメントとヘルプだけの起動は検�
     ['Bash', 'npm -v run -s review:codex'],
     ['Bash', 'node -e "require(\'./tools/cross-review.js\')" tools/cross-review.js codex'],
     ['Bash', 'node --check tools/cross-review.js codex'],
+    ['Bash', 'node --eval="console.log(process.argv)" tools/cross-review.js codex'],
+    ['Bash', 'node -p"process.argv" tools/cross-review.js codex'],
+    ['Bash', 'node -pe 1 tools/cross-review.js codex'],
+    ['Bash', 'node - tools/cross-review.js codex'],
     ['Bash', 'node -r tools/cross-review.js codex'],
     ['Bash', 'node tools/my-cross-review.js codex'],
     ['PowerShell', "$request = @'\nnpm.cmd run review:codex\n'@"],

@@ -177,8 +177,12 @@ const NODE_NON_SCRIPT_OPTIONS = new Set(['-e', '--eval', '-p', '--print', '-c', 
 function nodeScriptArguments(words) {
   let index = 0;
   while (words[index]?.startsWith('-') && words[index] !== '--') {
-    if (NODE_NON_SCRIPT_OPTIONS.has(words[index])) return [];
-    index += NODE_VALUE_OPTIONS.has(words[index]) ? 2 : 1;
+    const word = words[index];
+    if (word === '-') return [];
+    // node は --eval=式 と -p式 のように値を続けて書く形と、-pe のように短い名前を連ねる形も受け付ける。
+    const name = word.startsWith('--') ? word.split('=')[0] : word.slice(0, 2);
+    if (NODE_NON_SCRIPT_OPTIONS.has(name)) return [];
+    index += NODE_VALUE_OPTIONS.has(name) && name === word ? 2 : 1;
   }
   return words.slice(words[index] === '--' ? index + 1 : index);
 }
