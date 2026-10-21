@@ -361,7 +361,7 @@ function commandInvocations(command, isScript, prepare = (text) => [text], depth
   return commandInvocationDetails(command, isScript, prepare, depth, toolName).map((invocation) => invocation.argumentsList);
 }
 
-/** commandInvocations と同じ起動ごとに、語の列と、その語を分けたシェルの種別(toolName)を返す。 */
+/** commandInvocations と同じ起動ごとに、語の列と、その語を分けたシェルの種別(toolName)と、`bash -c` などの中の起動か(nested)を返す。 */
 function commandInvocationDetails(command, isScript, prepare = (text) => [text], depth = 0, toolName = 'Bash', stripRedirections = false) {
   if (typeof command !== 'string') return [];
   if (depth >= 8) return [];
@@ -370,7 +370,7 @@ function commandInvocationDetails(command, isScript, prepare = (text) => [text],
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
     const words = withoutCommandPrefixes(commandWords(ungrouped, toolName, stripRedirections), segmentStartsWithEnv(ungrouped));
-    const invocation = (argumentsList) => [{ argumentsList, toolName, executable: commandName(words[0]) }];
+    const invocation = (argumentsList) => [{ argumentsList, toolName, executable: commandName(words[0]), nested: depth > 0 }];
     if (isScript(words[0] || '')) return invocation(words.slice(1));
     if (['source', '.'].includes(words[0])) return isScript(words[1] || '') ? invocation(words.slice(2)) : [];
     const shell = commandName(words[0]);

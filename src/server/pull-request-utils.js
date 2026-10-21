@@ -1,4 +1,4 @@
-const { commandSegments, commandSegmentParts, commandWords } = require('../shared/shell-commands');
+const { commandSegments, commandSegmentParts, commandWords, commandName, commandInvocationDetails } = require('../shared/shell-commands');
 'use strict';
 
 const path = require('node:path');
@@ -194,12 +194,22 @@ function subcommandIndex(words, command) {
   return index;
 }
 
+// レビューと Codex の起動の判定と同じく、command や timeout の前置き、.exe の付いた名前、bash -c の中身も読む。
+// 語の列は、先頭を起動したコマンドの名前(gh、git)にそろえて返す。
+function toolInvocations(segment, toolName, names) {
+  return commandInvocationDetails(segment, (word) => names.includes(commandName(word)), undefined, 0, toolName)
+    .map(({ argumentsList, executable, nested }) => ({ words: [executable, ...argumentsList], nested }));
+}
+
+function isGhPrCreateWords(words) {
+  const subcommand = subcommandIndex(words, 'gh');
+  return words[0] === 'gh' && words[subcommand] === 'pr' && ['create', 'new'].includes(words[subcommand + 1]);
+}
+
 function isGhPrCreateCommand(command, toolName = 'Bash') {
-  return commandSegments(command, toolName).some((segment) => {
-    const words = commandWords(segment, toolName);
-    const subcommand = subcommandIndex(words, 'gh');
-    return words[0] === 'gh' && words[subcommand] === 'pr' && words[subcommand + 1] === 'create';
-  });
+  return commandSegments(command, toolName).some((segment) => (
+    toolInvocations(segment, toolName, ['gh']).some(({ words }) => isGhPrCreateWords(words))
+  ));
 }
 
 function countGhPrCreateCommands(command, toolName = 'Bash') {
@@ -208,7 +218,7 @@ function countGhPrCreateCommands(command, toolName = 'Bash') {
 
 function hasGhCommandOtherThanPrCreate(command, toolName = 'Bash') {
   return commandSegments(command, toolName).some((segment) => (
-    commandWords(segment, toolName)[0] === 'gh' && !isGhPrCreateCommand(segment, toolName)
+    toolInvocations(segment, toolName, ['gh']).some(({ words }) => !isGhPrCreateWords(words))
   ));
 }
 
@@ -229,13 +239,16 @@ function pullRequestCreateCommandCwd(command, cwd, commandNumber, toolName = 'Ba
   return null;
 }
 
+function isRefreshWords(words) {
+  if (words[0] === 'git') return words[subcommandIndex(words, 'git')] === 'push';
+  if (words[0] === 'gh') return words[subcommandIndex(words, 'gh')] === 'pr';
+  return false;
+}
+
 function shouldRefreshPullRequests(command, toolName = 'Bash') {
-  return commandSegments(command, toolName).some((segment) => {
-    const words = commandWords(segment, toolName);
-    if (words[0] === 'git') return words[subcommandIndex(words, 'git')] === 'push';
-    if (words[0] === 'gh') return words[subcommandIndex(words, 'gh')] === 'pr';
-    return false;
-  });
+  return commandSegments(command, toolName).some((segment) => (
+    toolInvocations(segment, toolName, ['git', 'gh']).some(({ words }) => isRefreshWords(words))
+  ));
 }
 
 function ghRepositoryOption(words) {
@@ -250,7 +263,7 @@ function ghRepositoryOption(words) {
 /**
  * 取り直しの対象のコマンドが指すリポジトリを返す。
  * repository は gh の --repo の指定、cwd はコマンドを始めた作業ディレクトリのリポジトリを指す。
- * 移動先を決められない cd、git -C、複数の対象を含むなど、1 つに決められないときは unknown を返す。
+ * 移動先を決められない cd、git -C、bash -c などの中の起動、複数の対象を含むなど、1 つに決められないときは unknown を返す。
  */
 function pullRequestRefreshScope(command, cwd) {
   const targets = new Set();
@@ -258,15 +271,20 @@ function pullRequestRefreshScope(command, cwd) {
   for (const [index, segment] of commandSegments(command).entries()) {
     const words = commandWords(segment);
     if (['cd', 'pushd', 'popd'].includes(words[0]) && (index > 0 || !pullRequestCommandCwd(command, cwd))) return { unknown: true };
-    if (words[0] === 'git') {
-      const subcommand = subcommandIndex(words, 'git');
-      if (words[subcommand] !== 'push') continue;
-      if (words.slice(1, subcommand).some((word) => word.startsWith('-C') || ['--git-dir', '--work-tree'].includes(word.split('=')[0]))) {
-        return { unknown: true };
+    for (const invocation of toolInvocations(segment, 'Bash', ['git', 'gh'])) {
+      if (!isRefreshWords(invocation.words)) continue;
+      // シェルの中では cd で作業ディレクトリが変わりうるので、どのリポジトリかを決めない。
+      if (invocation.nested) return { unknown: true };
+      const toolWords = invocation.words;
+      if (toolWords[0] === 'git') {
+        const subcommand = subcommandIndex(toolWords, 'git');
+        if (toolWords.slice(1, subcommand).some((word) => word.startsWith('-C') || ['--git-dir', '--work-tree'].includes(word.split('=')[0]))) {
+          return { unknown: true };
+        }
+        targets.add('cwd');
+        continue;
       }
-      targets.add('cwd');
-    } else if (words[0] === 'gh' && words[subcommandIndex(words, 'gh')] === 'pr') {
-      const value = ghRepositoryOption(words);
+      const value = ghRepositoryOption(toolWords);
       if (value === null) {
         targets.add('cwd');
         continue;
