@@ -1,6 +1,5 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { performance } = require('node:perf_hooks');
 const { DashboardState } = require('../src/server/state');
 
 function syntheticEvents(count = 10000) {
@@ -67,21 +66,17 @@ test('PowerShell の PR 作成と取り直し判定が索引と全件照合に�
   assert.equal(state.wasPullRequestRefreshCommand('powershell-index', 'powershell-pr'), true);
 });
 
-test('同じ一万イベントの先頭と末尾の処理時間が大幅に増加しない', (t) => {
+// イベントごとの処理は保持している件数に比例するので、時間ではなく件数で確かめる。
+// 2000 は畳み込みを始める件数で、畳み込みが効かないと一万件まで増える。
+test('一万イベントを加える間ずっと保持する件数が畳み込みを始める件数を超えない', (t) => {
   const state = new DashboardState({ verifyEntries: false });
-  const events = syntheticEvents();
-  const times = events.map((event) => {
-    const start = performance.now();
+  let largest = 0;
+  for (const event of syntheticEvents()) {
     state.addEvent(event);
-    return performance.now() - start;
-  });
-  const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
-  const first = mean(times.slice(0, 500));
-  const last = mean(times.slice(-500));
-  t.diagnostic(`先頭 ${first.toFixed(3)}ms、末尾 ${last.toFixed(3)}ms、比 ${(last / first).toFixed(2)}`);
-  // 短い処理では時計と GC の揺れが比率を支配するため、平均 0.25ms を判定の下限にする。
-  // 区切りのイベントは残すので緩やかには増える。畳み込みが効かないと数十倍になるので、5 倍で分ける。
-  assert.ok(last <= Math.max(first, 0.25) * 5,`先頭 ${first.toFixed(3)}ms、末尾 ${last.toFixed(3)}ms`);
+    largest = Math.max(largest, state.entries.get('compact').length);
+  }
+  t.diagnostic(`最大 ${largest} 件、最後 ${state.entries.get('compact').length} 件`);
+  assert.ok(largest <= 2000, `最大 ${largest} 件`);
 });
 
 test('Codex のツールに毎回モデルと作業ディレクトリが付いても畳み込み後の表示が一致する', () => {
