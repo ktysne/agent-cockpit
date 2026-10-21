@@ -14,7 +14,7 @@ Claude と同じ目的の処理と表示は、同じ仕様にする(開発者の
 
 - 在席中: 質問は元の画面に出る。ダッシュボードには判断事項のカードとして表示だけし、ダッシュボードからは答えられない。カードは質問ツールの結果(`PostToolUse` の回答の内容)で閉じる。
 - 離席中: `PreToolUse` のフックが、離席の設定の時間(1〜30 分)だけダッシュボードでの回答を待つ。回答が来たら回答を返す。期限が来たら、推奨を適用して判断事項を仮適用(provisional)にするよう指示して拒否する。期限の起点は質問を登録した時刻である。
-- 期限の後の回答: ターンの途中なら次のツールの区切り、ターンの後なら次の入力か、`Stop` で待って届ける。モデルが `cockpit_update_decision` で反映を記録する。
+- 期限の後の回答: ターンの途中なら次のツールの区切り、ターンの後なら次の入力か、対話セッションの `Stop` で待って届ける。単発実行(`AGENT_COCKPIT_NONINTERACTIVE=1`)では待たない。モデルが `cockpit_update_decision` で反映を記録する。
 - サブエージェントの質問は判断事項にしない。離席中は推奨で進めるよう指示して拒否する。
 - 質問文が重複する判断事項は答えられない。
 
@@ -68,8 +68,8 @@ Claude の質問には必ず選択肢と推奨があるので、同じ場面が�
 
 Codex にはセッションを起こす手段が無い。
 ターンの途中なら次の `PostToolUse` の `additionalContext` で、ターンの後なら次の `UserPromptSubmit` の `additionalContext` で届ける(開発者の決定)。
-`Stop` の時点で届けていない回答があれば、その回答を理由にして一度だけ続行(`decision: block`)させる。
-離席中に `Stop` で待って届けることは [codex-instructions.md](codex-instructions.md) にある。
+対話セッションでは `Stop` の時点で届けていない回答があれば、その回答を理由にして一度だけ続行(`decision: block`)させる。
+単発実行(`AGENT_COCKPIT_NONINTERACTIVE=1`)では離席中も待たない。離席中の `Stop` の待機は [codex-instructions.md](codex-instructions.md) にある。
 
 ### フックの上限
 
@@ -100,7 +100,7 @@ Codex のフックの既定の上限は 600 秒で、Claude の待ちの上限(3
 
 期限の後にダッシュボードで送った判断事項の回答を、次の `PostToolUse` または `UserPromptSubmit` の `additionalContext` で届ける。
 在席中は、ターンの終わりに未配信の回答があるときだけ続行させる。
-離席中は `Stop` で回答や通知を待って届け、届いた内容を理由に続行させる(詳細は [codex-instructions.md](codex-instructions.md)「ターンの後」)。
+対話セッションでは離席中に `Stop` で回答や通知を待って届け、届いた内容を理由に続行させる。単発実行(`AGENT_COCKPIT_NONINTERACTIVE=1`)では待たない(詳細は [codex-instructions.md](codex-instructions.md)「ターンの後」)。
 
 Codex の `hooks.json` に、`node "<リポジトリ>/src/hooks/away.js" codex` を同期のフックとして登録する。
 provider は `event.js` と同じく引数で決め、入力の形から推測しない。

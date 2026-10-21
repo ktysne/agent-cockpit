@@ -11,7 +11,7 @@ agent-cockpit、ai-cross-review、claude-codex-bridge(以下、bridge)のうち�
 各ツールは 2 層で古くなる。
 
 - **checkout**：GitHub から clone した作業コピー。
-- **写し**：checkout から Claude と Codex のホームへコピーしたスキル、定義、スクリプトと、フックと MCP の登録。checkout を更新しても自動では変わらない。
+- **写し**：checkout から Claude のホーム、Codex のホーム、`~/.agents/skills` へコピーしたスキル、定義、スクリプトと、フックと MCP の登録。checkout を更新しても自動では変わらない。
 
 checkout の確認と更新、写しと登録の照合と反映は、agent-cockpit の checkout にあるコマンドで行う。
 bridge と ai-cross-review の写しは、診断が各ツールの照会の入口を呼んで照合する。

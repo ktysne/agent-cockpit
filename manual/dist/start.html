@@ -195,10 +195,11 @@
   </ul>
   <p>Codex は、ホーム(<code>CODEX_HOME</code>、無ければ <code>~/.codex</code>)の <code>hooks.json</code> に、引数 <code>codex</code> 付きでフックを登録します。
   MCP サーバーは <code>config.toml</code> の <code>mcp_servers.agent-cockpit</code> に登録し、各ツールに <code>approval_mode = "approve"</code> を設定します。
-  スキルは、ホームの <code>skills/agent-cockpit/</code> に置きます。
+  スキルは、<code>~/.agents/skills/agent-cockpit/</code> に置きます。
   <code>/hooks</code> でフックを信頼する必要があり、フックを変更したときは信頼し直します(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md#パターン-e--codex">Codex の導入手順</a>)。</p>
-  <p>新しく登録したものは、新しく開いたセッションから効きます。
-  開いたままのセッションには、反映されません。</p>
+  <p>フックとスキルは、新しく開いたセッションから効きます。
+  起動済みアプリの古い MCP プロセスは、アプリを終了するまで残ります。
+  更新後は Claude Code デスクトップアプリと Codex を再起動します。</p>
   <details class="more">
     <summary>フックが伝えること、送る情報の詳細</summary>
     <ul>

@@ -32,6 +32,7 @@
         "settings.away-wait": ".settings-theme-row:has(#settings-away-answer-wait-minutes)",
         "settings.gh-concurrency": ".settings-theme-row:has(#settings-gh-concurrency-limit)",
         "settings.terminal": ".settings-theme-row:has(#settings-terminal-select)",
+        "settings.pull-default-branch": ".settings-theme-row:has(#settings-pull-default-branch)",
         "settings.import-app-tasks": ".settings-theme-row:has(#settings-import-app-tasks)",
         "settings.order": ".settings-section-order",
         "settings.manual": ".settings-manual-link",

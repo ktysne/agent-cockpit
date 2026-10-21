@@ -9,7 +9,7 @@
   画面の上に重なって開き、<span class="ui">閉じる</span> のボタンか、画面の外側を押すと閉じます。
   変えた設定は、その場で保存されて、一覧に反映されます。保存のボタンはありません。
   項目名の横に <span class="ui">i</span> のボタンがある項目は、押すとその項目の説明が開きます。説明は、ほかの場所を押すか Esc キーで閉じます。</p>
-  <figure class="guide-map" id="settings-dialog-map" data-shot="settings-dialog/dialog" data-alt="開いた設定の画面。表示の見出しの下に、配色、前回見てから、マージできますと出す条件、終わったものを非表示にする、3 つの時間の入力欄、GitHub CLI の同時起動上限数、ターミナルで開く端末、デスクトップアプリのタスク一覧の取り込み、セクションの並び順が並び、左下にマニュアルのリンク、右下に閉じるのボタンがある">
+  <figure class="guide-map" id="settings-dialog-map" data-shot="settings-dialog/dialog" data-alt="開いた設定の画面。表示の見出しの下に、配色、前回見てから、マージできますと出す条件、終わったものを非表示にする、3 つの時間の入力欄、GitHub CLI の同時起動上限数、ターミナルで開く端末、既定ブランチへのマージ後に作業ツリーを最新にする、デスクトップアプリのタスク一覧の取り込み、セクションの並び順が並び、左下にマニュアルのリンク、右下に閉じるのボタンがある">
     <ol class="guide-list">
       <li data-part="settings.theme" data-at="0.7450,0.2105"><b><span class="ui">配色</span></b>：画面の明るさを選びます(<a href="#settings-theme">配色</a>)。</li>
       <li data-part="settings.since-seen" data-at="0.7450,0.2347"><b><span class="ui">前回見てから</span></b>：「前回見てから」の欄を出すかどうかを選びます(<a href="#settings-since-seen">前回見てから</a>)。</li>
@@ -20,6 +20,7 @@
       <li data-part="settings.away-wait" data-at="0.7450,0.5115"><b><span class="ui">離席中に質問の回答を待つ時間 (1〜30 分)</span></b>：離席中に質問を預かる時間です(<a href="#settings-away-wait">離席中に質問の回答を待つ時間</a>)。</li>
       <li data-part="settings.gh-concurrency" data-at="0.7450,0.5358"><b><span class="ui">GitHub CLI の同時起動上限数 (1〜32)</span></b>：プルリクエストの取得で同時に動かす gh の数です(<a href="#settings-gh-concurrency">GitHub CLI の同時起動上限数</a>)。</li>
       <li data-part="settings.terminal" data-at="0.7450,0.5602"><b><span class="ui">「ターミナルで開く」で使う端末</span></b>：worktree を開く端末を選びます(<a href="#settings-terminal">「ターミナルで開く」で使う端末</a>)。</li>
+      <li data-part="settings.pull-default-branch" data-at="0.7450,0.5875"><b><span class="ui">既定ブランチへのマージ後、既定ブランチの作業ツリーを最新にする</span></b>：マージ後に作業ツリーを更新するか選びます(<a href="#settings-pull-default-branch">既定ブランチへのマージ後に作業ツリーを最新にする</a>)。</li>
       <li data-part="settings.import-app-tasks" data-at="0.7450,0.6103"><b><span class="ui">デスクトップアプリのタスク一覧を取り込む</span></b>：Claude Code デスクトップアプリのタスク一覧を取り込むか選びます(<a href="#settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</a>)。</li>
       <li data-part="settings.order" data-at="0.7450,0.6373"><b><span class="ui">セクションの並び順</span></b>：一覧の欄の並び順を決めます(<a href="#settings-order">セクションの並び順</a>)。</li>
       <li data-part="settings.manual" data-place="right"><b><span class="ui">マニュアル</span></b>：このマニュアルを、既定のブラウザーで開きます。</li>
@@ -47,19 +48,28 @@
 
   <h2 id="settings-doctor">導入の点検</h2>
   <p>設定の <span class="ui">診断ログ</span> の隣にある <span class="ui">導入の点検</span> を押すと、点検結果のダイアログが開きます。
-  フック、MCP の登録、スキル、連携ツールの写しが古くないかを確かめられます。
+  フック、MCP の登録、スキル、連携ツールの写しに加え、常駐サーバーと MCP ツールを書き込んだプロセスの記録が対象の checkout と一致するかを確かめられます。
+  常駐サーバーの起動から 90 秒後とセッション開始から 10 秒後に自動で点検し、点検の間隔は最短 60 秒です。
   点検した時刻と件数を表示し、<span class="ui">点検し直す</span> で今すぐ確かめ直せます。
-  点検中はボタンに <span class="ui">点検中…</span> と表示し、失敗したときは前の結果を残して、点検し直すよう案内します。</p>
+  点検中はボタンに <span class="ui">点検中…</span> と表示します。
+  点検を完了できないときは、時間をおいて点検し直すよう案内します。結果の項目を取得できない場合は、項目を表示しません。</p>
   <p><span class="ui">不一致</span> と <span class="ui">未確認</span> の項目は開いて表示します。
   各項目の理由と手で行う操作を読み、ツール名、Claude か Codex か、項目の ID を確かめてください。
   未実施、未導入、一致は <span class="ui">ほかの項目</span> を開くと見られます。
-  照合した checkout とホームの場所は、末尾に表示します。</p>
+  照合した checkout とホームの場所は、末尾に表示します。
+  対象と異なる MCP の記録がある場合は、その記録の時刻とコミットも表示します。</p>
   <p>不一致があるときは、<span class="ui">直す依頼文をコピー</span> を押し、セッションに貼り付けて update-tools スキルへ依頼してください。
   コピーできないときは、表示された依頼文を手でコピーできます。
   ダッシュボードから設定やファイルを書き換えることはありません。</p>
   <p>不一致があるときは、画面上部の通知の <span class="ui">内容を見る</span> からも開けます。
-  再起動待ちの間と点検中は、この通知を表示しません。
-  再起動待ちの帯の <span class="ui">導入の点検を開く</span> で開いた結果が更新前なら、その旨を表示して自動で点検し直します。</p>
+  再起動待ち、点検中、更新前の古い結果がある間は、この通知を表示しません。
+  どこから開いても、結果が更新前なら、その旨を表示して自動で点検し直します。
+  再起動待ちの帯の <span class="ui">導入の点検を開く</span> からも開けます。</p>
+  <details class="more">
+    <summary>MCP の古い記録の詳細</summary>
+    <p>MCP の書き込み記録は、セッションを閉じた後も残ります。
+    表示された時刻とコミットが古くても、その MCP プロセスが現在も動いているとは限りません。</p>
+  </details>
 
   <h2 id="settings-items">設定画面の項目</h2>
 
@@ -95,7 +105,7 @@
   隠しているものの件数は、一覧の最下部の注記に出て、<span class="ui">表示する</span> を押すとオフに変わります(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   <p>オンのとき、次のものを隠します。</p>
   <ul>
-    <li>終わったセッション。待機中で、タスクが無いか全部完了していて、判断事項が全部解決か取り下げで、許可待ちも稼働中のサブエージェントも無いセッションです。セッションとタスクが一覧から外れます</li>
+    <li>終わったセッション。待機中で、タスクが無いか全部完了していて、判断事項が全部解決か取り下げで、許可待ち、稼働中のサブエージェント、バックグラウンドタスクが無いセッションです。セッションとタスクが一覧から外れます</li>
     <li>終了したサブエージェントの行(<a href="work.html#work-agents">サブエージェント</a>)</li>
     <li>解決済みと取り下げの判断事項(<a href="decisions.html#decisions-states">判断事項の状態</a>)</li>
     <li>マージ済みとクローズ済みの PR の一覧(<a href="pull-requests.html#pr-merged-list">マージ済みとクローズ済みの一覧</a>)</li>
@@ -228,7 +238,7 @@
   <p>設定と操作の結果は、保存先が 3 通りに分かれます。</p>
   <ul>
     <li><b>ブラウザー</b>：<span class="ui">配色</span> と <span class="ui">前回見てから</span> です。ブラウザーの <code>localStorage</code> に保存するので、ブラウザーごと、ウィンドウの種類ごとに別々です。タスクトレイから開くウィンドウは専用のプロファイルを使うので、普段のブラウザーとは別に設定します</li>
-    <li><b>常駐サーバー</b>：表示モード、カードの固定、並べ替え、畳み、隠した種類、セクションの並び順、<span class="ui">「マージできます」と出す条件</span>、<span class="ui">終わったものを非表示にする</span>、待ち時間と更新の無いセッションを隠すまでの時間、<span class="ui">離席中に質問の回答を待つ時間 (1〜30 分)</span>、<span class="ui">GitHub CLI の同時起動上限数 (1〜32)</span>、<span class="ui">「ターミナルで開く」で使う端末</span>、診断ログの <span class="ui">レベル</span> です。保存先の <code>store.json</code> に書くので、同じ常駐サーバーを開いているすべてのブラウザーで共通です。外したセッションの記録も、ここに保存されます</li>
+    <li><b>常駐サーバー</b>：表示モード、カードの固定、並べ替え、畳み、隠した種類、セクションの並び順、<span class="ui">「マージできます」と出す条件</span>、<span class="ui">終わったものを非表示にする</span>、待ち時間と更新の無いセッションを隠すまでの時間、<span class="ui">離席中に質問の回答を待つ時間 (1〜30 分)</span>、<span class="ui">GitHub CLI の同時起動上限数 (1〜32)</span>、<span class="ui">「ターミナルで開く」で使う端末</span>、<span class="ui">既定ブランチへのマージ後、既定ブランチの作業ツリーを最新にする</span>、<span class="ui">デスクトップアプリのタスク一覧を取り込む</span>、診断ログの <span class="ui">レベル</span> です。保存先の <code>store.json</code> に書くので、同じ常駐サーバーを開いているすべてのブラウザーで共通です。外したセッションの記録も、ここに保存されます</li>
     <li><b>ページを開いている間だけ</b>：更新の無いセッションの <span class="ui">表示する</span>、タスクや判断事項の開閉、書きかけの回答です。ページを開き直すと、元に戻ります</li>
   </ul>
   <p>別のウィンドウで変えた常駐サーバーの設定は、2 秒ごとの状態の取得で、開いている画面にも反映されます。</p>

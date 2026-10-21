@@ -364,7 +364,7 @@ Windows のルート相対パスは `\` で始め、相対パスは実行環境�
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 10 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 10 分へ戻し、書き込み時は拒む。
 - 表示設定 `display.ghConcurrencyLimit` は GitHub CLI を同時に起動する上限数で、既定は 8、範囲は 1〜32 の整数とする。保存値が範囲外または整数でなければ読み込み時に 8 へ戻し、書き込み時は拒む。
 - 表示設定 `display.awayAnswerWaitMinutes` は離席中の質問への回答を待つ時間で、既定は 3 分、範囲は 1〜30 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 3 分へ戻し、書き込み時は拒む。
-- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, update, doctor, appVersion, runtime, routing, integrations, uiVersion, installed, restartRequired, restartAvailable}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は配信する HTML テンプレートのバイト列の SHA-256 先頭 16 桁で、秘密値と版の埋め込み前に計算する。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, persistence, update, doctor, appVersion, runtime, routing, integrations, uiVersion, installed, restartRequired, restartAvailable}` を返す。`update` と `appVersion` は「更新の確認」の節に記す。`uiVersion` は配信する HTML テンプレートのバイト列の SHA-256 先頭 16 桁で、秘密値と版の埋め込み前に計算する。
   本番では起動時に listen の前に HTML を読み、そのテンプレートと版を再起動まで固定する。
   起動時に読めなかった場合、`GET /` は読み込みに失敗している間 500 を返し、最初の成功時に固定する。
   `GET /` は固定したテンプレートへ秘密値と版を埋め込み、ディスクを読み直さない。
@@ -577,7 +577,7 @@ MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り
 マージ済み PR と同じ名前のブランチが残り、現在の head がマージ時の head SHA と異なる場合、または `mergedHead.branchKept: true` で残す選択が記録されている場合は、その生きているブランチを compare の base にして追跡を止める。
 既定ブランチに行き着かない場合は、行き着いたブランチとの差分を使う。
 compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
-判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
+判定の詳細は[計画書](../handover/2026-10-02.md)の「積み直し待ちの判定」を正本とする。
 ダッシュボードから即時マージする口は、秘密値と必須 Origin を照合し、登録済みスタックの一番下と現在の head をサーバーで確かめる。`gh pr merge` には画面で確認した `--match-head-commit` を渡す。PR 行の予約チェックからは画面で見た head、方式、ブランチ削除の有無を予約口に送り、条件がそろっていればクロスレビューの最後の `converged` 記録の SHA を `--match-head-commit` に渡してその場でマージする。確認欄は予約状態にかかわらず即時マージ専用とする。
 予約チェックの表示は上の評価と方針の表に従う。
 子 PR の base は head ブランチを削除する場合(自動削除を含む)だけ付け替え、残す場合と fork では付け替えない。
@@ -589,7 +589,7 @@ compare の失敗や 250 件超で全件を確認できない場合はマージ�
 初回の取得で検出したマージは、リポジトリの状態の保存より前に届くので、取得した既定ブランチをイベントで渡して判定する。
 結果はマージ通知と同じセッション群へまとめて知らせ、更新の失敗でマージ処理を失敗させない。
 
-取得と判定の詳細は [計画書のマージ手順](../handover/2026-10-02.md#マージの手順常駐サーバー)に記す。
+取得と判定の詳細は[計画書](../handover/2026-10-02.md)の「マージの手順(常駐サーバー)」に記す。
 
 ## 前回見てから
 
@@ -629,7 +629,7 @@ gh pr merge の呼び出しからマージ結果の処理完了までは専用�
 期限前に始まった取得では意図を消さず、マージキューの意図と予約の扱いは変えない。
 
 結果は PR を登録したセッションへ PostToolBatch、UserPromptSubmit、Stop の回答配信経路で知らせる。レビュー収束後マージの結果には、ブランチ削除、base の付け替え、警告を保存し、既存のマージ結果 1 行と同じ形式で画面へ配る。画面には `warning` が空でない文字列か `headMismatch` が真の結果だけを表示し、`閉じる` 操作まで残す。予約マージ結果の `mergeResultClosedAt` は `POST /api/pull-requests/merge-result/close` で記録し、旧形式で項目が無い結果は未閉鎖として扱う。閉鎖時刻はマージ履歴と同じ 24 時間の保持期限で整理する。
-gh の順序、失敗時の扱い、積み直し通知は[計画書のマージの手順](../handover/2026-10-02.md#マージの手順常駐サーバー)を正本とする。
+gh の順序、失敗時の扱い、積み直し通知は[計画書](../handover/2026-10-02.md)の「マージの手順(常駐サーバー)」を正本とする。
 
 ## 衝突の解消の依頼
 

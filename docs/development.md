@@ -8,10 +8,10 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 |---|---|
 | [CLAUDE.md](../CLAUDE.md) / [AGENTS.md](../AGENTS.md) | 開発で守ること(待ち受けと照合、秘匿、マージの条件、モックとの整合など)。2 つは同じ内容に保つ |
 | [mock/index.html](../mock/index.html) | 開発者と合意した最終形の見た目と機能の正本。実装はモックにそろえる |
-| [docs/handover/2026-10-02.md](handover/2026-10-02.md) | 実装の計画書。決定済みの判断、対応順序、判断待ち、落とし穴 |
-| [docs/handover/2026-10-11-codex-rebuild.md](handover/2026-10-11-codex-rebuild.md) | Codex 対応(Codex デスクトップと CLI のセッションの表示と操作)の計画。資料ごとの扱いと、旧集約ブランチの固定参照もここにある |
+| [docs/handover/ の各資料](handover/) | 実装の計画、決定済みの判断、対応順序、判断待ち、落とし穴 |
 | [docs/design/server.md](design/server.md) | 常駐サーバー、フック、画面の設計 |
 | [docs/design/doctor.md](design/doctor.md) | 導入の整合の診断の設計。期待値の正本、項目、出力と対処の形 |
+| [docs/contracts/routing.md](contracts/routing.md) | 経路設定の共有データの契約 |
 | [docs/design/manual.md](design/manual.md) | 利用者向けマニュアルの構成、デモ状態、画面の撮影、配信、検査の設計 |
 | [docs/architecture.html](architecture.html) / [docs/architecture-detail.html](architecture-detail.html) | 構成要素と通信経路の図。回答の届け方、PR の登録からマージまでの流れ |
 | [docs/poc-results.md](poc-results.md) | PoC で確かめたことと、分かった制約。再現の一式は固定参照 8c701b1 の [`poc/`](https://github.com/ktysne/agent-cockpit/tree/8c701b1e8a5718eccff69f84775f21171b6663d0/poc) にある |
@@ -24,13 +24,17 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | 場所 | 中身 |
 |---|---|
 | `src/server/` | 常駐サーバー。状態の組み立て、保存、PR の取得とマージ、経路の設定 |
+| `src/client/` | 導入の点検と適用、常駐サーバーの再起動など、利用者が実行するコマンド |
 | `src/hooks/` | Claude Code のフック。`event.js`(イベント送信と常駐サーバーの起動)、`away.js`(離席中の質問待ち)、`answer.js`(回答の配信)、`route.js`(サブエージェントの経路) |
 | `src/mcp/` | タスクと判断事項を書き込む MCP サーバー |
 | `src/web/` | ダッシュボードの骨格(`index.html`)と診断画面の CSS、HTML、JS の部品。起動時に 1 つの HTML へ合成する |
+| `src/shared/` | フック、常駐サーバー、コマンドで共有する定義と解析。`integration-manifest.js`、`review-evaluation.js`、`shell-commands.js` など |
 | `src/tray/` | Windows のタスクトレイとショートカットの作成 |
 | `src/dev/` | 開発用のイベント再生 |
+| `skills/codex/agent-cockpit/` | Codex 向けのスキル |
 | `manual/` | 利用者向けマニュアルの原稿、撮影の定義、撮った画像、組み立てた結果(`dist/`) |
 | `tools/manual/` | マニュアルの組み立て、検査、デモ状態、撮影 |
+| `docs/contracts/` | ツール間で共有するデータの契約 |
 | `skills/agent-cockpit/` | メインセッションが読むスキル |
 | `skills/update-tools/` | agent-cockpit、ai-cross-review、claude-codex-bridge の更新を確かめて反映するスキル。Claude と Codex で共通 |
 | `test/` | テスト |
@@ -99,6 +103,8 @@ npm run test:inprocess
 
 ## リリース
 
+実行前に `npm install` を済ませ、`node_modules\basic-ftp` があることを確かめます。
+Node.js 22.15.0 以上が必要です。
 リリースは、リポジトリ直下の `release.bat` を 1 回実行すれば終わります。
 追加作業があるバージョンでは、先に [更新手順](update.md) の「バージョンごとの追加作業」に `### vX.Y.Z` の節で手順を書き、`main` に入れておきます。
 
@@ -169,7 +175,7 @@ Invoke-RestMethod http://127.0.0.1:48377/api/state | ConvertTo-Json -Depth 8
 
 配布ページの画像の撮影と配信は、[docs/design/site.md](design/site.md) を参照してください。
 配信はリポジトリ直下の `deploy-site.bat` で行います。
-配信だけは、`npm install` で開発用の依存を入れる必要があり、Node.js 22.15.0 以上が要ります。
+配信もリリースと同じく、`npm install` で入れる `basic-ftp` と Node.js 22.15.0 以上が要ります。
 
 ## アプリアイコン
 

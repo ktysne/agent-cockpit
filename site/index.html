@@ -147,6 +147,7 @@
             <li><span class="mark"></span><a href="#feat-tasks">タスクと完了条件</a></li>
             <li><span class="mark warn"></span><a href="#feat-decisions">判断待ちに画面から回答</a></li>
             <li><span class="mark away"></span><a href="#feat-away">席を外しても止めない</a></li>
+            <li><span class="mark"></span><a href="#feat-doctor">導入と更新の点検</a></li>
             <li><span class="mark ok"></span><a href="#feat-prs">積み上げた PR を順にマージ</a></li>
             <li><span class="mark codex"></span><a href="#feat-routing">サブエージェントの経路を切り替え</a></li>
           </ul>
@@ -193,9 +194,13 @@
           <h3><span class="mark away"></span>席を外しても止めない</h3>
           <p>離席中にすると、質問は画面からの回答を決めた時間だけ待ち、締切を過ぎたら推奨で進めます。セッションには離席中であることを伝え、破壊的な操作をせずに作業を続けさせます。戻ったら、離席中に起きた変化を「前回見てから」で確かめられます。</p>
         </div>
+        <div class="card" id="feat-doctor">
+          <h3><span class="mark"></span>導入と更新の点検</h3>
+          <p>フック、MCP、スキル、連携ツールの写しの食い違いを設定画面で確認できます。不一致は <code>update-tools</code> スキルで直せます。</p>
+        </div>
         <div class="card" id="feat-prs">
           <h3><span class="mark ok"></span>積み上げた PR を順にマージ</h3>
-          <p>セッションが作った PR を、CI とクロスレビューの状態と一緒にスタックの形で表示します。一番下の PR を画面で確認してマージできます。</p>
+          <p>セッションが作った PR を、CI とクロスレビューの状態と一緒にスタックの形で表示します。レビューを保留した PR もその理由と一緒に示し、既定ブランチへのマージ後にその作業ツリーを最新にする設定もあります。一番下の PR を画面で確認してマージできます。</p>
         </div>
         <div class="card" id="feat-routing">
           <h3><span class="mark codex"></span>サブエージェントの経路を切り替え</h3>
@@ -232,6 +237,7 @@
           <h3>導入できたかの確認</h3>
           <ul>
             <li>確かめる点は、<a href="https://github.com/ktysne/agent-cockpit#導入できたかの確認">README の「導入できたかの確認」</a>にあります。</li>
+            <li>導入後は、ダッシュボードの設定にある「導入の点検」でも結果を確かめられます。</li>
           </ul>
         </div>
       </div>
