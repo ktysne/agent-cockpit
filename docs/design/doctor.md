@@ -100,7 +100,7 @@ provider は、ホームに agent-cockpit のフック、MCP の登録、スキ�
 | server | `/health` の `version`、`commit`、`sourceState` を対象の checkout と比べる | 一致で `ok`、違えば `mismatch`。動いていなければ `unverified`(SessionStart のフックが起動するため) |
 | hooks | 期待する登録ごとに、同じイベントと matcher で同じスクリプトを指す登録を探し、引数、timeout、`async`、`asyncRewake` を比べる。agent-cockpit のスクリプトを指すが期待に無い登録も挙げる | 足りない、値が違う、余分、別の checkout を指すものは `mismatch` |
 | mcp | Claude は `.claude.json` の `mcpServers['agent-cockpit']`、Codex は `config.toml` の `[mcp_servers.agent-cockpit]` の実行先と、各ツールの `approval_mode` | 違えば `mismatch`。Claude のプロジェクトのスコープに同名の登録があれば、そちらが効くので `unverified` |
-| mcp-runtime | 診断ログ(`GET /api/diagnostics`)の今の起動の `mcp.write` に残る MCP プロセスの `version` と `commit` | すべて期待値と一致すれば `ok`。古いものがあれば、開き直しの案内を付けて `unverified`。記録はセッションを閉じた後も起動のあいだ残り、今動いているとは言えないため。記録が無ければ `unverified` |
+| mcp-runtime | 診断ログ(`GET /api/diagnostics`)の今の起動の `mcp.write` に残る MCP プロセスの `version` と `commit` | すべて期待値と一致すれば `ok`。古いものがあれば `unverified`。記録はセッションを閉じた後も起動のあいだ残り、今動いているとは言えないため。理由には、古い記録のうち最後のものの時刻(点検を流した端末のローカル時刻)と、違うバージョンかコミットの短い形を載せる。同じ内容の書き込みは `diagnostics.repeated` にまとめられ、その時刻は書き出した時刻なので、どの記録も「この時刻までに書いた」と示す。記録にセッションの ID は無く、どのセッションかを絞り込む手がかりは時刻だけだからである。対処は `manual` 1 つで、アプリ(Claude Code と Codex)の起動し直し、常駐サーバーの再起動、MCP ツールの呼び出しの順に案内する。MCP プロセスは、それを起動したアプリのプロセス(Claude はセッションごとの `claude.exe`、Codex は `app-server`)の子として、アプリを終了するまで残る。古い記録は常駐サーバーを再起動するまで消えない。再起動を `command` の対処にしないのは、適用が `unverified` の項目を扱わないためである。記録が無ければ `unverified` |
 | skills | 正本と写しを、行末の違いを除いて比べる。Codex の写しは `CODEX_HOME` と独立した `<home>/.agents` を基準にする | 違えば `mismatch`。agent-cockpit のスキルが無ければ `mismatch`、`update-tools` が新旧どちらにも無ければ `not-installed` |
 | copies | ai-cross-review と bridge の照会結果をそのまま写す | 一致で `ok`、古い写しと bridge の必須の未配置は `mismatch`、任意の未配置と対象外は `not-installed`、読めなければ `unverified` |
 | runtime-check | MCP からの書き込みと質問の回答の往復 | 常に `not-run`。導入手順の「確認」へ案内する |
@@ -224,7 +224,7 @@ Codex の `config.toml` のうち、agent-cockpit の登録をインラインテ
 | `copy-file` | `from`(正本の絶対パス)、`to`(配布先の絶対パス)、`sourceDigest`(正本の生バイト列の sha256)、`observedDigest`(写しの生バイト列の sha256、未配置なら `null`) |
 | `write` | `to`、`content`(照会が返す全文)、`observedDigest`、`source`(正本の絶対パス)、`sourceDigest` |
 | `command` | `command`(例 `node src/client/restart-server.js --json`)と、実行する場所 |
-| `manual` | 開発者の操作(セッションの開き直し、Codex の `/hooks` での信頼し直し)を `text` で |
+| `manual` | 開発者の操作(直した後の新しいセッションの起動、Codex の `/hooks` での信頼し直し、アプリと常駐サーバーの再起動)を `text` で。操作の対象と順序が読み取れる文にする |
 
 ファイルを書き換える対処には、`observedDigest`(観測したファイル全体の sha256)を付ける。UTF-8 で読んだ文字列から計算する。ただし `copy-file` と `write` は照会が返す値をそのまま使うので、生バイト列から計算する。
 ただし、Claude の MCP の登録の対処は `digestPath: ['mcpServers', 'agent-cockpit']` を持ち、この部分木の `JSON.stringify(値 ?? null)` の sha256 を使う。
