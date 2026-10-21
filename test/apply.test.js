@@ -34,7 +34,7 @@ async function fixture(t) {
   await write(settings, { hooks: manifest.claude.hooks });
   await write(mcp, { mcpServers: { 'agent-cockpit': { command: 'old', args: [], env: { TOKEN: 'private' } }, other: { command: 'custom' } } });
   await write(path.join(home, 'server.json'), { port: 47821, pid: 123, startedAt: 'start', secret: 'server-private' });
-  const options = { root, userHome, environment: {}, readSourceState: async () => 'release',
+  const options = { root, userHome, cwd: root, environment: {}, readSourceState: async () => 'release',
     fetchImpl: async url => ({ ok: true, status: 200, json: async () => url.endsWith('/health')
       ? { app: 'agent-cockpit', pid: 123, startedAt: 'start', version: 'old', commit: COMMIT, sourceState: 'release' }
       : { runs: [] } }) };
