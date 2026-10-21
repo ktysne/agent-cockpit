@@ -109,7 +109,12 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .settings-dialog section { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
 .settings-dialog h3 { margin: 0 0 10px; font-size: 14px; }
 .settings-theme-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
-.settings-theme-row label { color: var(--text-2); }
+.settings-label { display: inline-flex; flex: 1 1 0; align-items: center; gap: 6px; min-width: 0; }
+.settings-label label { word-break: auto-phrase; }
+.settings-dialog button.settings-info { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; min-height: 24px; height: 24px; padding: 0; border-radius: 50%; background: transparent; color: var(--text-2); font-size: 12px; font-weight: 700; line-height: 1; vertical-align: middle; }
+.settings-dialog button.settings-info:hover, .settings-dialog button.settings-info[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.settings-mergeable-condition legend .settings-info { margin-left: 6px; }
+.settings-info-popover { position: fixed; inset: auto; width: max-content; max-width: min(320px, calc(100vw - 32px)); margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 12px; line-height: 1.6; box-shadow: 0 6px 20px rgb(0 0 0 / 25%); }
 .settings-dialog select { max-width: 100%; padding: 4px 8px; }
 .settings-dialog input[type="number"] { width: 88px; padding: 4px 8px; text-align: right; }
 .settings-mergeable-condition { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; border: 0; }
@@ -486,20 +491,20 @@ h3.sub .count { font-weight: normal; }
       </select>
     </div>
     <div class="settings-theme-row">
-      <label for="settings-since-seen-select">前回見てから</label>
+      <span class="settings-label"><label for="settings-since-seen-select">前回見てから</label><button type="button" class="settings-info" popovertarget="settings-since-seen-note" aria-label="説明: 前回見てから">i</button></span>
       <select id="settings-since-seen-select" name="sinceSeen" aria-describedby="settings-since-seen-note">
         <option value="show">表示する</option>
         <option value="hide">表示しない</option>
       </select>
     </div>
-    <p class="meta" id="settings-since-seen-note">離席中に起きた変化を、既読にするまで表示します。</p>
-    <fieldset class="settings-mergeable-condition" aria-describedby="settings-mergeable-condition-note">
-      <legend>「マージできます」と出す条件</legend>
+    <div class="settings-info-popover" id="settings-since-seen-note" popover>離席中に起きた変化を、既読にするまで表示します。</div>
+    <fieldset class="settings-mergeable-condition" aria-labelledby="settings-mergeable-condition-title" aria-describedby="settings-mergeable-condition-note">
+      <legend><span id="settings-mergeable-condition-title">「マージできます」と出す条件</span><button type="button" class="settings-info" popovertarget="settings-mergeable-condition-note" aria-label="説明: 「マージできます」と出す条件">i</button></legend>
       <label><input type="radio" name="mergeableCondition" value="operation"><span>マージの操作ができる</span><small>スタックの一番下で、ドラフト、積み直し、コンフリクト、GitHub のレビュー待ちがない。</small></label>
       <label><input type="radio" name="mergeableCondition" value="ci"><span>CI も通っている(CI が無ければ問わない)</span><small>マージ操作に加えて、CI が成功している。</small></label>
       <label><input type="radio" name="mergeableCondition" value="cross-review"><span>クロスレビューも済んでいる(不要としたものを含む)</span><small>CI の成功と、この head のレビュー収束またはレビュー不要の記録がある。</small></label>
     </fieldset>
-    <p class="meta" id="settings-mergeable-condition-note">条件が残っていてもマージ操作が可能なら、確認欄に未達の条件を表示する。</p>
+    <div class="settings-info-popover" id="settings-mergeable-condition-note" popover>条件が残っていてもマージ操作が可能なら、確認欄に未達の条件を表示する。</div>
     <div class="settings-theme-row">
       <label for="settings-hide-finished">終わったものを非表示にする</label>
       <input id="settings-hide-finished" name="hideFinished" type="checkbox">
@@ -520,13 +525,13 @@ h3.sub .count { font-weight: normal; }
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
-      <label for="settings-gh-concurrency-limit">GitHub CLI の同時起動上限数 (1〜32)</label>
+      <span class="settings-label"><label for="settings-gh-concurrency-limit">GitHub CLI の同時起動上限数 (1〜32)</label><button type="button" class="settings-info" popovertarget="settings-gh-concurrency-limit-note" aria-label="説明: GitHub CLI の同時起動上限数 (1〜32)">i</button></span>
       <input id="settings-gh-concurrency-limit" name="ghConcurrencyLimit" type="number" step="1" inputmode="numeric" aria-describedby="settings-gh-concurrency-limit-note settings-gh-concurrency-limit-error">
       <span class="settings-input-error" id="settings-gh-concurrency-limit-error" role="alert" hidden></span>
     </div>
-    <p class="meta" id="settings-gh-concurrency-limit-note">プルリクエストの取得に使う gh を同時に動かす数。大きいほど一覧の更新が速く、PC と GitHub API への負荷が増える。変えた値は次に起動する gh から効く。</p>
+    <div class="settings-info-popover" id="settings-gh-concurrency-limit-note" popover>プルリクエストの取得に使う gh を同時に動かす数。大きいほど一覧の更新が速く、PC と GitHub API への負荷が増える。変えた値は次に起動する gh から効く。</div>
     <div class="settings-theme-row">
-      <label for="settings-terminal-select">「ターミナルで開く」で使う端末</label>
+      <span class="settings-label"><label for="settings-terminal-select">「ターミナルで開く」で使う端末</label><button type="button" class="settings-info" popovertarget="settings-terminal-note" aria-label="説明: 「ターミナルで開く」で使う端末">i</button></span>
       <select id="settings-terminal-select" name="terminal" aria-describedby="settings-terminal-note">
         <option value="auto">自動</option>
         <option value="windows-terminal">Windows Terminal</option>
@@ -535,20 +540,20 @@ h3.sub .count { font-weight: normal; }
         <option value="cmd">コマンドプロンプト</option>
       </select>
     </div>
-    <p class="meta" id="settings-terminal-note">自動では、Windows Terminal、PowerShell 7、Windows PowerShell の順に、見つかったものを使う。選んだ端末が見つからないときは開かずに知らせる。</p>
+    <div class="settings-info-popover" id="settings-terminal-note" popover>自動では、Windows Terminal、PowerShell 7、Windows PowerShell の順に、見つかったものを使う。選んだ端末が見つからないときは開かずに知らせる。</div>
     <div class="settings-theme-row">
-      <label for="settings-pull-default-branch">既定ブランチへのマージ後、既定ブランチの作業ツリーを最新にする</label>
+      <span class="settings-label"><label for="settings-pull-default-branch">既定ブランチへのマージ後、既定ブランチの作業ツリーを最新にする</label><button type="button" class="settings-info" popovertarget="settings-pull-default-branch-note" aria-label="説明: 既定ブランチへのマージ後、既定ブランチの作業ツリーを最新にする">i</button></span>
       <input id="settings-pull-default-branch" name="pullDefaultBranchAfterMerge" type="checkbox" aria-describedby="settings-pull-default-branch-note">
     </div>
-    <p class="meta" id="settings-pull-default-branch-note">オンでは、既定ブランチへのマージを検出したとき、そのブランチをチェックアウトしているローカルの作業ツリーを fast-forward で更新する。追跡しているファイルに未コミットの変更がある作業ツリーは更新せず、セッションへ知らせる。</p>
+    <div class="settings-info-popover" id="settings-pull-default-branch-note" popover>オンでは、既定ブランチへのマージを検出したとき、そのブランチをチェックアウトしているローカルの作業ツリーを fast-forward で更新する。追跡しているファイルに未コミットの変更がある作業ツリーは更新せず、セッションへ知らせる。</div>
     <div class="settings-theme-row">
-      <label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label>
+      <span class="settings-label"><label for="settings-import-app-tasks">デスクトップアプリのタスク一覧を取り込む</label><button type="button" class="settings-info" popovertarget="settings-import-app-tasks-note" aria-label="説明: デスクトップアプリのタスク一覧を取り込む">i</button></span>
       <input id="settings-import-app-tasks" name="importAppTasks" type="checkbox" aria-describedby="settings-import-app-tasks-note">
     </div>
-    <p class="meta" id="settings-import-app-tasks-note">オンでは、アプリの一覧を 1 つのタスクの完了条件として取り込む。依頼ごとの題はモデルが登録する。オフでは、モデルが Agent Cockpit に直接登録したタスクだけを出す。Codex のセッションには取り込める一覧が無いので、この設定にかかわらず取り込まない。</p>
+    <div class="settings-info-popover" id="settings-import-app-tasks-note" popover>オンでは、アプリの一覧を 1 つのタスクの完了条件として取り込む。依頼ごとの題はモデルが登録する。オフでは、モデルが Agent Cockpit に直接登録したタスクだけを出す。Codex のセッションには取り込める一覧が無いので、この設定にかかわらず取り込まない。</div>
     <div class="settings-section-order">
-      <h4 id="settings-section-order-title">セクションの並び順</h4>
-      <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」と「プルリクエスト」は、3 つのどれより前ならセッションの上、それ以外は下に出る。</p>
+      <div class="settings-label"><h4 id="settings-section-order-title">セクションの並び順</h4><button type="button" class="settings-info" popovertarget="settings-section-order-note" aria-label="説明: セクションの並び順">i</button></div>
+      <div class="settings-info-popover" id="settings-section-order-note" popover>種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」と「プルリクエスト」は、3 つのどれより前ならセッションの上、それ以外は下に出る。</div>
       <ol class="section-order-list" id="settings-section-order" aria-labelledby="settings-section-order-title" aria-describedby="settings-section-order-note"></ol>
       <button type="button" id="settings-section-order-reset">既定に戻す</button>
     </div>
@@ -1196,6 +1201,19 @@ settingsDialog.addEventListener('close', () => {
   settingsSaveError.hidden = true;
   settingsButton.focus();
 });
+// 説明は最上位レイヤーに出てボタンと連動して動かないため、開いたときにボタンの下(収まらなければ上)へ置き、スクロールしたら閉じる。
+for (const popover of settingsDialog.querySelectorAll('.settings-info-popover')) {
+  popover.addEventListener('toggle', (event) => {
+    if (event.newState !== 'open') return;
+    const anchor = settingsDialog.querySelector(`[popovertarget="${popover.id}"]`).getBoundingClientRect();
+    const gap = 6;
+    const edge = 8;
+    const below = anchor.bottom + gap;
+    popover.style.top = `${below + popover.offsetHeight <= innerHeight - edge ? below : Math.max(edge, anchor.top - gap - popover.offsetHeight)}px`;
+    popover.style.left = `${Math.max(edge, Math.min(anchor.left, innerWidth - popover.offsetWidth - edge))}px`;
+  });
+}
+settingsDialog.addEventListener('scroll', () => settingsDialog.querySelector('.settings-info-popover:popover-open')?.hidePopover());
 
 function applyAwayState(away) {
   const enabled = away?.enabled === true;
