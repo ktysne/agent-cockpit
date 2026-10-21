@@ -639,6 +639,20 @@ test('モックの整数表示設定を UI 状態へ保存し表示に反映す�
   assert.equal(rendered, 3);
 });
 
+test('設定の説明文は常時表示せず、項目名の横のボタンで開くポップオーバーに置く', () => {
+  for (const page of [web, mock]) {
+    const dialog = page.match(/<dialog class="settings-dialog" id="settings-dialog"[\s\S]*?<\/dialog>/)?.[0];
+    assert.ok(dialog);
+    assert.doesNotMatch(dialog, /<p class="meta"/);
+    const targets = [...dialog.matchAll(/class="settings-info" popovertarget="([^"]+)"/g)].map(match => match[1]);
+    const popovers = [...dialog.matchAll(/class="settings-info-popover" id="([^"]+)" popover>/g)].map(match => match[1]);
+    assert.equal(targets.length, 7);
+    assert.deepEqual(targets, popovers);
+    for (const id of targets) assert.match(dialog, new RegExp(`aria-describedby="(?:[^"]* )?${id}(?: [^"]*)?"`));
+    assert.equal(cssDeclarations(page, '.settings-theme-row label').length, 0);
+  }
+});
+
 test('セクションの並び順を保存し、端のボタンを無効化してフォーカスを維持する', () => {
   const sectionKinds = web.match(/const SECTION_KINDS = \[[\s\S]*?\n\];/)?.[0];
   const sectionOrderKeys = web.match(/const SECTION_ORDER_KEYS = [^\n]+/)?.[0];
