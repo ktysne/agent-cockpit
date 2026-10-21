@@ -194,11 +194,25 @@ function subcommandIndex(words, command) {
   return index;
 }
 
+// 区切りの先頭の env が -C か --chdir を持つかを見る。共通の解析は env のオプションを捨てるので、ここで調べる。
+function envChangesDirectory(segment, toolName) {
+  if (!/^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*env\s/.test(segment)) return false;
+  const words = commandWords(segment, toolName);
+  for (let index = 0; index < words.length && words[index].startsWith('-'); index += 1) {
+    const word = words[index];
+    if (word === '--chdir' || word.startsWith('--chdir=') || /^-[^-]*C/.test(word)) return true;
+    if (word === '-u' || word === '--unset') index += 1;
+  }
+  return false;
+}
+
 // レビューと Codex の起動の判定と同じく、command や timeout の前置き、.exe の付いた名前、bash -c の中身も読む。
 // 語の列は、先頭を起動したコマンドの名前(gh、git)にそろえて返す。
+// movesDirectory は、シェルの中か env -C の起動で、作業ディレクトリをコマンドの外から決められないことを表す。
 function toolInvocations(segment, toolName, names) {
+  const envMoves = envChangesDirectory(segment, toolName);
   return commandInvocationDetails(segment, (word) => names.includes(commandName(word)), undefined, 0, toolName)
-    .map(({ argumentsList, executable, nested }) => ({ words: [executable, ...argumentsList], nested }));
+    .map(({ argumentsList, executable, nested }) => ({ words: [executable, ...argumentsList], movesDirectory: nested || envMoves }));
 }
 
 function isGhPrCreateWords(words) {
@@ -206,9 +220,10 @@ function isGhPrCreateWords(words) {
   return words[0] === 'gh' && words[subcommand] === 'pr' && ['create', 'new'].includes(words[subcommand + 1]);
 }
 
+// 作業ディレクトリを決められない作成は数えない。数えると、別のリポジトリの PR をコマンドの外の cwd で登録するため。
 function isGhPrCreateCommand(command, toolName = 'Bash') {
   return commandSegments(command, toolName).some((segment) => (
-    toolInvocations(segment, toolName, ['gh']).some(({ words }) => isGhPrCreateWords(words))
+    toolInvocations(segment, toolName, ['gh']).some(({ words, movesDirectory }) => !movesDirectory && isGhPrCreateWords(words))
   ));
 }
 
@@ -273,8 +288,7 @@ function pullRequestRefreshScope(command, cwd) {
     if (['cd', 'pushd', 'popd'].includes(words[0]) && (index > 0 || !pullRequestCommandCwd(command, cwd))) return { unknown: true };
     for (const invocation of toolInvocations(segment, 'Bash', ['git', 'gh'])) {
       if (!isRefreshWords(invocation.words)) continue;
-      // シェルの中では cd で作業ディレクトリが変わりうるので、どのリポジトリかを決めない。
-      if (invocation.nested) return { unknown: true };
+      if (invocation.movesDirectory) return { unknown: true };
       const toolWords = invocation.words;
       if (toolWords[0] === 'git') {
         const subcommand = subcommandIndex(toolWords, 'git');
