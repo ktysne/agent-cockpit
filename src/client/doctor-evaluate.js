@@ -2,7 +2,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 
-const SESSION_ACTION = { op: 'manual', text: '登録と写しを直した後に新しいセッションを開いてください。開き直したセッションだけが新しい内容で動きます。' };
+const SESSION_ACTION = { op: 'manual', text: '直した後に、新しいセッションを開いてください。直す前から開いているセッションは、古い登録と写しのまま動きます。' };
 const TRUST_ACTION = { op: 'manual', text: 'Codex の /hooks でフックを信頼し直してください。' };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const digest = text => createHash('sha256').update(text).digest('hex');
@@ -294,16 +294,27 @@ function checkServer(home, root, expected, server, add) {
       ? '常駐サーバーが対象の checkout と違うため、対象の checkout から再起動してください。'
       : '常駐サーバーの一致を確認できませんでした。停止中なら新しいセッションの SessionStart が起動します。', result === 'mismatch'
       ? [{ op: 'command', command: 'node src/client/restart-server.js --json', cwd: root }] : []);
-  const identities = entries.filter(entry => entry.msg === 'mcp.write' && typeof entry.data?.version === 'string')
-    .map(entry => ({ version: entry.data.version, commit: entry.data.commit ?? null }));
-  const unique = [...new Map(identities.map(identity => [JSON.stringify(identity), identity])).values()];
-  const mismatch = unique.some(identity => identity.version !== expected.version || (expected.commit !== null && identity.commit !== null && identity.commit !== expected.commit));
+  const writes = entries.filter(entry => entry.msg === 'mcp.write' && typeof entry.data?.version === 'string')
+    .map(entry => ({ ts: entry.ts, identity: { version: entry.data.version, commit: entry.data.commit ?? null } }));
+  const unique = [...new Map(writes.map(({ identity }) => [JSON.stringify(identity), identity])).values()];
+  const stale = identity => identity.version !== expected.version || (expected.commit !== null && identity.commit !== null && identity.commit !== expected.commit);
+  const latestStale = writes.filter(write => stale(write.identity)).reduce((latest, write) => !latest || write.ts > latest.ts ? write : latest, null);
   const verified = unique.length && expected.commit !== null && unique.every(identity => identity.commit !== null);
   // 記録はセッションを閉じた後も起動のあいだ残るので、古い記録があっても今動いているとは言えない。
-  add(null, 'mcp-runtime', 'current', '/api/diagnostics', expected, unique, verified && !mismatch ? 'ok' : 'unverified', mismatch
-    ? '今の起動に、対象の checkout より古い MCP プロセスの記録があります。その頃から開いているセッションがあれば開き直してください。'
+  const steps = latestStale && { op: 'manual', text: `古い MCP プロセスは、起動したアプリを終了するまで残ります。Claude Code(デスクトップアプリ)と Codex を終了して起動し直し、${root} で node src/client/restart-server.js --json を実行して常駐サーバーを再起動してください。その後、どれかのセッションが cockpit の MCP ツールを呼ぶと、点検し直したときに一致を確かめられます。` };
+  add(null, 'mcp-runtime', 'current', '/api/diagnostics', expected, unique, verified && !latestStale ? 'ok' : 'unverified', latestStale
+    ? `${staleWriteText(latestStale, expected)}${steps.text}`
     : verified ? '今の起動に記録された MCP プロセスは対象の checkout と一致しています。'
-      : '今の起動の MCP のバージョンとコミットの記録が足りないため、実行中の MCP は未確認です。', mismatch ? [SESSION_ACTION] : []);
+      : '今の起動の MCP のバージョンとコミットの記録が足りないため、実行中の MCP は未確認です。', latestStale ? [steps] : []);
+}
+
+function staleWriteText({ ts, identity }, expected) {
+  const parts = [...(identity.version !== expected.version ? [`バージョン ${identity.version}`] : []), ...(identity.commit ? [`コミット ${identity.commit.slice(0, 7)}`] : [])];
+  const writer = `対象の checkout と違う MCP プロセス(${parts.join('、')})`;
+  if (!Number.isFinite(ts)) return `今の起動に、${writer}の記録があります。`;
+  const at = new Date(ts);
+  const pad = value => String(value).padStart(2, '0');
+  return `${pad(at.getMonth() + 1)}/${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())} に、${writer}が書き込んでいます。この時刻より前から動いているアプリのセッションが、古い MCP で動いている見込みです。`;
 }
 
 function evaluate(observation) {
