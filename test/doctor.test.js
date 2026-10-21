@@ -65,7 +65,7 @@ async function fixture(t, providers = ['claude', 'codex'], environment = {}) {
     ? { app: 'agent-cockpit', pid: 123, startedAt: '2026-10-20T00:00:00.000Z', version: '1.8.0', commit: COMMIT, sourceState: 'release' }
     : url.includes('?run=') ? { entries: [{ msg: 'mcp.write', data: { version: '1.8.0', commit: COMMIT } }] }
       : { runs: [{ id: 'current-run', current: true }, { id: 'old-run', current: false }] } });
-  const options = { root, userHome, environment, fetchImpl, readSourceState: async () => 'release' };
+  const options = { root, userHome, cwd: root, environment, fetchImpl, readSourceState: async () => 'release' };
   return { directory, root, userHome, homes, manifest, options };
 }
 
