@@ -102,13 +102,22 @@ async function runAskQuestion(input, options = {}) {
   const sessionId = input.session_id;
   const toolUseId = input.tool_use_id;
   if (!validSessionId(sessionId) || typeof toolUseId !== 'string' || !toolUseId) return null;
+  const isWrapUp = options.provider !== 'codex' && options.toolName === 'mcp__ccd_turn__wrap_up';
+  if (isWrapUp && (input.agent_id || typeof input.tool_input?.ask !== 'string' || !input.tool_input.ask.trim())) return null;
+  const questions = isWrapUp ? [{
+    question: input.tool_input.ask,
+    options: Array.isArray(input.tool_input.actions) ? input.tool_input.actions.map(action => ({
+      label: action?.label, description: action?.message,
+    })) : [],
+  }] : input.tool_input?.questions || [];
   const hookStartedAt = (options.now || Date.now)();
   const register = await postHookRequest({
     action: 'ask-register',
     event_name: 'PreToolUse',
     session_id: sessionId,
     id: toolUseId,
-    questions: input.tool_input?.questions || [],
+    questions,
+    ...(isWrapUp ? { recap: input.tool_input.recap } : {}),
     provider: options.provider || 'claude',
     tool_name: options.toolName || 'AskUserQuestion',
     ...(typeof input.agent_id === 'string' ? { agent_id: input.agent_id } : {}),

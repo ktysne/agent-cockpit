@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { sanitizeQuestions, sanitizeCodexQuestions } = require('./events');
+const { sanitizeCodexQuestions, sanitizeClaudeQuestions } = require('./events');
 const { isStoredSessionId } = require('./session-ids');
 const { TaskNudges } = require('./task-nudges');
 
@@ -55,6 +55,15 @@ function canAnswerDecision(decision) {
 }
 
 function denyAnswerOutput(decisionId, provider = 'claude', toolName = 'AskUserQuestion', questions = []) {
+  if (provider !== 'codex' && toolName === 'mcp__ccd_turn__wrap_up') {
+    const recommendation = recommendedOptions({ questions })[0];
+    return wrapUpOutput([
+      '推奨の適用の知らせです。開発者は離席中で、回答を取得できませんでした。',
+      recommendation ? `推奨「${recommendation.label}」を適用して作業を続けてください。${recommendation.description || ''}`
+        : '推奨を判断できないため、判断待ちとして最後の報告に書いて作業を続けてください。',
+      `判断事項の id は「${decisionId || '不明'}」です。判断が必要だった事項と仮に適用した推奨は、最後の報告の「あなたの判断が必要なこと」に書いてください。破壊的な操作は行わないでください。`,
+    ]);
+  }
   let reason = ANSWER_HOOK_DENY_REASON.replace('AskUserQuestion', toolName);
   if (provider === 'codex' && recommendedOptions({ questions }).some((option) => !option)) {
     reason = reason.replace('推奨の選択肢を適用して作業を続けてください。',
@@ -75,6 +84,14 @@ function denyAnswerOutput(decisionId, provider = 'claude', toolName = 'AskUserQu
       permissionDecisionReason: reason.replace('{id}', String(decisionId || '不明').slice(0, 256).replace(/[\r\n]/g, '')),
     },
   };
+}
+
+function wrapUpOutput(lines) {
+  return { hookSpecificOutput: {
+    hookEventName: 'PreToolUse',
+    permissionDecision: 'deny',
+    permissionDecisionReason: [...lines, '作業を終えたら ask を付けずに mcp__ccd_turn__wrap_up を呼び直してください。'].join('\n'),
+  } };
 }
 
 function askAnswers(decision, answer) {
@@ -100,6 +117,17 @@ function askAnswerOutput(decision, answer, provider = 'claude', toolName = 'AskU
   if (!answers) return denyAnswerOutput(decision.id, provider, toolName, decision.questions);
   const additionalContext = [];
   if (['ok', 'pick'].includes(answer.choice) && answer.note) additionalContext.push(`開発者の指示: ${answer.note}`);
+  if (provider !== 'codex' && toolName === 'mcp__ccd_turn__wrap_up') {
+    return wrapUpOutput([
+      '開発者の回答の知らせです。ダッシュボードで次の回答を受け取りました。回答に沿って作業を続けてください。',
+      ...decision.questions.map(question => {
+        const value = answers[question.question];
+        const option = question.options.find(option => option.label === value);
+        return `${question.question} → ${value}${option?.description ? `\n${option.description}` : ''}`;
+      }),
+      ...additionalContext,
+    ]);
+  }
   if (provider === 'codex') {
     return {
       hookSpecificOutput: {
@@ -182,8 +210,9 @@ class DecisionAnswerDelivery {
     this.closed = false;
   }
 
-  registerAsk({ sessionId, toolUseId, questions, agentId, provider = 'claude', toolName = 'AskUserQuestion' }) {
-    const sanitized = provider === 'codex' ? sanitizeCodexQuestions(toolName, questions) : sanitizeQuestions(questions);
+  registerAsk({ sessionId, toolUseId, questions, agentId, provider = 'claude', toolName = 'AskUserQuestion', recap }) {
+    const sanitized = provider === 'codex' ? sanitizeCodexQuestions(toolName, questions) : sanitizeClaudeQuestions(toolName, questions);
+    if (provider !== 'codex' && toolName === 'mcp__ccd_turn__wrap_up' && agentId) return { awaiting: false, hookOutput: null };
     const deny = (id) => denyAnswerOutput(id, provider, toolName, sanitized);
     const awayEnabled = this.away.snapshot().enabled === true;
     if (agentId) return { awaiting: false, hookOutput: awayEnabled ? deny(toolUseId) : null };
@@ -202,6 +231,7 @@ class DecisionAnswerDelivery {
       tool_name: toolName,
       tool_use_id: toolUseId,
       questions: sanitized,
+      ...(toolName === 'mcp__ccd_turn__wrap_up' ? { questionContext: recap } : {}),
     };
     if (!event.questions.length || !this.state.addEvent(event)) return { awaiting: false, hookOutput: null };
     const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
@@ -293,7 +323,7 @@ class DecisionAnswerDelivery {
       this.clearAskWait(record);
       const latest = this.state.decisionFor(sessionId, record.decisionId);
       const hookOutput = askAnswerOutput(latest, latest.answer, record.provider, record.toolName);
-      if (record.provider === 'codex') {
+      if (record.provider === 'codex' || record.toolName === 'mcp__ccd_turn__wrap_up') {
         this.state.updateDecision(sessionId, record.decisionId, 'resolved', Object.values(askAnswers(latest, latest.answer)), latest.answer.note, this.now());
         this.afterDecisionUpdate(sessionId, record.decisionId);
       }

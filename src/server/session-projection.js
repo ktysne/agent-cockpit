@@ -458,6 +458,7 @@ function applyAskQuestionStart(session, event) {
       delete existing.inferredWithdrawalHookAt;
       existing.title = event.questions[0].question.slice(0, 200);
       existing.questions = event.questions;
+      if (event.questionContext !== undefined) existing.context = event.questionContext;
       session.decisionBindings[toolUseId] = existing.id;
     } else {
       const createdAt = isoTime(event.hookAt);
@@ -467,7 +468,7 @@ function applyAskQuestionStart(session, event) {
         source: 'ask',
         state: 'waiting',
         title: event.questions[0].question.slice(0, 200),
-        context: '',
+        context: event.questionContext || '',
         questions: event.questions,
         createdAt,
         updatedAt: createdAt,
@@ -663,6 +664,8 @@ function applyBackgroundTaskEnds(session, event) {
  * @param {SessionDecisions} session
  */
 function applyAskQuestionCompletion(session, event) {
+  // wrap_up の拒否後も、仮適用または回答の記録を判断事項に残す。
+  if (event.tool_name === 'mcp__ccd_turn__wrap_up' && event.hook_event_name === 'PostToolUseFailure') return;
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;

@@ -11,7 +11,7 @@ function integrationManifest(root) {
   const codex = (name, properties, matcher) => hook('codex', name, properties, matcher);
   const claudeHooks = {
     SessionStart: [claude('event'), claude('away', { timeout: 5 })],
-    PreToolUse: [claude('event', { async: true }, ''), claude('away', { timeout: 1830 }, 'AskUserQuestion')],
+    PreToolUse: [claude('event', { async: true }, ''), claude('away', { timeout: 1830 }, 'AskUserQuestion|mcp__ccd_turn__wrap_up')],
     PostToolUse: [claude('event', { async: true }, '')],
     PostToolUseFailure: [claude('event', { async: true }, '')],
     PostToolBatch: [claude('answer', { timeout: 2 })],
