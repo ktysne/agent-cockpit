@@ -150,10 +150,27 @@ function extractCodexWaitRunId(command, toolName = 'Bash') {
   return '';
 }
 
+const NPM_VALUE_OPTIONS = new Set(['-C', '--prefix', '-w', '--workspace', '--loglevel', '--userconfig', '--cache', '--registry']);
+
+function withoutNpmOptions(words) {
+  let index = 0;
+  while (words[index]?.startsWith('-') && words[index] !== '--') {
+    index += NPM_VALUE_OPTIONS.has(words[index]) ? 2 : 1;
+  }
+  return words.slice(index);
+}
+
+// `npm -s run review:codex` や `npm run --silent review:codex` のように、npm のオプションが run の前後に入っても起動として扱う。
+function npmRunScript(words) {
+  const [subcommand, ...rest] = withoutNpmOptions(words);
+  if (!['run', 'run-script'].includes(subcommand)) return [];
+  return withoutNpmOptions(rest);
+}
+
 function extractCodexReviewDefinition(command, toolName = 'Bash') {
   const invocations = codexAgentInvocationDetails(command, (word) => ['npm', 'node'].includes(commandName(word)), undefined, 0, toolName, true);
   for (const { argumentsList: words, executable } of invocations) {
-    const [first, second, ...argumentsList] = words;
+    const [first, second, ...argumentsList] = executable === 'npm' ? ['run', ...npmRunScript(words)] : words;
     const npmReview = executable === 'npm' && first === 'run' && ['review:codex', 'review:codex:fix'].includes(second);
     const nodeReview = executable === 'node' && /^(?:\.[\\/])?tools[\\/]cross-review\.js$/i.test(first || '') && second === 'codex';
     if (!npmReview && !nodeReview) continue;
