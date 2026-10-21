@@ -129,7 +129,7 @@ git clone https://github.com/ktysne/agent-cockpit.git
     ],
     "PreToolUse": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 1830 }] }
+      { "matcher": "AskUserQuestion|mcp__ccd_turn__wrap_up", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 1830 }] }
     ],
     "PostToolUse": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
@@ -168,7 +168,8 @@ git clone https://github.com/ktysne/agent-cockpit.git
 同期か非同期か、timeout の値には理由があります。値を変えずに登録してください。
 
 - `SessionStart` の `event.js` は同期で動き、常駐サーバーが動いていなければ起動します。起動したダッシュボードの URL を `additionalContext` でセッションへ渡します。そのため、`npm start` で別に起動しておく必要はありません。
-- `PreToolUse`(matcher `AskUserQuestion`)の `away.js` は、離席中にダッシュボードの回答を待ちます。待つ時間は設定画面で 1〜30 分に変えられるので、timeout は最大値に 30 秒の余裕を足した 1830 秒に固定します。
+- `PreToolUse`(matcher `AskUserQuestion|mcp__ccd_turn__wrap_up`)の `away.js` は、離席中にダッシュボードの回答を待ちます。
+  `wrap_up` は `ask` があるメインセッションの呼び出しだけを対象にします。待つ時間は設定画面で 1〜30 分に変えられるので、timeout は最大値に 30 秒の余裕を足した 1830 秒に固定します。
 - `UserPromptSubmit` と `SessionStart` の `away.js` は同期で、timeout は 5 秒です。
 - `PostToolBatch` の `answer.js` は同期で timeout 2 秒、`UserPromptSubmit` の `answer.js` は同期で timeout 5 秒です。作業中のセッションへ回答を差し込みます。
 - `Stop` の `answer.js` は `asyncRewake: true` と timeout 3600 秒です。待機中のセッションを、回答が届いたときに起こします。

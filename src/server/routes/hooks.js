@@ -83,7 +83,7 @@ function createHookRoutes(ctx) {
     {
       matches: (body) => body.action === 'ask-register' && body.event_name === 'PreToolUse' && Array.isArray(body.questions),
       run: (body) => answerDelivery.registerAsk({ sessionId: body.session_id, toolUseId: body.id, questions: body.questions, agentId: body.agent_id,
-        provider: body.provider, toolName: body.tool_name }),
+        provider: body.provider, toolName: body.tool_name, recap: body.recap }),
     },
     {
       matches: (body) => body.action === 'ask-poll' && body.event_name === 'PreToolUse',

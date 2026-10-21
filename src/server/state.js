@@ -1958,7 +1958,24 @@ class DashboardState {
       bindings: Object.fromEntries(this.askDecisionBindings.get(sessionId) || []),
       finishedOutsideEventsIds: [...(this.finishedOutsideEventsAskDecisionIds.get(sessionId) || [])],
       awayHandledIds: this.awayHandledDecisionIds(sessionId),
+      finishedWrapUpToolUseIds: [...(this.decisionLifecycles.get(sessionId)?.values() || [])]
+        .map((lifecycle) => lifecycle.askToolUseId)
+        .filter((toolUseId) => this.isWrapUpAskFinished(sessionId, toolUseId)),
     };
+  }
+
+  isWrapUpAskFinished(sessionId, toolUseId) {
+    if (!toolUseId) return false;
+    const decisionId = this.decisionIdForToolUse(sessionId, toolUseId);
+    const lifecycle = this.decisionLifecycles.get(sessionId)?.get(decisionId);
+    return lifecycle?.askToolUseId === toolUseId && !lifecycle.awaitingAnswerUntil &&
+      (lifecycle.state === 'provisional' || Boolean(lifecycle.answer?.sentAt));
+  }
+
+  // 判断事項の回答待ちが別の呼び出しへ移っていれば、遅れて届いた古い呼び出しの終わりで書き換えないため。
+  isAskLifecycleOwnedBy(sessionId, toolUseId) {
+    const lifecycle = this.decisionLifecycles.get(sessionId)?.get(this.decisionIdForToolUse(sessionId, toolUseId));
+    return !lifecycle?.askToolUseId || lifecycle.askToolUseId === toolUseId;
   }
 
   persistAskDecisionState(sessionId, session) {

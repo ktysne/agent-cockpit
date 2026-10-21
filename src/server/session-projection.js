@@ -71,13 +71,13 @@ function agentModelFromDefinition(agentType, definition) {
 
 /** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>, codexReviewAgentIds: Set<string>}} SessionCodex */
 
-/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>}} SessionDecisions */
+/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>, awayHandledIds: Set<string>, finishedWrapUpToolUseIds: Set<string>}} SessionDecisions */
 
 /** @typedef {{permissionWaits: PermissionWait[], permissionBoundaries: Set<string|null>}} SessionPermissions */
 
 /** @typedef {SessionIdentity & SessionTools & SessionAgents & SessionCodex & SessionDecisions & SessionPermissions} DerivedSession */
 
-/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[], awayHandledIds?: string[]}} AskDecisionState */
+/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[], awayHandledIds?: string[], finishedWrapUpToolUseIds?: string[]}} AskDecisionState */
 
 /** @returns {DerivedSession} */
 function newSession(event, askDecisionState = {}) {
@@ -100,6 +100,7 @@ function newSession(event, askDecisionState = {}) {
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     awayHandledIds: new Set(askDecisionState.awayHandledIds || []),
+    finishedWrapUpToolUseIds: new Set(askDecisionState.finishedWrapUpToolUseIds || []),
     codexQuestionTools: Object.create(null),
     startedAskToolUseIds: new Set(),
     stopped: false,
@@ -308,6 +309,7 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
     decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
     bindings: askDecisionState.bindings || {},
     awayHandledIds: askDecisionState.awayHandledIds || [],
+    finishedWrapUpToolUseIds: askDecisionState.finishedWrapUpToolUseIds || [],
   };
 }
 
@@ -439,9 +441,10 @@ function applyAskQuestionStart(session, event) {
     session.startedAskToolUseIds.add(toolUseId);
     // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
     const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
-    const existing = boundDecision || session.decisions.find((decision) => (
+    // wrap_up は呼び出しごとに別の判断事項にする。使い回すと、遅れて届いた前の呼び出しの終わりが次の回答待ちを消すため。
+    const existing = boundDecision || (event.tool_name === 'mcp__ccd_turn__wrap_up' ? null : session.decisions.find((decision) => (
       ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
-    ));
+    )));
     // 最初の呼び出しか判断事項を終えた呼び出しの開始と、終わった時点より古い開始の知らせは、
     // 遅れて届いたか重複なので、状態と解決の内容を変えない。
     const staleStart = existing === boundDecision && isFinishedAskDecision(existing) && (
@@ -458,6 +461,7 @@ function applyAskQuestionStart(session, event) {
       delete existing.inferredWithdrawalHookAt;
       existing.title = event.questions[0].question.slice(0, 200);
       existing.questions = event.questions;
+      if (event.questionContext !== undefined) existing.context = event.questionContext;
       session.decisionBindings[toolUseId] = existing.id;
     } else {
       const createdAt = isoTime(event.hookAt);
@@ -467,7 +471,7 @@ function applyAskQuestionStart(session, event) {
         source: 'ask',
         state: 'waiting',
         title: event.questions[0].question.slice(0, 200),
-        context: '',
+        context: event.questionContext || '',
         questions: event.questions,
         createdAt,
         updatedAt: createdAt,
@@ -663,6 +667,9 @@ function applyBackgroundTaskEnds(session, event) {
  * @param {SessionDecisions} session
  */
 function applyAskQuestionCompletion(session, event) {
+  // 回答待ちを終えた wrap_up の拒否では、仮適用または回答の記録を残す。
+  if (event.tool_name === 'mcp__ccd_turn__wrap_up' && event.hook_event_name === 'PostToolUseFailure' &&
+    session.finishedWrapUpToolUseIds.has(event.tool_use_id)) return;
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;

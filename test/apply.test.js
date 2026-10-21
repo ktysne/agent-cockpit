@@ -640,3 +640,15 @@ test('bridge の順を並べ替えてもほかのツールの項目の順を保�
   assert.equal(code, 0);
   assert.deepEqual(renamed, [copy.items[0].target, f.mcp, copy.items[2].target, review.target, copy.items[3].target]);
 });
+
+test('古い離席用 matcher を doctor が検出し apply が wrap_up を含む登録に直す', async t => {
+  const f = await fixture(t);
+  await changeHook(f, (group, settings) => { settings.hooks.PreToolUse[1].matcher = 'AskUserQuestion'; });
+  const report = await save(f);
+  const items = report.items.filter(item => item.id.startsWith('claude.hooks.') && item.id.includes('PreToolUse') && item.id.includes('away'));
+  assert.ok(items.length);
+  assert.ok(items.every(item => item.result === 'mismatch'));
+  assert.equal((await run(f, items.map(item => item.id))).code, 0);
+  const hooks = JSON.parse(await fs.readFile(f.settings, 'utf8')).hooks.PreToolUse;
+  assert.deepEqual(hooks, f.manifest.claude.hooks.PreToolUse);
+});

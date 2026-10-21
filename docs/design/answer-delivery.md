@@ -64,7 +64,7 @@ ACK は受領の記録であり、`reflectedAt`、判断事項の解決、レビ
 | Claude stop-poll | `request` → `stop-status` → `prepare-answers` → `response` | レビュー判定と合図を待ち、stderrText に変換する |
 | Claude の非対話 Stop と Codex Stop の stop-check | `request` → `lifecycle(startStop)` → `stop-status` → `prepare-answers` → `response` | レビュー判定を待ち、block の reason に変換する |
 | Claude PostToolBatch と Codex PostToolUse | `request` → `prepare-answers` → `response` | サブエージェントの除外、状態イベント、additionalContext の組み立て |
-| PreToolUse の ask-finish | `request` → `response` | 質問待ちの終了、回答を updatedInput または拒否理由に変換、Codex の判断事項の解決 |
+| PreToolUse の ask-finish | `request` → `response` | 質問待ちの終了、回答を updatedInput または拒否理由に変換、Codex と wrap_up の判断事項の解決 |
 | UserPromptSubmit | `request` → `lifecycle` → `prepare-answers` → `response` | タスクの状態イベント、additionalContext の組み立て、委譲 thread の配信記録対象外の案内 |
 | delivery-ack | `ack` | HTTP の検証と acknowledged 応答 |
 | メインのツールイベント、入力、SessionEnd | `lifecycle` | 質問待ちとタイマーの後始末 |

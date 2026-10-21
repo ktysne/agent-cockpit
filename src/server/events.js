@@ -109,7 +109,17 @@ function sanitizeQuestions(value) {
 function isQuestionTool(provider, toolName) {
   return provider === 'codex'
     ? ['request_user_input_async', 'request_user_input'].includes(toolName)
-    : toolName === 'AskUserQuestion';
+    : ['AskUserQuestion', 'mcp__ccd_turn__wrap_up'].includes(toolName);
+}
+
+function sanitizeClaudeQuestions(toolName, value) {
+  const questions = sanitizeQuestions(value);
+  if (toolName === 'mcp__ccd_turn__wrap_up') {
+    for (const question of questions) {
+      question.options.forEach((option, index) => { option.recommended = index === 0; });
+    }
+  }
+  return questions;
 }
 
 function sanitizeCodexQuestions(toolName, value) {
@@ -261,8 +271,9 @@ function sanitizeEvent(input, metadata = {}) {
     if (event.tool_name === 'Agent') event.description = shortString(input.description, 200) || '';
     if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;
     if (input.refreshPullRequestsCommand === true) event.refreshPullRequestsCommand = true;
-    if (event.tool_name === 'AskUserQuestion' && !agentId) {
-      event.questions = sanitizeQuestions(input.questions);
+    if (isQuestionTool('claude', event.tool_name) && !agentId) {
+      event.questions = sanitizeClaudeQuestions(event.tool_name, input.questions);
+      if (event.tool_name === 'mcp__ccd_turn__wrap_up') event.questionContext = boundedString(input.questionContext, QUESTION_TEXT_LIMIT);
     }
   }
 
@@ -368,6 +379,7 @@ module.exports = {
   MAX_ASK_OPTIONS,
   QUESTION_TEXT_LIMIT,
   sanitizeQuestions,
+  sanitizeClaudeQuestions,
   sanitizeCodexQuestions,
   isQuestionTool,
   sanitizeDecisionResolution,
