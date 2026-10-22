@@ -3,7 +3,7 @@
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const path = require('node:path');
-const { isCompleteCommitSha, pullRequestKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, pullRequestKey, staleHeadDescription, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { reservationReview } = require('../shared/review-evaluation');
 const { safeRepo, ghFailureKind, matchingRepositoryCheckout, listWorktrees, gitRemotes } = require('./pull-requests');
 
@@ -249,8 +249,7 @@ class PullRequestMergeManager {
       if (candidate.refreshFailed) return actionResult(502, 'PR の状態を取り直せませんでした');
       if (candidate.error) return actionResult(409, 'PR はオープンではありません');
       if (candidate.pullRequest.staleHead) {
-        const { prHead, branchHead } = candidate.pullRequest.staleHead;
-        return actionResult(409, `GitHub の PR 情報がブランチの先頭に追いついていません (PR の head ${prHead.slice(0, 7)}、ブランチの先頭 ${branchHead.slice(0, 7)})。GitHub 側の head が更新されてから記録してください`);
+        return actionResult(409, `${staleHeadDescription(candidate.pullRequest.staleHead)}ため記録しません。PR の head とブランチの先頭が一致してから記録してください`);
       }
       if (candidate.pullRequest.headRefOid.toLowerCase() !== headRefOid.toLowerCase()) {
         return actionResult(409, 'PR の head が変わりました。現在の状態を確認してください');

@@ -2316,7 +2316,7 @@ for (const next of [undefined, 'GitHub の回復後にレビューする']) {
     const registration = f.state.pullRequestRegistrations()[0];
     const result = await f.manager.setReviewRecord(registration, sha(3), '理由', next);
     assert.equal(result.status, 409);
-    assert.match(result.error, /GitHub の PR 情報がブランチの先頭に追いついていません/);
+    assert.match(result.error, /GitHub の PR 情報がブランチに追いついていない .*ため記録しません/);
     assert.equal(f.state.crossReviewSkip('example', 'project', 1), null);
     assert.equal(f.state.crossReviewDeferral('example', 'project', 1), null);
   });

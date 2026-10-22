@@ -4121,6 +4121,26 @@ for (const mode of ['一致', 'null', '例外', '照合なし', 'head 更新']) 
   });
 }
 
+for (const mode of ['null', '例外']) {
+  test(`照合の記録が無い PR の先頭の取得が${mode}なら、確かめられないとしてマージを止め、Stop フックには出さない`, async t => {
+    const f = await trackerFixture(t);
+    t.after(() => f.tracker.close());
+    f.github.openPullRequests = [ghPullRequest(31, 'feature/31', 'main', 'a'.repeat(40))];
+    if (mode === '例外') f.github.branchHeadErrors.set('feature/31', new Error('HTTP 403'));
+    await f.tracker.refreshRepo('example', 'project', { verifyHeads: true });
+    const pr = f.tracker.snapshot()[0].trees[0];
+    assert.deepEqual(pr.staleHead, { prHead: 'a'.repeat(40), branchHead: null });
+    assert.equal(pr.canMerge, false);
+    assert.match(pr.operationBlocker, /ブランチの先頭を読めず、PR の head aaaaaaa が最新かを確かめられない/);
+    assert.equal((await f.tracker.missingReviewRecords('session-31')).some(target => target.staleHead), false);
+
+    f.github.branchHeads.set('feature/31', 'a'.repeat(40));
+    f.github.branchHeadErrors.delete('feature/31');
+    await f.tracker.refreshRepo('example', 'project', { verifyHeads: true });
+    assert.equal(f.tracker.snapshot()[0].trees[0].staleHead, null);
+  });
+}
+
 test('利用者の取り直しは非活性リポジトリを取得し、完了後 10 秒以内は再取得しない', async t => {
   const { tracker, state, calls } = await trackerFixture(t);
   t.after(() => tracker.close());

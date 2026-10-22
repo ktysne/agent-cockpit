@@ -2777,7 +2777,9 @@ function mergeBaseConflictBlocker(p, pr) {
   const e = effective(p, pr);
   const pendingParent = mockRetargetFailures.get(prKey(p, pr.number));
   if (pendingParent && !ui.merged[prKey(p, pendingParent)]) return `親 PR #${pendingParent} のマージ確認待ち`;
-  if (pr.staleHead) return `GitHub の PR 情報がブランチに追いついていない (PR の head ${pr.staleHead.prHead.slice(0, 7)}、ブランチの先頭 ${pr.staleHead.branchHead.slice(0, 7)})`;
+  if (pr.staleHead) return pr.staleHead.branchHead
+    ? `GitHub の PR 情報がブランチに追いついていない (PR の head ${pr.staleHead.prHead.slice(0, 7)}、ブランチの先頭 ${pr.staleHead.branchHead.slice(0, 7)})`
+    : `ブランチの先頭を読めず、PR の head ${pr.staleHead.prHead.slice(0, 7)} が最新かを確かめられない`;
   const parent = parentPr(p, pr);
   if (parent) return `下の #${parent.number} のマージ待ち`;
   if (!mergeTarget(p, pr)) return `base の ${e.base} はマージ済みの PR の head のため、ダッシュボードではマージしない`;

@@ -2524,6 +2524,8 @@ async function reviewSkipApi(t, { failOpenList = false } = {}) {
       callback(null, JSON.stringify({
         default_branch: 'main', allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true,
       }));
+    } else if (args[0] === 'api' && args[1] === 'repos/example/project/git/ref/heads/feature/602') {
+      callback(null, JSON.stringify({ object: { sha: headRefOid } }));
     } else callback(new Error(`unexpected gh arguments: ${args.join(' ')}`));
   };
   const runtime = await runningServer(t, { pullRequestOptions: {

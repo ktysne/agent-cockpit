@@ -10,6 +10,7 @@ const {
   parsePullRequestUrl,
   pullRequestKey,
   repositoryKey,
+  staleHeadDescription,
   validBranchName,
   validRepositoryPart,
 } = require('./pull-request-utils');
@@ -536,7 +537,7 @@ function assemblePullRequestStacks({
   function blockerFor(pr, includeCi = true) {
     const value = effective(pr);
     if (value.parentMergePending) return `親 PR #${value.parentMergePending} のマージ確認待ち`;
-    if (pr.staleHead) return `GitHub の PR 情報がブランチに追いついていない (PR の head ${pr.staleHead.prHead.slice(0, 7)}、ブランチの先頭 ${pr.staleHead.branchHead.slice(0, 7)})`;
+    if (pr.staleHead) return staleHeadDescription(pr.staleHead);
     if (!defaultBranch) return 'リポジトリ設定を取得できません';
     const parent = open.find((candidate) => candidate.number === parentByNumber.get(pr.number));
     if (parent) return `下の #${parent.number} のマージ待ち`;
@@ -1874,13 +1875,15 @@ class PullRequestTracker {
     await Promise.all(openPullRequests.map(async (pr) => {
       if (mismatches.get(pr.number)?.prHead !== pr.headRefOid) mismatches.delete(pr.number);
       if (verifyHeads && listAvailable && pr.isCrossRepository !== true && pr.headRefOid) {
+        let branchHead = null;
         try {
-          const branchHead = await readBranchHead(pr.headRefName);
-          if (branchHead) {
-            if (branchHead.toLowerCase() === pr.headRefOid.toLowerCase()) mismatches.delete(pr.number);
-            else mismatches.set(pr.number, { prHead: pr.headRefOid, branchHead, checkedAt });
-          }
+          branchHead = await readBranchHead(pr.headRefName);
         } catch {}
+        if (branchHead?.toLowerCase() === pr.headRefOid.toLowerCase()) mismatches.delete(pr.number);
+        else if (branchHead) mismatches.set(pr.number, { prHead: pr.headRefOid, branchHead, checkedAt });
+        // 読めないときに通すと、障害で ref も読めない間に古い head をマージしうるので、確かめられないとして止める。
+        // 確かめた食い違いは、読めなくても SHA を示せるので残す。
+        else if (!mismatches.get(pr.number)?.branchHead) mismatches.set(pr.number, { prHead: pr.headRefOid, branchHead: null, checkedAt });
       }
       const mismatch = mismatches.get(pr.number);
       pr.staleHead = mismatch ? { prHead: mismatch.prHead, branchHead: mismatch.branchHead } : null;
@@ -1974,8 +1977,10 @@ class PullRequestTracker {
       const key = repoKey(owner, repo);
       const pullRequest = this.repositories.get(key)?.openPullRequests.find((pr) => pr.number === number);
       const review = this.reviewByRepository.get(key)?.get(number);
-      if (pullRequest?.staleHead || (review && reviewReminderNeeded(review.evaluation))) {
-        targets.set(`${key}#${number}`, { owner, repo, number, headRefOid: pullRequest.headRefOid, ...(pullRequest.staleHead ? { staleHead: pullRequest.staleHead } : {}) });
+      // 先頭を読めなかっただけの PR は一時的な失敗のことが多いので、確かめた食い違いだけを知らせる。
+      const staleHead = pullRequest?.staleHead?.branchHead ? pullRequest.staleHead : null;
+      if (staleHead || (review && reviewReminderNeeded(review.evaluation))) {
+        targets.set(`${key}#${number}`, { owner, repo, number, headRefOid: pullRequest.headRefOid, ...(staleHead ? { staleHead } : {}) });
       }
     }
     return [...targets.values()];
