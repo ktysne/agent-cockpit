@@ -442,3 +442,15 @@ test('レビュー判定中に別の要求が取得したタスク催促を、�
   const retry = await send('post-tool-batch', 'next-batch', { event_name: 'PostToolBatch' });
   assert.match(retry.hookOutput.hookSpecificOutput.additionalContext, /タスクが登録されていない/);
 });
+
+test('head が不一致なら保留の記録があっても古い head に記録しないよう催促する', async t => {
+  const f = reminderFixture(t);
+  f.pr.staleHead = { prHead: f.pr.headRefOid, branchHead: 'b'.repeat(40) };
+  f.state.setCrossReviewDeferral({ owner: 'example', repo: 'project', number: 31,
+    headRefOid: f.pr.headRefOid, reason: '保留理由', next: '後でレビュー', recordedAt: new Date().toISOString() });
+  const result = await f.stop();
+  assert.match(result.stderrText, /古い head にレビュー不要や保留を記録しないでください/);
+  assert.match(result.stderrText, /ブランチの先頭 bbbbbbb/);
+  assert.doesNotMatch(result.stderrText, /cockpit_skip_review/);
+  assert.equal((await f.stop()).stderrText, null);
+});

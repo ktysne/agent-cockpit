@@ -5,6 +5,11 @@ const { applyReviewSkip, pullRequestStateUnavailable } = require('./review-skip'
 function createPullRequestRoutes(ctx) {
   const { state, pullRequestTracker, pullRequestMergeManager } = ctx;
 
+  async function handlePullRequestRefresh({ response }) {
+    const result = await pullRequestTracker.refreshAllByUser();
+    jsonResponse(response, 200, result);
+  }
+
   async function handleReviewSkip({ request, response, body }) {
     if (!body || typeof body !== 'object' || Array.isArray(body) ||
       Object.keys(body).sort().join(',') !== 'action,headRefOid,registration_key' ||
@@ -126,7 +131,7 @@ function createPullRequestRoutes(ctx) {
     jsonResponse(response, 200, { closed: true });
   }
 
-  return { handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister };
+  return { handlePullRequestRefresh, handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister };
 }
 
 module.exports = { createPullRequestRoutes };

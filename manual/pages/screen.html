@@ -6,7 +6,7 @@
 
   <figure class="guide-map" id="screen-overview-map" data-shot="overview/product" data-alt="ダッシュボードの全体。上から、ヘッダ、件数の札、経路の設定、表示モードの切り替えが並び、その下にプロダクトのカードがある">
     <ol class="guide-list">
-      <li data-part="overview.header" data-mark="frame" data-place="left"><b>ヘッダ</b>：アプリの名前、<span class="ui">離席中</span> のチェック、画面を読み込み直すボタン、設定のボタンです(<a href="#screen-header">ヘッダ</a>)。</li>
+      <li data-part="overview.header" data-mark="frame" data-place="left"><b>ヘッダ</b>：アプリの名前、<span class="ui">離席中</span> のチェック、最新の状態に取り直すボタン、設定のボタンです(<a href="#screen-header">ヘッダ</a>)。</li>
       <li data-part="overview.summary" data-mark="frame" data-place="right"><b>件数の札</b>：許可待ちや判断待ちなど、1 件以上ある種類の件数です。押すと、その種類を一覧から隠せます(<a href="#screen-summary">件数の札</a>)。</li>
       <li data-part="overview.routing" data-mark="frame" data-place="right"><b>経路の設定</b>：サブエージェントとクロスレビューを、Codex と Claude のどちらで行うかを選びます(<a href="#screen-routing">経路の設定</a>)。</li>
       <li data-part="overview.mode" data-mark="frame" data-place="right"><b>表示モードの切り替え</b>：一覧を、プロダクトごとに並べるか、種類ごとに並べるかを選びます(<a href="#screen-modes">プロダクト別と種類別の違い</a>)。</li>
@@ -16,12 +16,14 @@
 
   <h2 id="screen-header">ヘッダ</h2>
   <p>ヘッダは画面の最上段です。
-  左にアプリの名前、右に <span class="ui">離席中</span> のチェック、画面を読み込み直すボタン、設定のボタンがあります。</p>
-  <figure class="guide-map" id="screen-header-map" data-shot="screen-top/top" data-crop="0-340,1270-1700" data-crop-y="0-112" data-alt="ヘッダ。左にアイコンとアプリの名前があり、右に離席中のチェック、画面を読み込み直すボタン、歯車の設定のボタンがある">
+  左にアプリの名前、右に <span class="ui">離席中</span> のチェック、最新の状態に取り直すボタン、設定のボタンがあります。</p>
+  <figure class="guide-map" id="screen-header-map" data-shot="screen-top/top" data-crop="0-340,1270-1700" data-crop-y="0-112" data-alt="ヘッダ。左にアイコンとアプリの名前があり、右に離席中のチェック、最新の状態に取り直すボタン、歯車の設定のボタンがある">
     <ol class="guide-list">
       <li data-part="top.title"><b>アプリの名前</b>：Agent Cockpit の名前とアイコンです。ページの題には、許可待ちと止めて待っている判断事項の合計が、括弧で付きます。</li>
       <li data-part="top.away"><b><span class="ui">離席中</span></b>：席を外している間にチェックを入れます。離席中は、セッションからの質問への回答を、設定で決めた時間だけ待ち、時間内に回答が無い質問は推奨案で進めます。タスクトレイのメニューからも切り替えられます。</li>
-      <li data-part="top.refresh"><b><span class="ui">画面を読み込み直す</span></b>：画面全体を読み込み直します。書きかけの回答があるときは、捨てて読み込み直すか確認します。</li>
+      <li data-part="top.refresh"><b><span class="ui">最新の状態に取り直す</span></b>：登録済みのリポジトリから PR 情報を取り直し、画面を更新します。
+      画面の版が変わっている場合は、画面全体を読み込み直します。
+      その際、書きかけの回答があれば、捨てて読み込み直すか確認します。</li>
       <li data-part="top.settings"><b>設定のボタン</b>：歯車の形のボタンです。押すと <span class="ui">設定</span> の画面が開き、配色や、待ち時間と更新の無いセッションの扱いなどを決められます(<a href="settings.html#help-settings">設定画面</a>)。</li>
     </ol>
   </figure>

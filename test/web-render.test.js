@@ -5053,29 +5053,41 @@ test('セッションファイルの状態で決めたセッションは、フ�
   assert.equal(context.isIdleHiddenSession({ ...idle, statusSince: null }, now), false);
 });
 
-test('読み込み直すボタンは書きかけの回答が無ければ読み込み直し、あれば案内で確かめる', () => {
-  const handler = pageHtml.match(/refreshButton\.addEventListener\('click', (\(\) => \{[\s\S]*?\n\})\);/)?.[1];
-  assert.ok(handler);
-  const run = (hasDraft) => {
-    let reloads = 0;
-    const context = pageContext(pageHtml, {
-      lastState: { sessions: [] },
-      hasUnsentAnswerDraft: () => hasDraft,
-      location: { reload() { reloads += 1; } },
-      reloadNote: { hidden: true, innerHTML: '' },
-      uiUpdatePending: false,
-      refreshConfirmPending: false,
-    });
-    vm.runInContext(['renderReloadNote', 'setRefreshConfirmPending'].map((name) => functionSource(pageHtml, name)).join('\n'), context);
-    vm.runInContext(`(${handler})()`, context);
-    return { reloads, hidden: context.reloadNote.hidden, html: context.reloadNote.innerHTML };
-  };
+test('取り直すボタンは API の完了後に状態を取得し、待機中の二重操作を止める', async () => {
+  const calls = [];
+  let finish;
+  const button = { disabled: false, setAttribute(name, value) { this[name] = value; } };
+  const context = pageContext(pageHtml, {
+    refreshButton: button, uiUpdatePending: false,
+    postUiAction: (url, body) => { calls.push([url, body]); return new Promise(resolve => { finish = resolve; }); },
+    refresh: async () => { calls.push('state'); return true; },
+    showWriteError: (message) => assert.fail(message),
+  });
+  vm.runInContext(functionSource(pageHtml, 'refreshPullRequestsByUser'), context);
+  const pending = context.refreshPullRequestsByUser();
+  assert.equal(button.disabled, true);
+  assert.equal(button['aria-busy'], 'true');
+  await context.refreshPullRequestsByUser();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], '/api/pull-requests/refresh');
+  finish({ ok: true });
+  await pending;
+  assert.equal(calls[1], 'state');
+  assert.equal(button.disabled, false);
+  assert.equal(button['aria-busy'], 'false');
+});
 
-  assert.deepEqual(run(false), { reloads: 1, hidden: true, html: '' });
-  const withDraft = run(true);
-  assert.equal(withDraft.reloads, 0);
-  assert.equal(withDraft.hidden, false);
-  assert.match(withDraft.html, /data-reload-now>回答を消して読み込み直す</);
+test('画面の版が変わったときの取り直すボタンは下書きの破棄を確認する', async () => {
+  let confirmed = false;
+  const context = pageContext(pageHtml, {
+    refreshButton: { disabled: false }, uiUpdatePending: true, lastState: {},
+    hasUnsentAnswerDraft: () => true,
+    setRefreshConfirmPending: value => { confirmed = value; },
+    location: { reload() { assert.fail('下書きの確認が必要'); } },
+  });
+  vm.runInContext(functionSource(pageHtml, 'refreshPullRequestsByUser'), context);
+  await context.refreshPullRequestsByUser();
+  assert.equal(confirmed, true);
 });
 
 test('Codex が状態にあるときセッション、PR、「前回見てから」に起点帯を付ける', () => {
@@ -6219,4 +6231,19 @@ test('点検の実行要求の失敗は前の結果を残して再試行でき�
   assert.equal(context.doctorState.error, 'CHECK_FAILED');
   assert.equal(context.doctorState.running, false);
   assert.equal(context.doctorChecking, null);
+});
+
+test('PR の取り直しが失敗したら既存の書き込み失敗表示へ通知して再操作できる', async () => {
+  let errorMessage;
+  const button = { disabled: false, setAttribute() {} };
+  const context = pageContext(pageHtml, {
+    refreshButton: button, uiUpdatePending: false,
+    postUiAction: async () => ({ ok: false, status: 502 }),
+    refresh: async () => assert.fail('失敗した書き込みの後に状態を取得しない'),
+    showWriteError: message => { errorMessage = message; },
+  });
+  vm.runInContext(functionSource(pageHtml, 'refreshPullRequestsByUser'), context);
+  await context.refreshPullRequestsByUser();
+  assert.match(errorMessage, /最新の状態を取り直せませんでした/);
+  assert.equal(button.disabled, false);
 });

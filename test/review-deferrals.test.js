@@ -14,7 +14,7 @@ async function deferralApi(t, options = {}, readReview = () => null) {
     execFileImpl: (_file, args, _options, callback) => {
       if (args[0] === 'pr' && args[1] === 'list') callback(null, JSON.stringify(args[args.indexOf('--state') + 1] === 'open' ? [pr] : []));
       else if (args[0] === 'api' && args[1].includes('/compare/')) callback(null, JSON.stringify({ ahead_by: 0, commits: [] }));
-      else if (args[0] === 'api' && args[1].includes('/git/ref/')) callback(null, JSON.stringify({ object: { sha: 'a'.repeat(40) } }));
+      else if (args[0] === 'api' && args[1].includes('/git/ref/')) callback(null, JSON.stringify({ object: { sha: pr.headRefOid } }));
       else if (args[0] === 'api') callback(null, JSON.stringify({ default_branch: 'main', allow_merge_commit: true }));
       else callback(new Error('unexpected command'));
     },

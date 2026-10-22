@@ -22,6 +22,13 @@ function isCompleteCommitSha(value) {
   return typeof value === 'string' && COMPLETE_COMMIT_SHA_PATTERN.test(value);
 }
 
+/** branchHead が null なら、ブランチの先頭を読めず PR の head が最新かを確かめられていない。 */
+function staleHeadDescription({ prHead, branchHead }) {
+  return branchHead
+    ? `GitHub の PR 情報がブランチに追いついていない (PR の head ${prHead.slice(0, 7)}、ブランチの先頭 ${branchHead.slice(0, 7)})`
+    : `ブランチの先頭を読めず、PR の head ${prHead.slice(0, 7)} が最新かを確かめられない`;
+}
+
 // 登録キーは SHA-256 固定長なので、コミット SHA と長さの条件を分ける。
 function isSha256Digest(value) {
   return typeof value === 'string' && SHA256_DIGEST_PATTERN.test(value);
@@ -324,6 +331,7 @@ module.exports = {
   pullRequestKey,
   repositoryKey,
   shouldRefreshPullRequests,
+  staleHeadDescription,
   validBranchName,
   validRepositoryPart,
 };

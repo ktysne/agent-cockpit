@@ -10,6 +10,7 @@ const {
   parsePullRequestUrl,
   pullRequestKey,
   repositoryKey,
+  staleHeadDescription,
   validBranchName,
   validRepositoryPart,
 } = require('./pull-request-utils');
@@ -47,6 +48,7 @@ const DELETE_BRANCH_REF_MUTATION = `mutation($repositoryId: ID!, $refName: GitRe
   }
 }`;
 const INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+const USER_REFRESH_MIN_INTERVAL_MS = 10_000;
 // コマンドの後の取り直しも間引かないと、gh pr のたびに全リポジトリを一斉に取るため、修正前の定期取得と同じ間隔までは間引く。
 const COMMAND_REFRESH_INACTIVE_INTERVAL_MS = 60_000;
 // 対象のリポジトリが決まらないコマンドの全体の取り直しは、この間隔に 1 回へまとめ、間に来た分は間隔の明けに 1 回取る。
@@ -535,6 +537,7 @@ function assemblePullRequestStacks({
   function blockerFor(pr, includeCi = true) {
     const value = effective(pr);
     if (value.parentMergePending) return `親 PR #${value.parentMergePending} のマージ確認待ち`;
+    if (pr.staleHead) return staleHeadDescription(pr.staleHead);
     if (!defaultBranch) return 'リポジトリ設定を取得できません';
     const parent = open.find((candidate) => candidate.number === parentByNumber.get(pr.number));
     if (parent) return `下の #${parent.number} のマージ待ち`;
@@ -1240,6 +1243,10 @@ class PullRequestTracker {
     this.reviewGroupRefreshes = new Map();
     this.headToolResults = new Map();
     this.inFlight = new Map();
+    this.inFlightVerifying = new Set();
+    this.staleHeads = new Map();
+    this.userRefresh = null;
+    this.lastUserRefreshCompletedAt = -Infinity;
     this.executingMerges = new Set();
     this.lastFetchStartedAt = new Map();
     this.activeGhCount = 0;
@@ -1281,7 +1288,7 @@ class PullRequestTracker {
     this.commandRefreshTimer = null;
   }
 
-  refreshAll({ inactiveIntervalMs = INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS, fresh = false } = {}) {
+  refreshAll({ inactiveIntervalMs = INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS, fresh = false, verifyHeads = false } = {}) {
     const repositories = new Map();
     for (const record of [...this.state.readOnlyPullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]) {
       const key = repoKey(record.owner, record.repo);
@@ -1293,9 +1300,9 @@ class PullRequestTracker {
     const refreshes = [];
     for (const [key, { owner, repo, active }] of repositories) {
       const elapsed = this.lastFetchStartedAt.has(key) ? now - this.lastFetchStartedAt.get(key) : Infinity;
-      if (active || elapsed >= inactiveIntervalMs) refreshes.push(fresh ? this.refreshRepoFresh(owner, repo) : this.refreshRepo(owner, repo));
+      if (active || elapsed >= inactiveIntervalMs) refreshes.push(fresh ? this.refreshRepoFresh(owner, repo, { verifyHeads }) : this.refreshRepo(owner, repo, { verifyHeads }));
       // コマンドの後に飛ばしたリポジトリは、間隔が明けた時点で取る。15 分の定期取得まで反映を待たせないため。
-      else if (inactiveIntervalMs < INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS) this.deferRefresh(owner, repo, inactiveIntervalMs - elapsed);
+      else if (inactiveIntervalMs < INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS) this.deferRefresh(owner, repo, inactiveIntervalMs - elapsed, { verifyHeads });
     }
     return Promise.all(refreshes).then((results) => {
       // 取り直しの間に登録されたリポジトリを消さないため、登録は待った後に数え直す。
@@ -1321,7 +1328,24 @@ class PullRequestTracker {
     });
   }
 
+  refreshAllByUser() {
+    if (this.userRefresh) return this.userRefresh;
+    if (this.now() - this.lastUserRefreshCompletedAt < USER_REFRESH_MIN_INTERVAL_MS) {
+      return Promise.resolve({ ok: true, throttled: true });
+    }
+    this.userRefresh = this.refreshAll({ inactiveIntervalMs: 0, fresh: true, verifyHeads: true })
+      .then(() => ({ ok: true, throttled: false }))
+      .finally(() => {
+        this.lastUserRefreshCompletedAt = this.now();
+        this.userRefresh = null;
+      });
+    return this.userRefresh;
+  }
+
   pruneUnregisteredRepositoryRecords(registeredKeys) {
+    for (const key of this.staleHeads.keys()) {
+      if (!registeredKeys.has(key)) this.staleHeads.delete(key);
+    }
     for (const diagnosticKey of this.diagnosticFailures.keys()) {
       const firstSeparator = diagnosticKey.indexOf(':');
       const lastSeparator = diagnosticKey.lastIndexOf(':');
@@ -1364,7 +1388,7 @@ class PullRequestTracker {
     return deleted;
   }
 
-  scheduleUnknownMergeableRefresh(owner, repo, openPullRequests) {
+  scheduleUnknownMergeableRefresh(owner, repo, openPullRequests, { verifyHeads = false } = {}) {
     const key = repoKey(owner, repo);
     if (!openPullRequests.some((pullRequest) => pullRequest.mergeable === 'UNKNOWN')) {
       this.unknownMergeableRefreshCounts.delete(key);
@@ -1372,34 +1396,45 @@ class PullRequestTracker {
     }
     const count = (this.unknownMergeableRefreshCounts.get(key) || 0) + 1;
     this.unknownMergeableRefreshCounts.set(key, count);
-    if (count <= UNKNOWN_MERGEABLE_REFRESH_LIMIT) this.deferRefresh(owner, repo, UNKNOWN_MERGEABLE_REFRESH_MS);
+    if (count <= UNKNOWN_MERGEABLE_REFRESH_LIMIT) this.deferRefresh(owner, repo, UNKNOWN_MERGEABLE_REFRESH_MS, { verifyHeads });
   }
 
-  deferRefresh(owner, repo, delayMs) {
+  deferRefresh(owner, repo, delayMs, { verifyHeads = false } = {}) {
     const key = repoKey(owner, repo);
-    if (this.deferredRefreshes.has(key)) return;
+    if (this.deferredRefreshes.has(key)) {
+      if (!verifyHeads) return;
+      clearTimeout(this.deferredRefreshes.get(key));
+    }
     const timeout = setTimeout(() => {
       this.deferredRefreshes.delete(key);
       if (!this.state.pullRequestRegistrationsForRepo(owner, repo).length
         && !this.state.relatedPullRequestRegistrationsForRepo(owner, repo).length) return;
       // 先に動いている取得はコマンドの前の状態かもしれないので、合流せず終わるのを待ってから取り直す。
-      void this.refreshRepoFresh(owner, repo).catch(() => {});
+      void this.refreshRepoFresh(owner, repo, { verifyHeads }).catch(() => {});
     }, Math.max(0, delayMs));
     timeout.unref?.();
     this.deferredRefreshes.set(key, timeout);
   }
 
-  refreshRepo(owner, repo) {
+  refreshRepo(owner, repo, { verifyHeads = false } = {}) {
     const repository = safeRepo(owner, repo);
     const key = repoKey(owner, repo);
-    if (this.inFlight.has(key)) return this.inFlight.get(key);
+    if (this.inFlight.has(key)) {
+      const running = this.inFlight.get(key);
+      if (verifyHeads && !this.inFlightVerifying.has(key)) {
+        return running.catch(() => {}).then(() => this.refreshRepo(owner, repo, { verifyHeads }));
+      }
+      return running;
+    }
+    if (verifyHeads) this.inFlightVerifying.add(key);
     clearTimeout(this.deferredRefreshes.get(key));
     this.deferredRefreshes.delete(key);
     this.lastFetchStartedAt.set(key, this.now());
-    const operation = this.fetchRepository(owner, repo, repository)
+    const operation = this.fetchRepository(owner, repo, repository, { verifyHeads })
       .then(async (result) => {
         this.initialFetchCompleted.add(key);
         this.inFlight.delete(key);
+        this.inFlightVerifying.delete(key);
         this.state.touch();
         try {
           await this.onRefreshed?.(owner, repo);
@@ -1408,6 +1443,7 @@ class PullRequestTracker {
       }, (error) => {
         this.initialFetchCompleted.add(key);
         this.inFlight.delete(key);
+        this.inFlightVerifying.delete(key);
         this.state.touch();
         throw error;
       });
@@ -1415,11 +1451,12 @@ class PullRequestTracker {
     return operation;
   }
 
-  async refreshRepoFresh(owner, repo, { priority = false } = {}) {
+  async refreshRepoFresh(owner, repo, { priority = false, verifyHeads = priority } = {}) {
+    verifyHeads ||= priority;
     const key = repoKey(owner, repo);
     if (!priority) {
       await this.inFlight.get(key)?.catch(() => {});
-      return this.refreshRepo(owner, repo);
+      return this.refreshRepo(owner, repo, { verifyHeads });
     }
     // 先に動いている同じリポジトリの取得を待つ間も、その gh を優先に引き上げて確定操作を待たせない。
     this.priorityRepositories.set(key, (this.priorityRepositories.get(key) || 0) + 1);
@@ -1431,7 +1468,7 @@ class PullRequestTracker {
       if (count > 0) this.priorityRepositories.set(key, count);
       else this.priorityRepositories.delete(key);
     }
-    return ghPriorityContext.run(true, () => this.refreshRepo(owner, repo));
+    return ghPriorityContext.run(true, () => this.refreshRepo(owner, repo, { verifyHeads }));
   }
 
   // 先に動く取得はコマンドの前の状態かもしれないので、終わるのを待ってから取り直す。
@@ -1448,7 +1485,7 @@ class PullRequestTracker {
       return Promise.resolve([]);
     }
     this.lastCommandRefreshAt = this.now();
-    return this.refreshAll({ inactiveIntervalMs: COMMAND_REFRESH_INACTIVE_INTERVAL_MS, fresh: true });
+    return this.refreshAll({ inactiveIntervalMs: COMMAND_REFRESH_INACTIVE_INTERVAL_MS, fresh: true, verifyHeads: true });
   }
 
   mergeCandidate(registration) {
@@ -1769,7 +1806,7 @@ class PullRequestTracker {
     }
   }
 
-  async fetchRepository(owner, repo, repository) {
+  async fetchRepository(owner, repo, repository, { verifyHeads = false } = {}) {
     const key = repoKey(owner, repo);
     const fetchStartedAt = this.now();
     const closureGenerationAtStart = this.state.pullRequestClosureGeneration(owner, repo);
@@ -1789,7 +1826,7 @@ class PullRequestTracker {
       fetchedAt, listAvailable, errors, uninspectedNumbers } = interpretFetchResults({
       listResult, configResult, current, checkedAt,
     });
-    if (listAvailable) this.scheduleUnknownMergeableRefresh(owner, repo, openPullRequests);
+    if (listAvailable) this.scheduleUnknownMergeableRefresh(owner, repo, openPullRequests, { verifyHeads });
     let mergedPullRequests = null;
     let mergedListComplete = false;
 
@@ -1834,6 +1871,26 @@ class PullRequestTracker {
       }
       return branchHeadRequests.get(branch);
     };
+    const mismatches = this.staleHeads.get(key) || new Map();
+    await Promise.all(openPullRequests.map(async (pr) => {
+      if (mismatches.get(pr.number)?.prHead !== pr.headRefOid) mismatches.delete(pr.number);
+      // 確かめられない記録は定期の取得でも照合し直す。照合の付いた取得を待つと、予約のマージが回復後も再開しないため。
+      const unverified = mismatches.has(pr.number) && !mismatches.get(pr.number).branchHead;
+      if ((verifyHeads || unverified) && listAvailable && pr.isCrossRepository !== true && pr.headRefOid) {
+        let branchHead = null;
+        try {
+          branchHead = await readBranchHead(pr.headRefName);
+        } catch {}
+        if (branchHead?.toLowerCase() === pr.headRefOid.toLowerCase()) mismatches.delete(pr.number);
+        else if (branchHead) mismatches.set(pr.number, { prHead: pr.headRefOid, branchHead, checkedAt });
+        // 読めないときに通すと、障害で ref も読めない間に古い head をマージしうるので、確かめられないとして止める。
+        // 確かめた食い違いは、読めなくても SHA を示せるので残す。
+        else if (!mismatches.get(pr.number)?.branchHead) mismatches.set(pr.number, { prHead: pr.headRefOid, branchHead: null, checkedAt });
+      }
+      const mismatch = mismatches.get(pr.number);
+      pr.staleHead = mismatch ? { prHead: mismatch.prHead, branchHead: mismatch.branchHead } : null;
+    }));
+    this.staleHeads.set(key, mismatches);
     const { restackResults, liveMergedBranches } = await evaluateRestack({
       openPullRequests, mergedCandidates, mergedListComplete, defaultBranch, listAvailable, readBranchHead,
       compare: async (compareBase, headRefOid) => parseCompareResult(await this.execute([
@@ -1877,6 +1934,10 @@ class PullRequestTracker {
     // 取得中に確定したマージとクローズを古い一覧で戻さず、ほかの PR の更新は反映する。
     const currentOpenPullRequests = openPullRequests.filter((pr) =>
       this.state.pullRequestClosureGeneration(owner, repo, pr.number) <= closureGenerationAtStart);
+    const currentNumbers = new Set(currentOpenPullRequests.map((pr) => pr.number));
+    for (const number of mismatches.keys()) {
+      if (!currentNumbers.has(number)) mismatches.delete(number);
+    }
     this.updateProductMembership(owner, repo, {
       registrations, relatedPullRequests, openPullRequests: currentOpenPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
       mergedPullRequests, mergedCandidates, mergeTargetHeadChecks, uninspectedNumbers, mergeMethods,
@@ -1918,8 +1979,10 @@ class PullRequestTracker {
       const key = repoKey(owner, repo);
       const pullRequest = this.repositories.get(key)?.openPullRequests.find((pr) => pr.number === number);
       const review = this.reviewByRepository.get(key)?.get(number);
-      if (review && reviewReminderNeeded(review.evaluation)) {
-        targets.set(`${key}#${number}`, { owner, repo, number, headRefOid: pullRequest.headRefOid });
+      // 先頭を読めなかっただけの PR は一時的な失敗のことが多いので、確かめた食い違いだけを知らせる。
+      const staleHead = pullRequest?.staleHead?.branchHead ? pullRequest.staleHead : null;
+      if (staleHead || (review && reviewReminderNeeded(review.evaluation))) {
+        targets.set(`${key}#${number}`, { owner, repo, number, headRefOid: pullRequest.headRefOid, ...(staleHead ? { staleHead } : {}) });
       }
     }
     return [...targets.values()];
