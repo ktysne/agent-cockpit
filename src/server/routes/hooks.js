@@ -45,7 +45,7 @@ function createHookRoutes(ctx) {
       if (!repositories.has(key)) repositories.set(key, { owner: record.owner, repo: record.repo });
     }
     for (const { owner, repo } of repositories.values()) {
-      void pullRequestTracker?.refreshRepoFresh(owner, repo).catch(() => {});
+      void pullRequestTracker?.refreshRepoFresh(owner, repo, { verifyHeads: true }).catch(() => {});
     }
   }
 

@@ -4087,3 +4087,114 @@ for (const scenario of [
     else assert.deepEqual(review.decision, { kind: 'not-required', source: 'recorded', reason: '文言だけの変更', next: null });
   });
 }
+
+async function mismatchFixture(t) {
+  const f = await trackerFixture(t);
+  t.after(() => f.tracker.close());
+  f.github.openPullRequests = [ghPullRequest(31, 'feature/31', 'main', 'a'.repeat(40))];
+  f.github.branchHeads.set('feature/31', 'b'.repeat(40));
+  await f.tracker.refreshRepo('example', 'project', { verifyHeads: true });
+  return f;
+}
+
+test('head の不一致は画面へ渡し、マージと予約実行を止める', async t => {
+  const { tracker, state } = await mismatchFixture(t);
+  const pr = tracker.snapshot()[0].trees[0];
+  assert.deepEqual(pr.staleHead, { prHead: 'a'.repeat(40), branchHead: 'b'.repeat(40) });
+  assert.equal(pr.canMerge, false);
+  assert.match(pr.operationBlocker, /PR の head aaaaaaa、ブランチの先頭 bbbbbbb/);
+  assert.equal(tracker.mergeCandidate(state.pullRequestRegistrations()[0]).pullRequest.canMerge, false);
+});
+
+for (const mode of ['一致', 'null', '例外', '照合なし', 'head 更新']) {
+  test(`head の不一致の後の取得が${mode}なら照合結果に従って警告を保持または解除する`, async t => {
+    const { tracker, github, calls } = await mismatchFixture(t);
+    if (mode === '一致') github.branchHeads.set('feature/31', 'a'.repeat(40));
+    if (mode === 'null') github.branchHeads.delete('feature/31');
+    if (mode === '例外') github.branchHeadErrors.set('feature/31', new Error('network unavailable'));
+    if (mode === 'head 更新') github.openPullRequests[0].headRefOid = 'b'.repeat(40);
+    calls.length = 0;
+    await tracker.refreshRepo('example', 'project', { verifyHeads: ['一致', 'null', '例外'].includes(mode) });
+    const pr = tracker.snapshot()[0].trees[0];
+    assert.equal(!!pr.staleHead, ['null', '例外', '照合なし'].includes(mode));
+    if (mode === '照合なし') assert.equal(calls.some(args => args[1]?.includes('/git/ref/heads/feature/31')), false);
+  });
+}
+
+test('利用者の取り直しは非活性リポジトリを取得し、完了後 10 秒以内は再取得しない', async t => {
+  const { tracker, state, calls } = await trackerFixture(t);
+  t.after(() => tracker.close());
+  state.updatePullRequest('session-31', 'example', 'project', 31, { state: 'closed' });
+  await tracker.refreshAll();
+  calls.length = 0;
+  assert.deepEqual(await tracker.refreshAllByUser(), { ok: true, throttled: false });
+  assert.ok(calls.some(args => args[0] === 'pr' && args[1] === 'list'));
+  calls.length = 0;
+  assert.deepEqual(await tracker.refreshAllByUser(), { ok: true, throttled: true });
+  assert.equal(calls.length, 0);
+});
+
+test('利用者の取り直し中の再操作は同じ取得に合流する', async t => {
+  const { tracker } = await trackerFixture(t);
+  t.after(() => tracker.close());
+  const first = tracker.refreshAllByUser();
+  assert.equal(tracker.refreshAllByUser(), first);
+  await first;
+});
+
+test('照合なしの取得の完了通知中に始まった取得へ照合要求を合流させない', async t => {
+  const { tracker, github } = await trackerFixture(t);
+  t.after(() => tracker.close());
+  github.openPullRequests = [ghPullRequest(31, 'feature/31', 'main', 'a'.repeat(40))];
+  github.branchHeads.set('feature/31', 'b'.repeat(40));
+  let following;
+  tracker.onRefreshed = () => {
+    tracker.onRefreshed = null;
+    following = tracker.refreshRepo('example', 'project');
+  };
+  const running = tracker.refreshRepo('example', 'project');
+  const verifying = tracker.refreshRepoFresh('example', 'project', { priority: true });
+  await Promise.all([running, verifying]);
+  await following;
+  assert.ok(tracker.snapshot()[0].trees[0].staleHead);
+});
+
+test('消えた PR と登録を外したリポジトリの head 不一致を削除する', async t => {
+  const { tracker, github, state } = await mismatchFixture(t);
+  github.openPullRequests = [];
+  github.views.set(31, { ...ghPullRequest(31, 'feature/31', 'main', 'a'.repeat(40)), state: 'CLOSED' });
+  await tracker.refreshRepo('example', 'project');
+  assert.equal(tracker.staleHeads.get('example/project').size, 0);
+  state.deleteClosedPullRequest('example', 'project', 31);
+  await tracker.refreshAll();
+  assert.equal(tracker.staleHeads.has('example/project'), false);
+});
+
+test('PR の取り直し API は秘密値と Origin を検証してから全体を更新する', async t => {
+  const { startTestServer, request, uiHeaders } = require('./support/server');
+  let refreshed = 0;
+  const server = await startTestServer(t, { startPullRequestTracker: false });
+  server.runtime.pullRequestTracker.refreshAllByUser = async () => {
+    refreshed += 1;
+    return { ok: true, throttled: false };
+  };
+  const post = headers => request(server.info.port, { method: 'POST', path: '/api/pull-requests/refresh',
+    headers: { 'content-type': 'application/json', ...headers }, body: '{}' });
+  assert.equal((await post({})).status, 401);
+  assert.equal((await post(uiHeaders(server.info, 'https://example.invalid'))).status, 403);
+  assert.equal(refreshed, 0);
+  const response = await post(uiHeaders(server.info, `http://127.0.0.1:${server.info.port}`));
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body), { ok: true, throttled: false });
+  assert.equal(refreshed, 1);
+});
+
+test('fork の PR は利用者が取り直しても base リポジトリの同名ブランチと照合しない', async t => {
+  const { tracker, github, calls } = await trackerFixture(t);
+  t.after(() => tracker.close());
+  github.openPullRequests = [ghPullRequest(31, 'feature/fork', 'main', { sha: 'a'.repeat(40), isCrossRepository: true })];
+  github.branchHeads.set('feature/fork', 'b'.repeat(40));
+  await tracker.refreshAllByUser();
+  assert.equal(tracker.snapshot()[0].trees[0].staleHead, null);
+  assert.equal(calls.some(args => args[1]?.includes('/git/ref/heads/feature/fork')), false);
+});

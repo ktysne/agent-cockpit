@@ -696,10 +696,16 @@ class DecisionAnswerDelivery {
     for (const { owner, repo, number } of targets) {
       this.diagnostics?.record('info', 'merge', 'review.reminder', { repository: `${owner}/${repo}`, number, session: sessionId.slice(0, 8) });
     }
+    const ordinaryTargets = targets.filter((target) => !target.staleHead);
+    const mismatchedTargets = targets.filter((target) => target.staleHead);
     return [
-      '次の PR の現在の head には、クロスレビューの結論も、レビュー不要や保留の記録もありません(古い head の記録だけがある場合も含みます):',
-      ...targets.map(({ owner, repo, number }) => `PR #${number} (${owner}/${repo})。`),
-      'クロスレビューを実施するか、省略するなら `cockpit_skip_review` に現在の head SHA と理由を渡して記録してください。保留するなら `cockpit_defer_review` に現在の head SHA、理由、次の作業(next)を渡してください。ツールが成功を返したことを確かめてから完了報告してください。成功しなければツールの応答に従い、未記録か、記録できたかを確かめられなかったかを、理由とともに完了報告に書いてください。保留はレビューを条件にしたマージの対象になりません。',
+      ...(ordinaryTargets.length ? [
+        '次の PR の現在の head には、クロスレビューの結論も、レビュー不要や保留の記録もありません(古い head の記録だけがある場合も含みます):',
+        ...ordinaryTargets.map(({ owner, repo, number }) => `PR #${number} (${owner}/${repo})。`),
+        'クロスレビューを実施するか、省略するなら `cockpit_skip_review` に現在の head SHA と理由を渡して記録してください。保留するなら `cockpit_defer_review` に現在の head SHA、理由、次の作業(next)を渡してください。ツールが成功を返したことを確かめてから完了報告してください。成功しなければツールの応答に従い、未記録か、記録できたかを確かめられなかったかを、理由とともに完了報告に書いてください。保留はレビューを条件にしたマージの対象になりません。',
+      ] : []),
+      ...mismatchedTargets.map(({ owner, repo, number, staleHead: { prHead, branchHead } }) =>
+        `次の PR は、GitHub の PR 情報がブランチの先頭に追いついていません。PR #${number} (${owner}/${repo}): PR の head ${prHead.slice(0, 7)}、ブランチの先頭 ${branchHead.slice(0, 7)}。古い head にレビュー不要や保留を記録しないでください。GitHub 側で head が更新されたら(障害の回復を待つか、PR を閉じて開き直す)、ブランチの先頭に対してクロスレビューを行ってください。`),
       SESSION_NOTIFICATION_REPLY_LANGUAGE,
     ].join('\n');
   }

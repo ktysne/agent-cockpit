@@ -2308,3 +2308,36 @@ test('既定ブランチの worktree が無ければローカル更新の通知�
   assert.equal(f.localCalls.some(call => call[2] === 'merge'), false);
   assert.equal(f.notices.length, 1);
 });
+
+for (const next of [undefined, 'GitHub の回復後にレビューする']) {
+  test(`head が不一致なら${next ? '保留' : 'レビュー不要'}を古い head に記録しない`, async t => {
+    const f = await mergeFixture(t);
+    f.control.remoteBranchHeads.set('feature/one', sha(2));
+    const registration = f.state.pullRequestRegistrations()[0];
+    const result = await f.manager.setReviewRecord(registration, sha(3), '理由', next);
+    assert.equal(result.status, 409);
+    assert.match(result.error, /GitHub の PR 情報がブランチの先頭に追いついていません/);
+    assert.equal(f.state.crossReviewSkip('example', 'project', 1), null);
+    assert.equal(f.state.crossReviewDeferral('example', 'project', 1), null);
+  });
+}
+
+test('ブランチだけ進んだ PR は手動マージを実行しない', async t => {
+  const f = await mergeFixture(t);
+  f.control.crossReviews.set(1, convergedReview(1));
+  f.control.remoteBranchHeads.set('feature/one', sha(2));
+  const result = await f.manager.merge(mergeInput());
+  assert.equal(result.ok, false);
+  assert.match(result.error, /PR 情報がブランチに追いついていない/);
+  assert.equal(f.calls.some(args => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
+test('予約後にブランチだけ進んだ PR は収束の記録があってもマージしない', async t => {
+  const f = await mergeFixture(t);
+  assert.equal((await f.manager.reserve(mergeInput())).reserved, true);
+  f.control.crossReviews.set(1, convergedReview(1));
+  f.control.remoteBranchHeads.set('feature/one', sha(2));
+  await f.manager.checkReservations();
+  assert.equal(f.calls.some(args => args[0] === 'pr' && args[1] === 'merge'), false);
+  assert.ok(f.state.pullRequestMergeReservation('example', 'project', 1));
+});

@@ -222,7 +222,7 @@ function createRequestHandler(options) {
   const { handleHealth, handleState, handleTrayState, handleContext, handleDevFields, handleIndex, restartRequired } = createReadRoutes(ctx);
   ctx.restartRequired = restartRequired;
   const { handleHookAnswers, handleEvents, handlePlan, handleSessionPullRequests } = createHookRoutes(ctx);
-  const { handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
+  const { handlePullRequestRefresh, handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
   const {
     handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks,
     handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer, handleLaunchRequest, handleWorktreeTerminal,
@@ -288,6 +288,7 @@ function createRequestHandler(options) {
     { method: 'POST', path: /^\/api\/decisions\/([^/]+)\/answer$/, auth: 'ui', body: 'json', handler: handleDecisionAnswer },
     { method: 'POST', path: '/api/verify/launch', auth: 'ui', body: 'json', handler: handleLaunchRequest },
     { method: 'POST', path: '/api/worktree/terminal', auth: 'ui', body: 'json', handler: handleWorktreeTerminal },
+    { method: 'POST', path: '/api/pull-requests/refresh', auth: 'ui', body: 'json', handler: handlePullRequestRefresh },
     { method: 'POST', path: '/api/pull-requests/review-skip', auth: 'ui', body: 'json', handler: handleReviewSkip },
     { method: 'POST', path: /^\/api\/pull-requests\/(merge|reserve|cancel-reservation|conflict-request)$/, auth: 'ui', body: 'json', handler: handlePullRequestAction },
     { method: 'GET', path: '/', auth: 'none', body: 'none', handler: handleIndex },

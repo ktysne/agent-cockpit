@@ -248,6 +248,10 @@ class PullRequestMergeManager {
       const candidate = await this.reviewSkipCandidate(registration);
       if (candidate.refreshFailed) return actionResult(502, 'PR の状態を取り直せませんでした');
       if (candidate.error) return actionResult(409, 'PR はオープンではありません');
+      if (candidate.pullRequest.staleHead) {
+        const { prHead, branchHead } = candidate.pullRequest.staleHead;
+        return actionResult(409, `GitHub の PR 情報がブランチの先頭に追いついていません (PR の head ${prHead.slice(0, 7)}、ブランチの先頭 ${branchHead.slice(0, 7)})。GitHub 側の head が更新されてから記録してください`);
+      }
       if (candidate.pullRequest.headRefOid.toLowerCase() !== headRefOid.toLowerCase()) {
         return actionResult(409, 'PR の head が変わりました。現在の状態を確認してください');
       }
