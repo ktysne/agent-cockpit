@@ -1874,7 +1874,9 @@ class PullRequestTracker {
     const mismatches = this.staleHeads.get(key) || new Map();
     await Promise.all(openPullRequests.map(async (pr) => {
       if (mismatches.get(pr.number)?.prHead !== pr.headRefOid) mismatches.delete(pr.number);
-      if (verifyHeads && listAvailable && pr.isCrossRepository !== true && pr.headRefOid) {
+      // 確かめられない記録は定期の取得でも照合し直す。照合の付いた取得を待つと、予約のマージが回復後も再開しないため。
+      const unverified = mismatches.has(pr.number) && !mismatches.get(pr.number).branchHead;
+      if ((verifyHeads || unverified) && listAvailable && pr.isCrossRepository !== true && pr.headRefOid) {
         let branchHead = null;
         try {
           branchHead = await readBranchHead(pr.headRefName);

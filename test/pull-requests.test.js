@@ -4122,7 +4122,7 @@ for (const mode of ['一致', 'null', '例外', '照合なし', 'head 更新']) 
 }
 
 for (const mode of ['null', '例外']) {
-  test(`照合の記録が無い PR の先頭の取得が${mode}なら、確かめられないとしてマージを止め、Stop フックには出さない`, async t => {
+  test(`照合の記録が無い PR の先頭の取得が${mode}なら、確かめられないとしてマージを止め、Stop フックには出さず、定期の取得で照合し直す`, async t => {
     const f = await trackerFixture(t);
     t.after(() => f.tracker.close());
     f.github.openPullRequests = [ghPullRequest(31, 'feature/31', 'main', 'a'.repeat(40))];
@@ -4136,7 +4136,7 @@ for (const mode of ['null', '例外']) {
 
     f.github.branchHeads.set('feature/31', 'a'.repeat(40));
     f.github.branchHeadErrors.delete('feature/31');
-    await f.tracker.refreshRepo('example', 'project', { verifyHeads: true });
+    await f.tracker.refreshRepo('example', 'project');
     assert.equal(f.tracker.snapshot()[0].trees[0].staleHead, null);
   });
 }
