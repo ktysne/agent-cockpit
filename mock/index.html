@@ -306,6 +306,8 @@ h3.sub .count { font-weight: normal; }
 .decision.state-ok { border-left: 4px solid var(--ok); }
 .decision.withdrawn { border-left: 4px solid var(--border); }
 .decision .dhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.decision.manually-hidden { opacity: .55; }
+.decision .dhead > .link-btn, .pr .pline > .link-btn { margin-left: auto; }
 .decision .dtitle { font-weight: 600; }
 .decision .ctx { font-size: 13px; color: var(--text-2); margin: 4px 0 8px; }
 .options { list-style: none; padding: 0; margin: 0 0 10px; display: grid; gap: 4px; }
@@ -371,7 +373,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .pr-actions .merge-btn, .pr-actions .conflict-btn { margin-left: 0; width: 100%; padding-inline: 8px; }
 .merge-state { color: var(--text-2); font-size: 11px; text-align: center; }
 .merge-state.ok { color: var(--ok-text); font-weight: 600; }
-.pr .pline { display: flex; gap: 8px; align-items: baseline; }
+.pr .pline { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
 .pr .pline > * { flex: none; }
 .pr .pline > .ptitle { flex: 0 1 auto; min-width: 0; }
 .pr .num { font-weight: 600; }
@@ -1151,7 +1153,13 @@ const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) ||
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
 // 読み込み直すと消える案内なので、保存する ui には置かない。
 let refreshConfirmPending = false;
-const ui = Object.assign({ mode: 'kind', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 3, idleHideMinutes: 10, ghConcurrencyLimit: 8, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+const ui = Object.assign({ mode: 'kind', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], hiddenDecisions: [], expandedHiddenDecisions: [], expandedKindHiddenDecisions: false, hiddenPrs: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 3, idleHideMinutes: 10, ghConcurrencyLimit: 8, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+ui.hiddenDecisions = Array.isArray(ui.hiddenDecisions) ? [...new Set(ui.hiddenDecisions.filter(id => typeof id === 'string'))] : [];
+ui.hiddenPrs = Array.isArray(ui.hiddenPrs) ? [...new Set(ui.hiddenPrs.filter(key => typeof key === 'string'))] : [];
+if (!ui.answers['rs-1']) {
+  const sentAt = new Date(Date.now() - 18 * 60_000).toISOString();
+  ui.answers['rs-1'] = { choice: 'ok', picks: [], note: '', sent: { choice: 'ok', picks: [], note: '', at: sentAt, deliveredAt: sentAt } };
+}
 ui.importAppTasksAsked = ui.importAppTasksAsked === true;
 ui.importAppTasks = ui.importAppTasksAsked && ui.importAppTasks === true;
 const TRANSIENT_NOTICE_MS = 60_000;
@@ -2008,14 +2016,17 @@ function isAwaitingDecision(decision) {
   return isActiveDecision(decision) && !answerOf(decision.id).sent;
 }
 
-const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filter(isAwaitingDecision);
+const isManuallyHiddenDecision = decision => ui.hiddenDecisions.includes(decision.id);
+const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filter(decision =>
+  isAwaitingDecision(decision) && !isManuallyHiddenDecision(decision));
 
 function countJudgments(sessions) {
   const counts = { permission: 0, blocking: 0, provisional: 0 };
   for (const session of sessions) {
     counts.permission += session.perms.filter(wait => wait.phase === 'prompted').length;
     for (const decision of session.decisions) {
-      if (!isAwaitingDecision(decision)) continue;
+      const manuallyHidden = typeof ui !== 'undefined' && Array.isArray(ui.hiddenDecisions) && ui.hiddenDecisions.includes(decision.id);
+      if (!isAwaitingDecision(decision) || manuallyHidden) continue;
       counts[effectiveDecisionState(decision) === 'waiting' ? 'blocking' : 'provisional'] += 1;
     }
   }
@@ -2050,18 +2061,31 @@ function decisionCategory(d) {
   return 'answered';
 }
 const isShown = key => !ui.hidden.includes(key);
-const visibleDecisions = s => s.decisions.filter(d => isActiveDecision(d) && isShown(decisionCategory(d)));
+const visibleDecisions = s => s.decisions.filter(d => isActiveDecision(d)
+  && !isManuallyHiddenDecision(d) && isShown(decisionCategory(d)));
+const manuallyHiddenDecisions = s => s.decisions.filter(d => isActiveDecision(d)
+  && isManuallyHiddenDecision(d) && isShown(decisionCategory(d)));
 const visibleSubagents = s => s.subagents.filter(agent => !isBusyAgent(s, agent) || isShown('agents'));
 const visiblePermissions = s => isShown('permission') ? s.perms.filter(wait => wait.phase === 'prompted') : [];
 const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.some(wait => wait.phase === 'prompted'))
-  || s.decisions.some(d => isActiveDecision(d) && !isShown(decisionCategory(d)));
+  || s.decisions.some(d => isActiveDecision(d) && !isShown(decisionCategory(d)))
+  || manuallyHiddenDecisions(s).length > 0;
+
+function pruneHiddenDecisions() {
+  const activeIds = new Set(allSessions().flatMap(session => session.decisions).filter(isActiveDecision).map(decision => decision.id));
+  const retained = ui.hiddenDecisions.filter(id => activeIds.has(id));
+  if (retained.length !== ui.hiddenDecisions.length) {
+    ui.hiddenDecisions = retained;
+    save();
+  }
+}
 
 function countHidden() {
   const hiddenRows = allSessions().filter(s => (!ui.hiddenSessions.includes(s.id) || isIdleHiddenSession(s))).reduce((n, s) => n
-    + s.decisions.filter(d => isActiveDecision(d) && !isShown(decisionCategory(d))).length
+    + s.decisions.filter(d => isActiveDecision(d) && !isManuallyHiddenDecision(d) && !isShown(decisionCategory(d))).length
     + s.subagents.filter(agent => isBusyAgent(s, agent) && !isShown('agents')).length
     + (isShown('permission') ? 0 : s.perms.filter(wait => wait.phase === 'prompted').length), 0);
-  return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + openPrs(p).length, 0));
+  return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + visibleOpenPrs(p).length, 0));
 }
 
 const recordDeletionTargets = new Map();
@@ -2166,7 +2190,7 @@ function renderSummary() {
   const sessions = allSessions().filter(s => (!ui.hiddenSessions.includes(s.id) || isIdleHiddenSession(s)));
   const judgmentCounts = countJudgments(sessions);
   const agents = sessions.reduce((n, s) => n + s.subagents.filter(agent => isBusyAgent(s, agent)).length, 0);
-  const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length, 0);
+  const prs = DATA.products.reduce((n, p) => n + visibleOpenPrs(p).filter(pr => pullRequestMergeable(p, pr)).length, 0);
   const counts = { ...judgmentCounts, agents, prs };
   // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
   const need = judgmentCounts.permission + judgmentCounts.blocking;
@@ -2621,7 +2645,7 @@ function worktreeLinks(session) {
   return `<span class="worktree-links">${worktreeButtons(key, session.worktree, true, session.worktreeMissing)}${worktreeStatus(key)}</span>`;
 }
 
-function decisionCard(p, session, d, withTag) {
+function decisionCard(p, session, d, withTag, manuallyHidden = false) {
   const a = answerOf(d.id);
   const draft = answerForUi(a, d);
   const state = effectiveDecisionState(d);
@@ -2631,6 +2655,11 @@ function decisionCard(p, session, d, withTag) {
   const stateChip = state === 'waiting'
     ? `<span class="badge permission">${stateLabel}</span>`
     : `<span class="chip ${stateTone}">${stateLabel}</span>`;
+  const hideButton = manuallyHidden
+    ? `<button type="button" class="link-btn" data-restore-decision="${esc(d.id)}" data-decision-session="${esc(session.id)}">表示に戻す</button>`
+    : (state === 'waiting' || state === 'provisional') && !(state === 'waiting' && Number.isFinite(d.awaitingMin))
+      ? `<button type="button" class="link-btn" data-hide-decision="${esc(d.id)}" data-decision-session="${esc(session.id)}">非表示にする</button>`
+      : '';
   // ダイアログを出している質問は外から答えられないので、回答欄の代わりに案内を出す。
   // awaitingMin は、離席中に出た質問でフックが回答を待っているときの、推奨に進むまでの残り分。
   // 確認依頼は MCP で登録しダイアログを出さないので、フックの待ちが無くても画面から答えられる。
@@ -2653,8 +2682,8 @@ function decisionCard(p, session, d, withTag) {
     !active && !viaDialog ? sentLine : '',
   ].filter(Boolean).join('');
   const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${Number.isFinite(d.awaitingMin) ? `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>` : ''}` : state === 'provisional' ? `<span class="wait">仮適用から ${durationLabel(Date.now() - d.waitMin * 60_000)}</span>` : '';
-  return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''} ${session.provider === 'codex' ? 'origin-codex' : ''}" data-id="${d.id}" data-session-id="${esc(session.id)}">
-    <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
+  return `<article class="decision ${stateClass} ${manuallyHidden ? 'manually-hidden' : ''} ${long ? 'long-wait' : ''} ${session.provider === 'codex' ? 'origin-codex' : ''}" data-id="${esc(d.id)}" data-session-id="${esc(session.id)}">
+    <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}${hideButton}</div>
     <div class="ctx">${esc(d.ctx)}</div>
     ${d.verify && (state === 'waiting' || state === 'provisional') ? verifyPanel(d, session.provider) : ''}
     <ul class="options">${d.options.map((o, i) => {
@@ -2722,7 +2751,9 @@ function crossReviewLine(p, pr) {
 // 常駐サーバーは gh pr list --json で取得し、base と head の対応からスタックを組み立てる想定。
 const prKey = (p, n) => `${p.id}#${n}`;
 const isMerged = (p, pr) => !!ui.merged[prKey(p, pr.number)];
-const openPrs = p => p.prs.filter(pr => !isMerged(p, pr));
+const openPrs = p => p.prs.filter(pr => !isMerged(p, pr)
+  && !(p.closedPrs || []).some(closed => closed.number === pr.number));
+const visibleOpenPrs = p => openPrs(p).filter(pr => !isManuallyHiddenPr(p, pr));
 const prByHead = (p, head) => p.prs.find(pr => pr.head === head);
 
 // マージ済みの PR を base にしていたものは、その PR の base へ付け替わったとみなす。
@@ -2744,6 +2775,32 @@ function parentPr(p, pr) {
   return openPrs(p).find(x => x.head !== p.repo.defaultBranch && x.head === b) || null;
 }
 const childPrs = (p, pr) => pr.head === p.repo.defaultBranch ? [] : openPrs(p).filter(x => parentPr(p, x) === pr);
+
+function isManuallyHiddenPr(p, pr) {
+  for (let current = pr; current; current = parentPr(p, current)) {
+    if (ui.hiddenPrs.includes(prKey(p, current.number))) return true;
+  }
+  return false;
+}
+
+const visibleChildPrs = (p, pr) => childPrs(p, pr).filter(child => !isManuallyHiddenPr(p, child));
+
+function visibleStackPos(p, pr) {
+  const original = stackPos(p, pr);
+  let root = pr;
+  while (parentPr(p, root)) root = parentPr(p, root);
+  const height = item => 1 + Math.max(0, ...visibleChildPrs(p, item).map(height));
+  return { depth: original.depth, total: height(root) };
+}
+
+function pruneHiddenPrs() {
+  const openKeys = new Set(DATA.products.flatMap(p => openPrs(p).map(pr => prKey(p, pr.number))));
+  const retained = ui.hiddenPrs.filter(key => openKeys.has(key));
+  if (retained.length !== ui.hiddenPrs.length) {
+    ui.hiddenPrs = retained;
+    save();
+  }
+}
 
 // 下から数えた位置と、スタック全体の段数
 function stackPos(p, pr) {
@@ -3062,7 +3119,7 @@ function conflictStatus(p, pr) {
   return at ? `<div class="badges"><span class="badge accent long">${esc(absoluteTimeLabel(at, Date.now(), at))} に ${esc(pr.requestSession.name)} のセッションへ衝突の解消を依頼した</span></div>` : '';
 }
 
-function prItem(p, pr, showOriginBands = true) {
+function prItem(p, pr, showOriginBands = true, visiblePosition = null) {
   const k = prKey(p, pr.number);
   const confirmManual = ui.confirm?.key === k && ui.confirm.action === 'manual';
   const operationBlocker = mergeOperationBlocker(p, pr);
@@ -3075,7 +3132,8 @@ function prItem(p, pr, showOriginBands = true) {
   const shownInConfirmation = confirmManual && pullRequestMergeInFlight.has(k);
   const mergeInProgress = Boolean(pr.mergeInProgress) && !queued && !shownInConfirmation;
   const mergeIntent = queued || mergeInProgress;
-  const pos = stackPos(p, pr);
+  const pos = visiblePosition || stackPos(p, pr);
+  const originalPos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
   const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
@@ -3083,6 +3141,9 @@ function prItem(p, pr, showOriginBands = true) {
     .filter(Boolean).join(' ');
   // 予約は収束の記録が無いと実行されないので、道具が無い PR には予約が残っているときだけ出す。
   const reservationToggleShown = rsv || mockReview(p, pr).reservation.showCheckbox;
+  const hiddenAction = (Array.isArray(ui.hiddenPrs) ? ui.hiddenPrs : []).includes(k)
+    ? `<button type="button" class="link-btn" data-restore-pr="${esc(k)}" title="押すと表示に戻す">表示に戻す</button>`
+    : `<button type="button" class="link-btn" data-hide-pr="${esc(k)}"${originalPos.total > originalPos.depth ? ' title="上に積んだ PR も一緒に隠します"' : ''}>非表示にする</button>`;
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
     !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
@@ -3093,7 +3154,7 @@ function prItem(p, pr, showOriginBands = true) {
     <div class="pr-body"><div class="pr-text">
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
-      <span class="num">#${pr.number}</span><span class="ptitle">${esc(pr.title)}</span>
+      <span class="num">#${pr.number}</span><span class="ptitle">${esc(pr.title)}</span>${hiddenAction}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${queued ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : mergeInProgress ? '<span class="badge accent">マージ処理中 (未マージ)</span>' : ''}${prBadges(p, pr)}</div>
@@ -3113,8 +3174,9 @@ function prItem(p, pr, showOriginBands = true) {
 }
 
 function prTree(p, pr, showOriginBands = true) {
-  const kids = childPrs(p, pr);
-  return prItem(p, pr, showOriginBands) + (kids.length ? `<div class="stack-level">${kids.map(k => prTree(p, k, showOriginBands)).join('')}</div>` : '');
+  if (isManuallyHiddenPr(p, pr)) return '';
+  const kids = visibleChildPrs(p, pr);
+  return prItem(p, pr, showOriginBands, visibleStackPos(p, pr)) + (kids.length ? `<div class="stack-level">${kids.map(k => prTree(p, k, showOriginBands)).join('')}</div>` : '');
 }
 
 function reservationNoticeRows(p) {
@@ -3130,13 +3192,23 @@ function reservationNoticeRows(p) {
 
 const MERGED_VISIBLE_COUNT = 5;
 function prBlock(p, withTag, showOriginBands = true) {
-  const roots = openPrs(p).filter(pr => !parentPr(p, pr));
+  const hiddenKeys = Array.isArray(ui.hiddenPrs) ? ui.hiddenPrs : [];
+  const isHidden = pr => {
+    for (let current = pr; current; current = parentPr(p, current)) {
+      if (hiddenKeys.includes(prKey(p, current.number))) return true;
+    }
+    return false;
+  };
+  const visibleChildren = pr => childPrs(p, pr).filter(child => !isHidden(child));
+  const visibleHeight = pr => 1 + Math.max(0, ...visibleChildren(pr).map(visibleHeight));
+  const roots = openPrs(p).filter(pr => !parentPr(p, pr) && !isHidden(pr));
+  const hiddenPrs = openPrs(p).filter(pr => hiddenKeys.includes(prKey(p, pr.number)));
   const merged = p.prs.filter(pr => isMerged(p, pr) && !ui.dismissedMergeHistory.includes(`${p.repo.name}#${pr.number}`.toLowerCase()));
   const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
   const headingTag = withTag ? 'h3' : 'h4';
   const head = `<header class="prs-head"><${headingTag} class="pr-repo-title"><strong>${esc(p.repo.name)}</strong></${headingTag}>${tag}<span class="meta">GitHub から ${esc(p.repo.fetched)}に取得</span></header>`;
   const stacks = roots.map(r => `<div class="stack">
-      <div class="stack-base"><code>${esc(effective(p, r).base)}</code>${childPrs(p, r).length ? `<span>スタック ${stackPos(p, r).total} 段</span>` : ''}</div>
+      <div class="stack-base"><code>${esc(effective(p, r).base)}</code>${visibleChildren(r).length ? `<span>スタック ${visibleHeight(r)} 段</span>` : ''}</div>
       ${prTree(p, r, showOriginBands)}</div>`).join('');
   const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
@@ -3150,7 +3222,7 @@ function prBlock(p, withTag, showOriginBands = true) {
     const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
     return `<a class="badge mute${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''} href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`;
   }));
-  const empty = !roots.length && !p.repo.error ? `<div class="empty">オープンの PR はありません</div>` : '';
+  const empty = !roots.length && !hiddenPrs.length && !p.repo.error ? `<div class="empty">オープンの PR はありません</div>` : '';
   const results = (pullRequestMergeResults.get(p.repo.name) || [])
     .filter(result => result.productId === p.id && pullRequestMergeResultVisible(result))
     .map(result => `<div class="merge-result" role="status"><span>PR #${result.number}: ${pullRequestMergeResultLine(result)}</span><button type="button" class="link-btn" data-close-merge-result="${esc(result.id)}">閉じる</button></div>`).join('');
@@ -3158,7 +3230,14 @@ function prBlock(p, withTag, showOriginBands = true) {
     ? `<div class="repository-unregister">${repositoryUnregisterConfirmations.has(p.id)
       ? `<span>状態を確認できない ${p.repo.unregisterableCount} 件の PR の記録を削除します。元に戻せません</span><button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="confirm">削除する</button><button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="cancel">やめる</button>`
       : `<button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="open">このリポジトリの登録を外す</button>`}</div>` : ''}</div>` : '';
-  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${error}${reservationNoticeRows(p)}${stacks || empty}${mergedLine}${closedLine}${results}</div></section>`;
+  const hiddenLine = hiddenPrs.length
+    ? `<div class="merged-list">非表示: ${hiddenPrs.map(pr => {
+      const descendantCount = item => childPrs(p, item).reduce((count, child) => count + 1 + descendantCount(child), 0);
+      const countAbove = descendantCount(pr);
+      return `<button type="button" class="link-btn" data-restore-pr="${esc(prKey(p, pr.number))}" title="押すと表示に戻す">#${pr.number}</button>${countAbove ? ` (上に ${countAbove} 件)` : ''}`;
+    }).join(' ')}</div>`
+    : '';
+  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${error}${reservationNoticeRows(p)}${stacks || empty}${mergedLine}${closedLine}${results}${hiddenLine}</div></section>`;
 }
 
 // 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
@@ -3182,16 +3261,28 @@ function endedDecisionToggle(session) {
   return `<button type="button" class="ended-toggle" data-ended-decisions="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '解決済みと取り下げを隠す' : '解決済みと取り下げを表示'} (${ended.length} 件)</button>`;
 }
 
+function hiddenDecisionToggle(session) {
+  const hidden = manuallyHiddenDecisions(session);
+  if (!hidden.length) return '';
+  const expanded = ui.expandedHiddenDecisions.includes(session.id);
+  return `<button type="button" class="ended-toggle" data-hidden-decisions="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '非表示の判断事項を隠す' : '非表示の判断事項を表示'} (${hidden.length} 件)</button>`;
+}
+
 function decisionSessionBlock(p, session, withTag) {
   const active = visibleDecisions(session).sort((a, b) => ageMinutes(a) - ageMinutes(b));
+  const hidden = manuallyHiddenDecisions(session).sort((a, b) => ageMinutes(a) - ageMinutes(b));
+  const hiddenExpanded = ui.expandedHiddenDecisions.includes(session.id);
   const ended = hidesFinished() ? [] : session.decisions.filter(isEndedDecision);
   const expanded = !hidesFinished() && ui.expandedEndedDecisions.includes(session.id);
   const visible = expanded ? [...active, ...ended].sort((a, b) => ageMinutes(a) - ageMinutes(b)) : active;
-  const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
+  const cards = [
+    ...visible.map(d => decisionCard(p, session, d, withTag)),
+    ...(hiddenExpanded ? hidden.map(d => decisionCard(p, session, d, withTag, true)) : []),
+  ].join('');
   const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
   // 許可待ちのカードが出ているときは、判断事項が無くても「ありません」と出さない。
   const showEmpty = !cards && !visiblePerms(session).length && !hasHiddenJudgmentItems(session);
-  return `${cards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
+  return `${cards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${hiddenDecisionToggle(session)}${endedDecisionToggle(session)}`;
 }
 
 // 作業中のタスクがあるときは未着手を畳み、作業中だけを先に見せる。未着手しか無ければ畳まない。
@@ -3250,6 +3341,17 @@ function kindEndedDecisionEntries(sessions) {
     .sort((a, b) => ageMinutes(a.decision) - ageMinutes(b.decision));
 }
 
+function kindHiddenDecisionEntries(sessions) {
+  return sessions.flatMap(({ p, session }) => manuallyHiddenDecisions(session)
+    .map(decision => ({ p, session, decision })))
+    .sort((a, b) => ageMinutes(a.decision) - ageMinutes(b.decision));
+}
+
+function kindHiddenDecisionToggle(count, expanded) {
+  if (!count) return '';
+  return `<button type="button" class="ended-toggle" data-hidden-kind-decisions="true" aria-expanded="${expanded}">${expanded ? '非表示の判断事項を隠す' : '非表示の判断事項を表示'} (${count} 件)</button>`;
+}
+
 function kindEndedAgentCount(sessions) {
   if (hidesFinished()) return 0;
   return sessions.reduce((count, { session }) => count + session.subagents.filter(agent => isEndedAgent(session, agent)).length, 0);
@@ -3288,6 +3390,8 @@ function sessionBlock(p, session, showOriginBands = true) {
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
+    || session.decisions.some(decision => isActiveDecision(decision) && Array.isArray(ui.hiddenDecisions) && ui.hiddenDecisions.includes(decision.id)
+      && isShown(decisionCategory(decision)))
     || (!hidesFinished() && session.decisions.some(isEndedDecision))
     || !hasHiddenJudgmentItems(session);
   return `<${groupTag} class="session-group ${multiple ? '' : 'single'}${origin ? ` origin-${origin}` : ''}"${origin ? ` data-origin="${origin}"` : ''}>
@@ -3569,6 +3673,7 @@ function productCloseButton(p, describedById) {
 
 function renderProductMode(showOriginBands = true) {
   const ps = orderedProducts();
+  const countableOpenPrs = p => Array.isArray(ui.hiddenPrs) && ui.hiddenPrs.length ? visibleOpenPrs(p) : openPrs(p);
   if (!ps.length) {
     const hidden = finishedHiddenCounts();
     return `<div class="empty">${hidesFinished() && (hidden.sessions || hidden.pullRequests)
@@ -3591,7 +3696,7 @@ function renderProductMode(showOriginBands = true) {
       if (key === 'sinceSeen') return newsBox(p, false, showOriginBands, p.id === markAllSeenProductId);
       if (key === 'sessions') return sessions.map(session => sessionBlock(p, session, showOriginBands)).join('');
       if (!isShown('prs')) return '';
-      const pullRequests = `<h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false, showOriginBands)}`;
+      const pullRequests = `<h3 class="sub">プルリクエスト <span class="count">(${countableOpenPrs(p).length} 件)</span></h3>${prBlock(p, false, showOriginBands)}`;
       return prsBeforeSessions
         ? `${pullRequests}<div class="product-pr-divider"></div>`
         : `<div class="product-pr-divider"></div>${pullRequests}`;
@@ -3601,7 +3706,7 @@ function renderProductMode(showOriginBands = true) {
         <h2 id="product-heading-${i}" tabindex="-1">${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
         ${judgmentCounts.permission ? `<span class="chip danger">許可待ち (${judgmentCounts.permission} 件)</span>` : ''}
         ${pend.length ? `<span class="chip danger" title="${esc(decisionCountTitle(pend))}">判断待ち (${pend.length} 件)</span>` : ''}
-        ${(n => n ? `<span class="chip ok">マージできる PR (${n} 件)</span>` : '')(openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length)}
+        ${(n => n ? `<span class="chip ok">マージできる PR (${n} 件)</span>` : '')(countableOpenPrs(p).filter(pr => pullRequestMergeable(p, pr)).length)}
         ${orderControls(p, i, ps.length, pinnedCount)}
         ${productCloseButton(p, `product-heading-${i}`) ? `<div class="product-remove">${productCloseButton(p, `product-heading-${i}`)}</div>` : ''}
       </div>
@@ -3631,15 +3736,21 @@ function renderKindMode(showOriginBands = true) {
   ]).sort(compareKindMockJudgmentItems);
   const visibleDecisionItems = waits.map(x => x.html).join('');
   const hiddenJudgmentItems = sessions.some(({ session }) => hasHiddenJudgmentItems(session));
+  const hiddenDecisionEntries = kindHiddenDecisionEntries(sessions);
+  const hiddenDecisionCards = ui.expandedKindHiddenDecisions
+    ? hiddenDecisionEntries.map(({ p, session, decision }) => decisionCard(p, session, decision, true, true)).join('')
+    : '';
+  const hiddenDecisionToggle = kindHiddenDecisionToggle(hiddenDecisionEntries.length, ui.expandedKindHiddenDecisions);
   const endedDecisionEntries = kindEndedDecisionEntries(sessions);
   const endedDecisionCards = ui.expandedKindDecisions
     ? endedDecisionEntries.map(({ p, session, decision }) => decisionCard(p, session, decision, true)).join('')
     : '';
-  const endedDecisionToggle = endedDecisionEntries.length
+  const endedDecisionEndToggle = endedDecisionEntries.length
     ? kindToggle('decisions', '解決済みと取り下げ', endedDecisionEntries.length, ui.expandedKindDecisions)
     : '';
-  const decisionItems = visibleDecisionItems + endedDecisionCards;
-  const decisionControls = endedDecisionToggle ? `<div class="kind-section-controls">${endedDecisionToggle}</div>` : '';
+  const endedDecisionToggle = hiddenDecisionToggle || endedDecisionEndToggle;
+  const decisionItems = visibleDecisionItems + hiddenDecisionCards + endedDecisionCards;
+  const decisionControls = endedDecisionToggle ? `<div class="kind-section-controls">${hiddenDecisionToggle}${endedDecisionEndToggle}</div>` : '';
   const decisions = decisionItems;
   const showJudgment = Boolean(decisionItems || endedDecisionToggle) || !hiddenJudgmentItems;
   const unseenProducts = ui.sinceSeenMode !== 'hide' ? ps.filter(p => Array.isArray(p.news) && p.news.length && !ui.seen.includes(p.id)) : [];
@@ -3689,10 +3800,16 @@ function renderKindMode(showOriginBands = true) {
 }
 
 function render() {
+  pruneHiddenDecisions();
+  pruneHiddenPrs();
   const showOriginBands = hasCodexOrigin();
   const active = document.activeElement;
-  const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
+  const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-hidden-decisions', 'data-hidden-kind-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
   const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
+    : active?.dataset?.hideDecision ? { kind: 'decision-visibility', id: active.dataset.hideDecision, sessionId: active.dataset.decisionSession, hidden: false }
+      : active?.dataset?.restoreDecision ? { kind: 'decision-visibility', id: active.dataset.restoreDecision, sessionId: active.dataset.decisionSession, hidden: true }
+        : active?.dataset?.hidePr ? { kind: 'pr-visibility', key: active.dataset.hidePr, hidden: false }
+          : active?.dataset?.restorePr ? { kind: 'pr-visibility', key: active.dataset.restorePr, hidden: true }
     : focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.reviewKey, action: active.dataset.reviewSkip }
        : active?.dataset?.showFinished ? { kind: 'show-finished', location: active.dataset.showFinished }
@@ -3722,6 +3839,17 @@ function render() {
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode(showOriginBands) : renderKindMode(showOriginBands);
   if (focusData?.kind === 'record-deletion') {
     focusRecordDeletion(focusData.band, focusData.action);
+  } else if (focusData?.kind === 'decision-visibility') {
+    const target = focusData.hidden
+      ? document.querySelector(`[data-hide-decision="${CSS.escape(focusData.id)}"]`)
+      : ui.mode === 'kind'
+        ? document.querySelector('[data-hidden-kind-decisions]')
+        : document.querySelector(`[data-hidden-decisions="${CSS.escape(focusData.sessionId)}"]`);
+    (target || document.querySelector('[data-hidden-kind-decisions]') || document.querySelector(`[data-hidden-decisions="${CSS.escape(focusData.sessionId)}"]`))?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'pr-visibility') {
+    const attribute = focusData.hidden ? 'data-hide-pr' : 'data-restore-pr';
+    (document.querySelector(`[${attribute}="${CSS.escape(focusData.key)}"]`)
+      || document.querySelector('[data-restore-pr]'))?.focus({ preventScroll: true });
   } else if (focusData?.attribute) {
     [...document.querySelectorAll(`[${focusData.attribute}]`)].find(button => button.getAttribute(focusData.attribute) === focusData.value)?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'show-finished') {
@@ -3869,6 +3997,30 @@ document.addEventListener('click', e => {
       ui.hiddenSessions = ui.hiddenSessions.filter(id => !restored.has(id));
       hiddenSessionsUndo = null;
     }
+  }
+  else if (t.dataset.hideDecision) {
+    const decision = allSessions().flatMap(session => session.decisions).find(item => item.id === t.dataset.hideDecision);
+    if (!decision || !isActiveDecision(decision) || effectiveDecisionState(decision) === 'waiting' && Number.isFinite(decision.awaitingMin)) return;
+    ui.hiddenDecisions = [...new Set([...ui.hiddenDecisions, decision.id])];
+  } else if (t.dataset.restoreDecision) {
+    ui.hiddenDecisions = ui.hiddenDecisions.filter(id => id !== t.dataset.restoreDecision);
+  } else if (t.dataset.hiddenDecisions) {
+    const id = t.dataset.hiddenDecisions;
+    ui.expandedHiddenDecisions = ui.expandedHiddenDecisions.includes(id)
+      ? ui.expandedHiddenDecisions.filter(item => item !== id)
+      : [...ui.expandedHiddenDecisions, id];
+  } else if (t.hasAttribute('data-hidden-kind-decisions')) {
+    ui.expandedKindHiddenDecisions = !ui.expandedKindHiddenDecisions;
+  } else if (t.dataset.hidePr) {
+    const key = t.dataset.hidePr;
+    const separator = key.lastIndexOf('#');
+    const product = byId(key.slice(0, separator));
+    const number = key.slice(separator + 1);
+    const pr = product?.prs.find(item => String(item.number) === number);
+    if (!pr || !openPrs(product).includes(pr)) return;
+    ui.hiddenPrs = [...new Set([...ui.hiddenPrs, key])];
+  } else if (t.dataset.restorePr) {
+    ui.hiddenPrs = ui.hiddenPrs.filter(key => key !== t.dataset.restorePr);
   }
   else if (t.dataset.kindToggle) {
     const stateKey = { decisions: 'expandedKindDecisions', agents: 'expandedKindAgents', tasks: 'expandedKindTasks', todoTasks: 'expandedKindTodoTasks' }[t.dataset.kindToggle];

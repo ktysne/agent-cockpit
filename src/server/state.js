@@ -57,6 +57,7 @@ const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_AWAY_PERIODS = 50;
 const MAX_CODEX_RECOVERY_SESSIONS = 200;
+const MAX_HIDDEN_ITEMS = 200;
 const CODEX_RECOVERY_ACTIVITY_STEP_MS = 60_000;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -469,6 +470,15 @@ function normalizeStore(value) {
     hiddenSessions.push({ session_id: record.session_id, updatedAt: record.updatedAt });
   }
   const prs = value.prs === undefined ? [] : value.prs;
+  const hiddenDecisions = value.hiddenDecisions === undefined ? [] : value.hiddenDecisions;
+  const hiddenPrs = value.hiddenPrs === undefined ? [] : value.hiddenPrs;
+  if (!Array.isArray(hiddenDecisions) || hiddenDecisions.length > MAX_HIDDEN_ITEMS || hiddenDecisions.some(record =>
+    !isRecord(record) || !validStoredSessionId(record.session_id) || typeof record.id !== 'string' || !record.id.length || record.id.length > 256)) {
+    throw new Error('Invalid hidden decisions');
+  }
+  if (!Array.isArray(hiddenPrs) || hiddenPrs.length > MAX_HIDDEN_ITEMS || hiddenPrs.some(record =>
+    !isRecord(record) || !validRepositoryPart(record.owner) || !validRepositoryPart(record.repo)
+      || !Number.isSafeInteger(record.number) || record.number <= 0)) throw new Error('Invalid hidden pull requests');
   const deletedSessions = new Map();
   if (value.deletedSessions !== undefined && !isRecord(value.deletedSessions)) throw new Error('Invalid deleted sessions');
   for (const [sessionId, deletedAt] of Object.entries(value.deletedSessions || {})) {
@@ -515,6 +525,8 @@ function normalizeStore(value) {
     pendingSessionNotificationOverflow: normalizePendingSessionNotificationOverflow(value.pendingSessionNotificationOverflow),
     closedTasks,
     hiddenSessions,
+    hiddenDecisions,
+    hiddenPrs,
     deletedSessions,
     prs: prs.map(normalizePullRequestRecord),
     relatedPrs: relatedPrs.map(normalizeRelatedPullRequestRecord),
@@ -706,6 +718,8 @@ class DashboardState {
     this.pendingSessionNotificationOverflow = new Map();
     this.estimates = new Map();
     this.hiddenSessions = new Set();
+    this.hiddenDecisions = new Map();
+    this.hiddenPrs = new Map();
     this.hiddenSessionUpdatedAt = new Map();
     this.deletedSessions = new Map();
     this.closedTasks = new Map();
@@ -815,6 +829,8 @@ class DashboardState {
       this.hiddenSessions.add(record.session_id);
       this.hiddenSessionUpdatedAt.set(record.session_id, record.updatedAt);
     }
+    for (const record of store.hiddenDecisions) this.hiddenDecisions.set(`${record.session_id}\0${record.id}`, { session_id: record.session_id, id: record.id });
+    for (const record of store.hiddenPrs) this.hiddenPrs.set(relatedPullRequestRecordKey(record.owner, record.repo, record.number), { owner: record.owner, repo: record.repo, number: record.number });
     for (const record of store.prs) {
       let records = this.pullRequests.get(record.session_id);
       if (!records) {
@@ -832,6 +848,7 @@ class DashboardState {
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
     for (const record of [...this.readOnlyPullRequestRegistrations(), ...this.relatedPullRequestRegistrations()]) {
+      if (['merged', 'closed'].includes(record.state)) this.hiddenPrs.delete(relatedPullRequestRecordKey(record.owner, record.repo, record.number));
       const mergedAt = Date.parse(record.mergedAt || '');
       if (record.state !== 'merged' || !Number.isFinite(mergedAt) || now - mergedAt < 0 || now - mergedAt >= MERGED_PULL_REQUEST_RETENTION_MS) continue;
       const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
@@ -865,6 +882,7 @@ class DashboardState {
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
     this.pruneExpiredStoreRecords(now);
+    this.pruneHiddenDecisions();
   }
 
   pruneExpiredStoreRecords(now) {
@@ -1060,6 +1078,8 @@ class DashboardState {
       pendingSessionNotificationOverflow,
       closedTasks,
       hiddenSessions,
+      hiddenDecisions: [...this.hiddenDecisions.values()],
+      hiddenPrs: [...this.hiddenPrs.values()],
       deletedSessions: Object.fromEntries(this.deletedSessions),
       prs: this.pullRequestRegistrations(),
       relatedPrs: [...this.relatedPullRequests.values()].map(normalizeRelatedPullRequestRecord),
@@ -1661,6 +1681,7 @@ class DashboardState {
   }
 
   recordPullRequestClosure(owner, repo, number) {
+    this.hiddenPrs.delete(relatedPullRequestRecordKey(owner, repo, number));
     const key = pullRequestRepositoryKey(owner, repo);
     let record = this.pullRequestClosureGenerations.get(key);
     if (!record) {
@@ -2390,6 +2411,33 @@ class DashboardState {
     return true;
   }
 
+  setDecisionHidden(sessionId, id, hidden) {
+    const decision = this.decisionFor(sessionId, id);
+    if (hidden && (!decision || !['waiting', 'provisional'].includes(decision.state)
+      || (decision.state === 'waiting' && decision.awaitingAnswerUntil))) return false;
+    const key = `${sessionId}\0${id}`;
+    if (hidden && !this.hiddenDecisions.has(key) && this.hiddenDecisions.size >= MAX_HIDDEN_ITEMS) return false;
+    if (hidden) this.hiddenDecisions.set(key, { session_id: sessionId, id });
+    else this.hiddenDecisions.delete(key);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  setPullRequestHidden(owner, repo, number, hidden) {
+    const key = relatedPullRequestRecordKey(owner, repo, number);
+    if (hidden && !this.hiddenPrs.has(key) && this.hiddenPrs.size >= MAX_HIDDEN_ITEMS) return false;
+    if (hidden) this.hiddenPrs.set(key, { owner, repo, number });
+    else this.hiddenPrs.delete(key);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  isPullRequestHidden(owner, repo, number) {
+    return this.hiddenPrs.has(relatedPullRequestRecordKey(owner, repo, number));
+  }
+
   unhideSessions(sessionIds) {
     let unhidden = 0;
     for (const sessionId of new Set(sessionIds)) {
@@ -2761,7 +2809,23 @@ class DashboardState {
     return true;
   }
 
+  // 判断事項が見つからなくても、セッションが残っていれば消さない。起動直後はイベント由来の判断事項がまだ組み立てられていないため。
+  // 隠した質問が再提示されて回答の秒読みに入ったら表示へ戻す。隠したままだと回答の機会を見落とすため。
+  pruneHiddenDecisions() {
+    if (!this.hiddenDecisions.size) return;
+    const decisionsBySession = new Map();
+    for (const [key, record] of this.hiddenDecisions) {
+      if (!decisionsBySession.has(record.session_id)) decisionsBySession.set(record.session_id, this.decisionsFor(record.session_id));
+      const decision = decisionsBySession.get(record.session_id).find((item) => item.id === record.id);
+      const sessionGone = !this.plans.has(record.session_id) && !this.sessions.has(record.session_id);
+      const hideable = decision && ['waiting', 'provisional'].includes(decision.state)
+        && !(decision.state === 'waiting' && decision.awaitingAnswerUntil);
+      if (decision ? !hideable : sessionGone) this.hiddenDecisions.delete(key);
+    }
+  }
+
   touch() {
+    this.pruneHiddenDecisions();
     this.version += 1;
     this.generatedAt = new Date().toISOString();
   }
@@ -2847,7 +2911,8 @@ class DashboardState {
         };
       }),
       permissionWaits: base.permissionWaits.filter((wait) => !closedAgentIds.has(wait.agent_id)).map((wait) => ({ ...wait })),
-      decisions,
+      decisions: decisions.map(decision => this.hiddenDecisions.has(`${sessionId}\0${decision.id}`)
+        ? { ...decision, hidden: true } : decision),
       tasks: (plan?.tasks || []).map((task) => {
         const closed = this.closedTasks.get(sessionId)?.get(task.title);
         const isClosedByUser = closed?.stateAtClose === task.state;
