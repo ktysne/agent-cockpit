@@ -2810,6 +2810,7 @@ class DashboardState {
   }
 
   // 判断事項が見つからなくても、セッションが残っていれば消さない。起動直後はイベント由来の判断事項がまだ組み立てられていないため。
+  // 隠した質問が再提示されて回答の秒読みに入ったら表示へ戻す。隠したままだと回答の機会を見落とすため。
   pruneHiddenDecisions() {
     if (!this.hiddenDecisions.size) return;
     const decisionsBySession = new Map();
@@ -2817,7 +2818,9 @@ class DashboardState {
       if (!decisionsBySession.has(record.session_id)) decisionsBySession.set(record.session_id, this.decisionsFor(record.session_id));
       const decision = decisionsBySession.get(record.session_id).find((item) => item.id === record.id);
       const sessionGone = !this.plans.has(record.session_id) && !this.sessions.has(record.session_id);
-      if (decision ? !['waiting', 'provisional'].includes(decision.state) : sessionGone) this.hiddenDecisions.delete(key);
+      const hideable = decision && ['waiting', 'provisional'].includes(decision.state)
+        && !(decision.state === 'waiting' && decision.awaitingAnswerUntil);
+      if (decision ? !hideable : sessionGone) this.hiddenDecisions.delete(key);
     }
   }
 

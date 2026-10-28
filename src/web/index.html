@@ -4226,7 +4226,9 @@ function renderKindSections(products, showOriginBands = true, finishedPrCount = 
 
 function focusDataFor(active) {
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-hidden-decisions', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute?.(attribute));
+  const visibilityAttribute = ['data-hide-decision', 'data-restore-decision', 'data-hide-pr', 'data-restore-pr'].find((attribute) => active?.hasAttribute?.(attribute));
   return active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
+    : visibilityAttribute ? { kind: 'item-visibility', attribute: visibilityAttribute, value: active.getAttribute(visibilityAttribute), sessionId: active.dataset.decisionSession || '' }
     : toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
@@ -4326,6 +4328,7 @@ function render(state) {
     'answer-note': [findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.decisionId === focusData.decisionId && item.hasAttribute('data-answer-note')), findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.sendAnswer === focusData.decisionId), currentModeButton],
     'answer-submit': [findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.sendAnswer === focusData.decisionId), findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.decisionId === focusData.decisionId && item.hasAttribute('data-answer-note')), currentModeButton],
     'record-deletion': [findFocusControl((item) => item.dataset?.recordBand === focusData.band && item.dataset?.recordAction === focusData.action)],
+    'item-visibility': [findFocusControl((item) => item.getAttribute(focusData.attribute) === focusData.value && (item.dataset?.decisionSession || '') === focusData.sessionId)],
     toggle: [findFocusControl((item) => item.getAttribute(focusData.attribute) === focusData.value), findFocusControl((item) => focusData.attribute === 'data-hide-session' && item.hasAttribute('data-clear-hidden-sessions'))],
     filter: [findFocusControl((item) => item.dataset?.filter === focusData.key), () => filterFocusFallback(focusControls().filter((item) => item.dataset?.filter), focusData.key), currentModeButton],
     'show-all': [findFocusControl((item) => item.hasAttribute('data-show-all'))],

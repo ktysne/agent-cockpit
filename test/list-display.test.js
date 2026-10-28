@@ -1765,6 +1765,53 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
   assert.deepEqual(JSON.parse(JSON.stringify(withoutChip.modeButton.focusOptions)), { preventScroll: true });
 });
 
+test('再描画の後も判断事項と PR の非表示と復元のボタンへフォーカスを戻す', () => {
+  const render = functionSource(web, 'render');
+  const exercise = (attribute, value, decisionSession) => {
+    const button = (attrs, dataset) => ({
+      dataset, setAttribute() {}, focus(options) { this.focusOptions = options; },
+      hasAttribute: (name) => Object.hasOwn(attrs, name), getAttribute: (name) => attrs[name] ?? null,
+    });
+    const dataset = decisionSession ? { decisionSession } : {};
+    const same = button({ [attribute]: value }, dataset);
+    const otherSession = button({ [attribute]: value }, { decisionSession: 'other' });
+    const context = pageContext(web, {
+      answerNoteComposing: false,
+      renderRouting() {},
+      idleHiddenSessions: () => [],
+      sessionsAfterIdleFilter: () => [],
+      renderSummary() {},
+      renderExcludedNote() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+      renderFinishedNote() {},
+      renderIdleNote() {},
+      updateTitle() {},
+      document: {
+        activeElement: button({ [attribute]: value }, dataset),
+        querySelectorAll: (selector) => selector === 'button' ? [otherSession, same] : [],
+        querySelector: () => null,
+      },
+      HTMLTextAreaElement: class {},
+      displayPreferences: { mode: 'product' },
+      visibleSinceSeen: () => [],
+      orderedProducts: () => [],
+      root: { replaceChildren() {}, querySelectorAll: () => [] },
+      element: (tag, className, textContent) => ({ tag, className, textContent }),
+    });
+    vm.runInContext(`${functionSource(web, 'focusDataFor')}\n${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
+    context.render({ sessions: [], pullRequests: [] });
+    return { same, otherSession };
+  };
+
+  for (const [attribute, value, session] of [['data-hide-decision', 'decision', 'session'], ['data-restore-decision', 'decision', 'session'],
+    ['data-hide-pr', 'example/project#1', ''], ['data-restore-pr', 'example/project#1', '']]) {
+    const { same, otherSession } = exercise(attribute, value, session);
+    assert.ok(same.focusOptions, attribute);
+    assert.equal(otherSession.focusOptions, undefined, attribute);
+  }
+});
+
 test('一覧が残る再描画で表示設定のボタンが消えたらマージ結果か表示切り替えへフォーカスを戻す', () => {
   const render = functionSource(web, 'render');
   assert.ok(render);

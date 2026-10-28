@@ -78,6 +78,14 @@ test('回答の秒読み中と終了済みの判断は非表示にできない',
   assert.equal((await f.post('decisions', f.decisionBody)).status, 409);
 });
 
+test('隠した質問が再提示されて回答の秒読みに入ったら非表示の記録を消す', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.post('decisions', f.decisionBody)).status, 200);
+  f.state.setDecisionLifecycle('hidden-items', f.decision.id, { awaitingAnswerUntil: new Date(Date.now() + 60000).toISOString() });
+  assert.deepEqual(f.state.serializeStore().hiddenDecisions, []);
+  assert.equal(f.state.snapshot().sessions[0].decisions[0].hidden, undefined);
+});
+
 test('PR を隠すと木の子孫も集計から外れ、マージの条件と子孫の記録は維持される', async t => {
   const f = await fixture(t);
   const before = f.tracker.snapshot()[0];
