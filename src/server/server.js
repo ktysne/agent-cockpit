@@ -224,7 +224,7 @@ function createRequestHandler(options) {
   const { handleHookAnswers, handleEvents, handlePlan, handleSessionPullRequests } = createHookRoutes(ctx);
   const { handlePullRequestRefresh, handleReviewSkip, handlePullRequestAction, handleStackMergeAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
   const {
-    handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks,
+    handleEstimate, handleHiddenSessions, handleHiddenDecisions, handleHiddenPullRequests, handleRecordDeletions, handleClosedTasks,
     handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer, handleLaunchRequest, handleWorktreeTerminal,
   } = createUiSessionRoutes(ctx);
   const { handleAwayState, handleAway, handleRouting, handleOpenUrl, handleUpdateCheck, handlePersistenceRetry } = createSettingsRoutes(ctx);
@@ -296,6 +296,8 @@ function createRequestHandler(options) {
     { method: 'POST', path: /^\/api\/sessions\/([^/]+)\/estimate$/, auth: 'ui', body: 'none', idCheck: unknownSessionId, handler: handleEstimate },
     { method: 'POST', path: '/api/record-deletions', auth: 'ui', body: 'json', handler: handleRecordDeletions },
     { method: 'POST', path: '/api/hidden-sessions', auth: 'ui', body: 'json', handler: handleHiddenSessions },
+    { method: 'POST', path: '/api/hidden-decisions', auth: 'ui', body: 'json', handler: handleHiddenDecisions },
+    { method: 'POST', path: '/api/hidden-pull-requests', auth: 'ui', body: 'json', handler: handleHiddenPullRequests },
     { method: 'POST', path: '/api/display', auth: 'ui', body: 'json', handler: handleDisplay },
     { method: 'POST', path: '/api/pull-requests/merge-result/close', auth: 'ui', body: 'json', handler: handleMergeResultClose },
     { method: 'POST', path: '/api/pull-requests/repository/unregister', auth: 'ui', body: 'json', handler: handleRepositoryUnregister },

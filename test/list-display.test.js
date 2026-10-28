@@ -319,7 +319,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     isFilterShown: () => false,
     orderedSectionKeys: (keys) => keys,
   });
-  const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
+  const kindSort = ['appendHiddenDecisions', 'hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
     .map((name) => functionSource(web, name)).join('\n');
   vm.runInContext(`${kindSort}\n${functionSource(web, 'runningBackgrounds')}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
   const activitySection = kindContext.renderKinds([{ pullRequestGroups: [] }]).find((section) => section.title === '今やっていること');
@@ -551,7 +551,7 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     isFilterShown: () => false,
     orderedSectionKeys: (keys) => keys,
   });
-  const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
+  const kindSort = ['appendHiddenDecisions', 'hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
     .map((name) => functionSource(web, name)).join('\n');
   vm.runInContext(`${kindSort}\n${functionSource(web, 'runningBackgrounds')}\n${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
   const sections = kindContext.renderKinds([{ pullRequestGroups: [] }]);
@@ -604,7 +604,7 @@ test('種類別の空欄は本文と枠を省き、件数付きの見出し一�
 });
 
 test('元の画面で答える判断事項は、終わるまでだけ回答を求める案内を出す', () => {
-  const webFunctions = ['answerDraftKey', 'answerDraftChanged', 'originalScreenAction', 'appendDecisionCard', 'appendDecisionAnswer']
+  const webFunctions = ['isActiveDecision', 'answerDraftKey', 'answerDraftChanged', 'originalScreenAction', 'appendDecisionCard', 'appendDecisionAnswer']
     .map((name) => functionSource(web, name));
   assert.ok(webFunctions.every(Boolean));
   const context = pageContext(web, {
@@ -632,7 +632,7 @@ test('元の画面で答える判断事項は、終わるまでだけ回答を�
 });
 
 test('判断事項の解決内容と回答状態は余白のある一行にまとまる', () => {
-  const webFunctions = ['answerDraftKey', 'answerDraftChanged', 'appendDecisionCard', 'appendDecisionAnswer'].map((name) => functionSource(web, name));
+  const webFunctions = ['isActiveDecision', 'answerDraftKey', 'answerDraftChanged', 'appendDecisionCard', 'appendDecisionAnswer'].map((name) => functionSource(web, name));
   assert.ok(webFunctions.every(Boolean));
   const webContext = pageContext(web, {
     answerErrors: new Map(),
@@ -693,7 +693,7 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
 });
 
 test('回答の送信中は選択肢、指示、送信ボタンを無効にし、再描画後も保つ', () => {
-  const componentSources = ['answerDraftKey', 'appendDecisionCard', 'appendDecisionAnswer']
+  const componentSources = ['isActiveDecision', 'answerDraftKey', 'appendDecisionCard', 'appendDecisionAnswer']
     .map((name) => functionSource(web, name));
   assert.ok(componentSources.every(Boolean));
   const key = 'session-answer\0decision-answer';
@@ -1825,6 +1825,53 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
   assert.deepEqual(JSON.parse(JSON.stringify(withoutChip.modeButton.focusOptions)), { preventScroll: true });
 });
 
+test('再描画の後も判断事項と PR の非表示と復元のボタンへフォーカスを戻す', () => {
+  const render = functionSource(web, 'render');
+  const exercise = (attribute, value, decisionSession) => {
+    const button = (attrs, dataset) => ({
+      dataset, setAttribute() {}, focus(options) { this.focusOptions = options; },
+      hasAttribute: (name) => Object.hasOwn(attrs, name), getAttribute: (name) => attrs[name] ?? null,
+    });
+    const dataset = decisionSession ? { decisionSession } : {};
+    const same = button({ [attribute]: value }, dataset);
+    const otherSession = button({ [attribute]: value }, { decisionSession: 'other' });
+    const context = pageContext(web, {
+      answerNoteComposing: false,
+      renderRouting() {},
+      idleHiddenSessions: () => [],
+      sessionsAfterIdleFilter: () => [],
+      renderSummary() {},
+      renderExcludedNote() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+      renderFinishedNote() {},
+      renderIdleNote() {},
+      updateTitle() {},
+      document: {
+        activeElement: button({ [attribute]: value }, dataset),
+        querySelectorAll: (selector) => selector === 'button' ? [otherSession, same] : [],
+        querySelector: () => null,
+      },
+      HTMLTextAreaElement: class {},
+      displayPreferences: { mode: 'product' },
+      visibleSinceSeen: () => [],
+      orderedProducts: () => [],
+      root: { replaceChildren() {}, querySelectorAll: () => [] },
+      element: (tag, className, textContent) => ({ tag, className, textContent }),
+    });
+    vm.runInContext(`${functionSource(web, 'focusDataFor')}\n${functionSource(web, 'hasCodexOrigin')}\n${render}\nthis.render = render;`, context);
+    context.render({ sessions: [], pullRequests: [] });
+    return { same, otherSession };
+  };
+
+  for (const [attribute, value, session] of [['data-hide-decision', 'decision', 'session'], ['data-restore-decision', 'decision', 'session'],
+    ['data-hide-pr', 'example/project#1', ''], ['data-restore-pr', 'example/project#1', '']]) {
+    const { same, otherSession } = exercise(attribute, value, session);
+    assert.ok(same.focusOptions, attribute);
+    assert.equal(otherSession.focusOptions, undefined, attribute);
+  }
+});
+
 test('一覧が残る再描画で表示設定のボタンが消えたらマージ結果か表示切り替えへフォーカスを戻す', () => {
   const render = functionSource(web, 'render');
   assert.ok(render);
@@ -1992,7 +2039,7 @@ test('種類別の PR 見出しは対象件数があるときだけ終わった�
     kindSection: (title, body, controls) => ({ title, body, controls }), compareKindJudgmentItems: () => 0,
     render() {},
   });
-  vm.runInContext(['finishedHiddenCounts', 'finishedToggle', 'renderKindSections'].map(name => functionSource(web, name)).join('\n'), context);
+  vm.runInContext(['appendHiddenDecisions', 'finishedHiddenCounts', 'finishedToggle', 'renderKindSections'].map(name => functionSource(web, name)).join('\n'), context);
   const section = () => context.renderKindSections([], true, context.finishedHiddenCounts([], context.lastState.pullRequests).pullRequests)[0];
   let toggle = section().controls.children[0];
   assert.equal(toggle.className, 'ended-toggle');

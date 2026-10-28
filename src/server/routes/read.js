@@ -193,7 +193,7 @@ function createReadRoutes(ctx) {
       }
       for (const decision of session.decisions) {
         const hasEffectiveAnswer = decision.answer?.sentAt && !decision.answer.ignoredAt;
-        if (decision.state === 'waiting' && !hasEffectiveAnswer) {
+        if (decision.state === 'waiting' && !decision.hidden && !hasEffectiveAnswer) {
           decisionKeys.push(`${session.session_id}|${decision.id}`);
         }
       }

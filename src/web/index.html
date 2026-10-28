@@ -186,6 +186,8 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .decision-card.provisional { border-left-color: var(--warn); }
 .decision-card.resolved { border-left-color: var(--ok); }
 .decision-card.withdrawn { border-left-color: var(--border); }
+.decision-card.manually-hidden { opacity: .55; }
+.decision-head > .link-btn, .pr .pline > .link-btn { margin-left: auto; }
 .decision-card.long-wait { background: var(--danger-soft); }
 .decision-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; min-width: 0; }
 .decision-title { min-width: 0; font-weight: 600; }
@@ -348,7 +350,7 @@ h3.sub .count { font-weight: normal; }
 .pr-actions .merge-btn, .pr-actions .conflict-btn { margin-left: 0; width: 100%; padding-inline: 8px; }
 .merge-state { color: var(--text-2); font-size: 11px; text-align: center; }
 .merge-state.ok { color: var(--ok-text); font-weight: 600; }
-.pr .pline { display: flex; gap: 8px; align-items: baseline; }
+.pr .pline { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
 .pr .pline > * { flex: none; }
 .pr .pline > .ptitle { flex: 0 1 auto; min-width: 0; }
 .badges { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
@@ -711,6 +713,7 @@ let writeErrorMessage = '';
 let writeErrorTimer = null;
 const expandedEndedSessions = new Set();
 const expandedEndedDecisions = new Set();
+const expandedHiddenDecisions = new Set();
 const expandedTodoTasks = new Set();
 const expandedDoneTasks = new Set();
 const expandedPrLines = new Set();
@@ -1611,7 +1614,7 @@ function countJudgments(sessions) {
   for (const session of sessions) {
     counts.permission += session.permissionWaits.filter((wait) => wait.phase === 'prompted').length;
     for (const decision of session.decisions) {
-      if (!isAwaitingDecision(decision)) continue;
+      if (!isAwaitingDecision(decision) || decision.hidden) continue;
       counts[isPendingDecision(decision) ? 'blocking' : 'provisional'] += 1;
     }
   }
@@ -2019,9 +2022,9 @@ function shownPermissions(session) {
   return isFilterShown('permission') ? session.permissionWaits.filter((wait) => wait.phase === 'prompted') : [];
 }
 
-function shownActiveDecisions(session) {
+function shownActiveDecisions(session, includeHidden = false) {
   return session.decisions.filter((decision) => {
-    if (!isActiveDecision(decision)) return false;
+    if (!isActiveDecision(decision) || (!includeHidden && decision.hidden)) return false;
     if (hasEffectiveAnswer(decision)) return true;
     return decision.state === 'waiting' ? isFilterShown('blocking') : isFilterShown('provisional');
   });
@@ -2107,7 +2110,7 @@ function removePullRequestMergeResult(id) {
 }
 
 function pullRequestGroupHasVisibleContent(group) {
-  return group.openCount > 0 || group.openStateUnknown || group.error || group.trees?.length
+  return group.openCount > 0 || group.openStateUnknown || group.error || group.trees?.length || group.hiddenPrs?.length
     || group.mergeHistory?.some((record) => record.headMismatch === true
       || (record.automatic === true && record.automaticResult && pullRequestMergeResultVisible(record)))
       || group.reservationNotices?.some((notice) => !pullRequestTransientNoticeExpired(notice.at)) || hasPullRequestMergeResults(group);
@@ -2124,6 +2127,7 @@ function visiblePullRequestGroups(groups) {
 function pullRequestKeys(groups, includes) {
   const keys = new Set();
   const visit = (group, pullRequest) => {
+    if (pullRequest.hidden) return;
     if (includes(pullRequest)) keys.add(`${group.owner}/${group.repo}#${pullRequest.number}`.toLowerCase());
     for (const child of pullRequest.children || []) visit(group, child);
   };
@@ -2523,6 +2527,7 @@ function hasCodexOrigin(state) {
 }
 
 function appendPullRequestTree(target, group, pullRequest, showOriginBands = true) {
+  if (pullRequest.hidden) return;
   const reservation = pullRequest.reservation || null;
   const bulkReserved = reservation?.kind === 'stack';
   const queued = queuedPullRequestMerge(pullRequest);
@@ -2559,6 +2564,14 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   link.dataset.pullRequestLink = mergeKey || `${group.owner}/${group.repo}#${pullRequest.number}`.toLowerCase();
   link.setAttribute('aria-label', `GitHub で PR #${pullRequest.number} を開く`);
   line.append(link, element('span', 'ptitle', pullRequest.title));
+  const hide = element('button', 'link-btn', '非表示にする');
+  hide.type = 'button';
+  hide.dataset.hidePr = `${group.owner}/${group.repo}#${pullRequest.number}`.toLowerCase();
+  hide.dataset.owner = group.owner;
+  hide.dataset.repo = group.repo;
+  hide.dataset.number = String(pullRequest.number);
+  if (pullRequest.children.length) hide.title = '上に積んだ PR も一緒に隠します';
+  line.append(hide);
   const body = element('div', 'pr-body');
   const text = element('div', 'pr-text');
   const actions = element('div', 'pr-actions');
@@ -2641,7 +2654,7 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
     message.setAttribute('role', 'status');
     item.append(message);
   }
-  if (pullRequest.children.length) {
+  if (pullRequest.children.some(child => !child.hidden)) {
     const children = element('div', 'stack-level');
     for (const child of pullRequest.children) appendPullRequestTree(children, group, child, showOriginBands);
     item.append(children);
@@ -2841,10 +2854,11 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
     content.append(row);
   }
   for (const tree of group.trees) {
+    if (tree.hidden) continue;
     const stack = element('div', 'stack');
     const base = element('div', 'stack-base');
     base.append(element('code', '', tree.effectiveBase));
-    if (tree.children.length) base.append(element('span', '', `スタック ${tree.stackPosition.total} 段`));
+    if (tree.children.some(child => !child.hidden)) base.append(element('span', '', `スタック ${tree.stackPosition.total} 段`));
     stack.append(base);
     if (tree.stackMerge) appendStackMergeControls(base, stack, group, tree);
     appendPullRequestTree(stack, group, tree, showOriginBands);
@@ -2909,6 +2923,21 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
     line.append(link);
   });
   appendPullRequestMergeResults(content, group);
+  if (group.hiddenPrs?.length) {
+    const line = element('div', 'merged-list');
+    line.append(document.createTextNode('非表示: '));
+    for (const pr of group.hiddenPrs) {
+      const restore = element('button', 'link-btn', `#${pr.number}`);
+      restore.type = 'button';
+      restore.title = '押すと表示に戻す';
+      restore.dataset.restorePr = `${group.owner}/${group.repo}#${pr.number}`.toLowerCase();
+      restore.dataset.owner = group.owner;
+      restore.dataset.repo = group.repo;
+      restore.dataset.number = String(pr.number);
+      line.append(restore, document.createTextNode(pr.descendants ? ` (上に ${pr.descendants} 件) ` : ' '));
+    }
+    content.append(line);
+  }
   section.append(content);
   target.append(section);
 }
@@ -3613,6 +3642,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
   const optionDraft = answerActive ? answerDraftFor(decision, session) : null;
   const answerSending = answerActive && decisionAnswerInFlight.has(answerDraftKey(session.session_id, decision.id));
   const header = element('div', 'decision-head');
+  if (decision.hidden) card.className += ' manually-hidden';
   if (decision.isNew) header.append(badge('新着', 'new-mark'));
   appendContextTags(header, product, session, withTags, multipleSessions);
   header.append(
@@ -3627,6 +3657,13 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
   if (decision.state === 'waiting' && decision.awaitingAnswerUntil) {
     const remaining = Math.max(0, Math.ceil((Date.parse(decision.awaitingAnswerUntil) - Date.now()) / 60_000));
     header.append(element('span', 'wait awaiting-min', `あと ${remaining} 分で推奨に進む`));
+  }
+  if (isActiveDecision(decision) && (decision.hidden || !(decision.state === 'waiting' && decision.awaitingAnswerUntil))) {
+    const visibility = element('button', 'link-btn', decision.hidden ? '表示に戻す' : '非表示にする');
+    visibility.type = 'button';
+    visibility.dataset[decision.hidden ? 'restoreDecision' : 'hideDecision'] = decision.id;
+    visibility.dataset.decisionSession = session.session_id;
+    header.append(visibility);
   }
   // id はモデルが cockpit_update_decision で使う値なので、本文に出さずマウスを重ねたときだけ出す。
   card.title = `id: ${decision.id}`;
@@ -3736,7 +3773,23 @@ function appendDecisions(body, session, product, withTags = false, multipleSessi
     for (const decision of visible) appendDecisionCard(list, decision, product, session, withTags, multipleSessions);
     body.append(list);
   } else if (!shownPermissions(session).length && !hasHiddenJudgmentItems(session)) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
+  appendHiddenDecisions(body, [{ session, product, multipleSessions }], session.session_id, withTags);
   if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
+}
+
+function appendHiddenDecisions(body, references, key, withTags = true) {
+  const entries = references.flatMap(reference => shownActiveDecisions(reference.session, true)
+    .filter(decision => decision.hidden)
+    .map(decision => ({ ...reference, decision })));
+  if (!entries.length) return;
+  entries.sort((a, b) => itemTimestamp(b.decision) - itemTimestamp(a.decision));
+  if (expandedHiddenDecisions.has(key)) {
+    const list = element('div', 'decision-list');
+    for (const { decision, product, session, multipleSessions } of entries) appendDecisionCard(list, decision, product, session, withTags, multipleSessions);
+    body.append(list);
+  }
+  appendExpandToggle(body, expandedHiddenDecisions, key,
+    (expanded, count) => `非表示の判断事項を${expanded ? '隠す' : '表示'} (${count} 件)`, entries.length, 'data-hidden-decisions');
 }
 
 function appendTaskItem(list, task, product, session, withTags = false, multipleSessions = false) {
@@ -3918,7 +3971,7 @@ function sessionBlock(product, session, multipleSessions, showOriginBands = true
   }
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
   const hasEndedDecisions = !hidesFinished() && session.decisions.some(isEndedDecision);
-  const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
+  const showJudgment = judgmentCount > 0 || shownActiveDecisions(session, true).some(decision => decision.hidden) || hasEndedDecisions || !hasHiddenJudgmentItems(session);
   const sections = { judgment: [], tasks: [], now: [] };
   if (showJudgment) {
     const judgmentHeading = element('h3', 'sub', 'あなたの判断が必要なこと');
@@ -4009,7 +4062,7 @@ function productSection(product, index, products, pinnedCount, showOriginBands =
   if (branch) head.append(element('span', 'meta branch', branch));
 
   const judgmentCounts = countJudgments(product.sessions);
-  const awaitingDecisions = product.sessions.flatMap((session) => session.decisions).filter(isAwaitingDecision);
+  const awaitingDecisions = product.sessions.flatMap((session) => session.decisions).filter(decision => isAwaitingDecision(decision) && !decision.hidden);
   const decisionCount = judgmentCounts.decisions;
   const pullRequestGroups = product.pullRequestGroups || [];
   if (judgmentCounts.permission) head.append(element('span', 'chip danger', `許可待ち (${judgmentCounts.permission} 件)`));
@@ -4237,6 +4290,7 @@ function renderKindSections(products, showOriginBands = true, finishedPrCount = 
   for (const item of waitingItems) if (item.card) judgment.append(item.card);
   const hasHiddenJudgments = references.some(({ session }) => hasHiddenJudgmentItems(session));
   if (endedDecisionItems.length) judgment.append(endedDecisions);
+  appendHiddenDecisions(judgment, references, 'kind');
 
   const activityItems = [];
   const showEndedAgents = expandedKindSections.has('agents');
@@ -4285,7 +4339,7 @@ function renderKindSections(products, showOriginBands = true, finishedPrCount = 
     sinceSeen: sinceSeenContent.children.length
       ? kindSection('前回見てから', sinceSeenContent, sinceSeenControls.children.length ? sinceSeenControls : null, sinceSeenCount)
       : null,
-    judgment: waitingItems.length || endedDecisionItems.length || !hasHiddenJudgments
+    judgment: waitingItems.length || endedDecisionItems.length || !hasHiddenJudgments || references.some(({ session }) => shownActiveDecisions(session, true).some(decision => decision.hidden))
       ? kindSection('あなたの判断が必要なこと', judgment, endedDecisionItems.length ? endedDecisionControls : null, waitingItems.length + endedDecisionItems.length)
       : null,
     tasks: kindSection('タスクと完了条件', tasks, taskControls.children.length ? taskControls : null, todoTaskCount + doneTaskCount),
@@ -4307,10 +4361,12 @@ function renderKindSections(products, showOriginBands = true, finishedPrCount = 
 }
 
 function focusDataFor(active) {
-  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute?.(attribute));
+  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-hidden-decisions', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute?.(attribute));
+  const visibilityAttribute = ['data-hide-decision', 'data-restore-decision', 'data-hide-pr', 'data-restore-pr'].find((attribute) => active?.hasAttribute?.(attribute));
   const stackAttribute = ['stackMergeOpen', 'stackMergeGo', 'stackMergeConfirmCancel', 'stackMergeStop', 'closeStackMergeResult'].find((name) => active?.dataset?.[name]);
   if (stackAttribute) return { kind: 'stack-merge', attribute: stackAttribute, key: active.dataset[stackAttribute] };
   return active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
+    : visibilityAttribute ? { kind: 'item-visibility', attribute: visibilityAttribute, value: active.getAttribute(visibilityAttribute), sessionId: active.dataset.decisionSession || '' }
     : toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
@@ -4411,6 +4467,7 @@ function render(state) {
     'answer-note': [findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.decisionId === focusData.decisionId && item.hasAttribute('data-answer-note')), findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.sendAnswer === focusData.decisionId), currentModeButton],
     'answer-submit': [findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.sendAnswer === focusData.decisionId), findFocusControl((item) => item.dataset?.sessionId === focusData.sessionId && item.dataset?.decisionId === focusData.decisionId && item.hasAttribute('data-answer-note')), currentModeButton],
     'record-deletion': [findFocusControl((item) => item.dataset?.recordBand === focusData.band && item.dataset?.recordAction === focusData.action)],
+    'item-visibility': [findFocusControl((item) => item.getAttribute(focusData.attribute) === focusData.value && (item.dataset?.decisionSession || '') === focusData.sessionId)],
     toggle: [findFocusControl((item) => item.getAttribute(focusData.attribute) === focusData.value), findFocusControl((item) => focusData.attribute === 'data-hide-session' && item.hasAttribute('data-clear-hidden-sessions'))],
     filter: [findFocusControl((item) => item.dataset?.filter === focusData.key), () => filterFocusFallback(focusControls().filter((item) => item.dataset?.filter), focusData.key), currentModeButton],
     'show-all': [findFocusControl((item) => item.hasAttribute('data-show-all'))],
@@ -5077,6 +5134,30 @@ async function runPullRequestConflictRequest(button) {
   });
 }
 
+async function changeItemVisibility(button, url, body) {
+  button.disabled = true;
+  try {
+    const response = await postUiAction(url, body);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await refresh();
+    const isDecision = url === '/api/hidden-decisions';
+    const attribute = isDecision
+      ? body.action === 'hide' ? 'data-restore-decision' : 'data-hide-decision'
+      : body.action === 'hide' ? 'data-restore-pr' : 'data-hide-pr';
+    const value = isDecision ? body.id : `${body.owner}/${body.repo}#${body.number}`.toLowerCase();
+    const target = [...root.querySelectorAll(`[${attribute}]`)].find(item =>
+      item.getAttribute(attribute) === value && (!isDecision || item.dataset.decisionSession === body.session_id));
+    (target || (isDecision && [...root.querySelectorAll('[data-hidden-decisions]')]
+      .find(item => ['kind', body.session_id].includes(item.dataset.hiddenDecisions)))
+      || root.querySelector('.section h2'))?.focus({ preventScroll: true });
+  } catch {
+    liveStatus.textContent = '表示の変更に失敗しました。もう一度お試しください。';
+    showWriteError('表示の変更に失敗しました');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false, undoInfo = null) {
   button.disabled = true;
   // 更新が無くて隠れているセッションは外し直すと外した時刻が今になり、外したセッションの件数に混ざるので、取り消しの対象にしない。
@@ -5153,6 +5234,20 @@ document.addEventListener('click', (event) => {
   if (button.dataset.stackMergeGo || button.dataset.stackMergeStop || button.dataset.closeStackMergeResult) {
     const action = button.dataset.stackMergeGo ? 'merge-stack' : button.dataset.stackMergeStop ? 'cancel-stack-merge' : 'stack-merge-result-close';
     void runStackMergeAction(button, action, button.dataset.stackMergeGo || button.dataset.stackMergeStop || button.dataset.closeStackMergeResult);
+    return;
+  }
+  if (button.dataset.hideDecision || button.dataset.restoreDecision) {
+    void changeItemVisibility(button, '/api/hidden-decisions', {
+      action: button.dataset.hideDecision ? 'hide' : 'unhide', session_id: button.dataset.decisionSession,
+      id: button.dataset.hideDecision || button.dataset.restoreDecision,
+    });
+    return;
+  }
+  if (button.dataset.hidePr || button.dataset.restorePr) {
+    void changeItemVisibility(button, '/api/hidden-pull-requests', {
+      action: button.dataset.hidePr ? 'hide' : 'unhide', owner: button.dataset.owner, repo: button.dataset.repo,
+      number: Number(button.dataset.number),
+    });
     return;
   }
   if (button.dataset.route) {
