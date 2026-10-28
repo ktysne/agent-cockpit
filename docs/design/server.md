@@ -635,9 +635,9 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書](../handover
 
 分岐のないオープン PR の鎖に「スタックをすべてマージ」を表示し、確認欄には下から順に番号、題、照合する head SHA、待機状態を並べる。
 方式はマージコミット、リモートブランチの削除は有効に固定する。
-`POST /api/pull-requests/merge-stack` は `items: [{number, registration_key, headRefOid}]`、`method: 'merge'`、`deleteBranch: true` だけを受ける。
+`POST /api/pull-requests/merge-stack` は `items: [{number, registration_key, headRefOid}]`、`method: 'merge'`、`deleteBranch: true`、確認欄に表示した `targetBranch` を受ける。
 構成員は 2 件から 20 件までとし、秘密値と必須 Origin を照合する。
-リポジトリロック内で全構成員を取り直し、鎖全体と順序、登録キー、画面で見た SHA、許可方式、既存予約や操作意図との重複、中止条件を確かめる。
+リポジトリロック内で全構成員を取り直し、鎖全体と順序、登録キー、画面で見た SHA とマージ先、許可方式、既存予約や操作意図との重複、中止条件を確かめる。
 条件が崩れていれば何も予約せず 409 を返す。
 
 予約は既存の `mergeReservations` に `kind: 'stack'`、`runId`、`order`、`total`、確定時の `headRefOid` を付けて保存し、保存完了後に実行条件を確認する。
@@ -651,6 +651,7 @@ head の変化、登録の消失、ドラフト、積み直し、コンフリク
 計算中の構成員がある場合は、通常の早い取り直しが尽きても 10 秒間隔で連続 60 回まで再取得し、その後は定期取得を待つ。
 
 `POST /api/pull-requests/cancel-stack-merge` は `{runId}` で残りの予約を取り消す。
+中止要求をメモリーに記録してからリポジトリロックを待ち、進行中の段は base 付け替え後の再評価で止める。すでに `gh pr merge` を呼んだ段は完了させてから残りを取り消す。
 中止の通知は実行ごとに一通にまとめ、各段のマージ通知と結果は既存の経路で残す。
 最後の段が入ったら完了結果を記録する。
 完了と中止の結果は `store.json` の `stackMergeResults` に保存し、最大 100 実行を保持する。

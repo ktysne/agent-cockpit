@@ -2250,6 +2250,7 @@ function attachStackMergeState(root, repository, state) {
   return { ...root, stackMerge: {
     available: members.length >= 2 && !blocker,
     blocker,
+    targetBranch: root.mergeTarget,
     members: members.map((pr) => ({ number: pr.number, title: pr.title, headRefOid: pr.headRefOid,
       registration_key: pr.mergeRecordKey,
       status: pr.mergeable === 'UNKNOWN' ? 'GitHub の計算中・待ってからマージ'

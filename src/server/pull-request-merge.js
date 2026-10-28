@@ -74,6 +74,7 @@ class PullRequestMergeManager {
     this.handledMerges = new Set();
     this.mergeOutcomes = new Map();
     this.diagnosticReservationConditions = new Map();
+    this.stackMergeCancellationRequests = new Set();
   }
 
   async withPullRequestLock(owner, repo, number, operation) {
@@ -179,7 +180,7 @@ class PullRequestMergeManager {
 
   async mergeStack(input) {
     if (!Array.isArray(input.items) || input.items.length < 2 || input.items.length > 20 ||
-      input.method !== 'merge' || input.deleteBranch !== true ||
+      input.method !== 'merge' || input.deleteBranch !== true || !validBranchName(input.targetBranch) ||
       input.items.some((item) => !isCompleteCommitSha(item.headRefOid))) return actionResult(400, '一括マージの内容を確認してください');
     const registrations = input.items.map((item) => this.registeredPullRequest(item.number, item.registration_key));
     if (registrations.some((record) => !record)) return actionResult(409, '構成員の登録が見つかりません');
@@ -207,6 +208,7 @@ class PullRequestMergeManager {
     const numbers = new Set(input.items.map((item) => item.number));
     const targetBranch = this.reservationTarget(latestRoot);
     if (!validBranchName(targetBranch)) return actionResult(409, 'マージ先を確認できません');
+    if (targetBranch !== input.targetBranch) return actionResult(409, 'マージ先が確認時から変わりました');
     for (let index = 0; index < registrations.length; index += 1) {
       const registration = registrations[index];
       if (!this.registeredPullRequest(input.items[index].number, input.items[index].registration_key)) return actionResult(409, '構成員の登録が変わりました');
@@ -251,9 +253,14 @@ class PullRequestMergeManager {
   }
 
   async cancelStackMerge({ runId }) {
-    const reservation = this.state.pullRequestMergeReservations().find((record) => record.kind === 'stack' && record.runId === runId);
-    if (!reservation) return actionResult(404, '一括マージの予約が見つかりません');
-    return this.withRepositoryLock(reservation.owner, reservation.repo, () => this.cancelStackRun(reservation));
+    this.stackMergeCancellationRequests.add(runId);
+    try {
+      const reservation = this.state.pullRequestMergeReservations().find((record) => record.kind === 'stack' && record.runId === runId);
+      if (!reservation) return actionResult(404, '一括マージの予約が見つかりません');
+      return await this.withRepositoryLock(reservation.owner, reservation.repo, () => this.cancelStackRun(reservation));
+    } finally {
+      this.stackMergeCancellationRequests.delete(runId);
+    }
   }
 
   async cancelStackRun(reservation, reason = null) {
@@ -275,6 +282,7 @@ class PullRequestMergeManager {
   }
 
   stackReservationMergeInput(candidate, reservation) {
+    if (this.stackMergeCancellationRequests.has(reservation.runId)) return { userCancelled: true };
     if (this.state.pullRequestMergeReservation(reservation.owner, reservation.repo, reservation.number)?.runId !== reservation.runId) {
       return { cancelled: true, reason: '予約が取り消されました' };
     }
@@ -507,6 +515,7 @@ class PullRequestMergeManager {
     let mergeInput = input;
     if (reserved) {
       const reservationStatus = (reservation.kind === 'stack' ? this.stackReservationMergeInput(candidate, reservation) : this.reservationMergeInput(candidate, reservation));
+      if (reservationStatus?.userCancelled) return this.cancelStackRun(reservation);
       if (reservationStatus?.cancelled) return this.cancelStackRun(reservation, reservationStatus.reason);
       if (reservationStatus?.halted) return this.cancelHaltedReservation(reservation);
       if (!reservationStatus) return reject(409, reservation.kind === 'stack' ? '一括マージの条件待ちです' : 'レビュー収束後マージの条件が変わりました。予約は保持しています', 'review-not-ready');
@@ -575,6 +584,7 @@ class PullRequestMergeManager {
     }
     if (reserved) {
       const reservationStatus = (reservation.kind === 'stack' ? this.stackReservationMergeInput(latestCandidate, reservation) : this.reservationMergeInput(latestCandidate, reservation));
+      if (reservationStatus?.userCancelled) return this.cancelStackRun(reservation);
       if (reservationStatus?.cancelled) return this.cancelStackRun(reservation, reservationStatus.reason);
       if (reservationStatus?.halted) return this.cancelHaltedReservation(reservation);
       if (!reservationStatus) {
@@ -831,6 +841,7 @@ class PullRequestMergeManager {
         const record = this.state.pullRequestRegistrationForSession(member.session_id, member.owner, member.repo, member.number);
         if (!record) return this.cancelStackRun(member, '登録が消えました');
         const status = this.stackReservationMergeInput(this.tracker.mergeCandidate(record), member);
+        if (status?.userCancelled) return this.cancelStackRun(member);
         if (status?.cancelled) return this.cancelStackRun(member, status.reason);
         if (this.state.pullRequestMergeIntent(member.owner, member.repo, member.number)) return null;
       }
@@ -838,6 +849,7 @@ class PullRequestMergeManager {
     }
     const candidate = this.tracker.mergeCandidate(registration);
     const reservationStatus = (reservation.kind === 'stack' ? this.stackReservationMergeInput(candidate, reservation) : this.reservationMergeInput(candidate, reservation));
+    if (reservationStatus?.userCancelled) return this.cancelStackRun(reservation);
     if (reservationStatus?.cancelled) return this.cancelStackRun(reservation, reservationStatus.reason);
     if (reservationStatus?.halted) return this.cancelHaltedReservation(reservation);
     if (!reservationStatus) return null;

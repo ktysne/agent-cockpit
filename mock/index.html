@@ -2947,9 +2947,10 @@ function stackMergeConfirmation(p, members, run) {
 
 function stackMergeControls(p, root) {
   const members = stackMembers(p, root);
-  if (!members || members.length < 2) return '';
+  if (!members) return '';
   const key = stackMergeKey(p, root);
   const run = stackMergeRunFor(p, members);
+  if (!run && members.length < 2) return '';
   if (run?.phase === 'confirm') return '';
   if (run?.phase === 'running') {
     const current = run.members[run.index];

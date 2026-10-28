@@ -223,7 +223,9 @@ function mergeInput(number = 1, changes = {}) {
 }
 
 function stackInput(fixture, numbers = [1, 2]) {
-  return { method: 'merge', deleteBranch: true, items: numbers.map((number) => {
+  return { method: 'merge', deleteBranch: true,
+    targetBranch: fixture.github.openPullRequests.find((pullRequest) => pullRequest.number === numbers[0]).baseRefName,
+    items: numbers.map((number) => {
     const record = fixture.state.pullRequestRegistrationsForRepo('example', 'project').find((item) => item.number === number);
     return { number, registration_key: fixture.state.pullRequestRegistrationKey(record), headRefOid: sha(number) };
   }) };
@@ -243,6 +245,51 @@ test('一括マージは下から順に保存した SHA を照合してマージ
   assert.equal(fixture.state.stackMergeResultsForRepo('example', 'project')[0].message, 'スタックの 2 件を main にマージしました');
 });
 
+test('確認後にマージ先が変わると一括マージを予約しない', async (t) => {
+  const fixture = await stackFixture(t);
+  const input = stackInput(fixture);
+  fixture.github.openPullRequests[0].baseRefName = 'release';
+
+  const before = fixture.state.pullRequestMergeReservations();
+  const result = await fixture.manager.mergeStack(input);
+
+  assert.equal(result.status, 409);
+  assert.equal(result.error, 'マージ先が確認時から変わりました');
+  assert.deepEqual(fixture.state.pullRequestMergeReservations(), before);
+  assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
+test('base の付け替え中に中止すると進行中の段を止めて全予約を取り消す', async (t) => {
+  const fixture = await stackFixture(t);
+  const original = fixture.tracker.execFileImpl;
+  let releaseEdit;
+  let markEditStarted;
+  const editStarted = new Promise((resolve) => { markEditStarted = resolve; });
+  fixture.tracker.execFileImpl = (file, args, options, callback) => {
+    if (args[0] === 'pr' && args[1] === 'edit' && !releaseEdit) {
+      releaseEdit = () => original(file, args, options, callback);
+      markEditStarted();
+      return;
+    }
+    original(file, args, options, callback);
+  };
+
+  const merging = fixture.manager.mergeStack(stackInput(fixture));
+  await editStarted;
+  const { runId } = fixture.state.pullRequestMergeReservations()[0];
+  const cancelling = fixture.manager.cancelStackMerge({ runId });
+  assert.equal(fixture.manager.stackMergeCancellationRequests.has(runId), true);
+
+  releaseEdit();
+  await Promise.all([merging, cancelling]);
+
+  const message = '中止しました。残りの予約 (#1、#2) を取り消しました';
+  assert.deepEqual(fixture.state.pullRequestMergeReservations(), []);
+  assert.equal(fixture.state.stackMergeResultsForRepo('example', 'project')[0].message, message);
+  assert.equal(fixture.notices.filter((notice) => notice.message === message).length, 1);
+  assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
 test('親のマージ後に子の計算中と CI を待ち、一番下になってから続ける', async (t) => {
   const fixture = await stackFixture(t);
   fixture.control.afterMerge = () => {
@@ -252,6 +299,7 @@ test('親のマージ後に子の計算中と CI を待ち、一番下になっ�
   await fixture.manager.mergeStack(stackInput(fixture));
   assert.deepEqual(fixture.calls.filter((args) => args[1] === 'merge').map((args) => args[2]), ['1']);
   const snapshot = fixture.tracker.snapshot()[0].trees[0].stackMerge;
+  assert.equal(snapshot.targetBranch, 'main');
   assert.equal(snapshot.run.index, 2);
   fixture.control.afterMerge = null;
   Object.assign(fixture.github.openPullRequests[0], ghPullRequest(2, 'feature/two', 'main'));

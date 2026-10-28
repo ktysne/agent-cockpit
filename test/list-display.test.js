@@ -56,7 +56,7 @@ test('一括マージのボタン、無効理由、確認欄、最後の一件�
   vm.runInContext(['stackMergeKey', 'appendStackMergeControls'].map((name) => functionSource(web, name)).join('\n'), context);
   const members = [1, 2].map((number) => ({ number, title: `PR ${number}`, headRefOid: String(number).repeat(40),
     registration_key: String(number).repeat(64), status: 'マージできます' }));
-  const tree = { number: 1, stackMerge: { available: true, members, blocker: null, run: null } };
+  const tree = { number: 1, stackMerge: { available: true, targetBranch: 'aggregate', members, blocker: null, run: null } };
   const draw = () => {
     const base = fakeElement('div'); const stack = fakeElement('div');
     context.appendStackMergeControls(base, stack, {}, tree);
@@ -71,22 +71,27 @@ test('一括マージのボタン、無効理由、確認欄、最後の一件�
   const confirmed = draw();
   assert.ok(confirmed.some((node) => node.textContent === 'スタックの 2 件を aggregate へ順にマージする'));
   assert.ok(confirmed.some((node) => node.textContent === '照合する head SHA: 1111111 ・ マージできます'));
+  tree.stackMerge.targetBranch = 'release';
+  const changedTarget = draw();
+  assert.equal(changedTarget.find((node) => node.dataset.stackMergeGo).disabled, true);
+  assert.ok(changedTarget.some((node) => node.textContent.includes('マージ先が確認時から変わりました')));
+  tree.stackMerge.targetBranch = 'aggregate';
   tree.stackMerge.members = [members[1]]; tree.stackMerge.run = { runId: 'run-id', index: 2, total: 2, waitReason: '#2 で CI 実行中' };
   assert.ok(draw().some((node) => node.textContent === '順次マージ中 2/2 ・ 待ち: #2 で CI 実行中'));
   assert.ok(draw().some((node) => node.dataset.stackMergeStop === 'run-id'));
 });
 
-test('一括マージは確認欄に表示した各 PR の登録キーと SHA を送る', async () => {
+test('一括マージは確認欄に表示した登録キー、SHA、マージ先を送る', async () => {
   const members = [1, 2].map((number) => ({ number, title: '題', headRefOid: String(number).repeat(40), registration_key: String(number).repeat(64) }));
   const sent = [];
-  const context = pageContext(web, { stackMergeConfirmations: new Map([['key', { members }]]), stackMergeInFlight: new Set(), stackMergeMessages: new Map(),
+  const context = pageContext(web, { stackMergeConfirmations: new Map([['key', { members, target: 'main' }]]), stackMergeInFlight: new Set(), stackMergeMessages: new Map(),
     lastState: null, liveStatus: {}, refresh: async () => {}, postUiAction: async (url, body) => {
       sent.push({ url, body: JSON.parse(JSON.stringify(body)) }); return { ok: true, json: async () => ({ runId: 'run' }) };
     } });
   vm.runInContext(functionSource(web, 'runStackMergeAction'), context);
   await context.runStackMergeAction(fakeElement('button'), 'merge-stack', 'key');
   assert.deepEqual(sent, [{ url: '/api/pull-requests/merge-stack', body: { method: 'merge', deleteBranch: true,
-    items: members.map(({ number, registration_key, headRefOid }) => ({ number, registration_key, headRefOid })) } }]);
+    targetBranch: 'main', items: members.map(({ number, registration_key, headRefOid }) => ({ number, registration_key, headRefOid })) } }]);
 });
 
 test('一括予約の PR は予約の札を表示し個別マージと収束後マージを隠す', () => {

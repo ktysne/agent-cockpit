@@ -1,5 +1,5 @@
 const { jsonResponse } = require('../http-helpers');
-const { isCompleteCommitSha, isSha256Digest, validRepositoryPart } = require('../pull-request-utils');
+const { isCompleteCommitSha, isSha256Digest, validBranchName, validRepositoryPart } = require('../pull-request-utils');
 const { applyReviewSkip, pullRequestStateUnavailable } = require('./review-skip');
 
 function createPullRequestRoutes(ctx) {
@@ -105,7 +105,8 @@ function createPullRequestRoutes(ctx) {
     const action = params[1];
     const validRunId = (value) => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
     const valid = body && typeof body === 'object' && !Array.isArray(body) && (action === 'merge-stack'
-      ? Object.keys(body).sort().join(',') === 'deleteBranch,items,method' && body.method === 'merge' && body.deleteBranch === true &&
+      ? Object.keys(body).sort().join(',') === 'deleteBranch,items,method,targetBranch' && validBranchName(body.targetBranch) &&
+        body.method === 'merge' && body.deleteBranch === true &&
         Array.isArray(body.items) && body.items.length >= 2 && body.items.length <= 20 && body.items.every((item) =>
           item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).sort().join(',') === 'headRefOid,number,registration_key' &&
           Number.isSafeInteger(item.number) && item.number > 0 && isSha256Digest(item.registration_key) && isCompleteCommitSha(item.headRefOid))

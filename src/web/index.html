@@ -2736,10 +2736,13 @@ function appendStackMergeControls(base, stack, group, tree) {
       const panel = element('div', 'merge-confirm stack-merge-confirm');
       panel.dataset.stackMerge = key;
       panel.append(element('strong', '', `スタックの ${confirmation.members.length} 件を ${confirmation.target} へ順にマージする`));
-      const changed = confirmation.members.length !== state.members.length || confirmation.members.some((member, index) =>
+      const membersChanged = confirmation.members.length !== state.members.length || confirmation.members.some((member, index) =>
         member.number !== state.members[index]?.number || member.headRefOid !== state.members[index]?.headRefOid ||
         member.registration_key !== state.members[index]?.registration_key);
-      const reason = changed ? 'スタックの構成または head が変わりました。確認欄を開き直してください' : state.blocker;
+      const changedReasons = [];
+      if (membersChanged) changedReasons.push('スタックの構成または head が変わりました');
+      if (confirmation.target !== state.targetBranch) changedReasons.push('マージ先が確認時から変わりました');
+      const reason = changedReasons.length ? `${changedReasons.join('。')}。確認欄を開き直してください` : state.blocker;
       if (reason) panel.append(element('p', 'stack-merge-reason', `一括マージできない理由: ${reason}`));
       const list = element('ol', 'stack-merge-prs');
       for (const member of confirmation.members) {
@@ -2783,7 +2786,7 @@ async function runStackMergeAction(button, action, key) {
   const confirmation = stackMergeConfirmations.get(key);
   const body = action === 'merge-stack' ? confirmation && { items: confirmation.members.map((member) => ({
     number: member.number, registration_key: member.registration_key, headRefOid: member.headRefOid,
-  })), method: 'merge', deleteBranch: true } : { runId: key };
+  })), method: 'merge', deleteBranch: true, targetBranch: confirmation.target } : { runId: key };
   if (!body) return;
   stackMergeInFlight.add(key);
   stackMergeMessages.delete(key);
@@ -5138,7 +5141,7 @@ document.addEventListener('click', (event) => {
     const target = findStackMergeTarget(key);
     if (!target?.tree.stackMerge?.available) return;
     stackMergeConfirmations.set(key, { members: target.tree.stackMerge.members.map((member) => ({ ...member })),
-      target: target.tree.mergeTarget || target.group.defaultBranch });
+      target: target.tree.stackMerge.targetBranch });
     if (lastState) render(lastState);
     document.querySelector(`[data-stack-merge-go="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
     return;
