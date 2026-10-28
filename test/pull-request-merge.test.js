@@ -222,6 +222,154 @@ function mergeInput(number = 1, changes = {}) {
   };
 }
 
+function stackInput(fixture, numbers = [1, 2]) {
+  return { method: 'merge', deleteBranch: true, items: numbers.map((number) => {
+    const record = fixture.state.pullRequestRegistrationsForRepo('example', 'project').find((item) => item.number === number);
+    return { number, registration_key: fixture.state.pullRequestRegistrationKey(record), headRefOid: sha(number) };
+  }) };
+}
+
+async function stackFixture(t, options = {}) {
+  return mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', options), ghPullRequest(2, 'feature/two', 'feature/one')]);
+}
+
+test('一括マージは下から順に保存した SHA を照合してマージコミットで完了する', async (t) => {
+  const fixture = await stackFixture(t);
+  const result = await fixture.manager.mergeStack(stackInput(fixture));
+  assert.equal(result.ok, true);
+  const merges = fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge');
+  assert.deepEqual(merges.map((args) => [args[2], args[5], args[7]]), [['1', '--merge', sha(1)], ['2', '--merge', sha(2)]]);
+  assert.equal(fixture.state.pullRequestMergeReservations().length, 0);
+  assert.equal(fixture.state.stackMergeResultsForRepo('example', 'project')[0].message, 'スタックの 2 件を main にマージしました');
+});
+
+test('親のマージ後に子の計算中と CI を待ち、一番下になってから続ける', async (t) => {
+  const fixture = await stackFixture(t);
+  fixture.control.afterMerge = () => {
+    const child = fixture.github.openPullRequests.find((pr) => pr.number === 2);
+    if (child) Object.assign(child, ghPullRequest(2, 'feature/two', 'main', { ci: 'pending', mergeable: 'UNKNOWN' }));
+  };
+  await fixture.manager.mergeStack(stackInput(fixture));
+  assert.deepEqual(fixture.calls.filter((args) => args[1] === 'merge').map((args) => args[2]), ['1']);
+  const snapshot = fixture.tracker.snapshot()[0].trees[0].stackMerge;
+  assert.equal(snapshot.run.index, 2);
+  fixture.control.afterMerge = null;
+  Object.assign(fixture.github.openPullRequests[0], ghPullRequest(2, 'feature/two', 'main'));
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.deepEqual(fixture.calls.filter((args) => args[1] === 'merge').map((args) => args[2]), ['1', '2']);
+});
+
+test('一括マージの確定は head 不一致、鎖の抜け、分岐、予約、中止条件、方式不可を保存前に拒否する', async (t) => {
+  for (const condition of ['head', 'chain', 'branch', 'reservation', 'draft', 'method', 'conflict', 'ci']) {
+    const fixture = await stackFixture(t, { ci: 'pending' });
+    const input = stackInput(fixture);
+    if (condition === 'head') input.items[1].headRefOid = sha(9);
+    if (condition === 'chain') input.items.reverse();
+    if (condition === 'branch') fixture.github.openPullRequests.push(ghPullRequest(3, 'feature/three', 'feature/one'));
+    if (condition === 'reservation') await fixture.manager.reserve(mergeInput(2));
+    if (condition === 'draft') fixture.github.openPullRequests[1].isDraft = true;
+    if (condition === 'method') fixture.control.allowMerge = false;
+    if (condition === 'conflict') fixture.github.openPullRequests[1].mergeable = 'CONFLICTING';
+    if (condition === 'ci') Object.assign(fixture.github.openPullRequests[1], ghPullRequest(2, 'feature/two', 'feature/one', { ci: 'fail' }));
+    const before = fixture.state.pullRequestMergeReservations();
+    const result = await fixture.manager.mergeStack(input);
+    assert.equal(result.status, 409, condition);
+    assert.deepEqual(fixture.state.pullRequestMergeReservations(), before, condition);
+  }
+});
+
+test('一括マージは子の head 変化、CI 失敗、コンフリクトで残りを取り消して一通だけ通知する', async (t) => {
+  for (const condition of ['head', 'ci', 'conflict']) {
+    const fixture = await stackFixture(t, { ci: 'pending' });
+    await fixture.manager.mergeStack(stackInput(fixture));
+    const child = fixture.github.openPullRequests[1];
+    if (condition === 'head') { child.headRefOid = sha(9); fixture.control.remoteBranchHeads.set(child.headRefName, sha(9)); }
+    if (condition === 'ci') Object.assign(child, ghPullRequest(2, child.headRefName, child.baseRefName, { ci: 'fail' }));
+    if (condition === 'conflict') child.mergeable = 'CONFLICTING';
+    await fixture.tracker.refreshRepo('example', 'project');
+    await fixture.manager.checkReservations();
+    assert.equal(fixture.state.pullRequestMergeReservations().length, 0, condition);
+    assert.equal(fixture.notices.filter((notice) => notice.message.includes('一括マージを中止')).length, 1, condition);
+    assert.equal(fixture.calls.some((args) => args[1] === 'merge'), false, condition);
+  }
+});
+
+test('一括マージはキュー入りと子の base 付け替え失敗で残りを取り消す', async (t) => {
+  for (const condition of ['queue', 'edit', 'gh']) {
+    const fixture = await stackFixture(t);
+    if (condition === 'queue') fixture.control.queueMerge = true;
+    if (condition === 'edit') fixture.control.failEditNumber = 2;
+    if (condition === 'gh') fixture.control.failMerge = true;
+    await fixture.manager.mergeStack(stackInput(fixture));
+    assert.equal(fixture.state.pullRequestMergeReservations().length, 0, condition);
+    assert.equal(fixture.notices.filter((notice) => notice.message.includes('一括マージを中止')).length, 1, condition);
+  }
+});
+
+test('一括マージの構成員が外部でマージされると残りを取り消す', async (t) => {
+  const fixture = await stackFixture(t, { ci: 'pending' });
+  await fixture.manager.mergeStack(stackInput(fixture));
+  const child = fixture.github.openPullRequests.pop();
+  fixture.github.views.set(2, mergedView(child));
+  fixture.github.mergedPullRequests.push(mergedView(child));
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.equal(fixture.state.pullRequestMergeReservations().length, 0);
+  assert.equal(fixture.notices.filter((notice) => notice.message.includes('一括マージを中止')).length, 1);
+});
+
+test('再起動後も一括予約の SHA と順序を保ち、中止と結果の閉鎖を保存する', async (t) => {
+  const fixture = await stackFixture(t, { ci: 'pending' });
+  const result = await fixture.manager.mergeStack(stackInput(fixture));
+  await fixture.state.flushPersistence();
+  const restored = await DashboardState.load(fixture.homeDir, { now: NOW });
+  t.after(() => restored.flushPersistence());
+  assert.deepEqual(restored.pullRequestMergeReservations(), fixture.state.pullRequestMergeReservations());
+  await fixture.manager.cancelStackMerge({ runId: result.runId });
+  fixture.state.closeStackMergeResult(result.runId);
+  await fixture.state.flushPersistence();
+  const closed = await DashboardState.load(fixture.homeDir, { now: NOW });
+  assert.deepEqual(closed.stackMergeResultsForRepo('example', 'project'), []);
+  assert.equal(closed.stackMergeResults.get(result.runId).closedAt.length > 0, true);
+});
+
+test('一括予約を保存した後で登録が消えると実行全体を中止する', async (t) => {
+  const fixture = await stackFixture(t, { ci: 'pending' });
+  await fixture.manager.mergeStack(stackInput(fixture));
+  fixture.state.updatePullRequest('session-2', 'example', 'project', 2, { state: 'unknown' });
+  fixture.state.unregisterUnknownPullRequests('example', 'project');
+  await fixture.manager.checkReservations();
+  assert.equal(fixture.state.pullRequestMergeReservations().length, 0);
+  assert.equal(fixture.notices.filter((notice) => notice.message.includes('一括マージを中止')).length, 1);
+});
+
+test('一括予約の登録がすべて消えたリポジトリでも定期取得で残りを取り消す', async (t) => {
+  const fixture = await stackFixture(t, { ci: 'pending' });
+  await fixture.manager.mergeStack(stackInput(fixture));
+  for (const number of [1, 2]) fixture.state.updatePullRequest(`session-${number}`, 'example', 'project', number, { state: 'unknown' });
+  fixture.state.unregisterUnknownPullRequests('example', 'project');
+  await fixture.tracker.refreshAll();
+  assert.equal(fixture.state.pullRequestMergeReservations().length, 0);
+  assert.equal(fixture.notices.filter((notice) => notice.message.includes('一括マージを中止')).length, 1);
+});
+
+test('一括予約中の個別マージは保存した SHA の承認を上書きせず拒否する', async (t) => {
+  const fixture = await stackFixture(t, { ci: 'pending' });
+  await fixture.manager.mergeStack(stackInput(fixture));
+  assert.equal((await fixture.manager.merge(mergeInput(1, { method: 'merge' }))).status, 409);
+  assert.equal(fixture.calls.some((args) => args[1] === 'merge'), false);
+  assert.equal(fixture.state.pullRequestMergeReservations().length, 2);
+});
+
+test('一括予約の構成員が計算中なら通常の早い取得の上限後も再取得を予約する', async (t) => {
+  const fixture = await stackFixture(t, { mergeable: 'UNKNOWN' });
+  await fixture.manager.mergeStack(stackInput(fixture));
+  const scheduled = [];
+  fixture.tracker.deferRefresh = (_owner, _repo, delayMs) => scheduled.push(delayMs);
+  for (let index = 0; index < 4; index += 1) await fixture.tracker.refreshRepoFresh('example', 'project');
+  assert.equal(scheduled.at(-1), 10_000);
+  assert.equal(fixture.state.pullRequestMergeReservations().length, 2);
+});
+
 function holdNextOpenList(fixture) {
   const original = fixture.tracker.execFileImpl;
   let release;

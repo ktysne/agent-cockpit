@@ -750,6 +750,21 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   assert.equal(away.headers['access-control-allow-origin'], undefined);
 });
 
+test('一括マージ口は完全なキー集合と SHA、構成員数を検査する', async (t) => {
+  const runtime = await runningServer(t);
+  const item = { number: 1, registration_key: 'b'.repeat(64), headRefOid: 'a'.repeat(40) };
+  const payload = { items: [item, { ...item, number: 2 }], method: 'merge', deleteBranch: true };
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin: `http://127.0.0.1:${runtime.info.port}` };
+  for (const body of [{ ...payload, owner: 'example' }, { ...payload, items: [item] },
+    { ...payload, items: Array.from({ length: 21 }, () => item) }, { ...payload, method: 'squash' }, { ...payload, deleteBranch: false },
+    { ...payload, items: [item, { ...item, headRefOid: 'abcdef1' }] }, { ...payload, items: [item, { ...item, extra: true }] }]) {
+    const response = await request(runtime.info.port, { method: 'POST', path: '/api/pull-requests/merge-stack', headers, body: JSON.stringify(body) });
+    assert.equal(response.status, 400);
+  }
+  const response = await request(runtime.info.port, { method: 'POST', path: '/api/pull-requests/merge-stack', headers, body: JSON.stringify(payload) });
+  assert.equal(response.status, 409);
+});
+
 test('PR マージ口は画面秘密値と Origin 必須照合を行い、owner/repo を要求本文から拒む', async (t) => {
   const runtime = await runningServer(t);
   const path = '/api/pull-requests/merge';
@@ -1587,6 +1602,9 @@ test('すべての POST 口で秘密値、Origin、Sec-Fetch-Site を照合す�
     { path: '/api/decisions/decision-1/answer', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/review-skip', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/merge', secret: 'ui', originRequired: true },
+    { path: '/api/pull-requests/merge-stack', secret: 'ui', originRequired: true },
+    { path: '/api/pull-requests/cancel-stack-merge', secret: 'ui', originRequired: true },
+    { path: '/api/pull-requests/stack-merge-result-close', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/reserve', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/cancel-reservation', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/conflict-request', secret: 'ui', originRequired: true },

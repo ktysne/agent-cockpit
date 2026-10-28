@@ -222,7 +222,7 @@ function createRequestHandler(options) {
   const { handleHealth, handleState, handleTrayState, handleContext, handleDevFields, handleIndex, restartRequired } = createReadRoutes(ctx);
   ctx.restartRequired = restartRequired;
   const { handleHookAnswers, handleEvents, handlePlan, handleSessionPullRequests } = createHookRoutes(ctx);
-  const { handlePullRequestRefresh, handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
+  const { handlePullRequestRefresh, handleReviewSkip, handlePullRequestAction, handleStackMergeAction, handleMergeResultClose, handleRepositoryUnregister } = createPullRequestRoutes(ctx);
   const {
     handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks,
     handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer, handleLaunchRequest, handleWorktreeTerminal,
@@ -291,6 +291,7 @@ function createRequestHandler(options) {
     { method: 'POST', path: '/api/pull-requests/refresh', auth: 'ui', body: 'json', handler: handlePullRequestRefresh },
     { method: 'POST', path: '/api/pull-requests/review-skip', auth: 'ui', body: 'json', handler: handleReviewSkip },
     { method: 'POST', path: /^\/api\/pull-requests\/(merge|reserve|cancel-reservation|conflict-request)$/, auth: 'ui', body: 'json', handler: handlePullRequestAction },
+    { method: 'POST', path: /^\/api\/pull-requests\/(merge-stack|cancel-stack-merge|stack-merge-result-close)$/, auth: 'ui', body: 'json', handler: handleStackMergeAction },
     { method: 'GET', path: '/', auth: 'none', body: 'none', handler: handleIndex },
     { method: 'POST', path: /^\/api\/sessions\/([^/]+)\/estimate$/, auth: 'ui', body: 'none', idCheck: unknownSessionId, handler: handleEstimate },
     { method: 'POST', path: '/api/record-deletions', auth: 'ui', body: 'json', handler: handleRecordDeletions },

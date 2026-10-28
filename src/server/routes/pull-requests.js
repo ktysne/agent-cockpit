@@ -101,6 +101,26 @@ function createPullRequestRoutes(ctx) {
     jsonResponse(response, result.ok ? 200 : result.status, result.ok ? result : { error: result.error });
   }
 
+  async function handleStackMergeAction({ response, params, body }) {
+    const action = params[1];
+    const validRunId = (value) => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
+    const valid = body && typeof body === 'object' && !Array.isArray(body) && (action === 'merge-stack'
+      ? Object.keys(body).sort().join(',') === 'deleteBranch,items,method' && body.method === 'merge' && body.deleteBranch === true &&
+        Array.isArray(body.items) && body.items.length >= 2 && body.items.length <= 20 && body.items.every((item) =>
+          item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).sort().join(',') === 'headRefOid,number,registration_key' &&
+          Number.isSafeInteger(item.number) && item.number > 0 && isSha256Digest(item.registration_key) && isCompleteCommitSha(item.headRefOid))
+      : Object.keys(body).join(',') === 'runId' && validRunId(body.runId));
+    if (!valid) {
+      jsonResponse(response, 400, { error: 'Invalid request' });
+      return;
+    }
+    const result = action === 'merge-stack' ? await pullRequestMergeManager.mergeStack(body)
+      : action === 'cancel-stack-merge' ? await pullRequestMergeManager.cancelStackMerge(body)
+        : state.closeStackMergeResult(body.runId) ? { ok: true, closed: true } : { ok: false, status: 404, error: '一括マージの結果が見つかりません' };
+    await state.waitForPersistence();
+    jsonResponse(response, result.ok ? 200 : result.status, result.ok ? result : { error: result.error });
+  }
+
   async function handleRepositoryUnregister({ response, body }) {
     if (!body || typeof body !== 'object' || Array.isArray(body) ||
       Object.keys(body).sort().join(',') !== 'owner,repo' ||
@@ -131,7 +151,7 @@ function createPullRequestRoutes(ctx) {
     jsonResponse(response, 200, { closed: true });
   }
 
-  return { handlePullRequestRefresh, handleReviewSkip, handlePullRequestAction, handleMergeResultClose, handleRepositoryUnregister };
+  return { handlePullRequestRefresh, handleReviewSkip, handlePullRequestAction, handleStackMergeAction, handleMergeResultClose, handleRepositoryUnregister };
 }
 
 module.exports = { createPullRequestRoutes };
