@@ -363,6 +363,11 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     childPrs: () => [],
     stackPos: () => ({ total: 1 }),
     prTree: () => '<div class="pr">オープン #1</div>',
+    stackMembers: () => null,
+    stackMergeRunFor: () => null,
+    stackMergeConfirmation: () => '',
+    stackMergeControls: () => '',
+    stackMergeResultRows: () => '',
     foldedPrLine: (_product, kind) => `<div class="merged-list">${kind}</div>`,
     prKey: (_product, number) => String(number),
     METHOD_LABEL: { squash: 'スカッシュ' },
@@ -809,6 +814,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
     conflictStatus: () => '',
     esc: (value) => String(value ?? ''),
     pullRequestMergeInFlight: new Set(),
+    stackMergeRunFor: () => null,
     mergeConfirm: () => '<div class="merge-confirm">処理中…</div>',
   });
   vm.runInContext(`${mockItem}\nthis.renderPullRequest = prItem;`, mockContext);
@@ -954,6 +960,7 @@ test('モックの予約チェックは PR 行にあり、確認欄は即時マ�
     ui: { reserved: {}, reservationNotices: {}, mergeErrors: {}, confirm: null, mergeOpts: {} },
     transientMessageVisible: () => false,
     mergeConfirm: () => '<div class="merge-confirm" data-action="shared"></div>',
+    stackMergeRunFor: () => null,
     conflictButton: () => '',
     prBadges: () => '',
     crossReviewLine: () => '',
