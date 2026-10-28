@@ -497,7 +497,7 @@ GitHub の承認状態は `githubReview` に分ける。
 | 入力 | `record` は `selectCrossReview` で選んだ生の記録。`undefined` は未登録、`null` は記録なし、`unavailable` は確認不能、`notRequired` と `source: 'tool-absent'` は道具なし。`skip` と `deferral` は保存済みの不要と保留、`headSha` は PR の現在の head | `recalculateReviewGroups`、`selectCrossReview`、`mergeCandidate` |
 | head と記録 | `headKnown` は 40 桁か 64 桁の完全な SHA か。`record` は `unregistered / none / unavailable / tool-absent / recorded`。`atHead` は `converged / halted / fixing / in-progress / stale`。SHA は小文字で比較する | `evaluateReview` |
 | 今の結論 | `latest = { round, outcome, sha }`。triage と記録の round が同じときだけ outcome を採用し、それ以外は null と reviewedSha を使う。`rounds` は往復、上限、非対応数。`reviewedSha` と `conflict` の証拠も残す | `evaluateReview` |
-| head の範囲 | `covered` は head 不明なら `unknown`、今の head の記録か判断があれば true。`pushedAfterConvergence` は今の往復の収束 SHA と現在の完全な head が異なるときだけ true。`awaitingConclusion` は以前の往復にだけ結論がある場合の表示材料 | `evaluateReview`、`reviewDisplay` |
+| head の範囲 | `covered` は head 不明なら `unknown`、今の head の記録か判断があれば true。`pushedAfterConvergence` は今の往復の収束 SHA と現在の完全な head が異なるときだけ true。`awaitingConclusion` は往復が 1 以上で、以前の往復にだけ結論があるか、結論が無く記録の SHA が今の head と同じ場合の表示材料。札と待ち理由で結論の未記録と記録のコマンドを示す | `evaluateReview`、`reviewDisplay` |
 | 判断の重ね合わせ | `decision = { kind, source, reason, next }`。道具なしは不要。現在の head の保留は、競合がなく atHead が stale のときだけ重ねる。現在の head の不要は atHead が converged でないときだけ重ねる。結論、往復、競合の証拠は重ね合わせても残す | `evaluateReview` |
 | マージ条件 | 保留 → 不要 → 競合 → 確認不能 → 今の結論の順。不要は競合があっても met、保留と未登録は待つ。CI の待ちは利用側で結合する | `mergeConditionReview` → `mergeConditionWaits`、`mergeablePullRequestCount`、画面の条件切り替え |
 | Stop の催促 | 完全な head が分かり、判断と競合がなく、記録なしまたは recorded で stale のときだけ催促する | `reviewReminderNeeded` → `missingReviewRecords` |

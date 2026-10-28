@@ -38,7 +38,8 @@ function evaluateReview({ record, skip = null, deferral = null, headSha }) {
     covered: headKnown ? atHead !== 'stale' || decision.kind !== 'none' : 'unknown',
     pushedAfterConvergence: latest.outcome === 'converged' && completeReviewSha(latest.sha) && headKnown && latest.sha !== head,
     conflict, decision, rounds: kind === 'recorded' ? { round: record.round, max: record.max, dismissed: record.dismissed } : null,
-    reviewedSha: record?.reviewedSha?.toLowerCase(), awaitingConclusion: Boolean(triage && triage.round < record.round) };
+    reviewedSha: record?.reviewedSha?.toLowerCase(), awaitingConclusion: kind === 'recorded' && record.round > 0
+      && (triage ? triage.round < record.round : atHead === 'in-progress') };
 }
 
 /** マージ条件のレビュー部分を返す。 */
@@ -51,6 +52,7 @@ function mergeConditionReview(e) {
   else if (e.atHead === 'converged') return { met: true, waitReason };
   else if (e.latest.outcome === 'halted') waitReason = 'クロスレビューが開発者の判断待ち';
   else if (e.pushedAfterConvergence) waitReason = 'クロスレビュー後に push あり';
+  else if (e.awaitingConclusion) waitReason = `クロスレビューの ${e.rounds.round} 往復目の結論が未記録`;
   else waitReason = e.rounds?.round > 0 ? 'クロスレビュー対応中' : 'クロスレビュー未実施';
   return { met: false, waitReason };
 }
@@ -94,7 +96,8 @@ function reviewBadge(e) {
   if (e.record === 'unavailable') return state('warn', '状態を確認できない', 'クロスレビューの状態を確認できない');
   if (!e.headKnown) return state('mute', 'head を確かめられない', 'head を確かめられない');
   if (e.record === 'none') return state('warn', 'レビュー未実施', 'クロスレビューの記録が無い');
-  if (e.awaitingConclusion) return state('warn', `${e.rounds.round} 往復目の結論待ち`, `クロスレビューの ${e.rounds.round} 往復目の結論がまだ出ていない`);
+  if (e.awaitingConclusion) return state('warn', `${e.rounds.round} 往復目の結論が未記録`,
+    `クロスレビューの ${e.rounds.round} 往復目の結論が記録されていない。node tools/cross-review.js comment --round ${e.rounds.round} --outcome <fixing|converged|halted> で記録する`);
   if (e.latest.outcome === 'fixing') return state('warn', '指摘の対応中', `クロスレビューの ${e.latest.round} 往復目の指摘に対応している途中`);
   if (e.latest.outcome === 'halted') return state('warn', '開発者の判断待ち', 'クロスレビューは開発者の判断を待って止まっている');
   if (e.atHead === 'converged') return state('ok', 'レビュー済み');

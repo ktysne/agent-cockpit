@@ -16,7 +16,7 @@ const cases = [
   { name: '未実施', input: { record: null }, atHead: 'stale', covered: false, met: false, remind: true, action: 'wait', text: 'レビュー未実施' },
   { name: '収束後の変更', input: { record: record('converged', old) }, atHead: 'stale', covered: false, met: false, remind: true, action: 'wait', text: '収束の後に変更あり (収束 bbbbbbb)' },
   { name: '古い head の判断待ち', input: { record: record('halted', old) }, atHead: 'stale', covered: false, met: false, remind: true, action: 'cancel', text: '開発者の判断待ち' },
-  { name: '古い往復の判断待ち', input: { record: record('halted', old, 3, 2) }, atHead: 'in-progress', covered: true, met: false, remind: false, action: 'wait', text: '3 往復目の結論待ち', wait: 'クロスレビュー対応中' },
+  { name: '古い往復の判断待ち', input: { record: record('halted', old, 3, 2) }, atHead: 'in-progress', covered: true, met: false, remind: false, action: 'wait', text: '3 往復目の結論が未記録', wait: 'クロスレビューの 3 往復目の結論が未記録' },
   { name: '新しい往復の判断待ち', input: { record: record('halted', old, 1, 2) }, atHead: 'in-progress', covered: true, met: false, remind: false, action: 'wait', text: 'この head をレビューに回した' },
   { name: '収束と不要', input: { record: record('converged'), skip }, atHead: 'converged', covered: true, met: true, remind: false, action: 'merge', text: 'レビュー済み' },
   { name: '判断待ちと不要', input: { record: record('halted'), skip }, atHead: 'halted', covered: true, met: true, remind: false, action: 'wait', condition: 'review-required', text: 'レビュー不要' },
@@ -24,6 +24,9 @@ const cases = [
   { name: '確認不能と不要', input: { record: { unavailable: true }, skip }, atHead: 'stale', covered: true, met: true, remind: false, action: 'wait', text: 'レビュー不要' },
   { name: '道具なし', input: { record: { notRequired: true, source: 'tool-absent' } }, atHead: 'stale', covered: true, met: true, remind: false, action: 'wait', text: 'レビュー不要' },
   { name: '古い head と保留', input: { record: record('fixing', old), deferral }, atHead: 'stale', covered: true, met: false, remind: false, action: 'wait', condition: 'review-deferred', text: 'レビュー保留' },
+  { name: '今の head の結論の記録なし', input: { record: { round: 2, max: 3, dismissed: 1, reviewedSha: head, triage: null } }, atHead: 'in-progress', covered: true, met: false, remind: false, action: 'wait', condition: 'review-not-converged', text: '2 往復目の結論が未記録', wait: 'クロスレビューの 2 往復目の結論が未記録' },
+  { name: '古い head の結論の記録なし', input: { record: { round: 2, max: 3, dismissed: 1, reviewedSha: old, triage: null } }, atHead: 'stale', covered: false, met: false, remind: true, action: 'wait', condition: 'review-not-converged', text: 'レビューの後に変更あり (レビュー済み bbbbbbb)', wait: 'クロスレビュー対応中' },
+  { name: '往復なしの結論の記録なし', input: { record: { round: 0, max: 3, dismissed: 0, reviewedSha: null, triage: null } }, atHead: 'stale', covered: false, met: false, remind: true, action: 'wait', condition: 'review-not-converged', text: 'head を確かめられない', wait: 'クロスレビュー未実施' },
 ];
 for (const scenario of cases) {
   test(`${scenario.name}を評価して各入口の方針を返す`, () => {
@@ -99,3 +102,24 @@ for (const triageRound of [1, 3]) {
     }
   });
 }
+
+test('結論の記録が無い往復は記録のコマンドを示し、予約マージは収束を待たせる', () => {
+  const e = evaluateReview({ headSha: head, record: { round: 2, max: 3, dismissed: 1, reviewedSha: head, triage: null } });
+  assert.equal(e.awaitingConclusion, true);
+  assert.equal(e.latest.outcome, null);
+  assert.equal(reviewDisplay(e).warn,
+    'クロスレビューの 2 往復目の結論が記録されていない。node tools/cross-review.js comment --round 2 --outcome <fixing|converged|halted> で記録する');
+  assert.equal(reviewDisplay(e).skipControl, 'set');
+  assert.equal(reservationReviewDisplay(e).waitReason, 'クロスレビューの収束待ち');
+  assert.deepEqual(reservationReview(e), { action: 'wait', condition: 'review-not-converged', matchSha: null });
+});
+
+test('結論の記録が無くても不要と保留の判断を優先する', () => {
+  const raw = { round: 1, max: 3, dismissed: 0, reviewedSha: head, triage: null };
+  const skipped = evaluateReview({ headSha: head, record: raw, skip });
+  assert.equal(mergeConditionReview(skipped).met, true);
+  assert.equal(reviewDisplay(skipped).text, 'レビュー不要');
+  const deferred = evaluateReview({ headSha: head, record: { ...raw, reviewedSha: old }, deferral });
+  assert.equal(mergeConditionReview(deferred).waitReason, 'レビュー保留');
+  assert.equal(reviewDisplay(deferred).text, 'レビュー保留');
+});
