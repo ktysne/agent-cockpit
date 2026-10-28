@@ -76,6 +76,36 @@ function createUiSessionRoutes(ctx) {
     jsonResponse(response, 200, { hidden: isSingleHide ? true : hiddenCount });
   }
 
+  function handleHiddenDecisions({ response, body }) {
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 3
+      || !Object.keys(body).every(key => ['action', 'session_id', 'id'].includes(key))
+      || !['hide', 'unhide'].includes(body.action) || !isShortSessionId(body.session_id)
+      || typeof body.id !== 'string' || !body.id.trim() || body.id.length > 256) {
+      jsonResponse(response, 400, { error: 'Invalid request' });
+      return;
+    }
+    const saved = state.setDecisionHidden(body.session_id, body.id, body.action === 'hide');
+    jsonResponse(response, saved ? 200 : 409, saved ? { hidden: body.action === 'hide' } : { error: 'Decision cannot be hidden' });
+  }
+
+  function handleHiddenPullRequests({ response, body }) {
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 4
+      || !Object.keys(body).every(key => ['action', 'owner', 'repo', 'number'].includes(key))
+      || !['hide', 'unhide'].includes(body.action) || !validRepositoryPart(body.owner) || !validRepositoryPart(body.repo)
+      || !Number.isSafeInteger(body.number) || body.number <= 0) {
+      jsonResponse(response, 400, { error: 'Invalid request' });
+      return;
+    }
+    const find = trees => trees.some(pr => pr.number === body.number || find(pr.children || []));
+    if (body.action === 'hide' && !pullRequestTracker?.snapshot().some(group =>
+      group.owner.toLowerCase() === body.owner.toLowerCase() && group.repo.toLowerCase() === body.repo.toLowerCase() && find(group.trees))) {
+      jsonResponse(response, 404, { error: 'Open pull request not found' });
+      return;
+    }
+    const saved = state.setPullRequestHidden(body.owner, body.repo, body.number, body.action === 'hide');
+    jsonResponse(response, saved ? 200 : 409, saved ? { hidden: body.action === 'hide' } : { error: 'Hidden pull request limit reached' });
+  }
+
   async function handleRecordDeletions({ response, body }) {
     const keys = ['session_ids', 'merge_history', 'closed_pull_requests'];
     const validPullRequest = (record) => record && typeof record === 'object' && !Array.isArray(record)
@@ -261,7 +291,7 @@ function createUiSessionRoutes(ctx) {
     jsonResponse(response, result.status, result);
   }
 
-  return { handleEstimate, handleHiddenSessions, handleRecordDeletions, handleClosedTasks, handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
+  return { handleEstimate, handleHiddenSessions, handleHiddenDecisions, handleHiddenPullRequests, handleRecordDeletions, handleClosedTasks, handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
     handleLaunchRequest, handleWorktreeTerminal };
 }
 

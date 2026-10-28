@@ -620,7 +620,7 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
     orderedSectionKeys: (keys) => keys,
     isFilterShown: () => false,
   });
-  const kindSort = ['hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
+  const kindSort = ['appendHiddenDecisions', 'hasEffectiveAnswer', 'kindWaitAge', 'kindDecisionWaitAge', 'kindPermissionWaitKey', 'kindJudgmentSortKey', 'compareKindJudgmentItems']
     .map((name) => functionSource(pageHtml, name)).join('\n');
   vm.runInContext(`${element}\n${kindSort}\n${render}`, context);
 
@@ -4607,7 +4607,7 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
 
 test('一部完了のセッションでは完了タスクを表示できる', () => {
   const names = [
-    'element', 'activityStatus', 'isEndedAgent', 'runningBackgrounds', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
+    'element', 'activityStatus', 'isEndedAgent', 'runningBackgrounds', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'appendHiddenDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
     'kindEndedDecisionEntries', 'kindEndedAgentCount', 'sessionOrigin',
   ];
   const functions = names.map((name) => functionSource(pageHtml, name));

@@ -1093,7 +1093,7 @@ function applyMergeCondition(pullRequest, condition) {
 
 // マージボタンは登録したセッションがある PR にだけ出るので、件数もそれに合わせる。
 function mergeablePullRequestCount(trees) {
-  return trees.reduce((total, pullRequest) => total + Number((pullRequest.mergeConditionMet ?? pullRequest.canMerge) === true && Boolean(pullRequest.mergeSessionId))
+  return trees.reduce((total, pullRequest) => total + Number(!pullRequest.hidden && (pullRequest.mergeConditionMet ?? pullRequest.canMerge) === true && Boolean(pullRequest.mergeSessionId))
     + mergeablePullRequestCount(pullRequest.children || []), 0);
 }
 
@@ -2115,13 +2115,29 @@ class PullRequestTracker {
   snapshot(deadline) {
     const groups = [...this.productViews.values()].map((group) => {
       const condition = this.state.getDisplayPreferences?.().mergeableCondition || 'cross-review';
-      const trees = group.trees.map((tree) => applyMergeCondition(
+      const hiddenPrs = [];
+      let hiddenCount = 0;
+      const descendantCount = pr => (pr.children || []).reduce((total, child) => total + 1 + descendantCount(child), 0);
+      const withVisibility = (pr, inherited = false) => {
+        const direct = this.state.isPullRequestHidden(group.owner, group.repo, pr.number);
+        const hidden = inherited || direct;
+        if (direct) hiddenPrs.push({ number: pr.number, descendants: descendantCount(pr) });
+        if (hidden) hiddenCount += 1;
+        return { ...pr, hidden, children: pr.children.map(child => withVisibility(child, hidden)) };
+      };
+      const visibleHeight = pr => pr.hidden ? 0 : 1 + Math.max(0, ...pr.children.map(visibleHeight));
+      const withPosition = (pr, depth, total) => ({
+        ...pr, stackPosition: { depth, total }, children: pr.children.map(child => withPosition(child, depth + 1, total)),
+      });
+      const trees = group.trees.map((tree) => withVisibility(applyMergeCondition(
         attachMergeState(tree, [], group.owner, group.repo, this.state), condition,
-      ));
+      ))).map(tree => withPosition(tree, 1, visibleHeight(tree)));
       return {
         ...group,
         product: { ...group.product },
         mergeMethods: [...group.mergeMethods],
+        hiddenPrs,
+        openCount: Math.max(0, group.openCount - hiddenCount),
         mergeableCount: mergeablePullRequestCount(trees),
         trees,
         merged: group.merged.map((pullRequest) => ({
