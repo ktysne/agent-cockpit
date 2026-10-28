@@ -290,6 +290,35 @@ test('base の付け替え中に中止すると進行中の段を止めて全予
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
 });
 
+test('マージ意図の保存中に中止すると gh pr merge を呼ばずに全予約を取り消す', async (t) => {
+  const fixture = await stackFixture(t);
+  const originalFlush = fixture.state.flushStoreWrite.bind(fixture.state);
+  let releaseFlush;
+  let markFlushStarted;
+  const flushStarted = new Promise((resolve) => { markFlushStarted = resolve; });
+  fixture.state.flushStoreWrite = async (...args) => {
+    if (!releaseFlush && fixture.state.pullRequestMergeIntent('example', 'project', 1)) {
+      await new Promise((resolve) => {
+        releaseFlush = resolve;
+        markFlushStarted();
+      });
+    }
+    return originalFlush(...args);
+  };
+
+  const merging = fixture.manager.mergeStack(stackInput(fixture));
+  await flushStarted;
+  const { runId } = fixture.state.pullRequestMergeReservations()[0];
+  const cancelling = fixture.manager.cancelStackMerge({ runId });
+  releaseFlush();
+  await Promise.all([merging, cancelling]);
+
+  assert.deepEqual(fixture.state.pullRequestMergeReservations(), []);
+  assert.equal(fixture.state.pullRequestMergeIntent('example', 'project', 1), null);
+  assert.equal(fixture.state.stackMergeResultsForRepo('example', 'project')[0].message, '中止しました。残りの予約 (#1、#2) を取り消しました');
+  assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
 test('親のマージ後に子の計算中と CI を待ち、一番下になってから続ける', async (t) => {
   const fixture = await stackFixture(t);
   fixture.control.afterMerge = () => {

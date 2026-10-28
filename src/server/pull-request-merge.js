@@ -634,6 +634,12 @@ class PullRequestMergeManager {
       await this.state.waitForPersistence?.().catch(() => {});
       return reject(500, 'マージ操作を保存できませんでした', 'intent-persist');
     }
+    // 保存を待つ間に届いた一括マージの中止は、gh を呼ぶ前に効かせる。
+    if (reserved && reservation.kind === 'stack' && this.stackMergeCancellationRequests.has(reservation.runId)) {
+      this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
+      await this.state.waitForPersistence?.().catch(() => {});
+      return this.cancelStackRun(reservation);
+    }
 
     const mergeKey = pullRequestKey(registration.owner, registration.repo, registration.number);
     let outcome;
