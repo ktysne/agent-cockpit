@@ -148,6 +148,11 @@ function createFakeGh(definition, { now = () => Date.now(), onUnexpected = () =>
       if (expectedHead !== pr.headRefOid) fail(args, 'head が一致しない');
       pr.state = 'MERGED';
       pr.mergedAt = new Date(now()).toISOString();
+      // マージコミットだけが元のコミットを既定ブランチから辿れるようにし、子の積み直しを不要にする。
+      if (method === 'merge' && pr.base === repo.defaultBranch) {
+        repo.reachableFromDefault ??= new Set();
+        for (const sha of [...pr.parentCommits, pr.headRefOid]) repo.reachableFromDefault.add(sha);
+      }
       return '';
     }
     return fail(args);
@@ -191,7 +196,7 @@ function createFakeGh(definition, { now = () => Date.now(), onUnexpected = () =>
       const repo = repositoryFor(args, compare[1]);
       const pr = repo.pullRequests.find((item) => item.headRefOid === compare[3].toLowerCase()) || fail(args, 'head が定義に無い');
       if (decodeURIComponent(compare[2]) !== repo.defaultBranch) fail(args, '比較の base が既定ブランチではない');
-      const commits = [...pr.parentCommits, pr.headRefOid].map((value) => ({ sha: value }));
+      const commits = [...pr.parentCommits, pr.headRefOid].filter((value) => !repo.reachableFromDefault?.has(value)).map((value) => ({ sha: value }));
       return JSON.stringify({ ahead_by: commits.length, commits });
     }
     const repository = args[1].match(/^repos\/([^/]+\/[^/]+)$/);

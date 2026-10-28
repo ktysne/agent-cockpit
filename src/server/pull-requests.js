@@ -56,6 +56,8 @@ const COMMAND_REFRESH_COALESCE_MS = 5000;
 const UNKNOWN_MERGEABLE_REFRESH_MS = 5_000;
 // GitHub が計算中を返し続けても gh を呼び続けないよう、早めの取り直しは連続でこの回数までにする。
 const UNKNOWN_MERGEABLE_REFRESH_LIMIT = 3;
+const STACK_UNKNOWN_REFRESH_LIMIT = 60;
+const STACK_UNKNOWN_REFRESH_MS = 10_000;
 // 開発者が確定した操作の確かめ直しの中で呼ぶ gh を、定期取得より先に実行するための印。
 const ghPriorityContext = new AsyncLocalStorage();
 
@@ -536,33 +538,33 @@ function assemblePullRequestStacks({
 
   function blockerFor(pr, includeCi = true) {
     const value = effective(pr);
-    if (value.parentMergePending) return `親 PR #${value.parentMergePending} のマージ確認待ち`;
-    if (pr.staleHead) return staleHeadDescription(pr.staleHead);
-    if (!defaultBranch) return 'リポジトリ設定を取得できません';
+    if (value.parentMergePending) return { code: 'parentMergePending', message: `親 PR #${value.parentMergePending} のマージ確認待ち` };
+    if (pr.staleHead) return { code: 'staleHead', message: staleHeadDescription(pr.staleHead) };
+    if (!defaultBranch) return { code: 'repositoryUnavailable', message: 'リポジトリ設定を取得できません' };
     const parent = open.find((candidate) => candidate.number === parentByNumber.get(pr.number));
-    if (parent) return `下の #${parent.number} のマージ待ち`;
+    if (parent) return { code: 'parentOpen', message: `下の #${parent.number} のマージ待ち` };
     const mergeTarget = mergeTargetFor(value.base);
     if (!mergeTarget) {
       const mergedBase = known.some((candidate) => candidate.headRefName === value.base &&
         (candidate.state === 'merged' || mergedCandidates.includes(candidate)));
-      if (mergedBase) return `base の ${value.base} はマージ済みの PR の head のため、ダッシュボードではマージしない`;
-      if (mergeTargetHeadChecks.get(value.base) === false) return `base の ${value.base} は PR の head のため、ダッシュボードではマージしない`;
-      if (knownHeads.has(value.base)) return `base の ${value.base} に対応する PR が見つからない`;
-      return `base の ${value.base} がどの PR の head でもないことを確認できない`;
+      if (mergedBase) return { code: 'mergedBase', message: `base の ${value.base} はマージ済みの PR の head のため、ダッシュボードではマージしない` };
+      if (mergeTargetHeadChecks.get(value.base) === false) return { code: 'baseIsHead', message: `base の ${value.base} は PR の head のため、ダッシュボードではマージしない` };
+      if (knownHeads.has(value.base)) return { code: 'missingParent', message: `base の ${value.base} に対応する PR が見つからない` };
+      return { code: 'targetUnknown', message: `base の ${value.base} がどの PR の head でもないことを確認できない` };
     }
-    if (pr.baseRefName !== value.base) return `base を ${value.base} に付け替える必要がある`;
-    if (mergeTarget !== defaultBranch && !mergeMethods.includes('merge')) return 'マージコミットが必要だが、このリポジトリでは許可されていない';
-    if (pr.draft) return 'ドラフト';
+    if (pr.baseRefName !== value.base) return { code: 'retargetRequired', message: `base を ${value.base} に付け替える必要がある` };
+    if (mergeTarget !== defaultBranch && !mergeMethods.includes('merge')) return { code: 'methodUnavailable', message: 'マージコミットが必要だが、このリポジトリでは許可されていない' };
+    if (pr.draft) return { code: 'draft', message: 'ドラフト' };
     if (value.needsRestack) {
-      return `積み直し待ち (#${value.restackPr.number} が ${mergeTarget} に入った後も、そのコミットが差分に残っている)`;
+      return { code: 'needsRestack', message: `積み直し待ち (#${value.restackPr.number} が ${mergeTarget} に入った後も、そのコミットが差分に残っている)` };
     }
-    if (value.restackCheckUnknown) return '積み直しが必要か確かめられない';
-    if (pr.mergeable === 'UNKNOWN') return 'GitHub がマージできるかを計算中';
-    if (pr.conflict) return 'コンフリクトあり';
-    if (includeCi && pr.ci === 'fail') return 'CI が失敗';
-    if (includeCi && pr.ci === 'pending') return 'CI 実行中';
-    if (pr.review === 'changes') return '変更を求められている';
-    if (pr.review === 'required') return 'レビューの承認待ち';
+    if (value.restackCheckUnknown) return { code: 'restackCheckUnknown', message: '積み直しが必要か確かめられない' };
+    if (pr.mergeable === 'UNKNOWN') return { code: 'mergeableUnknown', message: 'GitHub がマージできるかを計算中' };
+    if (pr.conflict) return { code: 'conflict', message: 'コンフリクトあり' };
+    if (includeCi && pr.ci === 'fail') return { code: 'ciFail', message: 'CI が失敗' };
+    if (includeCi && pr.ci === 'pending') return { code: 'ciPending', message: 'CI 実行中' };
+    if (pr.review === 'changes') return { code: 'reviewChanges', message: '変更を求められている' };
+    if (pr.review === 'required') return { code: 'reviewRequired', message: 'レビューの承認待ち' };
     return null;
   }
 
@@ -571,6 +573,7 @@ function assemblePullRequestStacks({
     const nextAncestors = new Set(ancestors).add(root.number);
     const effectiveValue = effective(root);
     const blocker = blockerFor(root);
+    const operationBlocker = blockerFor(root, false);
     const children = (childrenByNumber.get(root.number) || [])
       .filter((number) => visibleOpenNumbers.has(number))
       .map((number) => nodeByNumber.get(number))
@@ -587,8 +590,10 @@ function assemblePullRequestStacks({
       restackCheckUnknown: effectiveValue.restackCheckUnknown,
       parentNumber: parentByNumber.get(root.number) || null,
       stackPosition: { depth, total: rootHeight },
-      blocker,
-      operationBlocker: blockerFor(root, false),
+      blocker: blocker?.message || null,
+      blockerCode: blocker?.code || null,
+      operationBlocker: operationBlocker?.message || null,
+      operationBlockerCode: operationBlocker?.code || null,
       canMerge: blockerFor(root, false) === null,
       children,
     };
@@ -614,7 +619,7 @@ function assemblePullRequestStacks({
       mergeableCount: visibleOpen.filter((pr) => blockerFor(pr, false) === null).length,
       relatedOpen: visibleOpen.filter((pr) => !registeredNumbers.has(pr.number)),
       merged: visibleClosed,
-    orphanedOpenNumbers: visibleOpen.filter((pr) => blockerFor(pr) && blockerFor(pr).startsWith('base の ')).map((pr) => pr.number),
+    orphanedOpenNumbers: visibleOpen.filter((pr) => blockerFor(pr) && ['mergedBase', 'baseIsHead', 'missingParent', 'targetUnknown'].includes(blockerFor(pr).code)).map((pr) => pr.number),
   };
 }
 
@@ -1304,7 +1309,7 @@ class PullRequestTracker {
       // コマンドの後に飛ばしたリポジトリは、間隔が明けた時点で取る。15 分の定期取得まで反映を待たせないため。
       else if (inactiveIntervalMs < INACTIVE_REPOSITORY_REFRESH_INTERVAL_MS) this.deferRefresh(owner, repo, inactiveIntervalMs - elapsed, { verifyHeads });
     }
-    return Promise.all(refreshes).then((results) => {
+    return Promise.all(refreshes).then(async (results) => {
       // 取り直しの間に登録されたリポジトリを消さないため、登録は待った後に数え直す。
       const registeredKeys = new Set([...this.state.readOnlyPullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
         .map((record) => repoKey(record.owner, record.repo)));
@@ -1323,6 +1328,10 @@ class PullRequestTracker {
         }
       }
       this.pruneUnregisteredRepositoryRecords(registeredKeys);
+      const orphanedStacks = new Map(this.state.pullRequestMergeReservations()
+        .filter((record) => record.kind === 'stack' && !registeredKeys.has(repoKey(record.owner, record.repo)))
+        .map((record) => [repoKey(record.owner, record.repo), record]));
+      for (const { owner, repo } of orphanedStacks.values()) await this.onRefreshed?.(owner, repo);
       if (removed) this.state.touch();
       return results;
     });
@@ -1396,7 +1405,11 @@ class PullRequestTracker {
     }
     const count = (this.unknownMergeableRefreshCounts.get(key) || 0) + 1;
     this.unknownMergeableRefreshCounts.set(key, count);
-    if (count <= UNKNOWN_MERGEABLE_REFRESH_LIMIT) this.deferRefresh(owner, repo, UNKNOWN_MERGEABLE_REFRESH_MS, { verifyHeads });
+    const stackWaiting = this.state.pullRequestMergeReservationsForRepo(owner, repo).some((record) => record.kind === 'stack' &&
+      openPullRequests.some((pr) => pr.number === record.number && pr.mergeable === 'UNKNOWN'));
+    if (count <= UNKNOWN_MERGEABLE_REFRESH_LIMIT || (stackWaiting && count <= STACK_UNKNOWN_REFRESH_LIMIT)) {
+      this.deferRefresh(owner, repo, count <= UNKNOWN_MERGEABLE_REFRESH_LIMIT ? UNKNOWN_MERGEABLE_REFRESH_MS : STACK_UNKNOWN_REFRESH_MS, { verifyHeads });
+    }
   }
 
   deferRefresh(owner, repo, delayMs, { verifyHeads = false } = {}) {
@@ -2139,7 +2152,8 @@ class PullRequestTracker {
         hiddenPrs,
         openCount: Math.max(0, group.openCount - hiddenCount),
         mergeableCount: mergeablePullRequestCount(trees),
-        trees,
+        trees: trees.map((tree) => attachStackMergeState(tree, group, this.state)),
+        stackMergeResults: this.state.stackMergeResultsForRepo(group.owner, group.repo),
         merged: group.merged.map((pullRequest) => ({
           ...structuredClone(pullRequest), providers: this.state.pullRequestProviders(group.owner, group.repo, pullRequest.number),
         })),
@@ -2177,6 +2191,89 @@ class PullRequestTracker {
     }
     return [...groups, ...pendingGroups.values()];
   }
+}
+
+function stackChain(root) {
+  const members = [];
+  const seen = new Set();
+  for (let pr = root; pr; pr = pr.children[0]) {
+    if (pr.children.length > 1 || seen.has(pr.number)) return null;
+    seen.add(pr.number);
+    members.push(pr);
+  }
+  return members;
+}
+
+function stackMemberBlocker(pr, repository, numbers) {
+  if (pr.isCrossRepository) return 'fork からの PR';
+  if (pr.staleHead) return 'head が変わっている';
+  if (pr.draft) return 'ドラフト';
+  if (pr.needsRestack) return '積み直しが必要';
+  if (pr.conflict || pr.mergeable === 'CONFLICTING') return 'コンフリクト';
+  if (pr.ci === 'fail') return 'CI が失敗';
+  if (!['pass', 'pending'].includes(pr.ci)) return 'CI 状態が不明';
+  const review = pr.githubReview || pr.review;
+  if (review === 'changes') return '変更要求がある';
+  if (review === 'required') return 'レビュー承認待ち';
+  if (!repository.mergeMethods.includes('merge')) return 'マージコミットが許可されていない';
+  if (pr.mergeMethodFixed && pr.mergeMethodFixed !== 'merge') return 'マージ方式が一致しない';
+  const code = pr.operationBlockerCode;
+  if (code === 'parentOpen' && numbers.has(pr.parentNumber)) return null;
+  if (['parentMergePending', 'mergeableUnknown', 'restackCheckUnknown'].includes(code)) return null;
+  if (pr.operationBlocker) return pr.operationBlocker;
+  return null;
+}
+
+function stackMergeBlockingReason(members, repository, state) {
+  const missing = members.find((pr) => !state.pullRequestRegistrationByKey(pr.mergeRecordKey));
+  if (missing) return `#${missing.number} は登録されていない`;
+  const fork = members.find((pr) => pr.isCrossRepository);
+  if (fork) return `#${fork.number} は fork からの PR`;
+  const reserved = members.find((pr) => pr.reservation);
+  if (reserved) return `#${reserved.number} は${reserved.reservation.kind === 'stack' ? '一括マージ' : '収束後マージ'}を予約中`;
+  if (!repository.mergeMethods.includes('merge')) return 'マージコミットが許可されていない';
+  const reversed = [...members].reverse();
+  const conflict = reversed.find((pr) => pr.conflict || pr.mergeable === 'CONFLICTING');
+  if (conflict) return `#${conflict.number} のコンフリクト`;
+  const numbers = new Set(members.map((pr) => pr.number));
+  for (const pr of reversed) {
+    if (pr.staleHead) return `#${pr.number} の head が変わっている`;
+    if (pr.draft) return `#${pr.number} はドラフト`;
+    if (pr.needsRestack) return `#${pr.number} は積み直しが必要`;
+    if (pr.ci === 'fail') return `#${pr.number} の CI が失敗`;
+    if (!['pass', 'pending'].includes(pr.ci)) return `#${pr.number} の CI 状態が不明`;
+    if (pr.githubReview === 'changes') return `#${pr.number} に変更要求がある`;
+    if (pr.githubReview === 'required') return `#${pr.number} のレビュー承認待ち`;
+    if (pr.mergeIntent) return `#${pr.number} は別のマージ処理中`;
+    const reason = stackMemberBlocker(pr, repository, numbers);
+    if (reason) return `#${pr.number} ${reason}`;
+  }
+  if (!repository.defaultBranch || repository.error) return 'リポジトリ設定を取得できません';
+  return members.length > 20 ? '一括マージは 20 件まで' : null;
+}
+
+function attachStackMergeState(root, repository, state) {
+  const members = stackChain(root);
+  if (!members) return root;
+  const reservations = state.pullRequestMergeReservationsForRepo(repository.owner, repository.repo);
+  const current = members.map((pr) => pr.reservation).find((record) => record?.kind === 'stack');
+  const remaining = current ? reservations.filter((record) => record.runId === current.runId).sort((a, b) => a.order - b.order) : [];
+  const next = remaining.length ? members.find((pr) => pr.number === remaining[0].number) : null;
+  const waitReason = repository.openStateUnknown || !next ? 'PR の状態を確認中'
+    : next.mergeable === 'UNKNOWN' ? 'GitHub の計算中'
+      : next.operationBlocker || (next.ci === 'pending' ? 'CI 実行中' : 'マージ結果の確認中');
+  const blocker = stackMergeBlockingReason(members, repository, state);
+  return { ...root, stackMerge: {
+    available: members.length >= 2 && !blocker,
+    blocker,
+    targetBranch: root.mergeTarget,
+    members: members.map((pr) => ({ number: pr.number, title: pr.title, headRefOid: pr.headRefOid,
+      registration_key: pr.mergeRecordKey,
+      status: pr.mergeable === 'UNKNOWN' ? 'GitHub の計算中・待ってからマージ'
+        : pr.ci === 'pending' ? 'CI 実行中・待ってからマージ' : 'マージできます' })),
+    run: current ? { runId: current.runId, index: remaining[0].order, total: current.total,
+      waitReason: `#${remaining[0].number} で ${waitReason}` } : null,
+  } };
 }
 
 function attachMergeState(pullRequest, registrations, owner, repo, state) {
@@ -2233,6 +2330,8 @@ module.exports = {
   evaluateRestack,
   PullRequestTracker,
   assemblePullRequestStacks,
+  stackChain,
+  stackMemberBlocker,
   ghEnvironment,
   ghErrorMessage,
   repoKey,

@@ -357,6 +357,13 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .stack { border: 0; padding: 0; margin-bottom: 8px; background: transparent; }
 .stack-base { font-size: 12px; color: var(--text-2); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.stack-merge-reason { color: var(--warn-text); font-size: 12px; }
+.stack-merge-confirm { margin-top: 8px; }
+.stack-merge-prs { display: grid; gap: 6px; margin: 0; padding-left: 24px; }
+.stack-merge-prs li { padding-left: 2px; }
+.stack-merge-prs .meta { display: block; }
+.stack-merge-progress { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 8px; }
+.stack-merge-progress .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
 .pr.origin-claude, .pr.origin-codex, .pr.origin-both { position: relative; padding-left: 10px; }
@@ -908,7 +915,7 @@ const DATA = {
         },
       ],
       // autoDeleteBranch は GitHub の「マージ後に head ブランチを自動で削除する」設定。
-      repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前', autoDeleteBranch: true },
+      repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash', 'merge'], fetched: '20 秒前', autoDeleteBranch: true },
       // xr はクロスレビューの道具の状態ファイル(往復の回数、最後にレビューした head、非対応の指摘)。
       // tools/cross-review.js はあるがこのブランチの記録が無い PR は null、道具が無い PR は { notRequired: true, source: 'tool-absent' }、
       // 状態を読めない PR は { unavailable: true } とし、登録したセッションの無い関連 PR には付けない。
@@ -916,17 +923,19 @@ const DATA = {
       closedPrs: [{ number: 138, title: '試作: 拍子変更を別ファイルで持つ' }],
       // triage は主セッションが記録した最後の結論(lastTriage)。記録が無ければ付けない。
       prs: [
-        { number: 141, staleHead: { prHead: 'a1c9e04', branchHead: 'b2d0f15' }, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false,
+        { number: 141, mergeRecordKey: 'ktysne/rec-studio#141', title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', mergeable: 'MERGEABLE', conflict: false, draft: false,
           xr: { round: 2, reviewedSha: 'a1c9e04', dismissed: 0, triage: { round: 2, sha: 'a1c9e04', outcome: 'converged' } } },
-        { number: 142, title: 'Session Score の読み込みと拍子変更', head: 'feat/session-score-import', base: 'feat/score-parser', sha: '7d2b311', ci: 'pending', review: 'required', conflict: false, draft: false,
+        { number: 142, mergeRecordKey: 'ktysne/rec-studio#142', title: 'Session Score の読み込みと拍子変更', head: 'feat/session-score-import', base: 'feat/score-parser', sha: '7d2b311', ci: 'pending', review: 'approved', mergeable: 'UNKNOWN', conflict: false, draft: false,
           xr: { round: 2, reviewedSha: '5c8e1d0', dismissed: 1, triage: { round: 1, sha: '2f7a9c3', outcome: 'fixing' } } },
-        { number: 143, title: '読み込み結果のプレビュー表示', head: 'feat/score-preview', base: 'feat/session-score-import', sha: 'e04f8aa', ci: 'pass', review: 'required', conflict: false, draft: true,
+        { number: 143, mergeRecordKey: 'ktysne/rec-studio#143', title: '読み込み結果のプレビュー表示', head: 'feat/score-preview', base: 'feat/session-score-import', sha: 'e04f8aa', ci: 'pass', review: 'approved', conflict: false, draft: false,
           xr: null },
         { number: 144, title: 'レビュー記録の競合を確認する', head: 'feat/review-conflict', base: 'main', sha: 'f657abc', ci: 'pass', review: 'approved', conflict: false, draft: false,
           xr: { round: 2, reviewedSha: 'f657abc', dismissed: 0, triage: { round: 2, sha: 'f657abc', outcome: 'halted' }, conflict: [
             { worktree: 'D:/Develop/rec-studio/.claude/worktrees/current', round: 2, sha: 'f657abc', outcome: 'halted' },
             { worktree: 'D:/Develop/rec-studio/.claude/worktrees/old', round: 1, sha: 'f657abc', outcome: 'converged' },
           ] } },
+        { number: 145, staleHead: { prHead: 'd38b6a1', branchHead: 'e49c7b2' }, title: '拍子記号の表示を整える', head: 'feat/meter-label', base: 'main', sha: 'd38b6a1', ci: 'pass', review: 'required', conflict: false, draft: true,
+          xr: null },
       ],
       extraSessions: [
         {
@@ -1000,10 +1009,10 @@ const DATA = {
       ],
       repo: { name: 'ktysne/agent-gc', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '1 分前' },
       prs: [
-        { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'none', conflict: false, draft: false,
+        { number: 57, mergeRecordKey: 'ktysne/agent-gc#57', title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'none', conflict: false, draft: false,
           xr: { round: 1, reviewedSha: '3b9e5d0', dismissed: 0, triage: { round: 1, sha: '3b9e5d0', outcome: 'fixing' } } },
         // requestSession は PR を登録したセッション。衝突の解消の依頼はここへ届け、alive が偽なら依頼できない。
-        { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'none', conflict: true, draft: false,
+        { number: 58, mergeRecordKey: 'ktysne/agent-gc#58', title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'none', conflict: true, draft: false,
           requestSession: { name: '確認ダイアログの追加', alive: true }, xr: null },
         { number: 55, title: 'README に dry-run の説明を追加', head: 'docs/dry-run', base: 'main', sha: '9a03b7e', ci: 'pending', review: 'approved', conflict: false, draft: false,
           xr: { notRequired: true, source: 'tool-absent' } },
@@ -1185,6 +1194,7 @@ const answerErrors = new Map();
 const pendingClosedTasks = new Map();
 const pullRequestMergeResults = new Map();
 const pullRequestMergeInFlight = new Set();
+const mockStackMergeRuns = new Map();
 const mockBranchUpdatedBeforeDelete = new Set();
 const mockRetargetFailures = new Map();
 let nextPullRequestMergeResultId = 0;
@@ -2909,6 +2919,148 @@ function reservationWait(p, pr, method = null) {
   return waiting.length ? waiting : ['次の状態更新でマージ'];
 }
 
+function stackMembers(p, root) {
+  const members = [];
+  let current = root;
+  while (current) {
+    const children = childPrs(p, current);
+    if (children.length > 1) return null;
+    members.push(current);
+    current = children[0] || null;
+  }
+  return members;
+}
+
+function stackMergeKey(p, root) {
+  return `${p.id}#${root.number}`;
+}
+
+function stackMergeBlockingReason(p, members) {
+  const missingRegistration = members.find(pr => !pr.mergeRecordKey);
+  if (missingRegistration) return `#${missingRegistration.number} は登録されていない`;
+  const fork = members.find(pr => pr.isCrossRepository === true);
+  if (fork) return `#${fork.number} は fork からの PR`;
+  const reserved = members.find(pr => ui.reserved[prKey(p, pr.number)]);
+  if (reserved) return `#${reserved.number} は収束後マージを予約中`;
+  if (!Array.isArray(p.repo.methods) || !p.repo.methods.includes('merge')) return 'マージコミットが許可されていない';
+  const conflict = [...members].reverse().find(pr => pr.conflict || pr.mergeable === 'CONFLICTING');
+  if (conflict) return `#${conflict.number} のコンフリクト`;
+  for (const pr of [...members].reverse()) {
+    const value = effective(p, pr);
+    if (pr.staleHead) return `#${pr.number} の head が変わっている`;
+    if (pr.draft) return `#${pr.number} はドラフト`;
+    if (value.needsRestack) return `#${pr.number} は積み直しが必要`;
+    if (pr.ci === 'fail') return `#${pr.number} の CI が失敗`;
+    if (pr.ci === 'unknown') return `#${pr.number} の CI 状態が不明`;
+    if (pr.review === 'changes') return `#${pr.number} に変更要求がある`;
+    if (pr.review === 'required') return `#${pr.number} のレビュー承認待ち`;
+    if (pr.mergeIntent || pr.mergeInProgress || pullRequestMergeInFlight.has(prKey(p, pr.number))) return `#${pr.number} は別のマージ処理中`;
+  }
+  const bottom = members[0];
+  const operationBlocker = mergeOperationBlocker(p, bottom);
+  if (operationBlocker && operationBlocker !== 'GitHub がマージできるかを計算中') {
+    return `#${bottom.number} ${operationBlocker}`;
+  }
+  return '';
+}
+
+function stackMergeRunFor(p, members) {
+  const numbers = new Set(members.map(pr => pr.number));
+  return [...mockStackMergeRuns.values()].reverse().find(run => run.productId === p.id &&
+    ['confirm', 'running'].includes(run.phase) && run.members.some(member => numbers.has(member.number))) || null;
+}
+
+function stackMergePrStatus(pr) {
+  if (pr.mergeable === 'UNKNOWN') return 'GitHub の計算中・待ってからマージ';
+  if (pr.ci === 'pending') return 'CI 実行中・待ってからマージ';
+  return 'マージできます';
+}
+
+function stackMergeWait(p, run) {
+  const member = run.members[run.index];
+  const pr = member && p.prs.find(item => item.number === member.number);
+  if (!pr) return 'PR の状態を確認中';
+  if (pr.mergeable === 'UNKNOWN') return 'GitHub の計算中';
+  if (pr.ci === 'pending') return 'CI 実行中';
+  return 'マージ結果の確認中';
+}
+
+function stackMergeConfirmation(p, members, run) {
+  const key = stackMergeKey(p, members[0]);
+  const reason = stackMergeBlockingReason(p, members);
+  const list = members.map((pr, index) => `<li><strong>#${pr.number}</strong> ${esc(pr.title)}
+      <span class="meta">照合する head SHA: ${shortShaLabel(pr.sha)} ・ ${esc(stackMergePrStatus(pr))}</span></li>`).join('');
+  return `<div class="merge-confirm stack-merge-confirm" data-stack-merge="${esc(key)}">
+    <div><strong>スタックの ${members.length} 件を ${esc(p.repo.defaultBranch)} へ順にマージする</strong></div>
+    ${reason ? `<p class="stack-merge-reason" role="status">一括マージできない理由: ${esc(reason)}</p>` : ''}
+    <ol class="stack-merge-prs">${list}</ol>
+    <ul class="effects"><li>方式: マージコミット(固定。子の head を変えずに続けるため)</li>
+      <li>マージ後にリモートブランチを削除(固定。子の base を付け替えるため)</li>
+      <li class="warn">どれかの PR で head の変化、CI の失敗、コンフリクトなどが出たら、残りの予約をすべて取り消します</li></ul>
+    <div class="row"><button type="button" class="merge-go" data-stack-merge-go="${esc(key)}" ${reason ? 'disabled' : ''}>すべてマージを実行</button>
+      <button type="button" class="ghost" data-stack-merge-confirm-cancel="${esc(key)}">やめる</button></div>
+  </div>`;
+}
+
+function stackMergeControls(p, root) {
+  const members = stackMembers(p, root);
+  if (!members) return '';
+  const key = stackMergeKey(p, root);
+  const run = stackMergeRunFor(p, members);
+  if (!run && members.length < 2) return '';
+  if (run?.phase === 'confirm') return '';
+  if (run?.phase === 'running') {
+    const current = run.members[run.index];
+    const runKey = run.key || key;
+    return `<span class="stack-merge-progress" role="status"><strong>順次マージ中 ${run.index + 1}/${run.members.length} ・ 待ち: #${current.number} で ${esc(stackMergeWait(p, run))}</strong>
+      <button type="button" class="link-btn" data-stack-merge-next="${esc(runKey)}">モック: 次の段へ進める</button>
+      <button type="button" class="link-btn" data-stack-merge-fail="${esc(runKey)}">モック: 途中で中止させる</button>
+      <button type="button" class="ghost" data-stack-merge-stop="${esc(runKey)}">中止</button></span>`;
+  }
+  const reason = stackMergeBlockingReason(p, members);
+  return `<button type="button" class="merge-btn" data-stack-merge-open="${esc(key)}" ${reason ? 'disabled' : ''}>スタックをすべてマージ (${members.length} 件)</button>
+    ${reason ? `<span class="stack-merge-reason">一括マージできない理由: ${esc(reason)}</span>` : ''}`;
+}
+
+function stackMergeResultRows(p) {
+  return [...mockStackMergeRuns.values()].filter(run => run.productId === p.id && run.result)
+    .map(run => `<div class="merge-result" role="status" tabindex="-1" data-stack-merge-result="${esc(run.key)}"><span>${esc(run.result)}</span><button type="button" class="link-btn" data-close-stack-merge-result="${esc(run.key)}">閉じる</button></div>`).join('');
+}
+
+function advanceMockStackMerge(p, run) {
+  const member = run.members[run.index];
+  const pr = member && p.prs.find(item => item.number === member.number);
+  if (!pr || pr.sha !== member.sha || pr.staleHead || pr.draft || pr.conflict || pr.ci === 'fail' || pr.review === 'changes') {
+    const reason = !pr || pr.sha !== member.sha || pr.staleHead ? 'head が変わりました' : pr?.conflict ? 'コンフリクトが発生しました'
+      : pr?.ci === 'fail' ? 'CI が失敗しました' : pr?.review === 'changes' ? '変更要求が出ました' : 'ドラフトになりました';
+    cancelMockStackMerge(p, run, reason, true);
+    return;
+  }
+  if (pr.ci === 'pending') pr.ci = 'pass';
+  if (pr.mergeable === 'UNKNOWN') pr.mergeable = 'MERGEABLE';
+  run.index++;
+  if (run.index === run.members.length) {
+    run.phase = 'complete';
+    run.result = `スタックの ${run.members.length} 件を ${p.repo.defaultBranch} にマージしました`;
+  }
+  finishMockMerge(p, pr, { method: 'merge', del: true });
+}
+
+function cancelMockStackMerge(p, run, reason = '', failed = false) {
+  const remaining = run.members.slice(run.index).map(member => `#${member.number}`).join('、');
+  if (failed) {
+    const current = run.members[run.index];
+    const pr = current && p.prs.find(item => item.number === current.number);
+    if (pr && reason === 'CI が失敗しました') pr.ci = 'fail';
+    run.result = `スタックの一括マージを中止しました: #${current.number} の ${reason.replace(/しました$/, '')}。残りの予約${remaining ? ` (${remaining})` : ''} を取り消しました`;
+  } else {
+    run.result = `中止しました。${remaining ? `残りの予約 (${remaining}) を取り消しました` : '残りの予約はありません。'}`;
+  }
+  run.phase = 'cancelled';
+  save();
+  render();
+}
+
 function mergeConditionWaits(p, pr) {
   if (ui.mergeableCondition === 'operation') return [];
   const waiting = [];
@@ -3136,8 +3288,11 @@ function prItem(p, pr, showOriginBands = true, visiblePosition = null) {
   const originalPos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
+  const bulkRun = stackMergeRunFor(p, [pr]);
+  const bulkIndex = bulkRun?.members.findIndex(member => member.number === pr.number) ?? -1;
+  const bulkReserved = bulkRun?.phase === 'running' && bulkIndex >= bulkRun.index;
   const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
-  const classes = ['pr', rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : '', origin ? `origin-${origin}` : '']
+  const classes = ['pr', rsv || bulkReserved ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : '', origin ? `origin-${origin}` : '']
     .filter(Boolean).join(' ');
   // 予約は収束の記録が無いと実行されないので、道具が無い PR には予約が残っているときだけ出す。
   const reservationToggleShown = rsv || mockReview(p, pr).reservation.showCheckbox;
@@ -3146,7 +3301,7 @@ function prItem(p, pr, showOriginBands = true, visiblePosition = null) {
     : `<button type="button" class="link-btn" data-hide-pr="${esc(k)}"${originalPos.total > originalPos.depth ? ' title="上に積んだ PR も一緒に隠します"' : ''}>非表示にする</button>`;
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
-    !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
+    !bulkReserved && !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
       ${reservationToggleShown ? `<label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'aria-disabled="true"' : ''}>収束後マージ</label>` : ''}` : '',
     conflictButton(p, pr),
   ].join('').trim();
@@ -3157,14 +3312,14 @@ function prItem(p, pr, showOriginBands = true, visiblePosition = null) {
       <span class="num">#${pr.number}</span><span class="ptitle">${esc(pr.title)}</span>${hiddenAction}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
-    <div class="badges">${queued ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : mergeInProgress ? '<span class="badge accent">マージ処理中 (未マージ)</span>' : ''}${prBadges(p, pr)}</div>
+    <div class="badges">${queued ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : mergeInProgress ? '<span class="badge accent">マージ処理中 (未マージ)</span>' : ''}${prBadges(p, pr)}${bulkReserved ? `<span class="badge accent long">一括マージ ${bulkIndex + 1}/${bulkRun.members.length} の予約</span>` : ''}</div>
     ${crossReviewLine(p, pr)}
     ${mockReview(p, pr).display.conflict.length ? crossReviewConflictDetails(p, pr) : ''}
     ${rsv ? `<div class="badges"><span class="badge accent long">レビュー収束後にマージ予約中 (${METHOD_LABEL[rsv.method]}、予約時 ${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))}、${esc(reservationWait(p, pr, rsv.method).join('、'))})</span>
       <button type="button" class="link-btn" data-ready-merge="${k}">モック: 待機条件を満たす</button></div>` : ''}
-    ${operationBlocker && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(operationBlocker)}
+    ${operationBlocker && !bulkReserved && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(operationBlocker)}
       ${e.needsRestack ? ` <button type="button" class="link-btn" data-restack="${k}">モック: 積み直しの完了を再現する</button>` : ''}</div>` : ''}
-    ${shownWaits.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${shownWaits.map(esc).join('、')}</div>` : ''}
+    ${shownWaits.length && !bulkReserved && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${shownWaits.map(esc).join('、')}</div>` : ''}
     ${conflictStatus(p, pr)}
     </div>${actions ? `<div class="pr-actions">${actions}</div>` : ''}</div>
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
@@ -3207,9 +3362,14 @@ function prBlock(p, withTag, showOriginBands = true) {
   const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
   const headingTag = withTag ? 'h3' : 'h4';
   const head = `<header class="prs-head"><${headingTag} class="pr-repo-title"><strong>${esc(p.repo.name)}</strong></${headingTag}>${tag}<span class="meta">GitHub から ${esc(p.repo.fetched)}に取得</span></header>`;
-  const stacks = roots.map(r => `<div class="stack">
-      <div class="stack-base"><code>${esc(effective(p, r).base)}</code>${visibleChildren(r).length ? `<span>スタック ${visibleHeight(r)} 段</span>` : ''}</div>
-      ${prTree(p, r, showOriginBands)}</div>`).join('');
+  const stacks = roots.map(r => {
+    const members = stackMembers(p, r);
+    const run = members ? stackMergeRunFor(p, members) : null;
+    const confirmation = run?.phase === 'confirm' ? stackMergeConfirmation(p, members, run) : '';
+    return `<div class="stack">
+      <div class="stack-base"><code>${esc(effective(p, r).base)}</code>${visibleChildren(r).length ? `<span>スタック ${visibleHeight(r)} 段</span>` : ''}${stackMergeControls(p, r)}</div>
+      ${confirmation}${prTree(p, r, showOriginBands)}</div>`;
+  }).join('');
   const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
   const visibleMerged = hidesFinished() ? mergedNewestFirst.filter(({ pr }) => pr.headMismatch === true) : mergedNewestFirst;
@@ -3226,6 +3386,7 @@ function prBlock(p, withTag, showOriginBands = true) {
   const results = (pullRequestMergeResults.get(p.repo.name) || [])
     .filter(result => result.productId === p.id && pullRequestMergeResultVisible(result))
     .map(result => `<div class="merge-result" role="status"><span>PR #${result.number}: ${pullRequestMergeResultLine(result)}</span><button type="button" class="link-btn" data-close-merge-result="${esc(result.id)}">閉じる</button></div>`).join('');
+  const stackResults = stackMergeResultRows(p);
   const error = p.repo.error ? `<div class="error-box"><div>${esc(p.repo.error)}</div>${p.repo.unregisterableCount > 0
     ? `<div class="repository-unregister">${repositoryUnregisterConfirmations.has(p.id)
       ? `<span>状態を確認できない ${p.repo.unregisterableCount} 件の PR の記録を削除します。元に戻せません</span><button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="confirm">削除する</button><button type="button" class="link-btn" data-unregister-repository="${p.id}" data-unregister-action="cancel">やめる</button>`
@@ -3237,7 +3398,7 @@ function prBlock(p, withTag, showOriginBands = true) {
       return `<button type="button" class="link-btn" data-restore-pr="${esc(prKey(p, pr.number))}" title="押すと表示に戻す">#${pr.number}</button>${countAbove ? ` (上に ${countAbove} 件)` : ''}`;
     }).join(' ')}</div>`
     : '';
-  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${error}${reservationNoticeRows(p)}${stacks || empty}${mergedLine}${closedLine}${results}${hiddenLine}</div></section>`;
+  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${error}${reservationNoticeRows(p)}${stacks || empty}${mergedLine}${closedLine}${results}${stackResults}${hiddenLine}</div></section>`;
 }
 
 // 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
@@ -3788,7 +3949,7 @@ function renderKindMode(showOriginBands = true) {
     ? `<div class="kind-section-controls">${todoTaskToggle}${doneTaskToggle}</div>`
     : '';
   const finishedPrCount = ui.hideFinished ? finishedHiddenCounts().pullRequests : 0;
-  const prs = ps.filter(p => reservationNoticeRows(p) || (hidesFinished() ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true, showOriginBands)).join('');
+  const prs = ps.filter(p => reservationNoticeRows(p) || stackMergeResultRows(p) || (hidesFinished() ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true, showOriginBands)).join('');
   const sections = {
     sinceSeen: news ? section('前回見てから', news, sinceSeenControls) : '',
     judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls, waits.length + endedDecisionEntries.length) : '',
@@ -3826,7 +3987,13 @@ function render() {
             : active?.dataset?.conflictGo ? { kind: 'conflict-open', key: active.dataset.conflictGo }
               : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
                 : active?.dataset?.conflict ? { kind: 'conflict-open', key: active.dataset.conflict }
-                  : active?.dataset?.merge ? { kind: 'merge-open', key: active.dataset.merge } : null;
+                  : active?.dataset?.stackMergeOpen ? { kind: 'stack-merge-confirm', key: active.dataset.stackMergeOpen }
+                    : active?.dataset?.stackMergeGo ? { kind: 'stack-merge-progress', key: active.dataset.stackMergeGo }
+                      : active?.dataset?.stackMergeConfirmCancel ? { kind: 'stack-merge-open', key: active.dataset.stackMergeConfirmCancel }
+                        : active?.dataset?.stackMergeNext ? { kind: 'stack-merge-progress', key: active.dataset.stackMergeNext }
+                          : active?.dataset?.stackMergeFail || active?.dataset?.stackMergeStop
+                            ? { kind: 'stack-merge-result', key: active.dataset.stackMergeFail || active.dataset.stackMergeStop }
+                            : active?.dataset?.merge ? { kind: 'merge-open', key: active.dataset.merge } : null;
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
   renderConnectionNote();
@@ -3864,6 +4031,16 @@ function render() {
     (document.querySelector(`[data-close-merge-result="${CSS.escape(focusData.id)}"]`)
       || document.querySelector('[data-close-merge-result]')
       || document.querySelector('[data-mode="' + ui.mode + '"]'))?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'stack-merge-confirm') {
+    document.querySelector(`[data-stack-merge-go="${CSS.escape(focusData.key)}"]`)?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'stack-merge-open') {
+    document.querySelector(`[data-stack-merge-open="${CSS.escape(focusData.key)}"]`)?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'stack-merge-progress') {
+    (document.querySelector(`[data-stack-merge-next="${CSS.escape(focusData.key)}"]`)
+      || document.querySelector(`[data-stack-merge-result="${CSS.escape(focusData.key)}"]`))?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'stack-merge-result') {
+    (document.querySelector(`[data-stack-merge-result="${CSS.escape(focusData.key)}"]`)
+      || document.querySelector(`[data-stack-merge-open="${CSS.escape(focusData.key)}"]`))?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'task-close') {
     (document.querySelector(`[data-cancel-close-task="${CSS.escape(focusData.key)}"]`)
       || document.querySelector(`[data-close-task="${CSS.escape(focusData.key)}"]`))?.focus({ preventScroll: true });
@@ -4105,6 +4282,44 @@ document.addEventListener('click', e => {
       delete ui.reviewSkips[key];
       if (mockReview(p, pr).evaluation.decision.source === 'recorded') pr.xr = null;
     }
+  } else if (t.dataset.stackMergeOpen) {
+    const key = t.dataset.stackMergeOpen;
+    const [pid, number] = key.split('#');
+    const p = byId(pid), root = p?.prs.find(item => String(item.number) === number);
+    const members = root && stackMembers(p, root);
+    if (!p || !members || members.length < 2 || stackMergeBlockingReason(p, members)) return;
+    mockStackMergeRuns.set(key, { key, productId: p.id, phase: 'confirm', index: 0,
+      members: members.map(pr => ({ number: pr.number, title: pr.title, sha: pr.sha })) });
+    ui.confirm = null;
+    save(); render();
+    return;
+  } else if (t.dataset.stackMergeGo) {
+    const key = t.dataset.stackMergeGo;
+    const run = mockStackMergeRuns.get(key);
+    const p = run && byId(run.productId);
+    const members = p && run.members.map(member => p.prs.find(pr => pr.number === member.number));
+    if (!run || run.phase !== 'confirm' || !p || members.some(pr => !pr || isMerged(p, pr))) return;
+    if (stackMergeBlockingReason(p, members)) { save(); render(); return; }
+    run.members = members.map(pr => ({ number: pr.number, title: pr.title, sha: pr.sha }));
+    run.index = 0;
+    run.phase = 'running';
+    run.result = '';
+    ui.confirm = null;
+    save(); render();
+    return;
+  } else if (t.dataset.stackMergeConfirmCancel) {
+    mockStackMergeRuns.delete(t.dataset.stackMergeConfirmCancel);
+    save(); render();
+    return;
+  } else if (t.dataset.stackMergeNext || t.dataset.stackMergeFail || t.dataset.stackMergeStop) {
+    const key = t.dataset.stackMergeNext || t.dataset.stackMergeFail || t.dataset.stackMergeStop;
+    const run = mockStackMergeRuns.get(key);
+    const p = run && byId(run.productId);
+    if (!p || run.phase !== 'running') return;
+    if (t.dataset.stackMergeNext) advanceMockStackMerge(p, run);
+    else if (t.dataset.stackMergeFail) cancelMockStackMerge(p, run, 'CI が失敗しました', true);
+    else cancelMockStackMerge(p, run);
+    return;
   } else if (t.dataset.merge) {
     delete ui.mergeErrors[t.dataset.merge];
     setMergeConfirmation(t.dataset.merge, t.dataset.mergeAction);
@@ -4160,6 +4375,9 @@ document.addEventListener('click', e => {
     return;
   } else if (t.dataset.closeMergeResult) {
     closePullRequestMergeResult(t.dataset.closeMergeResult);
+  } else if (t.dataset.closeStackMergeResult) {
+    mockStackMergeRuns.delete(t.dataset.closeStackMergeResult);
+    save();
   } else if (t.dataset.seenAll) {
     const unseenProducts = orderedProducts().filter(p => sinceSeenVisible() && Array.isArray(p.news) && p.news.length && !ui.seen.includes(p.id));
     if (unseenProducts.length < 2) return;

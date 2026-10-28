@@ -337,9 +337,14 @@ function validPullRequestMergeResult(value) {
 
 function validPullRequestMergeReservation(record) {
   const parsedUrl = parsePullRequestUrl(record?.url);
-  const allowedKeys = new Set(['session_id', 'owner', 'repo', 'number', 'url', 'method', 'deleteBranch', 'createdAt', 'targetBranch']);
+  const allowedKeys = new Set(['session_id', 'owner', 'repo', 'number', 'url', 'method', 'deleteBranch', 'createdAt', 'targetBranch', 'kind', 'headRefOid', 'runId', 'order', 'total']);
   return isRecord(record) && validStoredSessionId(record.session_id) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
     Object.keys(record).every((key) => allowedKeys.has(key)) &&
+    (record.kind === undefined || (record.kind === 'stack' && isCompleteCommitSha(record.headRefOid) &&
+      typeof record.runId === 'string' && /^[a-f0-9-]{36}$/.test(record.runId) &&
+      Number.isSafeInteger(record.order) && Number.isSafeInteger(record.total) &&
+      record.total >= 2 && record.total <= 20 && record.order >= 1 && record.order <= record.total &&
+      record.method === 'merge' && record.deleteBranch === true && validBranchName(record.targetBranch))) &&
     Number.isSafeInteger(record.number) && record.number > 0 && PULL_REQUEST_MERGE_METHODS.has(record.method) &&
     (record.targetBranch === undefined || validBranchName(record.targetBranch)) &&
     typeof record.deleteBranch === 'boolean' && validTimestamp(record.createdAt) && typeof record.url === 'string' &&
@@ -533,6 +538,11 @@ function normalizeStore(value) {
     retargetedPrs: retargetedPrs.map((record) => ({ ...record })),
     mergedPrs: mergedPrs.map((record) => ({ ...record })),
     mergeReservations: mergeReservations.map((record) => ({ ...record })),
+    stackMergeResults: (Array.isArray(value.stackMergeResults) ? value.stackMergeResults : []).filter((record) =>
+      isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
+      typeof record.runId === 'string' && /^[a-f0-9-]{36}$/.test(record.runId) && validTimestamp(record.at) &&
+      typeof record.message === 'string' && record.message.length <= 5000 &&
+      (record.closedAt === undefined || validTimestamp(record.closedAt))),
     mergeIntents: mergeIntents.map((record) => ({
       ...record,
       stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
@@ -731,6 +741,7 @@ class DashboardState {
     this.pullRequestRetargets = [];
     this.mergedPullRequests = new Map();
     this.pullRequestMergeReservationRecords = new Map();
+    this.stackMergeResults = new Map();
     this.pullRequestMergeReservationNotices = new Map();
     this.pullRequestMergeIntentRecords = new Map();
     this.pullRequestClosureGenerations = new Map();
@@ -870,6 +881,7 @@ class DashboardState {
     this.pullRequestMergeReservationRecords = new Map(store.mergeReservations.map((record) => [
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
+    this.stackMergeResults = new Map(store.stackMergeResults.map((record) => [record.runId, record]));
     this.pullRequestMergeReservationNotices = new Map();
     this.pullRequestMergeIntentRecords = new Map(store.mergeIntents.map((record) => [
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
@@ -1086,6 +1098,7 @@ class DashboardState {
       retargetedPrs: this.pullRequestRetargets.map((record) => ({ ...record })),
       mergedPrs: [...this.mergedPullRequests.values()].map((record) => ({ ...record })),
       mergeReservations: [...this.pullRequestMergeReservationRecords.values()].map((record) => ({ ...record })),
+      stackMergeResults: [...this.stackMergeResults.values()],
       mergeIntents: [...this.pullRequestMergeIntentRecords.values()].map((record) => ({
         ...record,
         stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
@@ -1419,6 +1432,8 @@ class DashboardState {
       deleteBranch: record.deleteBranch,
       createdAt: record.createdAt,
       ...(record.targetBranch === undefined ? {} : { targetBranch: record.targetBranch }),
+      ...(record.kind === 'stack' ? { kind: record.kind, headRefOid: record.headRefOid,
+        runId: record.runId, order: record.order, total: record.total } : {}),
     };
     if (!validPullRequestMergeReservation(next)) return false;
     const key = relatedPullRequestRecordKey(next.owner, next.repo, next.number);
@@ -1434,6 +1449,26 @@ class DashboardState {
   pullRequestMergeReservation(owner, repo, number) {
     const record = this.pullRequestMergeReservationRecords.get(relatedPullRequestRecordKey(owner, repo, number));
     return record ? { ...record } : null;
+  }
+
+  recordStackMergeResult(record) {
+    this.stackMergeResults.set(record.runId, { ...record });
+    if (this.stackMergeResults.size > 100) this.stackMergeResults.delete(this.stackMergeResults.keys().next().value);
+    this.touch();
+    this.requestStoreWrite();
+  }
+
+  stackMergeResultsForRepo(owner, repo) {
+    return [...this.stackMergeResults.values()].filter((record) => !record.closedAt &&
+      record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
+      .map((record) => ({ ...record }));
+  }
+
+  closeStackMergeResult(runId) {
+    const record = this.stackMergeResults.get(runId);
+    if (!record) return false;
+    this.recordStackMergeResult({ ...record, closedAt: new Date().toISOString() });
+    return true;
   }
 
   pullRequestMergeReservationsForRepo(owner, repo) {

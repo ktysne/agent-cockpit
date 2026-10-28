@@ -327,6 +327,12 @@ h3.sub .count { font-weight: normal; }
 .stack { margin-bottom: 8px; padding: 0; border: 0; background: transparent; }
 .stack-base { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; color: var(--text-2); font-size: 12px; }
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.stack-merge-reason { color: var(--warn-text); font-size: 12px; }
+.stack-merge-confirm { margin-top: 8px; }
+.stack-merge-prs { display: grid; gap: 6px; margin: 0; padding-left: 24px; }
+.stack-merge-prs li { padding-left: 2px; }
+.stack-merge-prs .meta { display: block; }
+.stack-merge-progress { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 8px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
 .pr.origin-claude, .pr.origin-codex, .pr.origin-both { position: relative; padding-left: 10px; }
@@ -728,6 +734,9 @@ const recordDeletionConfirmations = new Map();
 let uiUpdatePending = false;
 let refreshConfirmPending = false;
 const pullRequestMergeConfirmations = new Map();
+const stackMergeConfirmations = new Map();
+const stackMergeInFlight = new Set();
+const stackMergeMessages = new Map();
 const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
 const pullRequestReservationPending = new Map();
@@ -2038,7 +2047,7 @@ function pullRequestRepositoryKey(group) {
 }
 
 function hasPullRequestMergeResults(group) {
-  return (pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || [])
+  return Boolean(group.stackMergeResults?.length) || (pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || [])
     .some((result) => pullRequestMergeResultVisible(result));
 }
 
@@ -2520,6 +2529,7 @@ function hasCodexOrigin(state) {
 function appendPullRequestTree(target, group, pullRequest, showOriginBands = true) {
   if (pullRequest.hidden) return;
   const reservation = pullRequest.reservation || null;
+  const bulkReserved = reservation?.kind === 'stack';
   const queued = queuedPullRequestMerge(pullRequest);
   const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
   let confirmation = mergeKey ? pullRequestMergeConfirmations.get(mergeKey) : null;
@@ -2565,7 +2575,9 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   const body = element('div', 'pr-body');
   const text = element('div', 'pr-text');
   const actions = element('div', 'pr-actions');
-  if (mergeKey && mergeIntent) {
+  if (bulkReserved) {
+    confirmation = null;
+  } else if (mergeKey && mergeIntent) {
     if (queued && !pullRequest.mergeIntent) {
       const left = element('button', 'link-btn', 'キューから外れた');
       left.type = 'button';
@@ -2610,7 +2622,9 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   if (mergeKey && queued) badges.append(badge('マージキューに追加済み (未マージ)', 'accent'));
   else if (mergeKey && mergeInProgress) badges.append(badge('マージ処理中 (未マージ)', 'accent'));
   appendPullRequestBadges(badges, pullRequest);
-  if (reservation) {
+  if (bulkReserved) {
+    badges.append(badge(`一括マージ ${reservation.order}/${reservation.total} の予約`, 'accent long'));
+  } else if (reservation) {
     const reservedText = `レビュー収束後にマージ予約中 (${MERGE_METHOD_LABELS[reservation.method] || reservation.method}、予約時 ${reservation.createdAt ? absoluteTimeLabel(reservation.createdAt) : '時刻不明'}、${pullRequestReservationWaits(pullRequest, group, reservation.method).join('、')})`;
     badges.append(badge(reservedText, 'accent long'));
   }
@@ -2666,6 +2680,17 @@ function pullRequestMergeResultLine(result) {
 }
 
 function appendPullRequestMergeResults(content, group) {
+  for (const result of group.stackMergeResults || []) {
+    const row = element('div', 'merge-result');
+    row.setAttribute('role', 'status');
+    row.tabIndex = -1;
+    row.append(element('span', '', result.message));
+    const close = element('button', 'link-btn', '閉じる');
+    close.type = 'button';
+    close.dataset.closeStackMergeResult = result.runId;
+    row.append(close);
+    content.append(row);
+  }
   const results = pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || [];
   const serverResults = (group.mergeHistory || []).filter((result) => result.automatic === true && result.automaticResult && pullRequestMergeResultVisible(result));
   const visibleLocalResults = results.filter((result) => pullRequestMergeResultVisible(result));
@@ -2690,6 +2715,119 @@ function appendPullRequestMergeResults(content, group) {
 }
 
 const repositoryUnregisterConfirmations = new Map();
+
+function stackMergeKey(group, root) {
+  return `${pullRequestRepositoryKey(group)}#${root.number}`;
+}
+
+function appendStackMergeControls(base, stack, group, tree) {
+  const state = tree.stackMerge;
+  if (!state) return;
+  const key = stackMergeKey(group, tree);
+  const button = (text, className, attribute, value = key) => {
+    const node = element('button', className, text);
+    node.type = 'button';
+    node.dataset[attribute] = value;
+    node.disabled = stackMergeInFlight.has(key) || stackMergeInFlight.has(value);
+    return node;
+  };
+  if (state.run) {
+    const progress = element('span', 'stack-merge-progress');
+    progress.setAttribute('role', 'status');
+    progress.append(element('strong', '', `順次マージ中 ${state.run.index}/${state.run.total} ・ 待ち: ${state.run.waitReason}`),
+      button('中止', 'ghost', 'stackMergeStop', state.run.runId));
+    base.append(progress);
+    stackMergeConfirmations.delete(key);
+  } else if (state.members.length >= 2) {
+    const confirmation = stackMergeConfirmations.get(key);
+    if (!confirmation) {
+      const open = button(`スタックをすべてマージ (${state.members.length} 件)`, 'merge-btn', 'stackMergeOpen');
+      open.disabled = !state.available || open.disabled;
+      base.append(open);
+      if (state.blocker) base.append(element('span', 'stack-merge-reason', `一括マージできない理由: ${state.blocker}`));
+    } else {
+      const panel = element('div', 'merge-confirm stack-merge-confirm');
+      panel.dataset.stackMerge = key;
+      panel.append(element('strong', '', `スタックの ${confirmation.members.length} 件を ${confirmation.target} へ順にマージする`));
+      const membersChanged = confirmation.members.length !== state.members.length || confirmation.members.some((member, index) =>
+        member.number !== state.members[index]?.number || member.headRefOid !== state.members[index]?.headRefOid ||
+        member.registration_key !== state.members[index]?.registration_key);
+      const changedReasons = [];
+      if (membersChanged) changedReasons.push('スタックの構成または head が変わりました');
+      if (confirmation.target !== state.targetBranch) changedReasons.push('マージ先が確認時から変わりました');
+      const reason = changedReasons.length ? `${changedReasons.join('。')}。確認欄を開き直してください` : state.blocker;
+      if (reason) panel.append(element('p', 'stack-merge-reason', `一括マージできない理由: ${reason}`));
+      const list = element('ol', 'stack-merge-prs');
+      for (const member of confirmation.members) {
+        const item = element('li');
+        item.append(element('strong', '', `#${member.number}`), document.createTextNode(` ${member.title}`),
+          element('span', 'meta', `照合する head SHA: ${member.headRefOid.slice(0, 7)} ・ ${member.status}`));
+        list.append(item);
+      }
+      panel.append(list);
+      const effects = element('ul', 'effects');
+      effects.append(element('li', '', '方式: マージコミット(固定。子の head を変えずに続けるため)'),
+        element('li', '', 'マージ後にリモートブランチを削除(固定。子の base を付け替えるため)'),
+        element('li', 'warn', 'どれかの PR で head の変化、CI の失敗、コンフリクトなどが出たら、残りの予約をすべて取り消します'));
+      panel.append(effects);
+      const actions = element('div', 'row');
+      const go = button(stackMergeInFlight.has(key) ? '処理中…' : 'すべてマージを実行', 'merge-go', 'stackMergeGo');
+      go.disabled = Boolean(reason) || go.disabled;
+      actions.append(go, button('やめる', 'ghost', 'stackMergeConfirmCancel'));
+      panel.append(actions);
+      stack.append(panel);
+    }
+  }
+  const message = stackMergeMessages.get(key) || stackMergeMessages.get(state.run?.runId);
+  if (message) {
+    const row = element('div', 'merge-error', message);
+    row.setAttribute('role', 'status');
+    stack.append(row);
+  }
+}
+
+function findStackMergeTarget(key) {
+  for (const group of lastState?.pullRequests || []) {
+    const tree = group.trees.find((root) => stackMergeKey(group, root) === key);
+    if (tree) return { group, tree };
+  }
+  return null;
+}
+
+async function runStackMergeAction(button, action, key) {
+  if (stackMergeInFlight.has(key)) return;
+  const confirmation = stackMergeConfirmations.get(key);
+  const body = action === 'merge-stack' ? confirmation && { items: confirmation.members.map((member) => ({
+    number: member.number, registration_key: member.registration_key, headRefOid: member.headRefOid,
+  })), method: 'merge', deleteBranch: true, targetBranch: confirmation.target } : { runId: key };
+  if (!body) return;
+  stackMergeInFlight.add(key);
+  stackMergeMessages.delete(key);
+  button.disabled = true;
+  if (lastState) render(lastState);
+  try {
+    const response = await postUiAction(`/api/pull-requests/${action}`, body);
+    const result = await response.json();
+    if (!response.ok) {
+      const message = result.error || '一括マージの操作に失敗しました';
+      stackMergeMessages.set(key, message);
+      liveStatus.textContent = message;
+      showWriteError(message);
+    } else {
+      stackMergeConfirmations.delete(key);
+      liveStatus.textContent = result.message || (action === 'merge-stack' ? 'スタックの一括マージを予約しました' : '一括マージの操作を反映しました');
+    }
+    await refresh();
+  } catch {
+    const message = '操作結果を取得できませんでした。PR の状態を取り直してください。';
+    stackMergeMessages.set(key, message);
+    liveStatus.textContent = message;
+    showWriteError(message);
+  } finally {
+    stackMergeInFlight.delete(key);
+    if (lastState) render(lastState);
+  }
+}
 
 function appendPullRequestBlock(target, group, withTag = false, showOriginBands = true) {
   if (!group) return;
@@ -2725,6 +2863,7 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
     base.append(element('code', '', tree.effectiveBase));
     if (tree.children.some(child => !child.hidden)) base.append(element('span', '', `スタック ${tree.stackPosition.total} 段`));
     stack.append(base);
+    if (tree.stackMerge) appendStackMergeControls(base, stack, group, tree);
     appendPullRequestTree(stack, group, tree, showOriginBands);
     content.append(stack);
   }
@@ -4227,6 +4366,8 @@ function renderKindSections(products, showOriginBands = true, finishedPrCount = 
 function focusDataFor(active) {
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-hidden-decisions', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute?.(attribute));
   const visibilityAttribute = ['data-hide-decision', 'data-restore-decision', 'data-hide-pr', 'data-restore-pr'].find((attribute) => active?.hasAttribute?.(attribute));
+  const stackAttribute = ['stackMergeOpen', 'stackMergeGo', 'stackMergeConfirmCancel', 'stackMergeStop', 'closeStackMergeResult'].find((name) => active?.dataset?.[name]);
+  if (stackAttribute) return { kind: 'stack-merge', attribute: stackAttribute, key: active.dataset[stackAttribute] };
   return active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
     : visibilityAttribute ? { kind: 'item-visibility', attribute: visibilityAttribute, value: active.getAttribute(visibilityAttribute), sessionId: active.dataset.decisionSession || '' }
     : toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
@@ -4317,6 +4458,7 @@ function render(state) {
     'merge-conflict-open': [sameMergeControl('conflictGo'), sameMergeControl('conflictOpen')],
     'merge-conflict-go': [sameMergeControl('conflictGo'), sameMergeControl('conflictOpen')],
     'merge-conflict-cancel': [sameMergeControl('conflictCancel'), sameMergeControl('conflictOpen')],
+    'stack-merge': [sameMergeControl(focusData?.attribute), sameMergeControl('stackMergeStop'), sameMergeControl('stackMergeGo'), sameMergeControl('stackMergeOpen'), currentModeButton],
     'merge-open': [sameMergeControl('openMerge'), findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.hasAttribute('data-merge-method'))],
     'merge-cancel': [sameMergeControl('mergeCancel'), sameMergeControl('openMerge'), findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.hasAttribute('data-merge-method'))],
     'merge-go': [sameMergeControl('mergeGo'), sameMergeControl('mergeCancel'), sameMergeControl('openMerge'), sameMergeControl('pullRequestLink', focusData?.key), currentModeButton],
@@ -5074,6 +5216,29 @@ document.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
   if (button.getAttribute?.('aria-disabled') === 'true') return;
+  if (button.disabled) return;
+  if (button.dataset.stackMergeOpen) {
+    const key = button.dataset.stackMergeOpen;
+    const target = findStackMergeTarget(key);
+    if (!target?.tree.stackMerge?.available) return;
+    stackMergeConfirmations.set(key, { members: target.tree.stackMerge.members.map((member) => ({ ...member })),
+      target: target.tree.stackMerge.targetBranch });
+    if (lastState) render(lastState);
+    document.querySelector(`[data-stack-merge-go="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+    return;
+  }
+  if (button.dataset.stackMergeConfirmCancel) {
+    const key = button.dataset.stackMergeConfirmCancel;
+    stackMergeConfirmations.delete(key);
+    if (lastState) render(lastState);
+    document.querySelector(`[data-stack-merge-open="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+    return;
+  }
+  if (button.dataset.stackMergeGo || button.dataset.stackMergeStop || button.dataset.closeStackMergeResult) {
+    const action = button.dataset.stackMergeGo ? 'merge-stack' : button.dataset.stackMergeStop ? 'cancel-stack-merge' : 'stack-merge-result-close';
+    void runStackMergeAction(button, action, button.dataset.stackMergeGo || button.dataset.stackMergeStop || button.dataset.closeStackMergeResult);
+    return;
+  }
   if (button.dataset.hideDecision || button.dataset.restoreDecision) {
     void changeItemVisibility(button, '/api/hidden-decisions', {
       action: button.dataset.hideDecision ? 'hide' : 'unhide', session_id: button.dataset.decisionSession,
