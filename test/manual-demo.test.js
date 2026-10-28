@@ -227,7 +227,7 @@ test('基本のシナリオを流し込むと、全体図に要る状態が隔�
     state.pullRequests.flatMap((group) => group.trees).forEach(walk);
     const byNumber = new Map(trees.map((tree) => [tree.number, tree]));
     assert.equal(byNumber.get(41).mergeConditionMet, true);
-    assert.deepEqual(byNumber.get(118).mergeConditionWaits, ['CI 実行中', 'クロスレビュー対応中']);
+    assert.deepEqual(byNumber.get(118).mergeConditionWaits, ['CI 実行中', 'クロスレビューの 2 往復目の結論が未記録']);
     assert.match(byNumber.get(119).blocker, /^積み直し待ち/);
     assert.equal(byNumber.get(120).blocker, 'コンフリクトあり');
     assert.equal(byNumber.get(121).blocker, 'ドラフト');

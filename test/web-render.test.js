@@ -1355,8 +1355,8 @@ test('クロスレビューの行は往復数と head の状態を表示する',
     crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha },
   });
   const reviewedBadge = allNodes(reviewed).find((node) => node.className?.startsWith('badge'));
-  assert.equal(textOf(reviewed), 'クロスレビュー 2 / 3 往復、非対応 1 この head をレビューに回した');
-  assert.equal(reviewedBadge.className, 'badge mute');
+  assert.equal(textOf(reviewed), 'クロスレビュー 2 / 3 往復、非対応 1 2 往復目の結論が未記録');
+  assert.equal(reviewedBadge.className, 'badge warn');
 
   const notRequired = line({ headRefOid: headSha, crossReview: { notRequired: true, source: 'tool-absent' } });
   const notRequiredBadge = allNodes(notRequired).find((node) => node.className?.startsWith('badge'));
@@ -1376,14 +1376,14 @@ test('クロスレビューの行は往復数と head の状態を表示する',
     headRefOid: headSha,
     crossReview: { round: 3, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } },
   }));
-  assert.equal(waitingForTriage.text, '3 往復目の結論待ち');
-  assert.equal(waitingForTriage.warn, 'クロスレビューの 3 往復目の結論がまだ出ていない');
+  assert.equal(waitingForTriage.text, '3 往復目の結論が未記録');
+  assert.equal(waitingForTriage.warn, 'クロスレビューの 3 往復目の結論が記録されていない。node tools/cross-review.js comment --round 3 --outcome <fixing|converged|halted> で記録する');
 
   const convergedButNextRound = context.crossReviewState(reviewPr({
     headRefOid: headSha,
     crossReview: { round: 3, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' } },
   }));
-  assert.deepEqual([convergedButNextRound.text, convergedButNextRound.cls], ['3 往復目の結論待ち', 'warn']);
+  assert.deepEqual([convergedButNextRound.text, convergedButNextRound.cls], ['3 往復目の結論が未記録', 'warn']);
 
   const triageAheadOfRound = context.crossReviewState(reviewPr({
     headRefOid: headSha,
@@ -1458,7 +1458,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.ok(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'fixing' } }));
   assert.ok(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'converged' } }));
   assert.equal(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' } }), undefined);
-  assert.equal(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha }), undefined);
+  assert.ok(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha }));
   assert.ok(skipButtonOf({ round: 1, max: 3, dismissed: 0, reviewedSha: null }));
 
   const changedAfter64DigitReview = context.crossReviewState(reviewPr({
@@ -1530,10 +1530,12 @@ test('マージと予約の確認欄は警告と照合用 SHA を表示する', 
     const reviewedEffects = confirmation(automatic, {
       round: 1, max: 3, dismissed: 0, reviewedSha: headSha,
     });
-    assert.equal(reviewedEffects.length, 1);
-    assert.equal(reviewedEffects[0].children[0].textContent, '照合する head SHA: ');
-    assert.equal(reviewedEffects[0].children[1].textContent, 'aaaaaaa');
-    assert.equal(reviewedEffects[0].children[1].title, headSha);
+    assert.equal(reviewedEffects.length, 2);
+    assert.equal(reviewedEffects[0].className, 'warn');
+    assert.equal(reviewedEffects[0].textContent, 'クロスレビューの 1 往復目の結論が記録されていない。node tools/cross-review.js comment --round 1 --outcome <fixing|converged|halted> で記録する');
+    assert.equal(reviewedEffects[1].children[0].textContent, '照合する head SHA: ');
+    assert.equal(reviewedEffects[1].children[1].textContent, 'aaaaaaa');
+    assert.equal(reviewedEffects[1].children[1].title, headSha);
   }
   const missingReviewEffects = confirmation(false, null);
   assert.equal(missingReviewEffects[0].className, 'warn');
@@ -1549,7 +1551,7 @@ test('マージと予約の確認欄は警告と照合用 SHA を表示する', 
   assert.equal(unverifiableEffects[0].textContent, 'head を確かめられない');
 
   const triageWarnings = [
-    [{ round: 3, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } }, 'クロスレビューの 3 往復目の結論がまだ出ていない'],
+    [{ round: 3, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } }, 'クロスレビューの 3 往復目の結論が記録されていない。node tools/cross-review.js comment --round 3 --outcome <fixing|converged|halted> で記録する'],
     [{ round: 2, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'fixing' } }, 'クロスレビューの 2 往復目の指摘に対応している途中'],
     [{ round: 2, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'halted' } }, 'クロスレビューは開発者の判断を待って止まっている'],
   ];
@@ -1694,7 +1696,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
 
   const headSha = 'a'.repeat(40);
   card = render({ crossReview: { round: 3, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } } });
-  assert.ok(card.text.includes('3 往復目の結論待ち'));
+  assert.ok(card.text.includes('3 往復目の結論が未記録'));
   assert.equal(card.text.includes('クロスレビュー対応中'), false);
 
   card = render({ ci: 'pass', crossReview: { round: 3, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } } });
@@ -1702,8 +1704,8 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
   assert.equal(card.text.includes('待ち:'), false);
 
   card = render({ ci: 'pass', crossReview: { round: 1, max: 3, dismissed: 0, reviewedSha: headSha, triage: null } });
-  assert.ok(card.text.includes('この head をレビューに回した'));
-  assert.match(card.text, /待ち: クロスレビュー対応中/);
+  assert.ok(card.text.includes('1 往復目の結論が未記録'));
+  assert.equal(card.text.includes('待ち:'), false);
 
   card = render({ canMerge: false, blocker: 'レビューの承認待ち', ci: 'pass' });
   assert.ok(card.text.includes('マージできない理由: レビューの承認待ち'));

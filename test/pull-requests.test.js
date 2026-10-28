@@ -1651,7 +1651,7 @@ test('マージ可能件数は選択した条件に従い、レビュー不要�
   }));
   await tracker.refreshReviewGroups('example', 'project');
   [group] = tracker.snapshot();
-  assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビュー対応中']);
+  assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビューの 2 往復目の結論が未記録']);
   assert.equal(group.mergeableCount, 0);
 
   await fs.writeFile(path.join(convergedRoot, '.cross-review-state.json'), JSON.stringify({
