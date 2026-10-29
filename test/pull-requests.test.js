@@ -4242,7 +4242,7 @@ async function baseMergeReviewFixture(t, scenario) {
   await fs.writeFile(path.join(root, conflicting ? 'shared.txt' : 'base.txt'), 'base\n');
   git('add', '.');
   git('commit', '-m', 'base');
-  git('remote', 'add', 'origin', 'https://github.com/example/project.git');
+  git('remote', 'add', 'origin', scenario === 'alias-remote' ? 'git@github-work:example/project.git' : 'https://github.com/example/project.git');
   git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'));
   if (scenario === 'other-base') {
     git('checkout', '-b', 'unrelated');
@@ -4283,7 +4283,7 @@ async function baseMergeReviewFixture(t, scenario) {
 }
 
 for (const [scenario, kind] of [['clean', 'clean'], ['resolved', 'resolved'], ['double', 'clean'],
-  ['other-base', 'other'], ['ordinary', 'other'], ['unsupported', 'unknown']]) {
+  ['other-base', 'other'], ['ordinary', 'other'], ['unsupported', 'unknown'], ['alias-remote', 'unknown']]) {
   test(`収束後の ${scenario} の git 履歴を ${kind} と分類する`, async (t) => {
     const { review, reports, headRefOid } = await baseMergeReviewFixture(t, scenario);
     const { mergeConditionReview, reviewReminderNeeded, reviewDisplay } = require('../src/shared/review-evaluation');

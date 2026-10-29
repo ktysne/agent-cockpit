@@ -508,6 +508,7 @@ GitHub の承認状態は `githubReview` に分ける。
 
 収束 SHA と head が違う場合、サーバーは登録の worktree で `afterConvergence` を分類する。
 PR のリポジトリと照合した remote の `refs/remotes/<remote>/<base>` だけを base とし、ローカルの base は参照しない。
+SSH の別名ホストなどで照合できる remote が無いときは、道具の有無の判定と違って全 remote を候補にせず、`unknown` とする。別のリポジトリの base で判定すると、レビューを経ていない変更でマージの条件を満たすためである。
 第 1 親の鎖が収束 SHA に着き、途中がすべて merge で、ほかの親が base の追跡ブランチの祖先である場合だけ、base の取り込みとする。
 探索は `MAX_AFTER_CONVERGENCE_MERGES` で制限し、上限超過や通常のコミット、base 以外の取り込みは `other` とする。
 各 merge の `git show --remerge-diff --format= --numstat` がすべて空なら `clean`、差分があれば `resolved` とし、ファイル数と追加行数と削除行数を merge ごとに合計した規模を返す。

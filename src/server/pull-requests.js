@@ -912,6 +912,7 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
   const { root } = tool;
   const pullRequestRepository = parsePullRequestUrl(pullRequest?.url);
   let baseRemoteNames = [];
+  let matchedBaseRemoteNames = [];
   if (pullRequestRepository) {
     // フォークから upstream に作った PR は origin と食い違うため、どの GitHub の remote とも一致すれば続ける。
     // 道具の有無は別のリポジトリの判定にならないので、レビュー不要と判定する前に照合する。
@@ -924,6 +925,8 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
     }
     // SSH の別名ホストなどで GitHub の remote と判定できないときは、PR のリポジトリを決められないのですべてを base の候補にする。
     baseRemoteNames = (gitHubRemotes.length ? matchingRemotes : remotes).map((remote) => remote.name);
+    // 収束の引き継ぎは別のリポジトリの base で判定するとマージの条件を誤って満たすので、照合できた remote だけを使う。
+    matchedBaseRemoteNames = matchingRemotes.map((remote) => remote.name);
   }
   let headTool = tool.status === 'present' ? 'present'
     : await crossReviewToolAtHead(root, pullRequest?.headRefOid, execFileImpl, headToolCache);
@@ -977,7 +980,7 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
     const afterConvergence = triage?.round === branchState.round && triage.outcome === 'converged'
       && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(pullRequest.headRefOid)
       && triage.sha.toLowerCase() !== pullRequest.headRefOid.toLowerCase()
-      ? await classifyAfterConvergence(root, triage.sha, pullRequest.headRefOid, pullRequest.baseRefName, baseRemoteNames, execFileImpl)
+      ? await classifyAfterConvergence(root, triage.sha, pullRequest.headRefOid, pullRequest.baseRefName, matchedBaseRemoteNames, execFileImpl)
       : null;
     report('present', isCompleteCommitSha(lastReviewedSha)
       ? (lastReviewedSha.toLowerCase() === pullRequest.headRefOid?.toLowerCase() ? 'match' : 'mismatch') : 'missing', 'none',
