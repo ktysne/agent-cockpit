@@ -1220,7 +1220,9 @@ async function mergeReviewFragments(candidates, pullRequest, options = {}) {
   const used = new Set();
   const merged = [];
   for (const { round, conclusion } of pairs) {
-    used.add(round).add(conclusion);
+    used.add(round);
+    // 結論を記録した worktree が自分の往復も持つときは、その進行中の記録を競合の判定から外さないよう候補に残す。
+    if (!(conclusion.review.round >= 1 && isCompleteCommitSha(conclusion.review.reviewedSha))) used.add(conclusion);
     const root = round.root || round.worktree;
     const { triage } = conclusion.review;
     const matchedRemoteNames = repository

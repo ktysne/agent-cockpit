@@ -3964,6 +3964,18 @@ test('候補が 3 つ以上あっても、組になる断片だけを統合し�
   assert.deepEqual(f.merges.map(({ roundFile }) => roundFile).sort(), [f.roots[0], f.roots[1]].sort());
 });
 
+test('結論を記録した worktree が自分の往復も持つときは、その進行中の記録を統合で消さずに競合として扱う', async (t) => {
+  const current = 'b'.repeat(40);
+  const f = await fragmentFixture(t, [
+    { round: 3, reviewedSha: FRAGMENT_HEAD },
+    { round: 2, reviewedSha: current, triage: convergedAt(FRAGMENT_HEAD, 3, 'halted') },
+    { round: 1, reviewedSha: current, triage: convergedAt(current, 1) },
+  ], { headSha: current });
+  const review = await f.read();
+  assert.deepEqual(review.conflict.map(({ round, outcome }) => `${round}:${outcome}`).sort(), ['1:converged', '2:in-progress']);
+  assert.equal(mergeConditionReview(evaluateReview({ record: review, headSha: current })).met, false);
+});
+
 test('同じ往復の断片に結論が食い違う断片が 2 つあれば、統合した記録を競合として扱う', async (t) => {
   const f = await fragmentFixture(t, [
     { round: 3, reviewedSha: FRAGMENT_HEAD },
