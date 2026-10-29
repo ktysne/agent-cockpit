@@ -805,15 +805,21 @@ function reservationReviewDisplay(e) {
   let waitReason = null;
   if (e.decision.kind === 'deferred') waitReason = 'レビュー保留';
   else if (e.conflict.length) waitReason = 'クロスレビューの記録が食い違う';
-  else if (e.decision.kind === 'not-required' || e.atHead !== 'converged') {
+  else if (e.decision.kind === 'not-required') waitReason = 'レビュー不要の記録では収束後マージは動かない。収束を記録するか、手でマージする';
+  else if (e.atHead !== 'converged') {
     waitReason = e.pushedAfterConvergence ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち';
   }
   return { waitReason, showCheckbox: e.decision.source !== 'tool-absent' };
 }
 
+function skippedAfterConvergence(e) {
+  return e.decision.kind === 'not-required' && e.pushedAfterConvergence;
+}
+
 function reviewBadge(e) {
   const state = (cls, text, warn = null) => ({ cls, text, warn });
   if (e.decision.kind === 'deferred') return state('warn', 'レビュー保留', 'レビュー保留');
+  if (skippedAfterConvergence(e)) return state('mute', `収束後に不要と記録 (収束 ${e.latest.sha.slice(0, 7)})`);
   if (e.decision.kind === 'not-required') return state('mute', 'レビュー不要');
   if (e.record === 'unregistered') return state('mute', '');
   if (e.conflict.length) return state('warn', '記録が食い違う', 'クロスレビューの記録が食い違う');
@@ -842,7 +848,7 @@ function reviewDisplay(e) {
   const labels = { halted: '開発者の判断待ち', fixing: '指摘の対応中', 'in-progress': '結論待ち', converged: '収束' };
   return { ...badge, visible: e.record !== 'unregistered' || e.decision.kind !== 'none',
     missingText: missing ? '現在の head の記録がありません。クロスレビューを実施するか、レビュー不要にする操作で記録してください。' : null,
-    rounds: notRequired || deferred ? null : e.rounds,
+    rounds: notRequired && !skippedAfterConvergence(e) || deferred ? null : e.rounds,
     roundsText: e.rounds ? `${e.rounds.round} / ${e.rounds.max} 往復、非対応 ${e.rounds.dismissed}` : null,
     reason: e.decision.reason, deferred,
     reasonText: deferred ? `理由: ${e.decision.reason}` : null, nextText: deferred ? `次の作業: ${e.decision.next}` : null,

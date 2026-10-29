@@ -123,3 +123,31 @@ test('結論の記録が無くても不要と保留の判断を優先する', ()
   assert.equal(mergeConditionReview(deferred).waitReason, 'レビュー保留');
   assert.equal(reviewDisplay(deferred).text, 'レビュー保留');
 });
+
+test('収束の後の head への不要の記録は、前の収束と往復を残して示す', () => {
+  const e = evaluateReview({ record: record('converged', old, 1), skip, headSha: head });
+  assert.equal(e.decision.kind, 'not-required');
+  assert.equal(e.pushedAfterConvergence, true);
+  const display = reviewDisplay(e);
+  assert.equal(display.text, `収束後に不要と記録 (収束 ${old.slice(0, 7)})`);
+  assert.equal(display.cls, 'mute');
+  assert.deepEqual(display.rounds, { round: 1, max: 3, dismissed: 1 });
+  assert.equal(display.reason, '文言だけ');
+  assert.equal(display.skipControl, 'clear');
+  assert.equal(mergeConditionReview(e).met, true);
+});
+
+test('収束の無い head への不要の記録は、往復を出さずにレビュー不要と示す', () => {
+  const e = evaluateReview({ record: record('fixing', old, 1), skip, headSha: head });
+  const display = reviewDisplay(e);
+  assert.equal(display.text, 'レビュー不要');
+  assert.equal(display.rounds, null);
+});
+
+test('不要の記録での予約は、収束待ちではなく収束後マージが動かないことを示す', () => {
+  for (const raw of [record('converged', old, 1), null]) {
+    const e = evaluateReview({ record: raw, skip, headSha: head });
+    assert.equal(reservationReviewDisplay(e).waitReason, 'レビュー不要の記録では収束後マージは動かない。収束を記録するか、手でマージする');
+    assert.equal(reservationReview(e).condition, 'review-required');
+  }
+});
