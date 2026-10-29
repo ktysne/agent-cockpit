@@ -10,7 +10,7 @@ agent-cockpit の #717 から #720 と、ai-cross-review の #106 から #108 �
 - 管理は agent-cockpit の管理セッションが行い、実装は次の 2 つのセッションが行う。
   - セッション A(agent-cockpit): #720 → #718 → #719 → #717 の順に、スタックで PR を積む。
   - セッション B(ai-cross-review): #106 → #108 → #107 の順に、スタックで PR を積む。
-- A は A1(#721)と A2(#722)がマージ済み。A3(#723)のクロスレビュー中。サブエージェント用の Codex アカウントが上限に達したので、解除まで実装は impl-*-claude で進める(開発者の指示、2026-10-30)。
+- A は A1(#721)と A2(#722)がマージ済み。A3(#723)が収束してマージ待ち。A4(#717)を実装中。ai-cross-review#109 から #111 は main にマージ済みで、A4 は契約を ai-cross-review の main から取り込む。サブエージェント用の Codex アカウントが上限に達したので、解除まで実装は impl-*-claude で進める(開発者の指示、2026-10-30)。
 - リポジトリをまたぐ依存は「判断待ちと受け渡し」の節に書いた 2 点だけである。
 
 ## 決定済みの判断
@@ -30,8 +30,8 @@ agent-cockpit の #717 から #720 と、ai-cross-review の #106 から #108 �
 |---|---|---|---|---|---|---|---|
 | A1 | agent-cockpit | #720 | `src/shared/review-evaluation.js` | standard(メインセッションが直接実装) | #721 | main | マージ済み(2026-10-30) |
 | A2 | agent-cockpit | #718 | `src/shared/review-evaluation.js`、`src/server/pull-requests.js`、停止のフック | hard(Codex の上限で impl-hard-claude が仕上げ) | #722 | main(A1 のマージで付け替え) | マージ済み(2026-10-30) |
-| A3 | agent-cockpit | #719 | `src/server/pull-requests.js`、`src/server/pull-request-merge.js`、`src/web/index.html` | hard(Codex の上限で impl-hard-claude) | #723 | main(A2 はマージ済み) | クロスレビュー中(2026-10-30) |
-| A4 | agent-cockpit | #717 | `src/server/pull-requests.js`、`docs/design/server.md`、契約の取り込み | hard | 未作成 | A3 | 未着手(2026-10-30) |
+| A3 | agent-cockpit | #719 | `src/server/pull-requests.js`、`src/server/pull-request-merge.js`、`src/web/index.html` | hard(Codex の上限で impl-hard-claude) | #723 | main(A2 はマージ済み) | 5 往復で収束、マージ待ち(2026-10-30) |
+| A4 | agent-cockpit | #717 | `src/server/pull-requests.js`、`docs/design/server.md`、契約の取り込み | hard(Codex の上限で impl-hard-claude) | 未作成 | A3 | 実装中(2026-10-30) |
 | B1 | ai-cross-review | #106 | `tools/cross-review.js`、`docs/contracts/cross-review-state.md`、`docs/migrations/` | hard | 未作成 | main | 未着手(2026-10-30) |
 | B2 | ai-cross-review | #108 | `tools/cross-review.js`(`buildRoundComment`、`buildMetaSummary`)、契約 | standard | 未作成 | B1 | 未着手(2026-10-30) |
 | B3 | ai-cross-review | #107 | `tools/cross-review.js`(`resolveBaseSelection`)、`.claude/skills/cross-review/SKILL.md`、`docs/cross-review.md` | hard | 未作成 | B2 | 未着手(2026-10-30) |
