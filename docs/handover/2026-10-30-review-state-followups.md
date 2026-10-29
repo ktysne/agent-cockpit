@@ -10,7 +10,7 @@ agent-cockpit の #717 から #720 と、ai-cross-review の #106 から #108 �
 - 管理は agent-cockpit の管理セッションが行い、実装は次の 2 つのセッションが行う。
   - セッション A(agent-cockpit): #720 → #718 → #719 → #717 の順に、スタックで PR を積む。
   - セッション B(ai-cross-review): #106 → #108 → #107 の順に、スタックで PR を積む。
-- 両セッションとも、最初は担当の 1 件目に着手する。
+- A は A1(#721)のクロスレビュー中。次は A2(#718)。
 - リポジトリをまたぐ依存は「判断待ちと受け渡し」の節に書いた 2 点だけである。
 
 ## 決定済みの判断
@@ -28,7 +28,7 @@ agent-cockpit の #717 から #720 と、ai-cross-review の #106 から #108 �
 
 | 順 | リポジトリ | Issue | 主な変更先 | 委譲の区分 | PR | base | 状態 |
 |---|---|---|---|---|---|---|---|
-| A1 | agent-cockpit | #720 | `src/shared/review-evaluation.js` | standard | 未作成 | main | 未着手(2026-10-30) |
+| A1 | agent-cockpit | #720 | `src/shared/review-evaluation.js` | standard(メインセッションが直接実装) | #721 | main | クロスレビュー中(2026-10-30) |
 | A2 | agent-cockpit | #718 | `src/shared/review-evaluation.js`、`src/server/pull-requests.js`、停止のフック | hard | 未作成 | A1 | 未着手(2026-10-30) |
 | A3 | agent-cockpit | #719 | `src/server/pull-requests.js`、`src/server/pull-request-merge.js`、`src/web/index.html` | hard | 未作成 | A2 | 未着手(2026-10-30) |
 | A4 | agent-cockpit | #717 | `src/server/pull-requests.js`、`docs/design/server.md`、契約の取り込み | hard | 未作成 | A3 | 未着手(2026-10-30) |
