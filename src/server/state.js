@@ -1339,6 +1339,14 @@ class DashboardState {
     return true;
   }
 
+  // squash と rebase では head の祖先が base に入らないので、マージコミットで入れたと記録した PR だけを返す。
+  mergeCommitMergedHeads(owner, repo) {
+    return [...this.mergedPullRequests.values()]
+      .filter((record) => record.method === 'merge' && !record.headMismatch && isCompleteCommitSha(record.mergedHeadRefOid)
+        && record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
+      .map((record) => `${record.number}:${record.mergedHeadRefOid.toLowerCase()}`);
+  }
+
   mergedPullRequestHistoryForRepo(owner, repo, now = Date.now(), deadline) {
     if (!Number.isFinite(this.lastStorePruneAt) || now < this.lastStorePruneAt ||
       now - this.lastStorePruneAt >= STORE_PRUNE_MIN_INTERVAL_MS) this.pruneExpiredStoreRecords(now);

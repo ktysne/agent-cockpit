@@ -843,6 +843,12 @@ function runReviewGit(root, args, execFileImpl) {
 }
 
 // base へマージ済みと GitHub が返した PR の head は、その base に入っている。追跡ブランチは fetch まで古いので、その補いに使う。
+function mergeCommitCandidates(mergedCandidates, mergedHeads) {
+  const known = new Set(mergedHeads || []);
+  return (mergedCandidates || []).filter((candidate) => isCompleteCommitSha(candidate?.headRefOid)
+    && known.has(`${candidate.number}:${candidate.headRefOid.toLowerCase()}`));
+}
+
 function mergedHeadsOfBase(mergedCandidates, base) {
   if (!Array.isArray(mergedCandidates) || !validBranchName(base)) return [];
   const heads = new Set();
@@ -2154,7 +2160,7 @@ class PullRequestTracker {
       const review = await this.readCrossReviewState(registration, pullRequest, {
         registrations, candidates: collected,
         fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache,
-        mergedCandidates: repositoryState.mergedCandidates,
+        mergedCandidates: mergeCommitCandidates(repositoryState.mergedCandidates, this.state.mergeCommitMergedHeads?.(owner, repo)),
         observeReview: (record, result) => {
           const key = `${repositoryKey(owner, repo)}:${record.number}:${record.cwd}`;
           const signature = JSON.stringify(result);

@@ -2679,3 +2679,16 @@ test('予約後にブランチだけ進んだ PR は収束の記録があって�
   assert.equal(f.calls.some(args => args[0] === 'pr' && args[1] === 'merge'), false);
   assert.ok(f.state.pullRequestMergeReservation('example', 'project', 1));
 });
+
+test('取り込みの根拠に使うマージ済みの head は、マージコミットでマージした記録だけに限る', () => {
+  const state = new DashboardState();
+  const record = (number, method, extra = {}) => state.recordMergedPullRequest({
+    owner: 'example', repo: 'project', number, title: `#${number}`, url: `https://github.com/example/project/pull/${number}`,
+    mergedAt: new Date(NOW).toISOString(), method, mergedHeadRefOid: sha(number), ...extra,
+  }, NOW);
+  record(1, 'merge');
+  record(2, 'squash');
+  record(3, 'rebase');
+  record(4, 'merge', { headMismatch: true });
+  assert.deepEqual(state.mergeCommitMergedHeads('Example', 'Project'), [`1:${sha(1).toLowerCase()}`]);
+});
