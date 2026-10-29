@@ -1146,6 +1146,8 @@ class PullRequestMergeManager {
       mergedHeadRefOid: pullRequest.headRefOid || null,
       mergedHead: { ...confirmedMergedHead(pullRequest), ...(branchKept ? { branchKept: true } : {}) },
       headMismatch: Boolean(headMismatch),
+      // 保存した意図から方式を補った記録は、マージキューなどで実際の方式と違いうるので、確かめた印を付けない。
+      methodConfirmed: Boolean(event.confirmedIntent),
       ...(automaticResult ? { automaticResult } : {}),
     }, this.now());
     const sessionIds = [

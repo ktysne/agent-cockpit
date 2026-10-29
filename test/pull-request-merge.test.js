@@ -2680,15 +2680,21 @@ test('予約後にブランチだけ進んだ PR は収束の記録があって�
   assert.ok(f.state.pullRequestMergeReservation('example', 'project', 1));
 });
 
-test('取り込みの根拠に使うマージ済みの head は、マージコミットでマージした記録だけに限る', () => {
-  const state = new DashboardState();
+test('取り込みの根拠に使うマージ済みの head は、マージの直後にマージコミットと確かめた記録だけに限り、保存をまたいで残す', async (t) => {
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-merged-heads-').directory;
+  const state = await DashboardState.load(homeDir, { now: NOW });
   const record = (number, method, extra = {}) => state.recordMergedPullRequest({
     owner: 'example', repo: 'project', number, title: `#${number}`, url: `https://github.com/example/project/pull/${number}`,
-    mergedAt: new Date(NOW).toISOString(), method, mergedHeadRefOid: sha(number), ...extra,
+    mergedAt: new Date(NOW).toISOString(), method, automatic: false, mergedHeadRefOid: sha(number), ...extra,
   }, NOW);
-  record(1, 'merge');
-  record(2, 'squash');
-  record(3, 'rebase');
-  record(4, 'merge', { headMismatch: true });
-  assert.deepEqual(state.mergeCommitMergedHeads('Example', 'Project'), [`1:${sha(1).toLowerCase()}`]);
+  record(1, 'merge', { methodConfirmed: true });
+  record(2, 'squash', { methodConfirmed: true });
+  record(3, 'rebase', { methodConfirmed: true });
+  record(4, 'merge', { methodConfirmed: true, headMismatch: true });
+  record(5, 'merge');
+  const expected = [`1:${sha(1).toLowerCase()}`];
+  assert.deepEqual(state.mergeCommitMergedHeads('Example', 'Project'), expected);
+  await state.flushPersistence();
+  const reloaded = await DashboardState.load(homeDir, { now: NOW });
+  assert.deepEqual(reloaded.mergeCommitMergedHeads('example', 'project'), expected);
 });
