@@ -339,7 +339,8 @@
     <li><span class="ui">レビュー未実施</span>：この PR のブランチに、クロスレビューの記録がありません</li>
     <li><span class="ui">レビュー保留</span>：今の head のレビューを保留しています。理由と次の作業も表示されます</li>
     <li><span class="ui">記録が食い違う</span>：worktree ごとの記録が今の head に対して矛盾しています</li>
-    <li><span class="ui">レビュー不要</span>：クロスレビューを使っていないか、レビュー不要と記録されています(<a href="#pr-skip">レビュー不要の記録</a>)</li>
+    <li><span class="ui">収束後に不要と記録</span>：収束した後に push があり、今の head にレビュー不要が記録されています。収束したコミットの 7 桁が続き、往復の数も残ります</li>
+    <li><span class="ui">レビュー不要</span>：クロスレビューを使っていないか、収束の記録が無い head にレビュー不要と記録されています(<a href="#pr-skip">レビュー不要の記録</a>)</li>
     <li><span class="ui">状態を確認できない</span>：記録を読めませんでした</li>
     <li><span class="ui">head を確かめられない</span>：PR の今の head を取得できていません</li>
   </ul>
@@ -484,6 +485,7 @@
     <ul>
       <li><span class="ui">クロスレビューの収束待ち</span></li>
       <li><span class="ui">収束後に push あり。現在の head の収束待ち</span></li>
+      <li><span class="ui">レビュー不要の記録では収束後マージは動かない。収束を記録するか、手でマージする</span></li>
       <li><span class="ui">レビュー保留</span></li>
       <li><span class="ui">クロスレビューの記録が食い違う</span></li>
       <li><span class="ui">CI 実行中</span></li>

@@ -503,8 +503,8 @@ GitHub の承認状態は `githubReview` に分ける。
 | Stop の催促 | 完全な head が分かり、判断と競合がなく、記録なしまたは recorded で stale のときだけ催促する | `reviewReminderNeeded` → `missingReviewRecords` |
 | 予約のレビュー | 保留は wait `review-deferred`、競合は wait `review-conflict`、不要は wait `review-required`、今の往復の halted は cancel `review-halted`。次に非収束(前の往復の収束を含む)、head 不一致、収束 SHA の欠けを待ち、満たせば merge と `matchSha = latest.sha` を返す | `reservationReview` → `reservationMergeInput` |
 | 予約の外側の条件 | 保留、競合、halted の取消を先に評価し、マージ先変更、残りのレビュー条件、CI、GitHub 承認、操作条件の順に確かめる。freshCandidate で取り直す前後に評価し、収束 SHA を `--match-head-commit` に使う | `reservationMergeInput` |
-| 表示 | 保留 → 不要 → 競合 → 確認不能 → 今の結論の順で札と行を作る。古い head の fixing と halted も結論を表示し、覆っていなければ未記録の案内を添える。head 不明は「head を確かめられない」 | `reviewDisplay` → `attachReviewState`、画面の `crossReviewLine` |
-| 予約の表示 | 待ち文言は同じ評価から作る。道具なしには予約チェックを出さず、保存した不要には出す。既存の予約は出所によらず取り消せる | `reservationReviewDisplay` → 画面の `pullRequestReservationWaitReasons`、予約チェック |
+| 表示 | 保留 → 不要 → 競合 → 確認不能 → 今の結論の順で札と行を作る。不要の記録が収束の後の head に付いたときは、札を「収束後に不要と記録 (収束 <SHA>)」にして往復の数を残す。収束の無い head への不要だけを「レビュー不要」とする。古い head の fixing と halted も結論を表示し、覆っていなければ未記録の案内を添える。head 不明は「head を確かめられない」 | `reviewDisplay` → `attachReviewState`、画面の `crossReviewLine` |
+| 予約の表示 | 待ち文言は同じ評価から作る。不要の記録は予約マージを動かさないので、収束待ちではなく「レビュー不要の記録では収束後マージは動かない」と出す。道具なしには予約チェックを出さず、保存した不要には出す。既存の予約は出所によらず取り消せる | `reservationReviewDisplay` → 画面の `pullRequestReservationWaitReasons`、予約チェック |
 
 モックは評価モジュールの本文を印の間に埋め込み、テストで原本との一致を確かめる。
 モックの例示用の短縮 SHA は評価の入力で完全な SHA に広げ、画面では短縮形を使う。
