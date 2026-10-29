@@ -30,6 +30,7 @@ const CROSS_REVIEW_MAX_ROUNDS = 3;
 const EMPTY_GIT_OBJECT_ID = '0000000000000000000000000000000000000000';
 const HEAD_TOOL_RESULT_LIMIT = 1024;
 const MAX_AFTER_CONVERGENCE_MERGES = 50;
+const MAX_MERGED_BASE_HEADS = 20;
 const MISSING_CWD_RECHECK_MS = 10 * 60 * 1000;
 const REPOSITORY_NODE_ID_QUERY = `query($owner: String!, $repository: String!) {
   repository(owner: $owner, name: $repository) {
@@ -735,6 +736,7 @@ function crossReviewReadOptions(options) {
     remoteRepositoryCache: options?.remoteRepositoryCache,
     headToolCache: options?.headToolCache,
     baseAncestorCache: options?.baseAncestorCache,
+    mergedCandidates: options?.mergedCandidates,
   };
 }
 
@@ -840,7 +842,20 @@ function runReviewGit(root, args, execFileImpl) {
   });
 }
 
-async function classifyAfterConvergence(root, convergedSha, headSha, base, remoteNames, execFileImpl) {
+// base へマージ済みと GitHub が返した PR の head は、その base に入っている。追跡ブランチは fetch まで古いので、その補いに使う。
+function mergedHeadsOfBase(mergedCandidates, base) {
+  if (!Array.isArray(mergedCandidates) || !validBranchName(base)) return [];
+  const heads = new Set();
+  const newestFirst = mergedCandidates.filter(candidate => candidate?.baseRefName === base && isCompleteCommitSha(candidate.headRefOid))
+    .sort((left, right) => Date.parse(right.mergedAt) - Date.parse(left.mergedAt) || right.number - left.number);
+  for (const candidate of newestFirst) {
+    heads.add(candidate.headRefOid.toLowerCase());
+    if (heads.size >= MAX_MERGED_BASE_HEADS) break;
+  }
+  return [...heads];
+}
+
+async function classifyAfterConvergence(root, convergedSha, headSha, base, remoteNames, mergedHeads, execFileImpl) {
   let merges = 0;
   const unknown = reason => ({ kind: 'unknown', merges, reason });
   if (!validBranchName(base)) return unknown('base-ref');
@@ -853,7 +868,7 @@ async function classifyAfterConvergence(root, convergedSha, headSha, base, remot
         if (isCompleteCommitSha(sha)) { baseSha = sha; break; }
       } catch {}
     }
-    if (!baseSha) return unknown('base-missing');
+    if (!baseSha && !mergedHeads.length) return unknown('base-missing');
     try { await git('merge-base', '--is-ancestor', convergedSha, headSha); }
     catch (error) {
       if (error.code === 1) return { kind: 'other', merges };
@@ -869,11 +884,17 @@ async function classifyAfterConvergence(root, convergedSha, headSha, base, remot
       if (![sha, firstParent, ...parents].every(isCompleteCommitSha)) return unknown('commit-format');
       if (sha.toLowerCase() !== expected || !parents.length) return { kind: 'other', merges };
       for (const parent of parents) {
-        try { await git('merge-base', '--is-ancestor', parent, baseSha); }
-        catch (error) {
-          if (error.code === 1) return { kind: 'other', merges };
-          throw error;
+        let inBase = false;
+        if (baseSha) {
+          try { await git('merge-base', '--is-ancestor', parent, baseSha); inBase = true; }
+          catch (error) { if (error.code !== 1) throw error; }
         }
+        // 手元に無いマージ済みの head は、その候補だけを外す。
+        for (const mergedHead of inBase ? [] : mergedHeads) {
+          try { await git('merge-base', '--is-ancestor', parent, mergedHead); inBase = true; break; }
+          catch (error) { if (typeof error.code !== 'number') throw error; }
+        }
+        if (!inBase) return baseSha ? { kind: 'other', merges } : unknown('base-missing');
       }
       expected = firstParent.toLowerCase();
       commits.push({ sha, parents });
@@ -900,7 +921,7 @@ async function classifyAfterConvergence(root, convergedSha, headSha, base, remot
 }
 
 async function readCrossReviewState(registration, pullRequest, options = {}) {
-  const { fileSystem, execFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache } = crossReviewReadOptions(options);
+  const { fileSystem, execFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache, mergedCandidates } = crossReviewReadOptions(options);
   const report = (file, head = 'missing', failure = 'none', state = {}) => options.observeReview?.(registration, { file, head, failure, ...state });
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
@@ -981,7 +1002,8 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
     const afterConvergence = triage?.round === branchState.round && triage.outcome === 'converged'
       && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(pullRequest.headRefOid)
       && triage.sha.toLowerCase() !== pullRequest.headRefOid.toLowerCase()
-      ? await classifyAfterConvergence(root, triage.sha, pullRequest.headRefOid, pullRequest.baseRefName, matchedBaseRemoteNames, execFileImpl)
+      ? await classifyAfterConvergence(root, triage.sha, pullRequest.headRefOid, pullRequest.baseRefName, matchedBaseRemoteNames,
+        matchedBaseRemoteNames.length ? mergedHeadsOfBase(mergedCandidates, pullRequest.baseRefName) : [], execFileImpl)
       : null;
     report('present', isCompleteCommitSha(lastReviewedSha)
       ? (lastReviewedSha.toLowerCase() === pullRequest.headRefOid?.toLowerCase() ? 'match' : 'mismatch') : 'missing', 'none',
@@ -2132,6 +2154,7 @@ class PullRequestTracker {
       const review = await this.readCrossReviewState(registration, pullRequest, {
         registrations, candidates: collected,
         fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache,
+        mergedCandidates: repositoryState.mergedCandidates,
         observeReview: (record, result) => {
           const key = `${repositoryKey(owner, repo)}:${record.number}:${record.cwd}`;
           const signature = JSON.stringify(result);

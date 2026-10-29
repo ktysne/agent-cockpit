@@ -510,6 +510,9 @@ GitHub の承認状態は `githubReview` に分ける。
 PR のリポジトリと照合した remote の `refs/remotes/<remote>/<base>` だけを base とし、ローカルの base は参照しない。
 SSH の別名ホストなどで照合できる remote が無いときは、道具の有無の判定と違って全 remote を候補にせず、`unknown` とする。別のリポジトリの base で判定すると、レビューを経ていない変更でマージの条件を満たすためである。
 第 1 親の鎖が収束 SHA に着き、途中がすべて merge で、ほかの親が base の追跡ブランチの祖先である場合だけ、base の取り込みとする。
+追跡ブランチは fetch まで古いので、下の段が base へマージされた後は、その段の head を取り込んだ merge が追跡ブランチの祖先にならない。
+そのため、今の PR の base と同じブランチへマージ済みと GitHub が返した PR の head(完全な SHA だけ、新しい順に `MAX_MERGED_BASE_HEADS` 件。サーバーが持つ一覧を使い、gh は呼び直さない)の祖先でも、base に入っているとみなす。
+手元に無い head は、その候補だけを外す。追跡ブランチも、マージ済みの head も祖先と確かめられなければ `other` とし、追跡ブランチが無く、マージ済みの head でも確かめられなければ `unknown` とする。
 探索は `MAX_AFTER_CONVERGENCE_MERGES` で制限し、上限超過や通常のコミット、base 以外の取り込みは `other` とする。
 各 merge の `git show --remerge-diff --format= --numstat` がすべて空なら `clean`、差分があれば `resolved` とし、ファイル数と追加行数と削除行数を merge ごとに合計した規模を返す。
 コミット不足、git の失敗や時間切れ、remerge-diff が扱えない merge は `unknown` とする。

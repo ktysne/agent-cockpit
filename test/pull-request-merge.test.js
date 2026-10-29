@@ -549,6 +549,17 @@ test('単独の収束後マージ予約があるスタックは、一括マー�
   assert.equal(stackMerge.blocker, '#3 は収束後マージを予約中');
 });
 
+test('確認後に対象外の上の段へ収束後マージが予約されると、一括マージを予約しない', async (t) => {
+  const fixture = await reviewedStackFixture(t, 3, [1, 2, 3]);
+  const input = stackInput(fixture, [1, 2]);
+  assert.equal((await fixture.manager.reserve(mergeInput(3))).ok, true);
+  const before = fixture.state.pullRequestMergeReservations();
+  const result = await fixture.manager.mergeStack(input);
+  assert.equal(result.status, 409);
+  assert.equal(result.error, '#3 は収束後マージを予約中');
+  assert.deepEqual(fixture.state.pullRequestMergeReservations(), before);
+});
+
 function holdNextOpenList(fixture) {
   const original = fixture.tracker.execFileImpl;
   let release;

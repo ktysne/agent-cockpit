@@ -223,6 +223,12 @@ class PullRequestMergeManager {
       const reviewReason = stackReviewBlocker(pr);
       if (reviewReason) return actionResult(409, `#${pr.number} は${reviewReason}`);
     }
+    // 画面は鎖のどれかの段が予約中なら一括マージを不可にする。対象外の上の段の予約を見逃すと、予約が鎖の一部だけに成立する。
+    for (const pr of chain.filter((member) => !numbers.has(member.number))) {
+      const { owner, repo } = registrations[0];
+      const reservation = this.state.pullRequestMergeReservation(owner, repo, pr.number);
+      if (reservation) return actionResult(409, `#${pr.number} は${reservation.kind === 'stack' ? '一括マージ' : '収束後マージ'}を予約中`);
+    }
     const runId = randomUUID();
     const saved = [];
     try {
