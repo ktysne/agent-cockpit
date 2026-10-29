@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const {
   PullRequestTracker,
   classifyInspectedPullRequest,
@@ -4218,3 +4218,86 @@ test('fork の PR は利用者が取り直しても base リポジトリの同�
   assert.equal(tracker.snapshot()[0].trees[0].staleHead, null);
   assert.equal(calls.some(args => args[1]?.includes('/git/ref/heads/feature/fork')), false);
 });
+
+async function baseMergeReviewFixture(t, scenario) {
+  const root = await temporaryDirectory(t);
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], {
+    encoding: 'utf8', windowsHide: true,
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(root, 'no-config') },
+  }).trim();
+  git('init', '-b', 'main');
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'core.autocrlf', 'false');
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, 'shared.txt'), 'initial\n');
+  git('add', '.');
+  git('commit', '-m', 'initial');
+  git('checkout', '-b', 'feature');
+  await fs.writeFile(path.join(root, 'shared.txt'), 'feature\n');
+  git('commit', '-am', 'feature');
+  const convergedSha = git('rev-parse', 'HEAD');
+  git('checkout', 'main');
+  const conflicting = scenario === 'resolved';
+  await fs.writeFile(path.join(root, conflicting ? 'shared.txt' : 'base.txt'), 'base\n');
+  git('add', '.');
+  git('commit', '-m', 'base');
+  git('remote', 'add', 'origin', scenario === 'alias-remote' ? 'git@github-work:example/project.git' : 'https://github.com/example/project.git');
+  git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'));
+  if (scenario === 'other-base') {
+    git('checkout', '-b', 'unrelated');
+    git('commit', '--allow-empty', '-m', 'other branch');
+  }
+  const source = scenario === 'other-base' ? 'unrelated' : 'main';
+  git('checkout', 'feature');
+  if (conflicting) {
+    assert.throws(() => git('merge', '--no-ff', source, '-m', 'merge'));
+    await fs.writeFile(path.join(root, 'shared.txt'), 'resolved\n');
+    git('add', 'shared.txt');
+    git('commit', '--no-edit');
+  } else git('merge', '--no-ff', source, '-m', 'merge');
+  if (scenario === 'double') {
+    git('checkout', 'main');
+    git('commit', '--allow-empty', '-m', 'base again');
+    git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'));
+    git('checkout', 'feature');
+    git('merge', '--no-ff', 'main', '-m', 'merge again');
+  }
+  if (scenario === 'ordinary') git('commit', '--allow-empty', '-m', 'extra change');
+  const headRefOid = git('rev-parse', 'HEAD');
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: {
+    feature: { round: 1, dismissed: [], lastReviewedSha: convergedSha,
+      lastTriage: { round: 1, outcome: 'converged', sha: convergedSha } },
+  } }));
+  const reports = [];
+  const review = await readCrossReviewState({ cwd: root, number: 31 }, {
+    url: 'https://github.com/example/project/pull/31', headRefName: 'feature', baseRefName: 'main', headRefOid,
+  }, {
+    observeReview: (_, report) => reports.push(report),
+    execFileImpl: (file, args, options, callback) => {
+      if (scenario === 'unsupported' && args.includes('--remerge-diff')) return callback(new Error('unknown option remerge-diff'));
+      return execFile(file, args, options, callback);
+    },
+  });
+  return { review, reports, headRefOid };
+}
+
+for (const [scenario, kind] of [['clean', 'clean'], ['resolved', 'resolved'], ['double', 'clean'],
+  ['other-base', 'other'], ['ordinary', 'other'], ['unsupported', 'unknown'], ['alias-remote', 'unknown']]) {
+  test(`収束後の ${scenario} の git 履歴を ${kind} と分類する`, async (t) => {
+    const { review, reports, headRefOid } = await baseMergeReviewFixture(t, scenario);
+    const { mergeConditionReview, reviewReminderNeeded, reviewDisplay } = require('../src/shared/review-evaluation');
+    assert.equal(review.afterConvergence.kind, kind);
+    assert.deepEqual(reports.at(-1).afterConvergence, review.afterConvergence);
+    const e = evaluateReview({ record: review, headSha: headRefOid, afterConvergence: review.afterConvergence });
+    assert.equal(mergeConditionReview(e).met, kind === 'clean');
+    assert.equal(reviewReminderNeeded(e), kind !== 'clean');
+    if (scenario === 'double') assert.equal(review.afterConvergence.merges, 2);
+    if (kind === 'resolved') {
+      assert.equal(review.afterConvergence.files, 1);
+      assert.ok(review.afterConvergence.insertions > 0);
+      assert.ok(review.afterConvergence.deletions > 0);
+    }
+    if (kind === 'unknown') assert.match(reviewDisplay(e).text, /収束の後に変更あり/);
+  });
+}

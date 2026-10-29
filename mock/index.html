@@ -740,7 +740,7 @@ function classifyReviewAtHead(review, headSha) {
 }
 
 /** PR の記録と現在の head に対する判断を評価する。 */
-function evaluateReview({ record, skip = null, deferral = null, headSha }) {
+function evaluateReview({ record, skip = null, deferral = null, headSha, afterConvergence = null }) {
   const headKnown = completeReviewSha(headSha);
   const head = headSha?.toLowerCase();
   const kind = record === undefined ? 'unregistered' : record === null ? 'none'
@@ -758,9 +758,11 @@ function evaluateReview({ record, skip = null, deferral = null, headSha }) {
   } else if (skip && skip.headRefOid?.toLowerCase() === head && atHead !== 'converged') {
     decision = { kind: 'not-required', source: 'recorded', reason: skip.reason, next: null };
   }
-  return { headKnown, headSha: head, record: kind, atHead, latest,
-    covered: headKnown ? atHead !== 'stale' || decision.kind !== 'none' : 'unknown',
-    pushedAfterConvergence: latest.outcome === 'converged' && completeReviewSha(latest.sha) && headKnown && latest.sha !== head,
+  const pushedAfterConvergence = latest.outcome === 'converged' && completeReviewSha(latest.sha) && headKnown && latest.sha !== head;
+  afterConvergence = pushedAfterConvergence ? afterConvergence : null;
+  return { headKnown, headSha: head, record: kind, atHead, latest, afterConvergence,
+    covered: headKnown ? atHead !== 'stale' || afterConvergence?.kind === 'clean' || decision.kind !== 'none' : 'unknown',
+    pushedAfterConvergence,
     conflict, decision, rounds: kind === 'recorded' ? { round: record.round, max: record.max, dismissed: record.dismissed } : null,
     reviewedSha: record?.reviewedSha?.toLowerCase(), awaitingConclusion: kind === 'recorded' && record.round > 0
       && (triage ? triage.round < record.round : atHead === 'in-progress') };
@@ -774,6 +776,8 @@ function mergeConditionReview(e) {
   else if (e.conflict.length) waitReason = 'クロスレビューの記録が食い違う';
   else if (e.record === 'unavailable') waitReason = 'クロスレビューの状態を確認できない';
   else if (e.atHead === 'converged') return { met: true, waitReason };
+  else if (e.afterConvergence?.kind === 'clean') return { met: true, waitReason };
+  else if (e.afterConvergence?.kind === 'resolved') waitReason = '競合の解消の確認待ち';
   else if (e.latest.outcome === 'halted') waitReason = 'クロスレビューが開発者の判断待ち';
   else if (e.pushedAfterConvergence) waitReason = 'クロスレビュー後に push あり';
   else if (e.awaitingConclusion) waitReason = `クロスレビューの ${e.rounds.round} 往復目の結論が未記録`;
@@ -783,7 +787,7 @@ function mergeConditionReview(e) {
 
 /** Stop でレビューの記録を促す必要があるかを返す。 */
 function reviewReminderNeeded(e) {
-  return e.headKnown && e.decision.kind === 'none' && !e.conflict.length
+  return e.headKnown && e.afterConvergence?.kind !== 'clean' && e.decision.kind === 'none' && !e.conflict.length
     && (e.record === 'none' || e.record === 'recorded' && e.atHead === 'stale');
 }
 
@@ -806,6 +810,7 @@ function reservationReviewDisplay(e) {
   if (e.decision.kind === 'deferred') waitReason = 'レビュー保留';
   else if (e.conflict.length) waitReason = 'クロスレビューの記録が食い違う';
   else if (e.decision.kind === 'not-required') waitReason = 'レビュー不要の記録では収束後マージは動かない。収束を記録するか、手でマージする';
+  else if (e.afterConvergence?.kind === 'clean') waitReason = 'base の取り込み後の head では収束後マージは動かない。手でマージする';
   else if (e.atHead !== 'converged') {
     waitReason = e.pushedAfterConvergence ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち';
   }
@@ -831,6 +836,10 @@ function reviewBadge(e) {
   if (e.latest.outcome === 'fixing') return state('warn', '指摘の対応中', `クロスレビューの ${e.latest.round} 往復目の指摘に対応している途中`);
   if (e.latest.outcome === 'halted') return state('warn', '開発者の判断待ち', 'クロスレビューは開発者の判断を待って止まっている');
   if (e.atHead === 'converged') return state('ok', 'レビュー済み');
+  if (e.afterConvergence?.kind === 'clean') return state('ok', `収束 ${e.latest.sha.slice(0, 7)} の後に base を取り込み(競合なし)`);
+  if (e.afterConvergence?.kind === 'resolved') return state('warn',
+    `競合の解消の確認待ち (${e.afterConvergence.files} ファイル、+${e.afterConvergence.insertions} −${e.afterConvergence.deletions})`,
+    'ai-cross-review の手順で解消の差分だけをレビューするか、cockpit_skip_review に現在の head SHA と理由を渡してレビュー不要を記録してください。');
   if (e.pushedAfterConvergence) return state('warn', `収束の後に変更あり (収束 ${e.latest.sha.slice(0, 7)})`,
     `head ${e.headSha.slice(0, 7)} はクロスレビューの収束の後に変更されている (収束は ${e.latest.sha.slice(0, 7)})`);
   if (!completeReviewSha(e.reviewedSha)) return state('mute', 'head を確かめられない', 'head を確かめられない');
@@ -2737,7 +2746,7 @@ function mockReview(p, pr) {
   const skip = ui.reviewSkips[prKey(p, pr.number)];
   const record = expandMockReviewSha(pr.xr);
   const headSha = expandMockReviewSha(pr.sha);
-  return reviewPresentation(evaluateReview({ record: record?.deferred ? null : record && { max: 3, ...record }, headSha,
+  return reviewPresentation(evaluateReview({ record: record?.deferred ? null : record && { max: 3, ...record }, headSha, afterConvergence: record?.afterConvergence,
     skip: skip ? { headRefOid: expandMockReviewSha(skip.sha), reason: skip.reason } : null,
     deferral: record?.deferred ? { headRefOid: headSha, reason: record.reason, next: record.next } : null }));
 }

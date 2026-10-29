@@ -454,3 +454,19 @@ test('head が不一致なら保留の記録があっても古い head に記録
   assert.doesNotMatch(result.stderrText, /cockpit_skip_review/);
   assert.equal((await f.stop()).stderrText, null);
 });
+
+for (const kind of ['clean', 'resolved']) {
+  test(`停止時に収束後の ${kind} の取り込みに応じた催促を返す`, async (t) => {
+    const f = reminderFixture(t);
+    f.tracker.readCrossReviewState = async () => ({ round: 1, max: 3, dismissed: 0,
+      triage: { round: 1, outcome: 'converged', sha: 'b'.repeat(40) },
+      afterConvergence: { kind, files: 1, insertions: 2, deletions: 1 } });
+    const result = await f.stop();
+    if (kind === 'clean') assert.equal(result.stderrText, null);
+    else {
+      assert.match(result.stderrText, /競合を解いた base の取り込みの後の head/);
+      assert.match(result.stderrText, /解消の差分だけ.*cockpit_skip_review/);
+      assert.doesNotMatch(result.stderrText, /結論も、レビュー不要や保留の記録もありません/);
+    }
+  });
+}
