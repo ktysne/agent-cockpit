@@ -1724,7 +1724,7 @@ class PullRequestTracker {
 
   async readPullRequestView(owner, repo, number, options) {
     const output = await this.execute([
-      'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt`,
+      'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt,mergeCommit`,
     ], options);
     const value = JSON.parse(output);
     const state = String(value?.state || '').toUpperCase();
@@ -1734,7 +1734,20 @@ class PullRequestTracker {
       state,
       pullRequest,
       mergedAt: typeof value.mergedAt === 'string' && Number.isFinite(Date.parse(value.mergedAt)) ? value.mergedAt : null,
+      mergeCommitOid: isCompleteCommitSha(value.mergeCommit?.oid) ? value.mergeCommit.oid.toLowerCase() : null,
     };
+  }
+
+  // マージキューでは指定した方式が効かないので、実際のマージコミットの親で、head の履歴が base に入ったかを確かめる。
+  async mergeCommitKeepsHead(owner, repo, mergeCommitOid, headRefOid, options) {
+    if (!isCompleteCommitSha(mergeCommitOid) || !isCompleteCommitSha(headRefOid)) return false;
+    try {
+      const parents = JSON.parse(await this.execute(['api', `repos/${safeRepo(owner, repo)}/commits/${mergeCommitOid}`], options))?.parents;
+      return Array.isArray(parents) && parents.length >= 2
+        && parents.some((parent) => typeof parent?.sha === 'string' && parent.sha.toLowerCase() === headRefOid.toLowerCase());
+    } catch {
+      return false;
+    }
   }
 
   async readRemoteBranchHead(repository, branch, options = {}) {

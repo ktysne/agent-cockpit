@@ -511,8 +511,8 @@ PR のリポジトリと照合した remote の `refs/remotes/<remote>/<base>` �
 SSH の別名ホストなどで照合できる remote が無いときは、道具の有無の判定と違って全 remote を候補にせず、`unknown` とする。別のリポジトリの base で判定すると、レビューを経ていない変更でマージの条件を満たすためである。
 第 1 親の鎖が収束 SHA に着き、途中がすべて merge で、ほかの親が base の追跡ブランチの祖先である場合だけ、base の取り込みとする。
 追跡ブランチは fetch まで古いので、下の段が base へマージされた後は、その段の head を取り込んだ merge が追跡ブランチの祖先にならない。
-そのため、今の PR の base と同じブランチへマージ済みと GitHub が返した PR のうち、cockpit が gh でマージした直後に MERGED を確かめ、マージコミットでマージしたと記録した PR の head(完全な SHA だけ、新しい順に `MAX_MERGED_BASE_HEADS` 件。サーバーが持つ一覧を使い、gh は呼び直さない)の祖先でも、base に入っているとみなす。
-squash と rebase のマージ、方式の分からない GitHub での手のマージ、保存した意図から方式を補った記録(マージキューなどで実際の方式と違いうる)は使わない。head の途中のコミットが base に入らないので、取り消された変更を含む取り込みを `clean` にしうるためである。
+そのため、今の PR の base と同じブランチへマージ済みと GitHub が返した PR のうち、cockpit がマージした直後に、GitHub のマージコミットの親に head があると確かめた PR の head(完全な SHA だけ、新しい順に `MAX_MERGED_BASE_HEADS` 件。サーバーが持つ一覧を使い、gh は呼び直さない)の祖先でも、base に入っているとみなす。
+squash と rebase のマージ、GitHub での手のマージ、親を確かめられなかったマージは使わない。マージキューでは指定した方式が効かないので、方式の指定ではなく実際のマージコミットの親で確かめる。head の途中のコミットが base に入らないので、取り消された変更を含む取り込みを `clean` にしうるためである。
 手元に無い head は、その候補だけを外す。追跡ブランチも、マージ済みの head も祖先と確かめられなければ `other` とし、追跡ブランチが無く、マージ済みの head でも確かめられなければ `unknown` とする。
 探索は `MAX_AFTER_CONVERGENCE_MERGES` で制限し、上限超過や通常のコミット、base 以外の取り込みは `other` とする。
 各 merge の `git show --remerge-diff --format= --numstat` がすべて空なら `clean`、差分があれば `resolved` とし、ファイル数と追加行数と削除行数を merge ごとに合計した規模を返す。

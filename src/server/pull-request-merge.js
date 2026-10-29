@@ -712,10 +712,12 @@ class PullRequestMergeManager {
 
       this.state.setLastPullRequestMethod(registration.owner, registration.repo, mergeInput.method);
       const mergedAt = view.mergedAt || new Date(this.now()).toISOString();
+      const historyMerged = await this.tracker.mergeCommitKeepsHead(registration.owner, registration.repo,
+        view.mergeCommitOid, view.pullRequest.headRefOid, { priority: true });
       // gh の後に MERGED を確かめたので、この操作の意図は方式と削除の根拠にしてよい。
       outcome = await this.processMergedPullRequest(
         registration.owner, registration.repo, view.pullRequest, mergedAt,
-        { ...mergeIntent, retargetedNumbers: retargeted.map((item) => item.number) },
+        { ...mergeIntent, retargetedNumbers: retargeted.map((item) => item.number), historyMerged },
       );
     } finally {
       this.tracker.executingMerges.delete(mergeKey);
@@ -1146,8 +1148,7 @@ class PullRequestMergeManager {
       mergedHeadRefOid: pullRequest.headRefOid || null,
       mergedHead: { ...confirmedMergedHead(pullRequest), ...(branchKept ? { branchKept: true } : {}) },
       headMismatch: Boolean(headMismatch),
-      // 保存した意図から方式を補った記録は、マージキューなどで実際の方式と違いうるので、確かめた印を付けない。
-      methodConfirmed: Boolean(event.confirmedIntent),
+      historyMerged: event.confirmedIntent?.historyMerged === true,
       ...(automaticResult ? { automaticResult } : {}),
     }, this.now());
     const sessionIds = [

@@ -71,6 +71,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     afterMerge: null,
     remoteBranchHeads: new Map(pullRequests.map((pr) => [pr.headRefName, pr.headRefOid])),
     crossReviewReader: null,
+    mergeCommitParents: null,
   };
   const execFileImpl = (_file, args, _options, callback) => {
     calls.push([...args]);
@@ -136,6 +137,10 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
       }
       return;
     }
+    if (args[0] === 'api' && args[1] === `repos/example/project/commits/${'e'.repeat(40)}`) {
+      finish(null, JSON.stringify({ sha: 'e'.repeat(40), parents: (control.mergeCommitParents || []).map((sha) => ({ sha })) }));
+      return;
+    }
     if (args[0] === 'api' && args[1].includes('/compare/')) {
       finish(null, JSON.stringify({ ahead_by: 0, commits: [] }));
       return;
@@ -178,7 +183,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
           if (current) github.views.set(number, { ...current, state: 'OPEN', mergedAt: null });
         } else {
           const current = github.openPullRequests.find((item) => item.number === number);
-          if (current) github.views.set(number, mergedView(current));
+          if (current) github.views.set(number, { ...mergedView(current), ...(control.mergeCommitParents ? { mergeCommit: { oid: 'e'.repeat(40) } } : {}) });
           github.openPullRequests = github.openPullRequests.filter((item) => item.number !== number);
         }
         await control.afterMerge?.();
@@ -2680,17 +2685,17 @@ test('予約後にブランチだけ進んだ PR は収束の記録があって�
   assert.ok(f.state.pullRequestMergeReservation('example', 'project', 1));
 });
 
-test('取り込みの根拠に使うマージ済みの head は、マージの直後にマージコミットと確かめた記録だけに限り、保存をまたいで残す', async (t) => {
+test('取り込みの根拠に使うマージ済みの head は、マージコミットの親に head があると確かめた記録だけに限り、保存をまたいで残す', async (t) => {
   const homeDir = temporaryDirectory(t, 'agent-cockpit-merged-heads-').directory;
   const state = await DashboardState.load(homeDir, { now: NOW });
   const record = (number, method, extra = {}) => state.recordMergedPullRequest({
     owner: 'example', repo: 'project', number, title: `#${number}`, url: `https://github.com/example/project/pull/${number}`,
     mergedAt: new Date(NOW).toISOString(), method, automatic: false, mergedHeadRefOid: sha(number), ...extra,
   }, NOW);
-  record(1, 'merge', { methodConfirmed: true });
-  record(2, 'squash', { methodConfirmed: true });
-  record(3, 'rebase', { methodConfirmed: true });
-  record(4, 'merge', { methodConfirmed: true, headMismatch: true });
+  record(1, 'merge', { historyMerged: true });
+  record(2, 'squash');
+  record(3, 'rebase');
+  record(4, 'merge', { historyMerged: true, headMismatch: true });
   record(5, 'merge');
   const expected = [`1:${sha(1).toLowerCase()}`];
   assert.deepEqual(state.mergeCommitMergedHeads('Example', 'Project'), expected);
@@ -2698,3 +2703,15 @@ test('取り込みの根拠に使うマージ済みの head は、マージの�
   const reloaded = await DashboardState.load(homeDir, { now: NOW });
   assert.deepEqual(reloaded.mergeCommitMergedHeads('example', 'project'), expected);
 });
+
+for (const [name, parents, expected] of [['マージコミット', (head) => ['f'.repeat(40), head], true], ['squash', () => ['f'.repeat(40)], false]]) {
+  test(`${name}でマージされた head だけを、取り込みの根拠として記録する`, async (t) => {
+    const fixture = await mergeFixture(t);
+    const head = fixture.github.openPullRequests[0].headRefOid;
+    fixture.control.mergeCommitParents = parents(head);
+    await fixture.tracker.refreshAll();
+    const result = await fixture.manager.merge(mergeInput(1, { method: 'merge' }));
+    assert.equal(result.ok, true);
+    assert.deepEqual(fixture.state.mergeCommitMergedHeads('example', 'project'), expected ? [`1:${head.toLowerCase()}`] : []);
+  });
+}
