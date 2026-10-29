@@ -56,7 +56,7 @@ test('一括マージのボタン、無効理由、確認欄、最後の一件�
   vm.runInContext(['stackMergeKey', 'appendStackMergeControls'].map((name) => functionSource(web, name)).join('\n'), context);
   const members = [1, 2].map((number) => ({ number, title: `PR ${number}`, headRefOid: String(number).repeat(40),
     registration_key: String(number).repeat(64), status: 'マージできます' }));
-  const tree = { number: 1, stackMerge: { available: true, targetBranch: 'aggregate', members, blocker: null, run: null } };
+  const tree = { number: 1, stackMerge: { available: true, targetBranch: 'aggregate', members, total: 2, stopAt: null, excluded: [], blocker: null, run: null } };
   const draw = () => {
     const base = fakeElement('div'); const stack = fakeElement('div');
     context.appendStackMergeControls(base, stack, {}, tree);
@@ -67,7 +67,7 @@ test('一括マージのボタン、無効理由、確認欄、最後の一件�
   assert.equal(draw().find((node) => node.dataset.stackMergeOpen).disabled, true);
   assert.ok(draw().some((node) => node.textContent.includes('一括マージできない理由: #2 のコンフリクト')));
   tree.stackMerge.available = true; tree.stackMerge.blocker = null;
-  confirmations.set('example/project#1', { members, target: 'aggregate' });
+  confirmations.set('example/project#1', { members, total: 2, excluded: [], target: 'aggregate' });
   const confirmed = draw();
   assert.ok(confirmed.some((node) => node.textContent === 'スタックの 2 件を aggregate へ順にマージする'));
   assert.ok(confirmed.some((node) => node.textContent === '照合する head SHA: 1111111 ・ マージできます'));
@@ -79,6 +79,43 @@ test('一括マージのボタン、無効理由、確認欄、最後の一件�
   tree.stackMerge.members = [members[1]]; tree.stackMerge.run = { runId: 'run-id', index: 2, total: 2, waitReason: '#2 で CI 実行中' };
   assert.ok(draw().some((node) => node.textContent === '順次マージ中 2/2 ・ 待ち: #2 で CI 実行中'));
   assert.ok(draw().some((node) => node.dataset.stackMergeStop === 'run-id'));
+});
+
+test('一括マージが鎖の一部だけを対象にするときは、件数と対象外の最初の段の理由を示し、確認欄に対象外の段を並べる', () => {
+  const confirmations = new Map();
+  const context = pageContext(web, { element: fakeElement, document: { createTextNode: (text) => fakeElement('text', '', text) },
+    stackMergeConfirmations: confirmations, stackMergeInFlight: new Set(), stackMergeMessages: new Map(), pullRequestRepositoryKey: () => 'example/project' });
+  vm.runInContext(['stackMergeKey', 'appendStackMergeControls'].map((name) => functionSource(web, name)).join('\n'), context);
+  const member = (number) => ({ number, title: `PR ${number}`, headRefOid: String(number).repeat(40),
+    registration_key: String(number).repeat(64), status: 'マージできます' });
+  const excluded = [{ number: 3, title: 'PR 3', reason: '#3 はクロスレビュー未実施' }, { number: 4, title: 'PR 4', reason: '下の段がマージできないため' }];
+  const tree = { number: 1, stackMerge: { available: true, targetBranch: 'main', members: [member(1), member(2)], total: 4,
+    stopAt: { number: 3, reason: '#3 はクロスレビュー未実施' }, excluded, blocker: null, run: null } };
+  const draw = () => {
+    const base = fakeElement('div'); const stack = fakeElement('div');
+    context.appendStackMergeControls(base, stack, {}, tree);
+    return descendants(base).concat(descendants(stack));
+  };
+  const closed = draw();
+  assert.equal(closed.find((node) => node.dataset.stackMergeOpen).textContent, '下から 2 件をマージ (全 4 件)');
+  assert.ok(closed.some((node) => node.textContent === '#3 はクロスレビュー未実施'));
+  confirmations.set('example/project#1', { members: tree.stackMerge.members, total: 4, excluded, target: 'main' });
+  const confirmed = draw();
+  assert.ok(confirmed.some((node) => node.textContent === '下から 2 件を main へ順にマージする'));
+  assert.ok(confirmed.some((node) => node.textContent === 'マージしない段'));
+  assert.ok(confirmed.some((node) => node.textContent === '下の段がマージできないため'));
+  const go = confirmed.find((node) => node.dataset.stackMergeGo);
+  assert.equal(go.textContent, '2 件のマージを実行');
+  assert.equal(go.disabled, false);
+  tree.stackMerge.total = 5;
+  assert.equal(draw().find((node) => node.dataset.stackMergeGo).disabled, true);
+  tree.stackMerge.total = 4;
+  tree.stackMerge.members = [member(1)];
+  const shrunk = draw();
+  assert.equal(shrunk.find((node) => node.dataset.stackMergeGo).disabled, true);
+  assert.ok(shrunk.some((node) => node.textContent.includes('スタックの構成または head が変わりました')));
+  confirmations.clear();
+  assert.equal(draw().some((node) => node.dataset.stackMergeOpen || node.dataset.stackMergeGo), false);
 });
 
 test('一括マージは確認欄に表示した登録キー、SHA、マージ先を送る', async () => {

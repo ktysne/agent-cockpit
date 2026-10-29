@@ -9,6 +9,7 @@ const scenarios = Object.freeze({
   verify: () => require('./verify'),
   'site-review': () => require('./site-review'),
   'site-work': () => require('./site-work'),
+  'stack-merge': () => require('./stack-merge'),
   states: () => require('./states'),
 });
 

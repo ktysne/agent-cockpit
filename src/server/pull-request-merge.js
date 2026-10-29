@@ -5,7 +5,7 @@ const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { isCompleteCommitSha, pullRequestKey, staleHeadDescription, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { reservationReview } = require('../shared/review-evaluation');
-const { safeRepo, ghFailureKind, matchingRepositoryCheckout, listWorktrees, gitRemotes, stackChain, stackMemberBlocker } = require('./pull-requests');
+const { safeRepo, ghFailureKind, matchingRepositoryCheckout, listWorktrees, gitRemotes, stackChain, stackMemberBlocker, stackReviewBlocker, STACK_MERGE_LIMIT } = require('./pull-requests');
 
 const METHODS = new Set(['merge', 'squash', 'rebase']);
 const METHOD_LABELS = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
@@ -179,7 +179,7 @@ class PullRequestMergeManager {
   }
 
   async mergeStack(input) {
-    if (!Array.isArray(input.items) || input.items.length < 2 || input.items.length > 20 ||
+    if (!Array.isArray(input.items) || input.items.length < 2 || input.items.length > STACK_MERGE_LIMIT ||
       input.method !== 'merge' || input.deleteBranch !== true || !validBranchName(input.targetBranch) ||
       input.items.some((item) => !isCompleteCommitSha(item.headRefOid))) return actionResult(400, '一括マージの内容を確認してください');
     const registrations = input.items.map((item) => this.registeredPullRequest(item.number, item.registration_key));
@@ -200,11 +200,11 @@ class PullRequestMergeManager {
       if (candidate.error) return actionResult(409, candidate.error);
       candidates.push(candidate);
     }
-    // 取り直し中に構成が変わることがあるため、最後の一覧で鎖全体を照合する。
+    // 取り直し中に構成が変わることがあるため、最後の一覧で、指定が鎖の一番下から続く範囲かを照合する。
     const latestRoot = this.tracker.mergeCandidate(registrations[0]);
     const chain = latestRoot?.pullRequest && stackChain(latestRoot.pullRequest);
-    if (!chain || latestRoot.pullRequest.parentNumber || chain.length !== input.items.length ||
-      chain.some((pr, index) => pr.number !== input.items[index].number)) return actionResult(409, 'スタックの全構成員を下から順に指定してください');
+    if (!chain || latestRoot.pullRequest.parentNumber || chain.length < input.items.length ||
+      input.items.some((item, index) => chain[index].number !== item.number)) return actionResult(409, 'スタックの下から続く構成員を下から順に指定してください');
     const numbers = new Set(input.items.map((item) => item.number));
     const targetBranch = this.reservationTarget(latestRoot);
     if (!validBranchName(targetBranch)) return actionResult(409, 'マージ先を確認できません');
@@ -220,6 +220,8 @@ class PullRequestMergeManager {
         this.state.pullRequestMergeIntent(registration.owner, registration.repo, registration.number)) return actionResult(409, `#${pr.number} はマージを予約中、または処理中です`);
       const reason = stackMemberBlocker(pr, candidate.repository, numbers);
       if (reason) return actionResult(409, `#${pr.number} ${reason}`);
+      const reviewReason = stackReviewBlocker(pr);
+      if (reviewReason) return actionResult(409, `#${pr.number} は${reviewReason}`);
     }
     const runId = randomUUID();
     const saved = [];
@@ -239,7 +241,7 @@ class PullRequestMergeManager {
       await this.state.waitForPersistence?.().catch(() => {});
       return actionResult(500, '一括マージの予約を保存できませんでした');
     }
-    if (chain.some((pr) => pr.mergeable === 'UNKNOWN')) {
+    if (chain.slice(0, input.items.length).some((pr) => pr.mergeable === 'UNKNOWN')) {
       const { owner, repo } = registrations[0];
       this.tracker.unknownMergeableRefreshCounts.delete(safeRepo(owner, repo).toLowerCase());
       this.tracker.scheduleUnknownMergeableRefresh(owner, repo, latestRoot.repository.openPullRequests, { verifyHeads: true });
@@ -294,6 +296,8 @@ class PullRequestMergeManager {
     const numbers = new Set(this.stackReservations(reservation).map((record) => record.number));
     const reason = stackMemberBlocker(pr, candidate.repository, numbers);
     if (reason) return { cancelled: true, reason };
+    const reviewReason = stackReviewBlocker(pr);
+    if (reviewReason) return { cancelled: true, reason: `クロスレビューの条件を満たさなくなった(${reviewReason})` };
     if (['parentOpen', 'parentMergePending', 'mergeableUnknown', 'restackCheckUnknown'].includes(pr.operationBlockerCode) ||
       pr.ci === 'pending') return null;
     if (pr.mergeTarget !== reservation.targetBranch) return { cancelled: true, reason: 'マージ先が変わりました' };

@@ -332,6 +332,7 @@ h3.sub .count { font-weight: normal; }
 .stack-merge-prs { display: grid; gap: 6px; margin: 0; padding-left: 24px; }
 .stack-merge-prs li { padding-left: 2px; }
 .stack-merge-prs .meta { display: block; }
+.stack-merge-excluded-title { display: block; margin-top: 8px; }
 .stack-merge-progress { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 8px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
@@ -2738,20 +2739,29 @@ function appendStackMergeControls(base, stack, group, tree) {
       button('中止', 'ghost', 'stackMergeStop', state.run.runId));
     base.append(progress);
     stackMergeConfirmations.delete(key);
-  } else if (state.members.length >= 2) {
+  } else {
     const confirmation = stackMergeConfirmations.get(key);
+    const partial = state.members.length < state.total;
     if (!confirmation) {
-      const open = button(`スタックをすべてマージ (${state.members.length} 件)`, 'merge-btn', 'stackMergeOpen');
-      open.disabled = !state.available || open.disabled;
-      base.append(open);
-      if (state.blocker) base.append(element('span', 'stack-merge-reason', `一括マージできない理由: ${state.blocker}`));
+      if (state.members.length >= 2) {
+        const open = button(partial ? `下から ${state.members.length} 件をマージ (全 ${state.total} 件)`
+          : `スタックをすべてマージ (${state.members.length} 件)`, 'merge-btn', 'stackMergeOpen');
+        open.disabled = !state.available || open.disabled;
+        base.append(open);
+        if (state.stopAt) base.append(element('span', 'meta', state.stopAt.reason));
+        if (state.blocker) base.append(element('span', 'stack-merge-reason', `一括マージできない理由: ${state.blocker}`));
+      }
     } else {
+      const confirmedPartial = confirmation.members.length < confirmation.total;
       const panel = element('div', 'merge-confirm stack-merge-confirm');
       panel.dataset.stackMerge = key;
-      panel.append(element('strong', '', `スタックの ${confirmation.members.length} 件を ${confirmation.target} へ順にマージする`));
-      const membersChanged = confirmation.members.length !== state.members.length || confirmation.members.some((member, index) =>
-        member.number !== state.members[index]?.number || member.headRefOid !== state.members[index]?.headRefOid ||
-        member.registration_key !== state.members[index]?.registration_key);
+      panel.append(element('strong', '', confirmedPartial
+        ? `下から ${confirmation.members.length} 件を ${confirmation.target} へ順にマージする`
+        : `スタックの ${confirmation.members.length} 件を ${confirmation.target} へ順にマージする`));
+      const membersChanged = confirmation.total !== state.total || confirmation.members.length !== state.members.length
+        || confirmation.members.some((member, index) =>
+          member.number !== state.members[index]?.number || member.headRefOid !== state.members[index]?.headRefOid ||
+          member.registration_key !== state.members[index]?.registration_key);
       const changedReasons = [];
       if (membersChanged) changedReasons.push('スタックの構成または head が変わりました');
       if (confirmation.target !== state.targetBranch) changedReasons.push('マージ先が確認時から変わりました');
@@ -2765,13 +2775,24 @@ function appendStackMergeControls(base, stack, group, tree) {
         list.append(item);
       }
       panel.append(list);
+      if (confirmation.excluded?.length) {
+        const skipped = element('ul', 'stack-merge-prs stack-merge-excluded');
+        for (const member of confirmation.excluded) {
+          const item = element('li');
+          item.append(element('strong', '', `#${member.number}`), document.createTextNode(` ${member.title}`),
+            element('span', 'meta', member.reason));
+          skipped.append(item);
+        }
+        panel.append(element('strong', 'stack-merge-excluded-title', 'マージしない段'), skipped);
+      }
       const effects = element('ul', 'effects');
       effects.append(element('li', '', '方式: マージコミット(固定。子の head を変えずに続けるため)'),
         element('li', '', 'マージ後にリモートブランチを削除(固定。子の base を付け替えるため)'),
         element('li', 'warn', 'どれかの PR で head の変化、CI の失敗、コンフリクトなどが出たら、残りの予約をすべて取り消します'));
       panel.append(effects);
       const actions = element('div', 'row');
-      const go = button(stackMergeInFlight.has(key) ? '処理中…' : 'すべてマージを実行', 'merge-go', 'stackMergeGo');
+      const go = button(stackMergeInFlight.has(key) ? '処理中…'
+        : confirmedPartial ? `${confirmation.members.length} 件のマージを実行` : 'すべてマージを実行', 'merge-go', 'stackMergeGo');
       go.disabled = Boolean(reason) || go.disabled;
       actions.append(go, button('やめる', 'ghost', 'stackMergeConfirmCancel'));
       panel.append(actions);
@@ -5221,8 +5242,9 @@ document.addEventListener('click', (event) => {
     const key = button.dataset.stackMergeOpen;
     const target = findStackMergeTarget(key);
     if (!target?.tree.stackMerge?.available) return;
-    stackMergeConfirmations.set(key, { members: target.tree.stackMerge.members.map((member) => ({ ...member })),
-      target: target.tree.stackMerge.targetBranch });
+    const { stackMerge } = target.tree;
+    stackMergeConfirmations.set(key, { members: stackMerge.members.map((member) => ({ ...member })),
+      excluded: stackMerge.excluded.map((member) => ({ ...member })), total: stackMerge.total, target: stackMerge.targetBranch });
     if (lastState) render(lastState);
     document.querySelector(`[data-stack-merge-go="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
     return;

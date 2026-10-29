@@ -24,6 +24,7 @@ const GH_TIMEOUT_MS = 20_000;
 const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
 const MERGED_PULL_REQUEST_LIMIT = 1000;
 const MERGE_TARGET_HEAD_CHECK_LIMIT = 20;
+const STACK_MERGE_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 const EMPTY_GIT_OBJECT_ID = '0000000000000000000000000000000000000000';
@@ -2304,37 +2305,58 @@ function stackMemberBlocker(pr, repository, numbers) {
   return null;
 }
 
-function stackMergeBlockingReason(members, repository, state) {
-  const missing = members.find((pr) => !state.pullRequestRegistrationByKey(pr.mergeRecordKey));
-  if (missing) return `#${missing.number} は登録されていない`;
-  const fork = members.find((pr) => pr.isCrossRepository);
-  if (fork) return `#${fork.number} は fork からの PR`;
+/** クロスレビューの条件を満たさないときの待ち理由を返す。満たすなら null。 */
+function stackReviewBlocker(pr) {
+  const condition = pr.review?.mergeCondition;
+  return condition?.met === true ? null : condition?.waitReason || 'クロスレビュー未実施';
+}
+
+// 一括マージの対象は、鎖の下からこの理由が無い段が続く範囲に限る。
+function stackStageStopReason(pr, repository, numbers, state) {
+  const label = `#${pr.number}`;
+  if (!state.pullRequestRegistrationByKey(pr.mergeRecordKey)) return `${label} は登録されていない`;
+  if (pr.isCrossRepository) return `${label} は fork からの PR`;
+  if (pr.conflict || pr.mergeable === 'CONFLICTING') return `${label} のコンフリクト`;
+  if (pr.staleHead) return `${label} の head が変わっている`;
+  if (pr.draft) return `${label} はドラフト`;
+  if (pr.needsRestack) return `${label} は積み直しが必要`;
+  if (pr.ci === 'fail') return `${label} の CI が失敗`;
+  if (!['pass', 'pending'].includes(pr.ci)) return `${label} の CI 状態が不明`;
+  if (pr.githubReview === 'changes') return `${label} に変更要求がある`;
+  if (pr.githubReview === 'required') return `${label} のレビュー承認待ち`;
+  if (pr.mergeIntent) return `${label} は別のマージ処理中`;
+  const reason = stackMemberBlocker(pr, repository, numbers);
+  if (reason) return `${label} ${reason}`;
+  const review = stackReviewBlocker(pr);
+  return review ? `${label} は${review}` : null;
+}
+
+// 鎖全体に効く条件。段ごとの条件は stackStageStopReason が見る。
+function stackMergeBlockingReason(members, target, repository) {
   const reserved = members.find((pr) => pr.reservation);
   if (reserved) return `#${reserved.number} は${reserved.reservation.kind === 'stack' ? '一括マージ' : '収束後マージ'}を予約中`;
   if (!repository.mergeMethods.includes('merge')) return 'マージコミットが許可されていない';
-  const reversed = [...members].reverse();
-  const conflict = reversed.find((pr) => pr.conflict || pr.mergeable === 'CONFLICTING');
-  if (conflict) return `#${conflict.number} のコンフリクト`;
-  const numbers = new Set(members.map((pr) => pr.number));
-  for (const pr of reversed) {
-    if (pr.staleHead) return `#${pr.number} の head が変わっている`;
-    if (pr.draft) return `#${pr.number} はドラフト`;
-    if (pr.needsRestack) return `#${pr.number} は積み直しが必要`;
-    if (pr.ci === 'fail') return `#${pr.number} の CI が失敗`;
-    if (!['pass', 'pending'].includes(pr.ci)) return `#${pr.number} の CI 状態が不明`;
-    if (pr.githubReview === 'changes') return `#${pr.number} に変更要求がある`;
-    if (pr.githubReview === 'required') return `#${pr.number} のレビュー承認待ち`;
-    if (pr.mergeIntent) return `#${pr.number} は別のマージ処理中`;
-    const reason = stackMemberBlocker(pr, repository, numbers);
-    if (reason) return `#${pr.number} ${reason}`;
-  }
   if (!repository.defaultBranch || repository.error) return 'リポジトリ設定を取得できません';
-  return members.length > 20 ? '一括マージは 20 件まで' : null;
+  return target.length > STACK_MERGE_LIMIT ? `一括マージは ${STACK_MERGE_LIMIT} 件まで` : null;
 }
 
 function attachStackMergeState(root, repository, state) {
   const members = stackChain(root);
   if (!members) return root;
+  const numbers = new Set(members.map((pr) => pr.number));
+  let stopAt = null;
+  let targetSize = 0;
+  for (const pr of members) {
+    const reason = stackStageStopReason(pr, repository, numbers, state);
+    if (reason) {
+      stopAt = { number: pr.number, reason };
+      break;
+    }
+    targetSize += 1;
+  }
+  const target = members.slice(0, targetSize);
+  const excluded = members.slice(targetSize).map((pr, index) => ({ number: pr.number, title: pr.title,
+    reason: index === 0 ? stopAt.reason : '下の段がマージできないため' }));
   const reservations = state.pullRequestMergeReservationsForRepo(repository.owner, repository.repo);
   const current = members.map((pr) => pr.reservation).find((record) => record?.kind === 'stack');
   const remaining = current ? reservations.filter((record) => record.runId === current.runId).sort((a, b) => a.order - b.order) : [];
@@ -2342,12 +2364,15 @@ function attachStackMergeState(root, repository, state) {
   const waitReason = repository.openStateUnknown || !next ? 'PR の状態を確認中'
     : next.mergeable === 'UNKNOWN' ? 'GitHub の計算中'
       : next.operationBlocker || (next.ci === 'pending' ? 'CI 実行中' : 'マージ結果の確認中');
-  const blocker = stackMergeBlockingReason(members, repository, state);
+  const blocker = stackMergeBlockingReason(members, target, repository);
   return { ...root, stackMerge: {
-    available: members.length >= 2 && !blocker,
+    available: target.length >= 2 && !blocker,
     blocker,
     targetBranch: root.mergeTarget,
-    members: members.map((pr) => ({ number: pr.number, title: pr.title, headRefOid: pr.headRefOid,
+    total: members.length,
+    stopAt,
+    excluded,
+    members: target.map((pr) => ({ number: pr.number, title: pr.title, headRefOid: pr.headRefOid,
       registration_key: pr.mergeRecordKey,
       status: pr.mergeable === 'UNKNOWN' ? 'GitHub の計算中・待ってからマージ'
         : pr.ci === 'pending' ? 'CI 実行中・待ってからマージ' : 'マージできます' })),
@@ -2412,6 +2437,8 @@ module.exports = {
   assemblePullRequestStacks,
   stackChain,
   stackMemberBlocker,
+  stackReviewBlocker,
+  STACK_MERGE_LIMIT,
   ghEnvironment,
   ghErrorMessage,
   repoKey,
