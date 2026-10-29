@@ -494,17 +494,35 @@ GitHub の承認状態は `githubReview` に分ける。
 
 | 項目 | 入力、結果と優先順位 | 利用する入口 |
 |---|---|---|
-| 入力 | `record` は `selectCrossReview` で選んだ生の記録。`undefined` は未登録、`null` は記録なし、`unavailable` は確認不能、`notRequired` と `source: 'tool-absent'` は道具なし。`skip` と `deferral` は保存済みの不要と保留、`headSha` は PR の現在の head | `recalculateReviewGroups`、`selectCrossReview`、`mergeCandidate` |
+| 入力 | `record` は `selectCrossReview` で選んだ生の記録。`undefined` は未登録、`null` は記録なし、`unavailable` は確認不能、`notRequired` と `source: 'tool-absent'` は道具なし。`skip` と `deferral` は保存済みの不要と保留、`headSha` は PR の現在の head。`afterConvergence` はサーバーが分類した収束後の base 取り込み | `recalculateReviewGroups`、`selectCrossReview`、`mergeCandidate` |
 | head と記録 | `headKnown` は 40 桁か 64 桁の完全な SHA か。`record` は `unregistered / none / unavailable / tool-absent / recorded`。`atHead` は `converged / halted / fixing / in-progress / stale`。SHA は小文字で比較する | `evaluateReview` |
 | 今の結論 | `latest = { round, outcome, sha }`。triage と記録の round が同じときだけ outcome を採用し、それ以外は null と reviewedSha を使う。`rounds` は往復、上限、非対応数。`reviewedSha` と `conflict` の証拠も残す | `evaluateReview` |
-| head の範囲 | `covered` は head 不明なら `unknown`、今の head の記録か判断があれば true。`pushedAfterConvergence` は今の往復の収束 SHA と現在の完全な head が異なるときだけ true。`awaitingConclusion` は往復が 1 以上で、以前の往復にだけ結論があるか、結論が無く記録の SHA が今の head と同じ場合の表示材料。札と待ち理由で結論の未記録と記録のコマンドを示す | `evaluateReview`、`reviewDisplay` |
+| head の範囲 | `covered` は head 不明なら `unknown`、今の head の記録か判断があるか、収束後の分類が clean なら true。`pushedAfterConvergence` は今の往復の収束 SHA と現在の完全な head が異なるときだけ true。`awaitingConclusion` は往復が 1 以上で、以前の往復にだけ結論があるか、結論が無く記録の SHA が今の head と同じ場合の表示材料。札と待ち理由で結論の未記録と記録のコマンドを示す | `evaluateReview`、`reviewDisplay` |
 | 判断の重ね合わせ | `decision = { kind, source, reason, next }`。道具なしは不要。現在の head の保留は、競合がなく atHead が stale のときだけ重ねる。現在の head の不要は atHead が converged でないときだけ重ねる。結論、往復、競合の証拠は重ね合わせても残す | `evaluateReview` |
-| マージ条件 | 保留 → 不要 → 競合 → 確認不能 → 今の結論の順。不要は競合があっても met、保留と未登録は待つ。CI の待ちは利用側で結合する | `mergeConditionReview` → `mergeConditionWaits`、`mergeablePullRequestCount`、画面の条件切り替え |
-| Stop の催促 | 完全な head が分かり、判断と競合がなく、記録なしまたは recorded で stale のときだけ催促する | `reviewReminderNeeded` → `missingReviewRecords` |
+| マージ条件 | 保留 → 不要 → 競合 → 確認不能 → 今の結論の順。不要は競合があっても met、保留と未登録は待つ。収束後の分類が clean なら met、resolved なら「競合の解消の確認待ち」、other と unknown は「クロスレビュー後に push あり」。CI の待ちは利用側で結合する | `mergeConditionReview` → `mergeConditionWaits`、`mergeablePullRequestCount`、画面の条件切り替え |
+| Stop の催促 | 完全な head が分かり、判断と競合がなく、記録なしまたは recorded で stale のときだけ催促する。clean は催促せず、resolved は解消の差分だけのレビューか `cockpit_skip_review` を案内する | `reviewReminderNeeded` → `missingReviewRecords` |
 | 予約のレビュー | 保留は wait `review-deferred`、競合は wait `review-conflict`、不要は wait `review-required`、今の往復の halted は cancel `review-halted`。次に非収束(前の往復の収束を含む)、head 不一致、収束 SHA の欠けを待ち、満たせば merge と `matchSha = latest.sha` を返す | `reservationReview` → `reservationMergeInput` |
 | 予約の外側の条件 | 保留、競合、halted の取消を先に評価し、マージ先変更、残りのレビュー条件、CI、GitHub 承認、操作条件の順に確かめる。freshCandidate で取り直す前後に評価し、収束 SHA を `--match-head-commit` に使う | `reservationMergeInput` |
-| 表示 | 保留 → 不要 → 競合 → 確認不能 → 今の結論の順で札と行を作る。不要の記録が収束の後の head に付いたときは、札を「収束後に不要と記録 (収束 <SHA>)」にして往復の数を残す。収束の無い head への不要だけを「レビュー不要」とする。古い head の fixing と halted も結論を表示し、覆っていなければ未記録の案内を添える。head 不明は「head を確かめられない」 | `reviewDisplay` → `attachReviewState`、画面の `crossReviewLine` |
-| 予約の表示 | 待ち文言は同じ評価から作る。不要の記録は予約マージを動かさないので、収束待ちではなく「レビュー不要の記録では収束後マージは動かない」と出す。道具なしには予約チェックを出さず、保存した不要には出す。既存の予約は出所によらず取り消せる | `reservationReviewDisplay` → 画面の `pullRequestReservationWaitReasons`、予約チェック |
+| 表示 | 保留 → 不要 → 競合 → 確認不能 → 今の結論の順で札と行を作る。不要の記録が収束の後の head に付いたときは、札を「収束後に不要と記録 (収束 <SHA>)」にして往復の数を残す。収束の無い head への不要だけを「レビュー不要」とする。古い head の fixing と halted も結論を表示し、覆っていなければ未記録の案内を添える。clean と resolved は下の分類表の札を表示する。head 不明は「head を確かめられない」 | `reviewDisplay` → `attachReviewState`、画面の `crossReviewLine` |
+| 予約の表示 | 待ち文言は同じ評価から作る。不要の記録は予約マージを動かさないので、収束待ちではなく「レビュー不要の記録では収束後マージは動かない」と出す。clean は「base の取り込み後の head では収束後マージは動かない。手でマージする」と出す。道具なしには予約チェックを出さず、保存した不要には出す。既存の予約は出所によらず取り消せる | `reservationReviewDisplay` → 画面の `pullRequestReservationWaitReasons`、予約チェック |
+
+収束 SHA と head が違う場合、サーバーは登録の worktree で `afterConvergence` を分類する。
+PR のリポジトリと照合した remote の `refs/remotes/<remote>/<base>` だけを base とし、ローカルの base は参照しない。
+第 1 親の鎖が収束 SHA に着き、途中がすべて merge で、ほかの親が base の追跡ブランチの祖先である場合だけ、base の取り込みとする。
+探索は `MAX_AFTER_CONVERGENCE_MERGES` で制限し、上限超過や通常のコミット、base 以外の取り込みは `other` とする。
+各 merge の `git show --remerge-diff --format= --numstat` がすべて空なら `clean`、差分があれば `resolved` とし、ファイル数と追加行数と削除行数を merge ごとに合計した規模を返す。
+コミット不足、git の失敗や時間切れ、remerge-diff が扱えない merge は `unknown` とする。
+分類と merge 数、差分の規模、確認不能の理由は診断に残す。
+
+| 収束後の分類 | head の範囲 | マージ条件 | 表示 | 予約の表示 |
+| --- | --- | --- | --- | --- |
+| clean | 競合なしの base 取り込みだけ | レビュー部分を満たす | ok「収束 <SHA> の後に base を取り込み(競合なし)」、往復は残す | base の取り込み後の head では収束後マージは動かない。手でマージする |
+| resolved | 競合を解いた base 取り込みだけ | 競合の解消の確認待ち | warn「競合の解消の確認待ち (N ファイル、+A −D)」、解消の差分だけのレビューか不要の記録を案内する | 現在の head の収束待ち |
+| other / unknown | それ以外 / 確認不能 | クロスレビュー後に push あり | 収束の後に変更あり | 現在の head の収束待ち |
+
+不要と保留の優先順位は分類を追加しても同じとする。
+resolved の head に不要を記録すると「収束後に不要と記録 (収束 <SHA>)」となる。
+予約マージは clean でも収束 SHA と head の不一致を待ち、実行条件は緩めない。
 
 モックは評価モジュールの本文を印の間に埋め込み、テストで原本との一致を確かめる。
 モックの例示用の短縮 SHA は評価の入力で完全な SHA に広げ、画面では短縮形を使う。
@@ -512,7 +530,7 @@ GitHub の承認状態は `githubReview` に分ける。
 セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は、PR の head のコミットにも無いことを `git ls-tree` で確かめて「レビュー不要」とする。head のコミットにあれば、道具がある worktree と同じく状態ファイルを読む。worktree が道具の無い別のブランチへ切り替わっても、記録を「不要」で隠さないためである。head のコミットが手元に無いなどで確かめられないときは、PR の base ブランチを remote の追跡ブランチ(`<remote>/<base>`)のコミットで確かめ、どれかにあれば道具を使うリポジトリとする。見る remote は PR のリポジトリと一致する GitHub の remote で、GitHub の remote と判定できるものが無い(SSH の別名ホストなど)ときはすべての remote とする。ローカルの `<base>` は、PR のリポジトリと内容が違うことがあるので見ない。head と base のどちらでも確かめられないときは「確認できない」とする。状態ファイルの有無ではなく道具の有無で判定したまま、「レビュー不要」は道具が無いと確かめられたときだけにし、head を取り込んでいないだけで、使わないリポジトリの PR を「確認できない」にしないためである。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。
 状態ファイルの本文の正規化と診断は `src/server/cross-review-state.js` の `parseCrossReviewState` が担う。
 上流の ai-cross-review の固定 revision の検証データを `test/fixtures/cross-review-state/` に置き、契約テストで読み取り結果を確かめる。
-`src/server/pull-requests.js` の `readCrossReviewState` は、ファイルの有無と読み取り失敗、道具の有無、古い記録かどうかの判断を担う adapter とする。
+`src/server/pull-requests.js` の `readCrossReviewState` は、ファイルの有無と読み取り失敗、道具の有無、古い記録かどうかの判断と収束後の取り込みの分類を担う adapter とする。
 JSON の構文誤りは取得不能とし、診断のうち対象ブランチ自体、`round`、`dismissed` 自体の不正も取得不能とする。
 それ以外の診断では正規化した値を使い、不正な `lastTriage` は `null`、非対応の件数は文字列でない要素と空白だけの要素を除いた数とする。
 `lastReviewedSha` は前後の空白を除き、完全な SHA なら小文字、それ以外は `null` とする。

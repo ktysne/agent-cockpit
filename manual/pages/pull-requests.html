@@ -238,7 +238,9 @@
   状態の札は、次のどれかです。</p>
   <ul>
     <li><span class="ui">レビュー済み</span>：最後の結論が「収束」で、その結論を出した時点のコミットが、PR の今の head と同じです</li>
-    <li><span class="ui">収束の後に変更あり</span>：収束した後に push があり、今の head が収束したコミットと違います。収束したコミットの 7 桁が続きます</li>
+    <li>収束した SHA の後に <span class="ui">base を取り込み(競合なし)</span>：競合なしの base 取り込みだけならレビューのマージ条件を満たし、往復の行を残します。停止時の催促は出しません</li>
+    <li><span class="ui">競合の解消の確認待ち</span>：競合を解いた base 取り込みです。ファイル数と追加行数と削除行数を表示します。ai-cross-review の手順で解消の差分だけをレビューするか、cockpit_skip_review で現在の head に不要を記録してください。確認まではレビューのマージ条件を満たしません</li>
+    <li><span class="ui">収束の後に変更あり</span>：収束した後の変更が base の取り込みだけではないか、git で分類を確認できません。収束したコミットの 7 桁が続きます</li>
     <li><span class="ui">指摘の対応中</span>：最後の結論が「指摘に対応中」です</li>
     <li><span class="ui">開発者の判断待ち</span>：最後の結論が <code>halted</code>(停止)で、開発者の判断を待って止まっています</li>
     <li><span class="ui">往復目の結論が未記録</span>：「2 往復目の結論が未記録」のように、今の head をレビューに回した往復の結論が、まだ記録されていません。結論を出したら <code>node tools/cross-review.js comment --round 2 --outcome converged</code> のように、<code>--outcome</code> に <code>fixing</code>、<code>converged</code>、<code>halted</code> のどれかを付けて記録します。<code>--outcome</code> を付けずに記録すると、収束してもこの札のままです</li>
@@ -417,6 +419,7 @@
     <ul>
       <li><span class="ui">クロスレビューの収束待ち</span></li>
       <li><span class="ui">収束後に push あり。現在の head の収束待ち</span></li>
+      <li><span class="ui">base の取り込み後の head では収束後マージは動かない。手でマージする</span>：競合なしの取り込みでも予約は収束 SHA と一致する head だけをマージします</li>
       <li><span class="ui">レビュー不要の記録では収束後マージは動かない。収束を記録するか、手でマージする</span></li>
       <li><span class="ui">レビュー保留</span></li>
       <li><span class="ui">クロスレビューの記録が食い違う</span></li>

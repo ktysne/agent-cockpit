@@ -696,9 +696,15 @@ class DecisionAnswerDelivery {
     for (const { owner, repo, number } of targets) {
       this.diagnostics?.record('info', 'merge', 'review.reminder', { repository: `${owner}/${repo}`, number, session: sessionId.slice(0, 8) });
     }
-    const ordinaryTargets = targets.filter((target) => !target.staleHead);
+    const resolvedTargets = targets.filter((target) => !target.staleHead && target.afterConvergence?.kind === 'resolved');
+    const ordinaryTargets = targets.filter((target) => !target.staleHead && target.afterConvergence?.kind !== 'resolved');
     const mismatchedTargets = targets.filter((target) => target.staleHead);
     return [
+      ...(resolvedTargets.length ? [
+        '次の PR は、競合を解いた base の取り込みの後の head で、解消の差分の確認が要ります:',
+        ...resolvedTargets.map(({ owner, repo, number }) => `PR #${number} (${owner}/${repo})。`),
+        'ai-cross-review の手順で解消の差分だけをレビューするか、`cockpit_skip_review` に現在の head SHA と理由を渡してレビュー不要を記録してください。ツールが成功を返したことを確かめてから完了報告してください。',
+      ] : []),
       ...(ordinaryTargets.length ? [
         '次の PR の現在の head には、クロスレビューの結論も、レビュー不要や保留の記録もありません(古い head の記録だけがある場合も含みます):',
         ...ordinaryTargets.map(({ owner, repo, number }) => `PR #${number} (${owner}/${repo})。`),

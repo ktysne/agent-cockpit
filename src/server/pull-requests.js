@@ -28,6 +28,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 const EMPTY_GIT_OBJECT_ID = '0000000000000000000000000000000000000000';
 const HEAD_TOOL_RESULT_LIMIT = 1024;
+const MAX_AFTER_CONVERGENCE_MERGES = 50;
 const MISSING_CWD_RECHECK_MS = 10 * 60 * 1000;
 const REPOSITORY_NODE_ID_QUERY = `query($owner: String!, $repository: String!) {
   repository(owner: $owner, name: $repository) {
@@ -830,6 +831,73 @@ async function crossReviewToolAtBase(root, baseRefName, remoteNames, execFileImp
   return result;
 }
 
+function runReviewGit(root, args, execFileImpl) {
+  return new Promise((resolve, reject) => {
+    execFileImpl('git', ['-C', root, ...args], {
+      encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
+    }, (error, stdout) => error ? reject(error) : resolve(stdout));
+  });
+}
+
+async function classifyAfterConvergence(root, convergedSha, headSha, base, remoteNames, execFileImpl) {
+  let merges = 0;
+  const unknown = reason => ({ kind: 'unknown', merges, reason });
+  if (!validBranchName(base)) return unknown('base-ref');
+  try {
+    const git = (...args) => runReviewGit(root, args, execFileImpl);
+    let baseSha;
+    for (const remote of remoteNames.filter(validBranchName)) {
+      try {
+        const sha = (await git('rev-parse', '--verify', `refs/remotes/${remote}/${base}^{commit}`)).trim();
+        if (isCompleteCommitSha(sha)) { baseSha = sha; break; }
+      } catch {}
+    }
+    if (!baseSha) return unknown('base-missing');
+    try { await git('merge-base', '--is-ancestor', convergedSha, headSha); }
+    catch (error) {
+      if (error.code === 1) return { kind: 'other', merges };
+      throw error;
+    }
+    const lines = (await git('rev-list', '--first-parent', '--parents',
+      `--max-count=${MAX_AFTER_CONVERGENCE_MERGES + 1}`, `${convergedSha}..${headSha}`)).trim().split(/\r?\n/).filter(Boolean);
+    if (!lines.length || lines.length > MAX_AFTER_CONVERGENCE_MERGES) return { kind: 'other', merges };
+    let expected = headSha.toLowerCase();
+    const commits = [];
+    for (const line of lines) {
+      const [sha, firstParent, ...parents] = line.split(' ');
+      if (![sha, firstParent, ...parents].every(isCompleteCommitSha)) return unknown('commit-format');
+      if (sha.toLowerCase() !== expected || !parents.length) return { kind: 'other', merges };
+      for (const parent of parents) {
+        try { await git('merge-base', '--is-ancestor', parent, baseSha); }
+        catch (error) {
+          if (error.code === 1) return { kind: 'other', merges };
+          throw error;
+        }
+      }
+      expected = firstParent.toLowerCase();
+      commits.push({ sha, parents });
+      merges++;
+    }
+    if (expected !== convergedSha.toLowerCase()) return { kind: 'other', merges };
+    let files = 0;
+    let insertions = 0;
+    let deletions = 0;
+    for (const { sha, parents } of commits) {
+      // remerge-diff は親が 2 つの merge だけを再構成できる。
+      if (parents.length !== 1) return unknown('octopus-merge');
+      const diff = await git('show', '--remerge-diff', '--format=', '--numstat', sha);
+      for (const line of diff.split(/\r?\n/).filter(Boolean)) {
+        const match = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line);
+        if (!match) return unknown('diff-format');
+        files++;
+        insertions += match[1] === '-' ? 0 : Number(match[1]);
+        deletions += match[2] === '-' ? 0 : Number(match[2]);
+      }
+    }
+    return { kind: files ? 'resolved' : 'clean', merges, files, insertions, deletions };
+  } catch { return unknown('git-failed'); }
+}
+
 async function readCrossReviewState(registration, pullRequest, options = {}) {
   const { fileSystem, execFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache } = crossReviewReadOptions(options);
   const report = (file, head = 'missing', failure = 'none', state = {}) => options.observeReview?.(registration, { file, head, failure, ...state });
@@ -906,9 +974,14 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
       return null;
     }
     const triage = lastTriage;
+    const afterConvergence = triage?.round === branchState.round && triage.outcome === 'converged'
+      && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(pullRequest.headRefOid)
+      && triage.sha.toLowerCase() !== pullRequest.headRefOid.toLowerCase()
+      ? await classifyAfterConvergence(root, triage.sha, pullRequest.headRefOid, pullRequest.baseRefName, baseRemoteNames, execFileImpl)
+      : null;
     report('present', isCompleteCommitSha(lastReviewedSha)
       ? (lastReviewedSha.toLowerCase() === pullRequest.headRefOid?.toLowerCase() ? 'match' : 'mismatch') : 'missing', 'none',
-      { round: branchState.round, outcome: triage?.outcome || 'missing', triageHead: triage
+      { afterConvergence, round: branchState.round, outcome: triage?.outcome || 'missing', triageHead: triage
         ? (triage.sha === pullRequest.headRefOid?.toLowerCase() ? 'match' : 'mismatch') : 'missing' });
     return {
       number: registration.number,
@@ -920,6 +993,7 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
         ? lastReviewedSha.toLowerCase()
         : null,
       triage,
+      ...(afterConvergence ? { afterConvergence } : {}),
     };
   } catch {
     report('present', 'missing', 'parse');
@@ -1995,7 +2069,9 @@ class PullRequestTracker {
       // 先頭を読めなかっただけの PR は一時的な失敗のことが多いので、確かめた食い違いだけを知らせる。
       const staleHead = pullRequest?.staleHead?.branchHead ? pullRequest.staleHead : null;
       if (staleHead || (review && reviewReminderNeeded(review.evaluation))) {
-        targets.set(`${key}#${number}`, { owner, repo, number, headRefOid: pullRequest.headRefOid, ...(staleHead ? { staleHead } : {}) });
+        targets.set(`${key}#${number}`, { owner, repo, number, headRefOid: pullRequest.headRefOid,
+          ...(review?.evaluation.afterConvergence ? { afterConvergence: review.evaluation.afterConvergence } : {}),
+          ...(staleHead ? { staleHead } : {}) });
       }
     }
     return [...targets.values()];
@@ -2067,6 +2143,7 @@ class PullRequestTracker {
       const pullRequest = repositoryState.openPullRequests.find(candidate => candidate.number === number);
       const review = selectCrossReview(candidates, pullRequest.headRefOid);
       reviewByNumber.set(number, reviewPresentation(evaluateReview({ record: review,
+        afterConvergence: review?.afterConvergence,
         headSha: pullRequest.headRefOid,
         skip: this.state.crossReviewSkip?.(owner, repo, number),
         deferral: this.state.crossReviewDeferral?.(owner, repo, number),

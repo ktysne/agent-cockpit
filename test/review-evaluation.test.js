@@ -151,3 +151,39 @@ test('不要の記録での予約は、収束待ちではなく収束後マー�
     assert.equal(reservationReview(e).condition, 'review-required');
   }
 });
+
+for (const kind of ['clean', 'resolved', 'other', 'unknown']) {
+  test(`収束後の ${kind} をマージ条件と札と催促と予約に反映する`, () => {
+    const e = evaluateReview({ headSha: head, record: record('converged', old),
+      afterConvergence: { kind, files: 1, insertions: 3, deletions: 2 } });
+    assert.equal(mergeConditionReview(e).met, kind === 'clean');
+    assert.equal(reviewReminderNeeded(e), kind !== 'clean');
+    assert.equal(reservationReview(e).condition, 'review-head-mismatch');
+    const display = reviewDisplay(e);
+    assert.deepEqual(display.rounds, { round: 2, max: 3, dismissed: 1 });
+    if (kind === 'clean') {
+      assert.equal(display.text, '収束 bbbbbbb の後に base を取り込み(競合なし)');
+      assert.equal(display.cls, 'ok');
+      assert.equal(display.missingText, null);
+      assert.match(reservationReviewDisplay(e).waitReason, /手でマージする/);
+    } else if (kind === 'resolved') {
+      assert.equal(display.text, '競合の解消の確認待ち (1 ファイル、+3 −2)');
+      assert.equal(mergeConditionReview(e).waitReason, '競合の解消の確認待ち');
+      assert.match(display.warn, /解消の差分だけ.*cockpit_skip_review/);
+      assert.equal(display.skipControl, 'set');
+    } else assert.match(display.text, /収束の後に変更あり/);
+  });
+}
+
+test('取り込みの分類より不要と保留の記録を優先する', () => {
+  for (const kind of ['clean', 'resolved']) {
+    const input = { headSha: head, record: record('converged', old), afterConvergence: { kind } };
+    const skipped = evaluateReview({ ...input, skip });
+    assert.equal(reviewDisplay(skipped).text, '収束後に不要と記録 (収束 bbbbbbb)');
+    assert.equal(mergeConditionReview(skipped).met, true);
+    assert.equal(reviewReminderNeeded(skipped), false);
+    const deferred = evaluateReview({ ...input, deferral });
+    assert.equal(mergeConditionReview(deferred).waitReason, 'レビュー保留');
+    assert.equal(reviewReminderNeeded(deferred), false);
+  }
+});
