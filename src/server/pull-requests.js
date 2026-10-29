@@ -28,6 +28,7 @@ const STACK_MERGE_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 const EMPTY_GIT_OBJECT_ID = '0000000000000000000000000000000000000000';
+const SHARED_CROSS_REVIEW_STATE_FILE = 'cross-review-state.json';
 const HEAD_TOOL_RESULT_LIMIT = 1024;
 const MAX_AFTER_CONVERGENCE_MERGES = 50;
 const MAX_MERGED_BASE_HEADS = 20;
@@ -861,6 +862,14 @@ function mergedHeadsOfBase(mergedCandidates, base) {
   return [...heads];
 }
 
+// 収束した結論の SHA と head が違うときだけ、収束後の取り込みを分類する。
+async function classifyConvergedPush(root, triage, pullRequest, matchedBaseRemoteNames, mergedCandidates, execFileImpl) {
+  if (triage?.outcome !== 'converged' || !isCompleteCommitSha(triage.sha) || !isCompleteCommitSha(pullRequest.headRefOid)
+    || triage.sha.toLowerCase() === pullRequest.headRefOid.toLowerCase()) return null;
+  return classifyAfterConvergence(root, triage.sha, pullRequest.headRefOid, pullRequest.baseRefName, matchedBaseRemoteNames,
+    matchedBaseRemoteNames.length ? mergedHeadsOfBase(mergedCandidates, pullRequest.baseRefName) : [], execFileImpl);
+}
+
 async function classifyAfterConvergence(root, convergedSha, headSha, base, remoteNames, mergedHeads, execFileImpl) {
   let merges = 0;
   const unknown = reason => ({ kind: 'unknown', merges, reason });
@@ -971,7 +980,7 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
   }
   let contents;
   try {
-    contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
+    contents = await fileSystem.readFile(options.stateFile || path.join(root, '.cross-review-state.json'), 'utf8');
   } catch (error) {
     report(error.code === 'ENOENT' ? 'missing' : 'unknown', 'missing', error.code === 'ENOENT' ? 'none' : 'read');
     return error.code === 'ENOENT' ? null : { unavailable: true };
@@ -1005,17 +1014,14 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
       return null;
     }
     const triage = lastTriage;
-    const afterConvergence = triage?.round === branchState.round && triage.outcome === 'converged'
-      && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(pullRequest.headRefOid)
-      && triage.sha.toLowerCase() !== pullRequest.headRefOid.toLowerCase()
-      ? await classifyAfterConvergence(root, triage.sha, pullRequest.headRefOid, pullRequest.baseRefName, matchedBaseRemoteNames,
-        matchedBaseRemoteNames.length ? mergedHeadsOfBase(mergedCandidates, pullRequest.baseRefName) : [], execFileImpl)
+    const afterConvergence = triage?.round === branchState.round
+      ? await classifyConvergedPush(root, triage, pullRequest, matchedBaseRemoteNames, mergedCandidates, execFileImpl)
       : null;
     report('present', isCompleteCommitSha(lastReviewedSha)
       ? (lastReviewedSha.toLowerCase() === pullRequest.headRefOid?.toLowerCase() ? 'match' : 'mismatch') : 'missing', 'none',
       { afterConvergence, round: branchState.round, outcome: triage?.outcome || 'missing', triageHead: triage
         ? (triage.sha === pullRequest.headRefOid?.toLowerCase() ? 'match' : 'mismatch') : 'missing' });
-    return {
+    return withDismissedSummaries({
       number: registration.number,
       branch,
       round: branchState.round,
@@ -1026,7 +1032,7 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
         : null,
       triage,
       ...(afterConvergence ? { afterConvergence } : {}),
-    };
+    }, branchState.dismissed);
   } catch {
     report('present', 'missing', 'parse');
     return { unavailable: true };
@@ -1122,7 +1128,8 @@ async function collectCrossReviewStatesAcrossWorktrees(registration, pullRequest
   } catch (error) {
     cwdMissing = ['ENOENT', 'ENOTDIR'].includes(error.code);
   }
-  for (const worktree of await listWorktrees(root, options.execFileImpl)) {
+  const worktrees = await listWorktrees(root, options.execFileImpl);
+  for (const worktree of worktrees) {
     if (worktree.prunable || (!cwdMissing && sameRoot(worktree.path, root))) continue;
     if (options.requireMatchingRepository && !await matchingRepositoryCheckout(worktree.path, registration, options)) continue;
     const candidate = await readCrossReviewState({ ...registration, cwd: worktree.path }, pullRequest, options);
@@ -1131,21 +1138,55 @@ async function collectCrossReviewStatesAcrossWorktrees(registration, pullRequest
     if (worktree.branch !== branch && !hasRecord) continue;
     candidates.push({ worktree: worktree.path, review: candidate });
   }
+  // 一覧を取れないときは git が使えないので、共有ファイルを探さない。
+  const shared = worktrees.length ? await readSharedCrossReviewState(registration, root, pullRequest, options) : null;
+  if (shared) candidates.push(shared);
   return candidates;
 }
 
-async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, options = {}) {
-  const candidates = await collectCrossReviewStatesAcrossWorktrees(registration, pullRequest, options);
-  if (options.candidates) {
-    options.candidates.push(...candidates);
-    return undefined;
-  }
-  return selectCrossReview(candidates, pullRequest.headRefOid);
+// 共通ディレクトリの共有ファイルは、そのブランチの記録を持つときだけ候補にする。読めない共有ファイルで記録なしの表示を上書きしないため。
+async function readSharedCrossReviewState(registration, root, pullRequest, options) {
+  const commonDir = await resolveGitCommonDir(root, options.execFileImpl || execFile, options.commonDirCache);
+  if (!commonDir) return null;
+  const stateFile = path.join(commonDir, SHARED_CROSS_REVIEW_STATE_FILE);
+  // 診断の記録は cwd ごとに重複を除くので、共有ファイルの読み取りは登録の cwd と別の鍵にする。
+  const observeReview = options.observeReview
+    && ((record, result) => options.observeReview({ ...record, cwd: stateFile }, result));
+  const review = await readCrossReviewState({ ...registration, cwd: root }, pullRequest, { ...options, stateFile, observeReview });
+  return Number.isSafeInteger(review?.round) ? { worktree: stateFile, root, review } : null;
 }
 
-function selectCrossReview(candidates, headSha) {
+// 共通ディレクトリの解決結果は、worktree の根ごとに 1 回の取得の間だけ使う。git の失敗と時間切れは「共有ファイル無し」とする。
+function resolveGitCommonDir(root, execFileImpl, cache) {
+  const key = process.platform === 'win32' ? root.toLowerCase() : root;
+  if (cache?.has(key)) return cache.get(key);
+  const run = (args) => new Promise((resolve) => {
+    try {
+      execFileImpl('git', ['-C', root, 'rev-parse', ...args], {
+        encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
+      }, (error, stdout) => resolve(error || typeof stdout !== 'string' ? null : stdout));
+    } catch { resolve(null); }
+  });
+  const resolved = (async () => {
+    // --path-format を受け付けない古い git では、出力を根からの相対として絶対パスにする。
+    for (const args of [['--path-format=absolute', '--git-common-dir'], ['--git-common-dir']]) {
+      const line = (await run(args))?.trim();
+      if (line && !line.includes('\n')) return path.resolve(root, line);
+    }
+    return null;
+  })();
+  cache?.set(key, resolved);
+  return resolved;
+}
+
+function withDismissedSummaries(review, summaries) {
+  // 統合の入力にだけ使う値で、画面に配る値には含めない。
+  Object.defineProperty(review, 'dismissedSummaries', { value: summaries, enumerable: false });
+  return review;
+}
+
+function uniqueCandidates(candidates) {
   const pathKey = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
-  const comparePath = (left, right) => left < right ? -1 : left > right ? 1 : 0;
   const priority = (review) => review === undefined ? 0
     : review?.notRequired === true ? 1 : review === null ? 3 : review?.unavailable === true ? 2 : 4;
   const unique = new Map();
@@ -1154,7 +1195,73 @@ function selectCrossReview(candidates, headSha) {
     const current = unique.get(key);
     if (!current || priority(candidate.review) > priority(current.review)) unique.set(key, candidate);
   }
-  const entries = [...unique.values()].map(candidate => ({
+  return [...unique.values()];
+}
+
+// 別の worktree で回したレビューは、往復の記録(round と lastReviewedSha)と結論(lastTriage)が別々の状態ファイルに残る。
+// 結論の round と SHA が往復の記録と両方一致する組だけを 1 つの記録にし、一致しない組は競合の判定に渡す。
+async function mergeReviewFragments(candidates, pullRequest, options = {}) {
+  const sameSha = (left, right) => left.toLowerCase() === right.toLowerCase();
+  const unique = uniqueCandidates(candidates);
+  const recorded = unique.filter(candidate => Number.isSafeInteger(candidate.review?.round));
+  const roundFragments = recorded.filter(({ review }) => review.round >= 1 && isCompleteCommitSha(review.reviewedSha)
+    && (!review.triage || review.triage.round < review.round));
+  const conclusionFragments = recorded.filter(({ review }) => review.triage && review.round < review.triage.round);
+  const pairs = [];
+  for (const conclusion of conclusionFragments) {
+    for (const round of roundFragments) {
+      if (round.review.round === conclusion.review.triage.round
+        && sameSha(round.review.reviewedSha, conclusion.review.triage.sha)) pairs.push({ round, conclusion });
+    }
+  }
+  if (!pairs.length) return candidates;
+  const { execFileImpl, remoteRepositoryCache, mergedCandidates } = crossReviewReadOptions(options);
+  const repository = parsePullRequestUrl(pullRequest?.url);
+  const used = new Set();
+  const merged = [];
+  for (const { round, conclusion } of pairs) {
+    used.add(round).add(conclusion);
+    const root = round.root || round.worktree;
+    const { triage } = conclusion.review;
+    const matchedRemoteNames = repository
+      ? (await gitRemotesOf(root, execFileImpl, remoteRepositoryCache))
+        .filter(remote => remote.owner && sameGitHubRepository(remote, repository)).map(remote => remote.name)
+      : [];
+    const afterConvergence = await classifyConvergedPush(root, triage, pullRequest, matchedRemoteNames, mergedCandidates, execFileImpl);
+    const summaries = [round.review.dismissedSummaries, conclusion.review.dismissedSummaries];
+    const union = summaries.every(Array.isArray) ? [...new Set(summaries.flat())] : undefined;
+    merged.push({
+      worktree: round.worktree + ' + ' + conclusion.worktree,
+      root,
+      review: withDismissedSummaries({
+        ...round.review, triage,
+        dismissed: union ? union.length : Math.max(round.review.dismissed, conclusion.review.dismissed),
+        ...(afterConvergence ? { afterConvergence } : {}),
+      }, union),
+      sources: [round.worktree, conclusion.worktree],
+    });
+  }
+  for (const { review, sources } of merged) {
+    options.observeMerge?.({ roundFile: sources[0], triageFile: sources[1], round: review.round, sha: review.reviewedSha.slice(0, 7) });
+  }
+  return [...unique.filter(candidate => !used.has(candidate)), ...merged];
+}
+
+async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, options = {}) {
+  const candidates = await collectCrossReviewStatesAcrossWorktrees(registration, pullRequest, options);
+  if (options.candidates) {
+    options.candidates.push(...candidates);
+    return undefined;
+  }
+  return selectCrossReview(await mergeReviewFragments(candidates, pullRequest, options), pullRequest.headRefOid);
+}
+
+function selectCrossReview(candidates, headSha) {
+  const pathKey = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
+  const comparePath = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+  const priority = (review) => review === undefined ? 0
+    : review?.notRequired === true ? 1 : review === null ? 3 : review?.unavailable === true ? 2 : 4;
+  const entries = uniqueCandidates(candidates).map(candidate => ({
     ...candidate, outcome: evaluateReview({ record: candidate.review, headSha }).atHead,
   }));
   const converged = entries.filter(entry => entry.outcome === 'converged');
@@ -2160,10 +2267,12 @@ class PullRequestTracker {
     const remoteRepositoryCache = new Map();
     const headToolCache = { known: this.headToolResults, unknown: new Set() };
     const baseAncestorCache = new Map();
+    const commonDirCache = new Map();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR は未登録と評価する。
     const reviewByNumber = new Map();
     const candidatesByNumber = new Map();
     this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);
+    const mergedCandidates = mergeCommitCandidates(repositoryState.mergedCandidates, this.state.mergeCommitMergedHeads?.(owner, repo));
     for (const registration of registrations) {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
       if (!pullRequest) continue;
@@ -2172,8 +2281,8 @@ class PullRequestTracker {
       const collected = [];
       const review = await this.readCrossReviewState(registration, pullRequest, {
         registrations, candidates: collected,
-        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache,
-        mergedCandidates: mergeCommitCandidates(repositoryState.mergedCandidates, this.state.mergeCommitMergedHeads?.(owner, repo)),
+        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, headToolCache, baseAncestorCache, commonDirCache,
+        mergedCandidates,
         observeReview: (record, result) => {
           const key = `${repositoryKey(owner, repo)}:${record.number}:${record.cwd}`;
           const signature = JSON.stringify(result);
@@ -2187,7 +2296,17 @@ class PullRequestTracker {
     }
     for (const [number, candidates] of candidatesByNumber) {
       const pullRequest = repositoryState.openPullRequests.find(candidate => candidate.number === number);
-      const review = selectCrossReview(candidates, pullRequest.headRefOid);
+      const fragments = await mergeReviewFragments(candidates, pullRequest, {
+        execFileImpl: this.gitExecFileImpl, remoteRepositoryCache, mergedCandidates,
+        observeMerge: (merge) => {
+          const diagnosticKey = [repoKey(owner, repo), number, 'fragments', merge.roundFile, merge.triageFile].join(':');
+          const signature = JSON.stringify(merge);
+          if (this.diagnosticReviews.get(diagnosticKey) === signature) return;
+          this.diagnosticReviews.set(diagnosticKey, signature);
+          this.diagnostics?.record('info', 'merge', 'review.state', { repository: safeRepo(owner, repo), number, failure: 'none', ...merge });
+        },
+      });
+      const review = selectCrossReview(fragments, pullRequest.headRefOid);
       reviewByNumber.set(number, reviewPresentation(evaluateReview({ record: review,
         afterConvergence: review?.afterConvergence,
         headSha: pullRequest.headRefOid,
