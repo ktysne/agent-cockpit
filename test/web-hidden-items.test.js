@@ -21,6 +21,7 @@ function context(overrides = {}) {
   return displayPageContext(html, {
     element, document: { createElement: element, createTextNode: value => element('text', '', value) },
     expandedHiddenDecisions: new Set(), expandedEndedDecisions: new Set(),
+    pendingDecisionCloseActions: new Map(), decisionCloseActionsInFlight: new Set(),
     isFilterShown: () => true, newestFirst: items => items,
     itemTimestamp: () => 0, lastState: null,
     root: { querySelectorAll: () => [] }, displayPreferences: { hideFinished: true },
@@ -77,7 +78,7 @@ test('判断カードは未解決だけに非表示を出し、秒読み中は�
   ]) {
     const root = element('div');
     ctx.appendDecisionCard(root, { id: 'decision', title: '判断', ...changes }, {}, { session_id: 'session' });
-    const button = all(root).find(node => node.tagName === 'button');
+    const button = all(root).find(node => node.dataset.hideDecision || node.dataset.restoreDecision);
     assert.equal(button?.textContent || null, label);
     if (changes.hidden) assert.match(root.children[0].className, /manually-hidden/);
   }
@@ -146,6 +147,89 @@ test('非表示操作の後は判断の折りたたみへ、PR では復元ボ�
   }
 });
 
+test('判断を非表示にしたら両表示方式の折りたたみを閉じてボタンへフォーカスを移す', async () => {
+  const expanded = new Set(['session', 'kind', 'other']);
+  let focused = false;
+  const toggle = { dataset: { hiddenDecisions: 'kind' }, focus: () => { focused = true; } };
+  const ctx = context({ expandedHiddenDecisions: expanded, postUiAction: async () => ({ ok: true }),
+    refresh: async () => { assert.deepEqual([...expanded], ['other']); },
+    root: { querySelectorAll: selector => selector === '[data-hidden-decisions]' ? [toggle] : [] } });
+  load(ctx, ['changeItemVisibility']);
+  await ctx.changeItemVisibility(element('button'), '/api/hidden-decisions', { action: 'hide', session_id: 'session', id: 'decision' });
+  assert.equal(focused, true);
+});
+
+test('判断を表示に戻す操作と非表示の失敗では折りたたみの状態を保つ', async () => {
+  for (const [action, ok] of [['unhide', true], ['hide', false]]) {
+    const expanded = new Set(['session', 'kind']);
+    const ctx = context({ expandedHiddenDecisions: expanded, postUiAction: async () => ({ ok }), refresh: async () => {},
+      root: { querySelectorAll: () => [], querySelector: () => null }, liveStatus: {}, showWriteError() {} });
+    load(ctx, ['changeItemVisibility']);
+    await ctx.changeItemVisibility(element('button'), '/api/hidden-decisions', { action, session_id: 'session', id: 'decision' });
+    assert.deepEqual([...expanded], ['session', 'kind']);
+  }
+});
+
+test('解決操作は仮適用と MCP の待機にだけ出て、画面で解決した印を表示する', () => {
+  const ctx = context({ decisionElapsedLabel: () => null, decisionAnswerAvailability: () => ({ active: false }),
+    appendContextTags() {}, badge: label => element('span', '', label), decisionStateLabel: state => state, appendDecisionAnswer() {} });
+  load(ctx, ['isActiveDecision', 'appendDecisionCard']);
+  for (const [changes, expected] of [
+    [{ state: 'provisional', source: 'ask' }, true], [{ state: 'provisional', source: 'mcp' }, true],
+    [{ state: 'waiting', source: 'mcp' }, true], [{ state: 'waiting', source: 'ask' }, false],
+    [{ state: 'waiting', source: 'mcp', awaitingAnswerUntil: new Date().toISOString() }, false],
+    [{ state: 'resolved', closedByUser: true }, false], [{ state: 'withdrawn' }, false],
+  ]) {
+    const root = element('div');
+    ctx.appendDecisionCard(root, { id: 'decision', title: '判断', ...changes }, {}, { session_id: 'session' });
+    assert.equal(all(root).some(node => node.dataset.closeDecision === 'session::decision'), expected);
+    assert.equal(text(root).includes('画面で解決済みにした'), changes.closedByUser === true);
+  }
+});
+
+test('判断の解決は再描画後も取り消せ、5 秒後だけ送信して送信中の重複を防ぐ', async () => {
+  let timer;
+  let sent = 0;
+  const pending = new Map();
+  const inFlight = new Set();
+  const ctx = context({ pendingDecisionCloseActions: pending, decisionCloseActionsInFlight: inFlight,
+    lastState: {}, render() {}, actionFocusRestores: new Map(), rememberActionFocus() {},
+    setTimeout: (callback, delay) => { timer = { callback, delay }; return 1; }, clearTimeout() {},
+    sendCloseAction: () => { sent += 1; },
+    decisionElapsedLabel: () => null, decisionAnswerAvailability: () => ({ active: false }),
+    appendContextTags() {}, badge: label => element('span', '', label), decisionStateLabel: state => state, appendDecisionAnswer() {} });
+  load(ctx, ['runCloseAction', 'cancelDecisionClose', 'appendDecisionCard', 'isActiveDecision']);
+  const button = element('button');
+  button.dataset.closeDecision = 'session::decision';
+  const run = () => ctx.runCloseAction(button, '/api/closed-decisions', { session_id: 'session', id: 'decision' }, '失敗');
+  await run();
+  assert.equal(timer.delay, 5000);
+  const root = element('div');
+  ctx.appendDecisionCard(root, { id: 'decision', title: '判断', state: 'provisional' }, {}, { session_id: 'session' });
+  assert.match(text(root), /取り消す5 秒後に解決済みにします。/);
+  const cancel = all(root).find(node => node.dataset.cancelCloseDecision);
+  ctx.cancelDecisionClose(cancel);
+  timer.callback();
+  assert.equal(sent, 0);
+  await run();
+  timer.callback();
+  await run();
+  assert.equal(sent, 1);
+  assert.equal(inFlight.has('session::decision'), true);
+});
+
+test('判断の解決送信に失敗したら送信中を解除し同じカードで再試行できる', async () => {
+  const key = 'session::decision';
+  const inFlight = new Set([key]);
+  const status = {};
+  const ctx = context({ decisionCloseActionsInFlight: inFlight, postUiAction: async () => { throw new Error('offline'); },
+    liveStatus: status, showWriteError() {}, actionFocusRestores: new Map(), lastState: {}, render() {} });
+  load(ctx, ['sendCloseAction']);
+  await ctx.sendCloseAction(element('button'), '/api/closed-decisions', {}, '判断事項を解決済みにできませんでした', key, `close:${key}`);
+  assert.equal(inFlight.size, 0);
+  assert.equal(status.textContent, '判断事項を解決済みにできませんでした');
+});
+
 test('画面のクリックは判断事項と PR の非表示と復元をそれぞれの HTTP 操作へ渡す', () => {
   let click;
   const calls = [];
@@ -165,4 +249,31 @@ test('画面のクリックは判断事項と PR の非表示と復元をそれ�
       else assert.equal(call.number, 1);
     }
   }
+});
+
+test('画面の判断解決ボタンはセッションと判断 ID を解決 API に渡す', () => {
+  let click;
+  let call;
+  const ctx = context({ document: { addEventListener: (_name, handler) => { click = handler; } },
+    runCloseAction: (_button, url, body) => { call = { url, ...body }; } });
+  load(ctx, ['closeDecisionButton']);
+  vm.runInContext(sourceBetween(html, "document.addEventListener('click', (event) => {", "document.addEventListener('keydown', (event) => {"), ctx);
+  const button = element('button');
+  button.dataset.closeDecision = 'session::decision::part';
+  click({ target: { closest: () => button } });
+  assert.deepEqual({ ...call }, { url: '/api/closed-decisions', session_id: 'session', id: 'decision::part' });
+});
+
+test('未配達回答のある仮適用を解決するとほかに内容がないセッションは種類別の対象から外れる', () => {
+  const ctx = context({ activityStatus: () => ({ tone: 'wait' }), runningBackgrounds: () => [],
+    visiblePullRequestGroups: () => [],
+    sessionsAfterIdleFilter: sessions => sessions, productGroups: sessions => sessions.length ? [{ key: 'product', sessions }] : [],
+    displayPreferences: { hideFinished: true, order: ['product'], pinned: [] } });
+  load(ctx, ['isEndedDecision', 'isFinishedSession', 'hasProductContent', 'orderedProducts']);
+  const decision = { id: 'decision', state: 'provisional', answer: { sentAt: new Date().toISOString(), deliveredAt: null } };
+  const session = { session_id: 'session', tasks: [], agents: [], permissionWaits: [], decisions: [decision] };
+  assert.equal(ctx.orderedProducts([session]).length, 1);
+  decision.state = 'resolved';
+  decision.closedByUser = true;
+  assert.equal(ctx.orderedProducts([session]).length, 0);
 });

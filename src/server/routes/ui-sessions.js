@@ -148,6 +148,25 @@ function createUiSessionRoutes(ctx) {
     jsonResponse(response, 200, { deleted: { sessions, pullRequests: deletedPullRequests.size } });
   }
 
+  async function handleClosedDecisions({ response, body }) {
+    if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      Object.keys(body).sort().join(',') !== 'id,session_id' || !validSessionId(body.session_id) || !validText(body.id, 256)) {
+      jsonResponse(response, 400, { error: 'Invalid request' });
+      return;
+    }
+    const closed = state.closeDecision(body.session_id, body.id);
+    if (closed === null) {
+      jsonResponse(response, 404, { error: 'Decision not found' });
+      return;
+    }
+    if (!closed) {
+      jsonResponse(response, 409, { error: 'Decision cannot be closed' });
+      return;
+    }
+    await state.flushPersistence();
+    jsonResponse(response, 200, { closed: true, persistence: state.persistenceStatus?.() });
+  }
+
   function handleClosedTasks({ response, body }) {
     if (!body || typeof body !== 'object' || Array.isArray(body) ||
       Object.keys(body).sort().join(',') !== 'session_id,title' || !validSessionId(body.session_id) || !validText(body.title, 200)) {
@@ -291,7 +310,7 @@ function createUiSessionRoutes(ctx) {
     jsonResponse(response, result.status, result);
   }
 
-  return { handleEstimate, handleHiddenSessions, handleHiddenDecisions, handleHiddenPullRequests, handleRecordDeletions, handleClosedTasks, handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
+  return { handleEstimate, handleHiddenSessions, handleHiddenDecisions, handleHiddenPullRequests, handleRecordDeletions, handleClosedDecisions, handleClosedTasks, handleClosedAgents, handleSeen, handleDisplay, handleDecisionAnswer,
     handleLaunchRequest, handleWorktreeTerminal };
 }
 

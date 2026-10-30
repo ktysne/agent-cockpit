@@ -652,6 +652,7 @@ test('元の画面で答える判断事項は、終わるまでだけ回答を�
   const context = pageContext(web, {
     answerErrors: new Map(),
     element: fakeElement,
+    pendingDecisionCloseActions: new Map(), decisionCloseActionsInFlight: new Set(),
     decisionElapsedLabel: () => null,
     decisionAnswerAvailability: () => ({ active: false, viaDialog: true }),
     answerDraftFor: () => ({}),
@@ -679,6 +680,7 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
   const webContext = pageContext(web, {
     answerErrors: new Map(),
     element: fakeElement,
+    pendingDecisionCloseActions: new Map(), decisionCloseActionsInFlight: new Set(),
     decisionElapsedLabel: () => null,
     decisionAnswerAvailability: () => ({ active: false, viaDialog: false }),
     answerDraftFor: () => ({}),
@@ -702,6 +704,7 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
   assert.ok(mockDecision);
   const answer = { choice: 'pick', note: '送信メモ', picks: [0], sent: { at: '12:00', choice: 'pick', picks: [0], note: '送信メモ' } };
   const mockContext = pageContext(mock, {
+    ui: { closedDecisions: [] }, pendingClosedDecisions: new Map(),
     answerErrors: new Map(),
     answerDraftKey: (sessionId, decisionId) => `${sessionId}\0${decisionId}`,
     answerOf: () => answer,
@@ -755,6 +758,7 @@ test('回答の送信中は選択肢、指示、送信ボタンを無効にし�
       createElement: (tagName) => fakeElement(tagName),
       createTextNode: (text) => fakeElement('#text', '', text),
     },
+    pendingDecisionCloseActions: new Map(), decisionCloseActionsInFlight: new Set(),
     decisionElapsedLabel: () => null,
     decisionAnswerAvailability: () => ({ active: true, viaDialog: false }),
     answerDraftFor: () => ({ choice: 'pick', picks: [['JSON']], note: '送信する指示' }),
@@ -1588,6 +1592,7 @@ test('完了にする操作は 5 秒間取り消せ、再描画中も同じタ�
   const pending = new Map();
   const context = pageContext(web, {
     ...actionFocusSupport(),
+    taskCloseActionsInFlight: new Set(),
     pendingTaskCloseActions: pending, lastState: {}, render: () => { renders += 1; },
     sendCloseAction: () => { sent += 1; },
     setTimeout: (callback, delay) => { scheduled = { callback, delay }; return 'timer-1'; },

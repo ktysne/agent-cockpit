@@ -85,6 +85,37 @@ test('モックと実装の画面スクリプトを構文解析できる', () =>
   }
 });
 
+test('モックの判断解決は 5 秒間取り消せ、確定後は解決済みとなり非表示の記録を消す', () => {
+  let timer;
+  const ui = { closedDecisions: [], hiddenDecisions: ['decision'] };
+  const context = pageContext(mock, { ui, pendingClosedDecisions: new Map(), save() {}, render() {},
+    setTimeout: (callback, delay) => { timer = { callback, delay }; return 1; }, clearTimeout() {} });
+  vm.runInContext(['scheduleDecisionClose', 'cancelDecisionClose'].map(name => functionSource(mock, name)).join('\n'), context);
+  vm.runInContext(mock.match(/^const effectiveDecisionState = .*;$/m)[0], context);
+  context.scheduleDecisionClose('decision');
+  assert.equal(timer.delay, 5000);
+  context.cancelDecisionClose('decision');
+  timer.callback();
+  assert.deepEqual(ui.closedDecisions, []);
+  context.scheduleDecisionClose('decision');
+  timer.callback();
+  assert.equal(vm.runInContext("effectiveDecisionState({ id: 'decision', kind: 'provisional' })", context), 'resolved');
+  assert.equal(ui.hiddenDecisions.length, 0);
+});
+
+test('モックの非表示操作はセッション別と種類別の折りたたみを閉じる', () => {
+  const ui = { hiddenDecisions: [], expandedHiddenDecisions: ['session', 'other'], expandedKindHiddenDecisions: true };
+  const context = pageContext(mock, { ui, save() {}, render() {},
+    allSessions: () => [{ decisions: [{ id: 'decision' }] }],
+    isActiveDecision: () => true, effectiveDecisionState: () => 'provisional' });
+  const listener = mock.match(/document\.addEventListener\('click', (e => \{[\s\S]*?\n\})\);/)[1];
+  context.event = { target: { closest: () => ({ dataset: { hideDecision: 'decision', decisionSession: 'session' }, hasAttribute: () => false }) } };
+  vm.runInContext(`(${listener})(event)`, context);
+  assert.deepEqual([...ui.hiddenDecisions], ['decision']);
+  assert.deepEqual([...ui.expandedHiddenDecisions], ['other']);
+  assert.equal(ui.expandedKindHiddenDecisions, false);
+});
+
 test('モックに合わせた配色、札、タスク行を表示する', () => {
   const webMergeButton = Object.fromEntries(cssDeclarations(web, '.merge-btn'));
   const mockMergeButton = Object.fromEntries(cssDeclarations(mock, '.merge-btn'));
