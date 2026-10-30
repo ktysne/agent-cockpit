@@ -269,6 +269,9 @@ test('画面で解決した仮適用の質問を別の呼び出しで出し直�
   assert.equal(state.decisionIdForToolUse('session-a', 'ask-2'), 'ask-1');
   assert.equal(decision(state).state, 'waiting');
   assert.notEqual(decision(state).closedByUser, true);
+  // 出し直しより古い時刻の元の呼び出しの終わりが遅れて届いても、出し直しの待ちを保つ。
+  state.addEvent({ session_id: 'session-a', hook_event_name: 'PostToolUseFailure', tool_name: 'AskUserQuestion', tool_use_id: 'ask-1', hookAt: NOW + 8 });
+  assert.equal(decision(state).state, 'waiting');
 });
 
 test('画面で解決した後に出し直した質問へ端末で答えると、画面の解決ではなくその回答を出す', async () => {

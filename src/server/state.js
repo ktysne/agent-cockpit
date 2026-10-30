@@ -75,7 +75,8 @@ function validStoredSessionId(value) {
 // 画面で解決した記録は、解決した時点の呼び出しが遅れて終わったときだけイベントより優先する。
 // 出し直した別の呼び出しの待ちや終わりは、開発者が新しく答えたものなのでイベントに従う。
 function closedByUserOutlasts(record, decision) {
-  return Boolean(record.closedByUser && record.closedToolUseId && decision.finishedByToolUseId === record.closedToolUseId);
+  return Boolean(record.closedByUser && record.closedToolUseId && decision.finishedByToolUseId === record.closedToolUseId &&
+    !['waiting', 'provisional'].includes(decision.state));
 }
 
 function validTimestamp(value, nullable = false) {
