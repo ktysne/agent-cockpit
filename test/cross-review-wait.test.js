@@ -23,7 +23,7 @@ test('レビューの生の記録の読み取りは評価と読み取り関数�
     ['web', readWebPage()],
     ['mock', mock.replace(/<!-- review-evaluation:begin -->[^]*?<!-- review-evaluation:end -->/, '')],
     ...fs.readdirSync(path.join(__dirname, '../src/server'), { recursive: true }).filter(name => name.endsWith('.js')).map(name => [name,
-      removeFunctions(fs.readFileSync(path.join(__dirname, '../src/server', name), 'utf8'), ['readCrossReviewState', 'selectCrossReview'])]),
+      removeFunctions(fs.readFileSync(path.join(__dirname, '../src/server', name), 'utf8'), ['readCrossReviewState', 'selectCrossReview', 'mergeReviewFragments', 'classifyConvergedPush'])]),
   ];
   for (const [name, text] of sources) {
     assert.doesNotMatch(text, /\.triage(?:\?\.|\.)\s*(?:outcome|sha|round)|\btriage(?:\?\.|\.)\s*(?:outcome|sha|round)|\.reviewedSha\b/, name);

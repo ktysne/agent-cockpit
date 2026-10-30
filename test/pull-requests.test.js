@@ -1,5 +1,5 @@
 const test = require('node:test');
-const { evaluateReview } = require('../src/shared/review-evaluation');
+const { evaluateReview, mergeConditionReview } = require('../src/shared/review-evaluation');
 const { reviewPr } = require('./support/review');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -3862,6 +3862,241 @@ for (const scenario of [
     assert.deepEqual(await readCrossReviewStateAcrossWorktrees(f.registration, f.pr, f.options), { unavailable: true });
   });
 }
+
+// 往復の記録と結論の記録が別の worktree に分かれたときの統合。
+const FRAGMENT_HEAD = 'a'.repeat(40);
+
+async function fragmentFixture(t, records, { headSha = FRAGMENT_HEAD } = {}) {
+  const base = await temporaryDirectory(t);
+  const roots = [];
+  for (const [index, record] of records.entries()) {
+    const root = path.join(base, `wt${index}`);
+    roots.push(root);
+    await fs.mkdir(path.join(root, '.git'), { recursive: true });
+    await installCrossReview(root);
+    await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({ branches: { 'feat/open': {
+      round: record.round, dismissed: record.dismissed || [], lastReviewedSha: record.reviewedSha ?? null,
+      ...(record.triage ? { lastTriage: record.triage } : {}),
+    } } }));
+  }
+  const worktrees = roots.map(root => `worktree ${root.replaceAll('\\', '/')}\nHEAD ${'c'.repeat(40)}\nbranch refs/heads/feat/open\n`).join('\n');
+  const merges = [];
+  return { roots, merges, read: (cwdIndex = 0) => readCrossReviewStateAcrossWorktrees(
+    { number: 31, cwd: roots[cwdIndex] },
+    { headRefName: 'feat/open', headRefOid: headSha, baseRefName: 'main' },
+    { execFileImpl: (_file, _args, _options, callback) => callback(null, worktrees), observeMerge: merge => merges.push(merge) },
+  ) };
+}
+
+const convergedAt = (sha, round = 3, outcome = 'converged') => ({ round, sha, outcome });
+
+for (const cwdIndex of [0, 1]) {
+  test(`往復の断片と結論の断片が別の worktree にあれば 1 つの収束した記録に統合する (登録の cwd: ${cwdIndex})`, async (t) => {
+    const f = await fragmentFixture(t, [
+      { round: 3, reviewedSha: FRAGMENT_HEAD, dismissed: ['a', 'b'] },
+      { round: 0, dismissed: ['b', 'c'], triage: convergedAt(FRAGMENT_HEAD) },
+    ]);
+    const review = await f.read(cwdIndex);
+    assert.deepEqual(review, {
+      number: 31, branch: 'feat/open', round: 3, max: 3, dismissed: 3, reviewedSha: FRAGMENT_HEAD, triage: convergedAt(FRAGMENT_HEAD),
+    });
+    const evaluation = evaluateReview({ record: review, headSha: FRAGMENT_HEAD });
+    assert.equal(evaluation.atHead, 'converged');
+    assert.equal(evaluation.awaitingConclusion, false);
+    assert.equal(mergeConditionReview(evaluation).met, true);
+    assert.deepEqual(f.merges, [{ roundFile: f.roots[0], triageFile: f.roots[1], round: 3, sha: 'aaaaaaa' }]);
+  });
+}
+
+for (const scenario of [
+  { name: '結論の round が違う', triage: convergedAt(FRAGMENT_HEAD, 2) },
+  { name: '結論の SHA が違う', triage: convergedAt('b'.repeat(40)) },
+]) {
+  test(`${scenario.name}組は統合せず、結論の無い往復の記録のまま未記録として扱う`, async (t) => {
+    const f = await fragmentFixture(t, [
+      { round: 3, reviewedSha: FRAGMENT_HEAD },
+      { round: 0, triage: scenario.triage },
+    ]);
+    const review = await f.read();
+    assert.equal(review.round, 3);
+    assert.equal(review.triage, null);
+    assert.equal(review.conflict, undefined);
+    const evaluation = evaluateReview({ record: review, headSha: FRAGMENT_HEAD });
+    assert.equal(evaluation.awaitingConclusion, true);
+    assert.equal(mergeConditionReview(evaluation).met, false);
+    assert.deepEqual(f.merges, []);
+  });
+}
+
+test('結論の SHA は大文字小文字を区別せず往復の記録と照合する', async (t) => {
+  const f = await fragmentFixture(t, [
+    { round: 3, reviewedSha: FRAGMENT_HEAD },
+    { round: 0, triage: convergedAt(FRAGMENT_HEAD.toUpperCase()) },
+  ]);
+  assert.equal((await f.read()).triage.outcome, 'converged');
+});
+
+for (const outcome of ['halted', 'fixing']) {
+  test(`結論が ${outcome} の断片も往復の断片と統合し、マージの条件を満たさない`, async (t) => {
+    const f = await fragmentFixture(t, [
+      { round: 3, reviewedSha: FRAGMENT_HEAD },
+      { round: 0, triage: convergedAt(FRAGMENT_HEAD, 3, outcome) },
+    ]);
+    const review = await f.read();
+    assert.equal(review.triage.outcome, outcome);
+    const evaluation = evaluateReview({ record: review, headSha: FRAGMENT_HEAD });
+    assert.equal(evaluation.latest.outcome, outcome);
+    assert.equal(mergeConditionReview(evaluation).met, false);
+  });
+}
+
+test('候補が 3 つ以上あっても、組になる断片だけを統合し、残りは別の候補として残す', async (t) => {
+  const f = await fragmentFixture(t, [
+    { round: 3, reviewedSha: FRAGMENT_HEAD, dismissed: ['a'] },
+    { round: 3, reviewedSha: FRAGMENT_HEAD, dismissed: ['z'] },
+    { round: 0, triage: convergedAt(FRAGMENT_HEAD), dismissed: ['b'] },
+    { round: 1, reviewedSha: 'd'.repeat(40) },
+  ]);
+  const review = await f.read();
+  assert.equal(review.triage.outcome, 'converged');
+  assert.equal(review.conflict, undefined);
+  assert.equal(evaluateReview({ record: review, headSha: FRAGMENT_HEAD }).atHead, 'converged');
+  assert.deepEqual(f.merges.map(({ roundFile }) => roundFile).sort(), [f.roots[0], f.roots[1]].sort());
+});
+
+test('結論を記録した worktree が自分の往復も持つときは、その進行中の記録を統合で消さずに競合として扱う', async (t) => {
+  const current = 'b'.repeat(40);
+  const f = await fragmentFixture(t, [
+    { round: 3, reviewedSha: FRAGMENT_HEAD },
+    { round: 2, reviewedSha: current, triage: convergedAt(FRAGMENT_HEAD, 3, 'halted') },
+    { round: 1, reviewedSha: current, triage: convergedAt(current, 1) },
+  ], { headSha: current });
+  const review = await f.read();
+  assert.deepEqual(review.conflict.map(({ round, outcome }) => `${round}:${outcome}`).sort(), ['1:converged', '2:in-progress']);
+  assert.equal(mergeConditionReview(evaluateReview({ record: review, headSha: current })).met, false);
+});
+
+test('同じ往復の断片に結論が食い違う断片が 2 つあれば、統合した記録を競合として扱う', async (t) => {
+  const f = await fragmentFixture(t, [
+    { round: 3, reviewedSha: FRAGMENT_HEAD },
+    { round: 0, triage: convergedAt(FRAGMENT_HEAD) },
+    { round: 0, triage: convergedAt(FRAGMENT_HEAD, 3, 'halted') },
+  ]);
+  const review = await f.read();
+  assert.deepEqual(review.conflict.map(({ outcome }) => outcome).sort(), ['converged', 'halted']);
+  assert.equal(mergeConditionReview(evaluateReview({ record: review, headSha: FRAGMENT_HEAD })).met, false);
+});
+
+test('統合した記録が収束の後の head に付いたら、収束後の取り込みを往復の断片の worktree で分類し直す', async (t) => {
+  const f = await fragmentFixture(t, [
+    { round: 3, reviewedSha: FRAGMENT_HEAD },
+    { round: 0, triage: convergedAt(FRAGMENT_HEAD) },
+  ], { headSha: 'e'.repeat(40) });
+  const review = await f.read();
+  assert.equal(review.triage.outcome, 'converged');
+  assert.deepEqual(review.afterConvergence, { kind: 'unknown', merges: 0, reason: 'base-missing' });
+});
+
+function gitIn(cwd, ...args) {
+  return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+// 本物の git リポジトリと worktree を作り、共通ディレクトリの共有ファイルを置ける状態にする。
+async function sharedStateFixture(t, { shared, local }) {
+  const base = await fs.realpath(await temporaryDirectory(t));
+  const main = path.join(base, 'main');
+  const linked = path.join(base, 'linked');
+  await fs.mkdir(main);
+  gitIn(main, 'init', '-b', 'main');
+  gitIn(main, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'init');
+  gitIn(main, 'worktree', 'add', '-b', 'feat/open', linked);
+  for (const root of [main, linked]) await installCrossReview(root);
+  const branchState = (record) => JSON.stringify({ branches: { 'feat/open': {
+    round: record.round, dismissed: record.dismissed || [], lastReviewedSha: record.reviewedSha ?? null,
+    ...(record.triage ? { lastTriage: record.triage } : {}),
+  } } });
+  const sharedFile = path.join(main, '.git', 'cross-review-state.json');
+  if (shared) await fs.writeFile(sharedFile, branchState(shared));
+  if (local) await fs.writeFile(path.join(linked, '.cross-review-state.json'), branchState(local));
+  const merges = [];
+  return { main, linked, sharedFile, merges, read: (cwd = linked, execFileImpl = execFile) => readCrossReviewStateAcrossWorktrees(
+    { number: 31, cwd },
+    { headRefName: 'feat/open', headRefOid: FRAGMENT_HEAD, baseRefName: 'main' },
+    { execFileImpl, observeMerge: merge => merges.push(merge) },
+  ) };
+}
+
+test('共通ディレクトリの共有ファイルを候補にし、worktree の結論の断片と統合する', async (t) => {
+  const f = await sharedStateFixture(t, {
+    shared: { round: 3, reviewedSha: FRAGMENT_HEAD },
+    local: { round: 0, triage: convergedAt(FRAGMENT_HEAD) },
+  });
+  const review = await f.read();
+  assert.equal(review.round, 3);
+  assert.equal(review.triage.outcome, 'converged');
+  assert.equal(evaluateReview({ record: review, headSha: FRAGMENT_HEAD }).atHead, 'converged');
+  assert.deepEqual(f.merges, [{ roundFile: f.sharedFile, triageFile: f.linked, round: 3, sha: 'aaaaaaa' }]);
+});
+
+test('worktree に旧ファイルが無くても、共有ファイルの記録を読む', async (t) => {
+  const f = await sharedStateFixture(t, { shared: { round: 3, reviewedSha: FRAGMENT_HEAD, triage: convergedAt(FRAGMENT_HEAD) } });
+  const review = await f.read();
+  assert.equal(review.triage.outcome, 'converged');
+  assert.deepEqual(f.merges, []);
+});
+
+test('共有ファイルにそのブランチの記録が無ければ、記録なしの表示を上書きしない', async (t) => {
+  const f = await sharedStateFixture(t, {});
+  await fs.writeFile(f.sharedFile, JSON.stringify({ branches: { 'feat/other': { round: 2, dismissed: [], lastReviewedSha: null } } }));
+  assert.equal(await f.read(), null);
+  await fs.writeFile(f.sharedFile, '{broken');
+  assert.equal(await f.read(), null);
+});
+
+test('git が共通ディレクトリを返せなければ共有ファイルを探さず、worktree のファイルだけを読む', async (t) => {
+  const f = await sharedStateFixture(t, {
+    shared: { round: 3, reviewedSha: FRAGMENT_HEAD },
+    local: { round: 0, triage: convergedAt(FRAGMENT_HEAD) },
+  });
+  const failing = (file, args, options, callback) => (args.includes('--git-common-dir')
+    ? callback(Object.assign(new Error('git failed'), { code: 128 })) : execFile(file, args, options, callback));
+  const review = await f.read(f.linked, failing);
+  assert.equal(review.triage.outcome, 'converged');
+  assert.equal(review.reviewedSha, null);
+  assert.deepEqual(f.merges, []);
+});
+
+test('--path-format を受け付けない git では、共通ディレクトリを根からの相対として解決する', async (t) => {
+  const f = await sharedStateFixture(t, { shared: { round: 3, reviewedSha: FRAGMENT_HEAD, triage: convergedAt(FRAGMENT_HEAD) } });
+  const calls = [];
+  const oldGit = (file, args, options, callback) => {
+    if (args.includes('--git-common-dir')) calls.push(args.slice(3));
+    return args.includes('--path-format=absolute')
+      ? callback(Object.assign(new Error('unknown option'), { code: 129 })) : execFile(file, args, options, callback);
+  };
+  const review = await f.read(f.main, oldGit);
+  assert.equal(review.triage.outcome, 'converged');
+  assert.deepEqual(calls, [['--path-format=absolute', '--git-common-dir'], ['--git-common-dir']]);
+});
+
+test('PR の再計算は別の worktree に分かれた往復と結論を統合してマージの条件を満たし、統合元を診断に残す', async (t) => {
+  const f = await reviewCandidatesFixture(t, [{ round: 3 }, { round: 0 }]);
+  await fs.writeFile(path.join(f.roots[1], '.cross-review-state.json'), JSON.stringify({ branches: { 'feat/open': {
+    round: 0, dismissed: [], lastReviewedSha: null, lastTriage: { round: 3, sha: f.head, outcome: 'converged' },
+  } } }));
+  const records = [];
+  f.tracker.diagnostics = { record: (...entry) => records.push(entry) };
+  const pr = await f.read();
+  assert.equal(pr.review.evaluation.latest.outcome, 'converged');
+  assert.equal(pr.review.evaluation.conflict.length, 0);
+  assert.equal(pr.mergeConditionMet, true);
+  const merges = records.filter(([, , message, data]) => message === 'review.state' && data.roundFile);
+  assert.equal(merges.length, 1);
+  assert.deepEqual(merges[0][3], { repository: 'example/project', number: 31, failure: 'none',
+    roundFile: f.roots[0], triageFile: f.roots[1], round: 3, sha: f.head.slice(0, 7) });
+  await f.read();
+  assert.equal(records.filter(([, , message, data]) => message === 'review.state' && data.roundFile).length, 1);
+});
 
 const TOOL_ENTRY = `100644 blob ${'b'.repeat(40)}\ttools/cross-review.js\n`;
 const ROUND_TWO_STATE = JSON.stringify({ branches: { 'feat/open': { round: 2, dismissed: [] } } });

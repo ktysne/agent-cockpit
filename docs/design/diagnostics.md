@@ -144,7 +144,7 @@ MCP と画面は診断の応答を本来の処理で待たず、250 ms で打ち
 | `merge.local-update` | `merge` | マージ後のローカル既定ブランチの更新結果。更新成功は `info`、更新しなかった場合と失敗は `warn` で残す |
 | `review.reminder` | `merge` | レビューの記録を促した PR のリポジトリ、番号、登録セッション ID の先頭。`info` で残す |
 | `session.ended` | `server` / `codex` | `SessionEnd`、Codex のプロセス終了とロック消失、セッション一覧からの消失による判定。`info` で残す。ロック消失は、ロックが戻るまで 1 回だけ残す |
-| `review.state` | `merge` | 状態ファイルの `present` / `missing` / `unknown`、レビュー済み head と収束判定の head の照合、回数、判断結果、失敗分類。失敗は `warn`、それ以外は `info` で残す |
+| `review.state` | `merge` | 状態ファイルの `present` / `missing` / `unknown`、レビュー済み head と収束判定の head の照合、回数、判断結果、失敗分類。失敗は `warn`、それ以外は `info` で残す。別の worktree の往復の記録と結論の記録を統合したときは、記録元のパス(`roundFile`、`triageFile`)と往復と SHA の短縮値(`sha`)だけを `info` で残す |
 | `server.stop` | `server` | 停止した常駐サーバーのプロセス ID。`mark` で残す |
 | `update.checked` | `server` | 更新確認時の現在と最新の版、更新の有無、確認時刻。`info` で残す |
 | `update.failed` | `server` | 更新確認の失敗分類。`warn` で残す |

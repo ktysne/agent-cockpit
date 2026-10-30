@@ -60,7 +60,7 @@ ai-cross-review の状態ファイルの検証データは、上流の checkout 
 上流の checkout は書き換えません。
 
 ```powershell
-node tools/import-cross-review-contract.js --checkout D:/Desktop/Develop/ai-cross-review --revision ab29d557a952b74a21bce82d403494f45ee1d39e
+node tools/import-cross-review-contract.js --checkout D:/Desktop/Develop/ai-cross-review --revision 8f1d5eefeb1a309d55ffe336b3a90f279d6cb9e5
 node --test test/cross-review-state-contract.test.js test/routing-contract.test.js test/shared-input-boundaries.test.js test/pull-requests.test.js
 ```
 

@@ -543,7 +543,19 @@ JSON の構文誤りは取得不能とし、診断のうち対象ブランチ自
 
 状態ファイルは、登録の `cwd` の worktree に加えて、同じリポジトリのほかの worktree からも探す。PR の head のブランチをチェックアウトしている worktree は記録の有無を問わず候補にし、それ以外の worktree はそのブランチの記録を持つときだけ候補にする。スタックを 1 つの worktree で積むと、下の段のブランチはどこにもチェックアウトされないためである。
 登録の `cwd` が消えたときは、親へ上って見つかる worktree の根で下の remote の照合をしてから、PR の head のコミットに `tools/cross-review.js` があるかを確かめる。head のコミットを確かめられなければ、上と同じく base ブランチのコミットで確かめる。無ければ「レビュー不要」とし、あるか、どちらも確かめられなければ「確認できない」とする。消えた worktree の状態ファイルは読めないためである。このとき見つけた根も、ほかの worktree と同じ規則の候補にする。`git worktree list` で `prunable` の worktree(フォルダーが無い)は候補にしない。
+ai-cross-review は状態ファイルを Git の共通ディレクトリの `cross-review-state.json` に置き、全 worktree で共有する(契約は `test/fixtures/cross-review-state/` の取り込み元の `docs/contracts/cross-review-state.md`)。
+サーバーは登録の worktree の根で `git rev-parse --path-format=absolute --git-common-dir` を実行し(受け付けない古い git では `--git-common-dir` の出力を根からの絶対パスにする)、その下の共有ファイルも 1 つの候補として読む。
+読み方は worktree ごとの候補と同じで、状態ファイルのパスだけを差し替える。worktree ごとの候補は、移行前の記録と古い版の ai-cross-review のために残す。
+共有ファイルは、そのブランチの記録を持つときだけ候補にする。読めない共有ファイルで記録なしの表示を上書きしないためである。
+共通ディレクトリの解決結果は 1 回の取得の間だけ worktree の根ごとに使い、git の失敗と時間切れ、`git worktree list` を取れないときは共有ファイルを探さない。
+`CROSS_REVIEW_STATE_DIR` は CLI のテスト用で、常駐サーバーの環境とセッションの環境は違うので読まない。
 登録や worktree の候補が複数あるときは、同じ worktree のパスを重複から除き、全登録の候補を集めてから一度だけ選ぶ。
+選ぶ前に、互いを補う断片を 1 つの記録に統合する。別の worktree でレビューを回すと、1 回のレビューが往復の記録(`round` が 1 以上で `lastReviewedSha` が完全な SHA、結論が無いか結論の往復が `round` より小さい)と結論の記録(`lastTriage` があり、`round` が結論の往復より小さい)に分かれて残るためである。
+結論の往復が往復の記録の `round` と等しく、結論の SHA が `lastReviewedSha` と大文字小文字を区別せず一致する組だけを統合する。往復の数と `lastReviewedSha` を往復の記録から、結論を結論の記録から取り、非対応の件数は両方の要約の和集合の数にする。
+統合した記録が収束で head と違うときは、収束後の取り込みを往復の記録の worktree の根で分類し直す。
+統合に使った記録は候補から除く。ただし結論の記録が自分の往復(`round` が 1 以上で完全な `lastReviewedSha`)も持つときは、その進行中の記録を競合の判定から外さないよう、元の候補も残す。
+一致しない組は統合せず別の候補として競合の判定に渡す。独立した worktree の `round` は時系列を保証しないので、往復の数だけで選ばない。
+統合した記録の記録元は `{worktree}` に両方のパスを ` + ` でつないだ値で持ち、統合した組ごとにパスと往復と SHA の短縮値だけを診断(`review.state`)に残す。
 別リポジトリの cwd から一致する checkout を探す経路も同じ選択を使う。
 往復の記録、記録なし(レビュー未実施)、確認できない、道具なし(レビュー不要)の順に選び、今の head の記録を古い head の記録より優先する。
 今の round の triage が今の head に対する結論なら、その outcome で分類する。
