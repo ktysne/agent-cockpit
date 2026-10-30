@@ -723,6 +723,8 @@ const answerDrafts = new Map();
 const answerErrors = new Map();
 const decisionAnswerInFlight = new Set();
 const pendingTaskCloseActions = new Map();
+const pendingDecisionCloseActions = new Map();
+const decisionCloseActionsInFlight = new Set();
 const taskCloseActionsInFlight = new Set();
 const pullRequestMergeResults = new Map();
 const pullRequestMergeResultCloseInFlight = new Set();
@@ -3739,6 +3741,18 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
   }
 
   const summary = element('div', 'decision-summary');
+  if (decision.closedByUser) summary.append(element('span', 'meta', '画面で解決済みにした'));
+  if (!decision.awaitingAnswerUntil && (decision.state === 'provisional' || decision.state === 'waiting' && decision.source === 'mcp')) {
+    const key = `${session.session_id}::${decision.id}`;
+    const pending = pendingDecisionCloseActions.has(key);
+    const sending = decisionCloseActionsInFlight.has(key);
+    const close = element('button', 'link-btn', pending ? '取り消す' : sending ? '送信中…' : '解決済みにする');
+    close.type = 'button';
+    close.setAttribute('aria-disabled', String(sending));
+    close.dataset[pending ? 'cancelCloseDecision' : 'closeDecision'] = key;
+    header.append(close);
+    if (pending) header.append(element('span', 'meta', '5 秒後に解決済みにします。'));
+  }
   if (decision.resolution) {
     const choices = Array.isArray(decision.resolution.chosen)
       ? decision.resolution.chosen.join('、')
@@ -4409,6 +4423,8 @@ function focusDataFor(active) {
                               : active?.dataset?.showIdle ? { kind: 'show-idle' }
                                 : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
                                   : active?.dataset?.repoUnregister ? { kind: 'repo-unregister', key: active.dataset.repoUnregister, action: active.dataset.repoUnregisterAction }
+                                    : active?.dataset?.closeDecision ? { kind: 'close-decision', key: active.dataset.closeDecision }
+                                      : active?.dataset?.cancelCloseDecision ? { kind: 'cancel-close-decision', key: active.dataset.cancelCloseDecision }
                                     : active?.dataset?.closeTask ? { kind: 'close-task', key: active.dataset.closeTask }
                                       : active?.dataset?.cancelCloseTask ? { kind: 'cancel-close-task', key: active.dataset.cancelCloseTask }
                                           : active?.hasAttribute?.('data-answer-note') ? { kind: 'answer-note', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection }
@@ -4504,6 +4520,8 @@ function render(state) {
     'review-skip': [findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.dataset?.reviewSkip === focusData.action), findFocusControl((item) => item.dataset?.mergeKey === focusData.key && item.dataset?.reviewSkip && item.dataset.reviewSkip !== focusData.action)],
     'repo-unregister': [findFocusControl((item) => item.dataset?.repoUnregister === focusData.key && item.dataset?.repoUnregisterAction === focusData.action), findFocusControl((item) => item.dataset?.repoUnregister === focusData.key)],
     'close-task': [sameMergeControl('closeTask', focusData.key), sameMergeControl('cancelCloseTask', focusData.key), currentModeButton],
+    'close-decision': [sameMergeControl('closeDecision', focusData.key), sameMergeControl('cancelCloseDecision', focusData.key), currentModeButton],
+    'cancel-close-decision': [sameMergeControl('cancelCloseDecision', focusData.key), sameMergeControl('closeDecision', focusData.key), currentModeButton],
     'cancel-close-task': [sameMergeControl('cancelCloseTask', focusData.key), sameMergeControl('closeTask', focusData.key), currentModeButton],
     'close-agent': [findFocusControl((item) => item.dataset?.closeAgent === focusData.key), findFocusControl((item) => item.hasAttribute('data-ended-toggle') && item.getAttribute('data-ended-toggle') === focusData.key.split('::')[0]), currentModeButton],
     seen: [sameMergeControl('seen', focusData.key), findFocusControl((item) => Boolean(item.dataset?.seen)), findFocusControl((item) => Boolean(item.dataset?.seenAll)), currentModeButton],
@@ -4765,7 +4783,7 @@ async function sendCloseAction(button, url, body, errorMessage, taskCloseKey = n
     showWriteError(errorMessage);
   } finally {
     if (taskCloseKey) {
-      taskCloseActionsInFlight.delete(taskCloseKey);
+      (url === '/api/closed-decisions' ? decisionCloseActionsInFlight : taskCloseActionsInFlight).delete(taskCloseKey);
     }
     if (lastState) render(lastState);
     if (focusRestoreKey) actionFocusRestores.delete(focusRestoreKey);
@@ -4774,20 +4792,24 @@ async function sendCloseAction(button, url, body, errorMessage, taskCloseKey = n
 
 async function runCloseAction(button, url, body, errorMessage) {
   if (button.getAttribute?.('aria-disabled') === 'true') return;
-  const focusRestoreKey = `close:${button.dataset.closeTask || button.dataset.closeAgent || ''}`;
+  const focusRestoreKey = `close:${button.dataset.closeDecision || button.dataset.closeTask || button.dataset.closeAgent || ''}`;
   rememberActionFocus(focusRestoreKey, button);
-  if (url === '/api/closed-tasks') {
-    const key = button.dataset.closeTask;
+  if (url === '/api/closed-tasks' || url === '/api/closed-decisions') {
+    const isDecision = url === '/api/closed-decisions';
+    const actions = isDecision ? pendingDecisionCloseActions : pendingTaskCloseActions;
+    const inFlight = isDecision ? decisionCloseActionsInFlight : taskCloseActionsInFlight;
+    const key = isDecision ? button.dataset.closeDecision : button.dataset.closeTask;
     if (!key) return;
+    if (actions.has(key) || inFlight.has(key)) return;
     const pending = { timeout: null };
     pending.timeout = setTimeout(() => {
-      if (pendingTaskCloseActions.get(key) !== pending) return;
-      pendingTaskCloseActions.delete(key);
-      taskCloseActionsInFlight.add(key);
+      if (actions.get(key) !== pending) return;
+      actions.delete(key);
+      inFlight.add(key);
       if (lastState) render(lastState);
       void sendCloseAction(button, url, body, errorMessage, key, focusRestoreKey);
     }, 5_000);
-    pendingTaskCloseActions.set(key, pending);
+    actions.set(key, pending);
     if (lastState) render(lastState);
     return;
   }
@@ -4812,6 +4834,26 @@ function closeTaskButton(button) {
     session_id: key.slice(0, separator),
     title: key.slice(separator + 2),
   }, 'タスクを完了にできませんでした');
+}
+
+function cancelDecisionClose(button) {
+  const key = button.dataset.cancelCloseDecision;
+  const pending = pendingDecisionCloseActions.get(key);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  pendingDecisionCloseActions.delete(key);
+  if (lastState) render(lastState);
+  actionFocusRestores.delete(`close:${key}`);
+}
+
+function closeDecisionButton(button) {
+  const key = button.dataset.closeDecision || '';
+  const separator = key.indexOf('::');
+  if (separator < 1) return;
+  void runCloseAction(button, '/api/closed-decisions', {
+    session_id: key.slice(0, separator),
+    id: key.slice(separator + 2),
+  }, '判断事項を解決済みにできませんでした');
 }
 
 async function markProductSeen(button) {
@@ -5163,13 +5205,17 @@ async function changeItemVisibility(button, url, body) {
   try {
     const response = await postUiAction(url, body);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    await refresh();
     const isDecision = url === '/api/hidden-decisions';
+    if (isDecision && body.action === 'hide') {
+      expandedHiddenDecisions.delete(body.session_id);
+      expandedHiddenDecisions.delete('kind');
+    }
+    await refresh();
     const attribute = isDecision
       ? body.action === 'hide' ? 'data-restore-decision' : 'data-hide-decision'
       : body.action === 'hide' ? 'data-restore-pr' : 'data-hide-pr';
     const value = isDecision ? body.id : `${body.owner}/${body.repo}#${body.number}`.toLowerCase();
-    const target = [...root.querySelectorAll(`[${attribute}]`)].find(item =>
+    const target = isDecision && body.action === 'hide' ? null : [...root.querySelectorAll(`[${attribute}]`)].find(item =>
       item.getAttribute(attribute) === value && (!isDecision || item.dataset.decisionSession === body.session_id));
     (target || (isDecision && [...root.querySelectorAll('[data-hidden-decisions]')]
       .find(item => ['kind', body.session_id].includes(item.dataset.hiddenDecisions)))
@@ -5349,6 +5395,14 @@ document.addEventListener('click', (event) => {
   }
   if (button.dataset.closeTask) {
     closeTaskButton(button);
+    return;
+  }
+  if (button.dataset.cancelCloseDecision) {
+    cancelDecisionClose(button);
+    return;
+  }
+  if (button.dataset.closeDecision) {
+    closeDecisionButton(button);
     return;
   }
   if (button.dataset.closeAgent) {

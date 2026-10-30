@@ -32,6 +32,7 @@ const WRITE_ROUTES = [
   { path: '/api/pull-requests/merge-result/close', auth: 'ui', nullBody: INVALID_REQUEST },
   { path: '/api/seen', auth: 'ui', nullBody: INVALID_REQUEST },
   { path: '/api/closed-tasks', auth: 'ui', nullBody: INVALID_REQUEST },
+  { path: '/api/closed-decisions', auth: 'ui', nullBody: INVALID_REQUEST },
   { path: '/api/closed-agents', auth: 'ui', nullBody: INVALID_REQUEST },
   { path: '/api/away', auth: 'ui-optional-origin', nullBody: INVALID_REQUEST },
   { path: '/api/routing', auth: 'ui', nullBody: INVALID_REQUEST },

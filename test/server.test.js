@@ -1616,6 +1616,7 @@ test('すべての POST 口で秘密値、Origin、Sec-Fetch-Site を照合す�
     { path: '/api/pull-requests/merge-result/close', secret: 'ui', originRequired: true },
     { path: '/api/seen', secret: 'ui', originRequired: true },
     { path: '/api/closed-tasks', secret: 'ui', originRequired: true },
+    { path: '/api/closed-decisions', secret: 'ui', originRequired: true },
     { path: '/api/closed-agents', secret: 'ui', originRequired: true },
     { path: '/api/away', secret: 'ui', originRequired: false },
     { path: '/api/routing', secret: 'ui', originRequired: true },
@@ -3029,6 +3030,86 @@ test('既読 API は秘密値と Origin を照合し、初回表示後の変化�
     'タスク「既読後の完了」が完了した',
     'タスク「表示後・既読前の完了」が完了した',
   ]);
+});
+
+test('画面から判断事項を解決する口は不正な本文と不明な ID を受け付けない', async (t) => {
+  const runtime = await runningServer(t);
+  const headers = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`, { 'content-type': 'application/json' });
+  const bodies = [null, [], {}, { session_id: 'session', id: '' }, { session_id: 'session', id: 'x'.repeat(257) },
+    { session_id: 'session', id: 'decision', state: 'resolved' }];
+  for (const body of bodies) {
+    const result = await request(runtime.info.port, { method: 'POST', path: '/api/closed-decisions', headers, body: JSON.stringify(body) });
+    assert.equal(result.status, 400);
+  }
+  const missing = await request(runtime.info.port, { method: 'POST', path: '/api/closed-decisions', headers,
+    body: JSON.stringify({ session_id: 'missing', id: 'missing' }) });
+  assert.equal(missing.status, 404);
+});
+
+test('画面の判断解決は質問の応答待ちと離席中の回答待ちと終了済みを受け付けない', async (t) => {
+  const runtime = await runningServer(t);
+  const state = runtime.state;
+  const sessionId = 'decision-conflict';
+  state.addEvent(askQuestionEvent(sessionId, Date.now()));
+  const ask = askDecision(runtime, sessionId);
+  const decision = state.addDecision(sessionId, { title: '確認', state: 'waiting', options: [] });
+  const headers = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`, { 'content-type': 'application/json' });
+  const close = id => request(runtime.info.port, { method: 'POST', path: '/api/closed-decisions', headers,
+    body: JSON.stringify({ session_id: sessionId, id }) });
+  assert.equal((await close(ask.id)).status, 409);
+  state.setDecisionLifecycle(sessionId, decision.id, { awaitingAnswerUntil: new Date(Date.now() + 60_000).toISOString() });
+  assert.equal((await close(decision.id)).status, 409);
+  state.setDecisionLifecycle(sessionId, decision.id, { awaitingAnswerUntil: null });
+  for (const status of ['withdrawn', 'resolved']) {
+    state.updateDecision(sessionId, decision.id, status, [], '');
+    assert.equal((await close(decision.id)).status, 409);
+  }
+});
+
+test('画面で解決した仮適用の質問は未配達回答を送らず保存後も解決済みを保つ', async (t) => {
+  const runtime = await runningServer(t);
+  const state = runtime.state;
+  const sessionId = 'close-provisional-ask';
+  state.addEvent(askQuestionEvent(sessionId, Date.now()));
+  const decision = askDecision(runtime, sessionId);
+  state.setDecisionLifecycle(sessionId, decision.id, { state: 'provisional', answer: {
+    choice: 'instruction', note: '確認した', sentAt: new Date().toISOString(), deliveredAt: null,
+  } });
+  state.setDecisionHidden(sessionId, decision.id, true);
+  const headers = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`, { 'content-type': 'application/json' });
+  const closed = await request(runtime.info.port, { method: 'POST', path: '/api/closed-decisions', headers,
+    body: JSON.stringify({ session_id: sessionId, id: decision.id }) });
+  assert.equal(closed.status, 200);
+  const saved = JSON.parse(await fs.readFile(path.join(runtime.homeDir, 'store.json'), 'utf8'));
+  assert.equal(saved.plans[sessionId].decisions.find(item => item.id === decision.id).closedByUser, true);
+  assert.deepEqual(saved.hiddenDecisions, []);
+  const restored = await DashboardState.load(runtime.homeDir);
+  t.after(() => restored.flushPersistence());
+  assert.equal(restored.decisionFor(sessionId, decision.id).state, 'resolved');
+  assert.equal(restored.decisionFor(sessionId, decision.id).closedByUser, true);
+  assert.equal(restored.updateDecision(sessionId, decision.id, 'provisional', [], ''), null);
+  const delivery = await request(runtime.info.port, { method: 'POST', path: '/api/hooks/answers',
+    headers: hookHeaders(runtime.info.secret, { 'content-type': 'application/json' }),
+    body: JSON.stringify({ session_id: sessionId, action: 'post-tool-batch', event_name: 'PostToolBatch', id: 'close-delivery' }) });
+  assert.equal(delivery.status, 200);
+  assert.equal(state.decisionFor(sessionId, decision.id).answer.deliveredAt, null);
+});
+
+test('画面から MCP の待機と仮適用を解決できモデルの再更新では戻らない', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'close-mcp';
+  const headers = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`, { 'content-type': 'application/json' });
+  for (const status of ['waiting', 'provisional']) {
+    const decision = runtime.state.addDecision(sessionId, { title: '確認', state: status, options: [] });
+    assert.equal((await request(runtime.info.port, { method: 'POST', path: '/api/closed-decisions', headers,
+      body: JSON.stringify({ session_id: sessionId, id: decision.id }) })).status, 200);
+    await request(runtime.info.port, { method: 'POST', path: `/api/sessions/${sessionId}/plan`,
+      headers: hookHeaders(runtime.info.secret, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ kind: 'update_decision', id: decision.id, state: 'provisional', chosen: [], note: '' }) });
+    const current = runtime.state.decisionFor(sessionId, decision.id);
+    assert.equal(current.state, 'resolved');
+    assert.equal(current.closedByUser, true);
+  }
 });
 
 test('画面からタスクと終了可能なエージェントを終了にできる', async (t) => {

@@ -1220,6 +1220,7 @@ const repositoryUnregisterConfirmations = new Map();
 let showIdleSessions = false;
 const answerErrors = new Map();
 const pendingClosedTasks = new Map();
+const pendingClosedDecisions = new Map();
 const pullRequestMergeResults = new Map();
 const pullRequestMergeInFlight = new Set();
 const mockStackMergeRuns = new Map();
@@ -2039,7 +2040,7 @@ const visibleSessions = p => p.sessions.filter(s => !ui.deletedSessionIds.includ
   && (!ui.hiddenSessions.includes(s.id) || isIdleHiddenSession(s))
   && !(hidesFinished() && !ui.hiddenSessions.includes(s.id) && isFinishedSession(s))
   && (showIdleSessions || !isIdleHiddenSession(s)));
-const effectiveDecisionState = d => d.kind;
+const effectiveDecisionState = d => ui.closedDecisions?.includes(d.id) ? 'resolved' : d.kind;
 function isActiveDecision(decision) {
   const state = effectiveDecisionState(decision);
   return state === 'waiting' || state === 'provisional';
@@ -2530,6 +2531,28 @@ function scheduleTaskClose(key) {
   render();
 }
 
+function scheduleDecisionClose(id) {
+  if (pendingClosedDecisions.has(id)) return;
+  const timer = setTimeout(() => {
+    if (pendingClosedDecisions.get(id) !== timer) return;
+    pendingClosedDecisions.delete(id);
+    ui.closedDecisions = [...new Set([...(ui.closedDecisions || []), id])];
+    ui.hiddenDecisions = ui.hiddenDecisions.filter(item => item !== id);
+    save();
+    render();
+  }, 5_000);
+  pendingClosedDecisions.set(id, timer);
+  render();
+}
+
+function cancelDecisionClose(id) {
+  const timer = pendingClosedDecisions.get(id);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  pendingClosedDecisions.delete(id);
+  render();
+}
+
 function cancelTaskClose(key) {
   const timer = pendingClosedTasks.get(key);
   if (timer === undefined) return;
@@ -2687,6 +2710,11 @@ function decisionCard(p, session, d, withTag, manuallyHidden = false) {
   const a = answerOf(d.id);
   const draft = answerForUi(a, d);
   const state = effectiveDecisionState(d);
+  const canClose = !Number.isFinite(d.awaitingMin) && !d.awaitingAnswerUntil &&
+    (state === 'provisional' || state === 'waiting' && (d.source === 'mcp' || d.verify));
+  const closeButton = canClose ? pendingClosedDecisions.has(d.id)
+    ? `<button type="button" class="link-btn" data-cancel-close-decision="${esc(d.id)}">取り消す</button><span class="meta">5 秒後に解決済みにします。</span>`
+    : `<button type="button" class="link-btn" data-close-decision="${esc(d.id)}">解決済みにする</button>` : '';
   const stateClass = { waiting: 'blocking', provisional: 'provisional', resolved: 'state-ok', withdrawn: 'withdrawn' }[state];
   const stateLabel = { waiting: '止めて待っている', provisional: '仮に推奨案で進行中', resolved: '解決済み', withdrawn: '取り下げ' }[state];
   const stateTone = { waiting: 'danger', provisional: 'warn', resolved: 'ok', withdrawn: 'mute' }[state];
@@ -2715,13 +2743,14 @@ function decisionCard(p, session, d, withTag, manuallyHidden = false) {
   const active = (state === 'waiting' && !viaDialog) || state === 'provisional';
   const chosen = Array.isArray(d.resolution?.chosen) ? d.resolution.chosen.join('、') : d.resolution?.chosen;
   const summary = [
+    ui.closedDecisions?.includes(d.id) ? '<span class="meta">画面で解決済みにした</span>' : '',
     chosen ? `<span class="meta">選択: ${esc(chosen)}</span>` : '',
     d.resolution?.note ? `<span class="meta">${esc(d.resolution.note)}</span>` : '',
     !active && !viaDialog ? sentLine : '',
   ].filter(Boolean).join('');
   const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${Number.isFinite(d.awaitingMin) ? `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>` : ''}` : state === 'provisional' ? `<span class="wait">仮適用から ${durationLabel(Date.now() - d.waitMin * 60_000)}</span>` : '';
   return `<article class="decision ${stateClass} ${manuallyHidden ? 'manually-hidden' : ''} ${long ? 'long-wait' : ''} ${session.provider === 'codex' ? 'origin-codex' : ''}" data-id="${esc(d.id)}" data-session-id="${esc(session.id)}">
-    <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}${hideButton}</div>
+    <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}${hideButton}${closeButton}</div>
     <div class="ctx">${esc(d.ctx)}</div>
     ${d.verify && (state === 'waiting' || state === 'provisional') ? verifyPanel(d, session.provider) : ''}
     <ul class="options">${d.options.map((o, i) => {
@@ -4026,6 +4055,8 @@ function render() {
        : active?.dataset?.showIdle ? { kind: 'show-idle' }
       : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
         : active?.dataset?.cancelCloseTask ? { kind: 'task-close', key: active.dataset.cancelCloseTask }
+      : active?.dataset?.closeDecision ? { kind: 'decision-close', key: active.dataset.closeDecision }
+      : active?.dataset?.cancelCloseDecision ? { kind: 'decision-close', key: active.dataset.cancelCloseDecision }
       : active?.dataset?.closeTask ? { kind: 'task-close', key: active.dataset.closeTask }
         : active?.dataset?.reservationToggle ? { kind: 'merge-reservation-toggle', key: active.dataset.reservationToggle }
         : active?.dataset?.conflictCancel ? { kind: 'conflict-cancel', key: active.dataset.conflictCancel }
@@ -4087,6 +4118,10 @@ function render() {
   } else if (focusData?.kind === 'stack-merge-result') {
     (document.querySelector(`[data-stack-merge-result="${CSS.escape(focusData.key)}"]`)
       || document.querySelector(`[data-stack-merge-open="${CSS.escape(focusData.key)}"]`))?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'decision-close') {
+    (document.querySelector(`[data-cancel-close-decision="${CSS.escape(focusData.key)}"]`)
+      || document.querySelector(`[data-close-decision="${CSS.escape(focusData.key)}"]`)
+      || document.querySelector('[data-mode="' + ui.mode + '"]'))?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'task-close') {
     (document.querySelector(`[data-cancel-close-task="${CSS.escape(focusData.key)}"]`)
       || document.querySelector(`[data-close-task="${CSS.escape(focusData.key)}"]`))?.focus({ preventScroll: true });
@@ -4225,6 +4260,8 @@ document.addEventListener('click', e => {
     const decision = allSessions().flatMap(session => session.decisions).find(item => item.id === t.dataset.hideDecision);
     if (!decision || !isActiveDecision(decision) || effectiveDecisionState(decision) === 'waiting' && Number.isFinite(decision.awaitingMin)) return;
     ui.hiddenDecisions = [...new Set([...ui.hiddenDecisions, decision.id])];
+    ui.expandedHiddenDecisions = ui.expandedHiddenDecisions.filter(id => id !== t.dataset.decisionSession);
+    ui.expandedKindHiddenDecisions = false;
   } else if (t.dataset.restoreDecision) {
     ui.hiddenDecisions = ui.hiddenDecisions.filter(id => id !== t.dataset.restoreDecision);
   } else if (t.dataset.hiddenDecisions) {
@@ -4269,6 +4306,12 @@ document.addEventListener('click', e => {
     if (!ui.closedAgents.includes(t.dataset.closeAgent)) ui.closedAgents.push(t.dataset.closeAgent);
   } else if (t.dataset.closeTask) {
     scheduleTaskClose(t.dataset.closeTask);
+    return;
+  } else if (t.dataset.closeDecision) {
+    scheduleDecisionClose(t.dataset.closeDecision);
+    return;
+  } else if (t.dataset.cancelCloseDecision) {
+    cancelDecisionClose(t.dataset.cancelCloseDecision);
     return;
   } else if (t.dataset.cancelCloseTask) {
     cancelTaskClose(t.dataset.cancelCloseTask);

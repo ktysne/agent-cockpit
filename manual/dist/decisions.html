@@ -118,6 +118,8 @@
         <summary>このページの内容</summary>
         <ol>        <li><a href="#decisions-source">判断事項の元</a></li>
         <li><a href="#decisions-card">判断事項のカード</a></li>
+        <li class="level-3"><a href="#decisions-close">画面から解決済みにする</a></li>
+        <li class="level-3"><a href="#decisions-hide">判断事項を非表示にする</a></li>
         <li class="level-3"><a href="#decisions-states">判断事項の状態</a></li>
         <li class="level-3"><a href="#decisions-time">経過時間と強調</a></li>
         <li class="level-3"><a href="#decisions-recommended">推奨の判定</a></li>
@@ -149,6 +151,24 @@
   止めて待っているものは赤、仮に進めているものは琥珀色、解決済みは緑、取り下げは灰色です。
   カードにマウスを載せると、判断事項の id が出ます。
   id は、セッションが判断事項を更新するときに使う値です。</p>
+
+  <h3 id="decisions-close">画面から解決済みにする</h3>
+  <p>セッションが判断事項を解決しないまま止まったときは、カードの <span class="ui">解決済みにする</span> で終わらせられます。
+  対象は、仮に推奨案で進行中の判断事項と、セッションがツールで記録した「止めて待っている」判断事項です。
+  質問ツールの応答待ちと、離席中の回答期限がある判断事項には、このボタンは出ません。</p>
+  <p>押すと <span class="ui">取り消す</span> に変わり、<span class="ui">5 秒後に解決済みにします。</span> と出ます。
+  5 秒以内なら取り消せます。
+  解決後は <span class="ui">画面で解決済みにした</span> と記録され、再起動しても残ります。
+  まだセッションへ届いていない回答は、以後送られません。</p>
+  <p>解決したカードは <span class="ui">解決済みと取り下げ</span> に移ります。
+  設定の <span class="ui">終わったものを非表示にする</span> がオンなら出ません。</p>
+
+  <h3 id="decisions-hide">判断事項を非表示にする</h3>
+  <p><span class="ui">非表示にする</span> を押すと、カードが通常の一覧から消えます。
+  非表示の判断事項を開いていた場合も折りたたみが閉じ、フォーカスは「非表示の判断事項を表示」のボタンに移ります。
+  そこを開き、<span class="ui">表示に戻す</span> を押すと通常の一覧へ戻せます。
+  非表示は判断事項の解決にはならず、回答の配達も止めません。
+  解決済みになった判断事項の非表示の記録は消えます。</p>
 
   <h3 id="decisions-states">判断事項の状態</h3>
   <ul>
@@ -336,6 +356,8 @@
       <h2>このページの内容</h2>
       <ol>        <li><a href="#decisions-source">判断事項の元</a></li>
         <li><a href="#decisions-card">判断事項のカード</a></li>
+        <li class="level-3"><a href="#decisions-close">画面から解決済みにする</a></li>
+        <li class="level-3"><a href="#decisions-hide">判断事項を非表示にする</a></li>
         <li class="level-3"><a href="#decisions-states">判断事項の状態</a></li>
         <li class="level-3"><a href="#decisions-time">経過時間と強調</a></li>
         <li class="level-3"><a href="#decisions-recommended">推奨の判定</a></li>

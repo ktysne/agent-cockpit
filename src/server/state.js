@@ -166,6 +166,7 @@ function validStoredPlan(plan) {
       Array.isArray(decision.questions) && decision.questions.every((question) => isRecord(question) && Array.isArray(question.options) &&
         question.options.every(option => option.next === undefined || validText(option.next, 2000, true))) &&
       (decision.verify === undefined || validVerify(decision.verify, true)) &&
+      (decision.closedByUser === undefined || typeof decision.closedByUser === 'boolean') &&
       (decision.launchRequestedAt === undefined || validTimestamp(decision.launchRequestedAt)) &&
       validTimestamp(decision.createdAt) && validTimestamp(decision.updatedAt) &&
       (decision.provisionalAt === undefined || validTimestamp(decision.provisionalAt)) &&
@@ -2679,7 +2680,15 @@ class DashboardState {
     return this.decisionFor(sessionId, id);
   }
 
-  updateDecision(sessionId, id, state, chosen, note, now = Date.now()) {
+  closeDecision(sessionId, id, now = Date.now()) {
+    const decision = this.decisionFor(sessionId, id);
+    if (!decision) return null;
+    if (decision.awaitingAnswerUntil || !(decision.state === 'provisional' ||
+      decision.state === 'waiting' && decision.source === 'mcp')) return false;
+    return this.updateDecision(sessionId, id, 'resolved', decision.resolution?.chosen || [], decision.resolution?.note || '', now, true);
+  }
+
+  updateDecision(sessionId, id, state, chosen, note, now = Date.now(), closedByUser = false) {
     const decisions = this.decisionsFor(sessionId);
     const decision = decisions.find((item) => item.id === id) || decisions.find((item) => (
       item.id === this.sessions.get(sessionId)?.decisionBindings?.[id]
@@ -2693,6 +2702,7 @@ class DashboardState {
       ...(state === 'provisional' && decision.state !== 'provisional' ? { provisionalAt: timestamp } : decision.provisionalAt ? { provisionalAt: decision.provisionalAt } : {}),
       resolvedAt: state === 'resolved' ? timestamp : null,
       resolution: { chosen, note },
+      ...(closedByUser ? { closedByUser: true } : {}),
     };
     const plan = this.plans.get(sessionId);
     const stored = plan?.decisions.find((item) => item.id === decision.id);
@@ -2712,6 +2722,7 @@ class DashboardState {
         ...(updated.provisionalAt ? { provisionalAt: updated.provisionalAt } : {}),
         resolvedAt: updated.resolvedAt,
         resolution: cloneResolution(updated.resolution),
+        ...(updated.closedByUser ? { closedByUser: true } : {}),
       });
       this.decisionOverrides.set(sessionId, overrides);
     }
