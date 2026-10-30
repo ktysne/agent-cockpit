@@ -3095,6 +3095,50 @@ test('画面で解決した仮適用の質問は未配達回答を送らず保�
   assert.equal(state.decisionFor(sessionId, decision.id).answer.deliveredAt, null);
 });
 
+test('画面で解決した質問は後から届いた同じ呼び出しの失敗や終了で取り下げに戻らない', async (t) => {
+  for (const finish of ['PostToolUseFailure', 'PostToolUse']) {
+    const runtime = await runningServer(t);
+    const state = runtime.state;
+    const sessionId = `close-then-${finish}`;
+    const base = Date.now();
+    state.addEvent(askQuestionEvent(sessionId, base));
+    const decision = askDecision(runtime, sessionId);
+    state.setDecisionLifecycle(sessionId, decision.id, { state: 'provisional' });
+    const headers = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`, { 'content-type': 'application/json' });
+    const closed = await request(runtime.info.port, { method: 'POST', path: '/api/closed-decisions', headers,
+      body: JSON.stringify({ session_id: sessionId, id: decision.id }) });
+    assert.equal(closed.status, 200);
+    state.addEvent({ session_id: sessionId, hook_event_name: finish, tool_name: 'AskUserQuestion', tool_use_id: 'ask-1', hookAt: base + 60_000 });
+    state.addEvent({ session_id: sessionId, hook_event_name: 'Stop', hookAt: base + 61_000 });
+    const current = state.decisionFor(sessionId, decision.id);
+    assert.equal(current.state, 'resolved', finish);
+    assert.equal(current.closedByUser, true, finish);
+    await state.flushPersistence();
+    const saved = JSON.parse(await fs.readFile(path.join(runtime.homeDir, 'store.json'), 'utf8'));
+    assert.equal(saved.plans[sessionId].decisions.find(item => item.id === decision.id).closedByUser, true, finish);
+  }
+});
+
+test('画面で解決した回答は未受領の配達記録の再送で返らない', async (t) => {
+  const runtime = await runningServer(t);
+  const state = runtime.state;
+  const sessionId = 'close-cached-delivery';
+  state.addEvent(askQuestionEvent(sessionId, Date.now()));
+  const decision = askDecision(runtime, sessionId);
+  state.setDecisionLifecycle(sessionId, decision.id, { state: 'provisional', answer: {
+    choice: null, note: '確認した', sentAt: new Date().toISOString(), version: 'v1', deliveredAt: null, reflectedAt: null, promptDeliveries: 0,
+  } });
+  const deliver = () => request(runtime.info.port, { method: 'POST', path: '/api/hooks/answers',
+    headers: hookHeaders(runtime.info.secret, { 'content-type': 'application/json' }),
+    body: JSON.stringify({ session_id: sessionId, action: 'post-tool-batch', event_name: 'PostToolBatch', id: 'lost-response' }) }).then(jsonBody);
+  assert.match(JSON.stringify(await deliver()), /確認した/);
+  const headers = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`, { 'content-type': 'application/json' });
+  const closed = await request(runtime.info.port, { method: 'POST', path: '/api/closed-decisions', headers,
+    body: JSON.stringify({ session_id: sessionId, id: decision.id }) });
+  assert.equal(closed.status, 200);
+  assert.doesNotMatch(JSON.stringify(await deliver()), /確認した/);
+});
+
 test('画面から MCP の待機と仮適用を解決できモデルの再更新では戻らない', async (t) => {
   const runtime = await runningServer(t);
   const sessionId = 'close-mcp';
@@ -3103,6 +3147,9 @@ test('画面から MCP の待機と仮適用を解決できモデルの再更新
     const decision = runtime.state.addDecision(sessionId, { title: '確認', state: status, options: [] });
     assert.equal((await request(runtime.info.port, { method: 'POST', path: '/api/closed-decisions', headers,
       body: JSON.stringify({ session_id: sessionId, id: decision.id }) })).status, 200);
+    // 応答の時点で保存済みであることを、遅延保存の予約より前に読んで確かめる。
+    const saved = JSON.parse(await fs.readFile(path.join(runtime.homeDir, 'store.json'), 'utf8'));
+    assert.equal(saved.plans[sessionId].decisions.find(item => item.id === decision.id).closedByUser, true);
     await request(runtime.info.port, { method: 'POST', path: `/api/sessions/${sessionId}/plan`,
       headers: hookHeaders(runtime.info.secret, { 'content-type': 'application/json' }),
       body: JSON.stringify({ kind: 'update_decision', id: decision.id, state: 'provisional', chosen: [], note: '' }) });

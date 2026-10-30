@@ -163,8 +163,8 @@ function createUiSessionRoutes(ctx) {
       jsonResponse(response, 409, { error: 'Decision cannot be closed' });
       return;
     }
-    await state.waitForPersistence();
-    jsonResponse(response, 200, { closed: true });
+    await state.flushPersistence();
+    jsonResponse(response, 200, { closed: true, persistence: state.persistenceStatus?.() });
   }
 
   function handleClosedTasks({ response, body }) {

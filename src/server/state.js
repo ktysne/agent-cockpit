@@ -2052,7 +2052,7 @@ class DashboardState {
       .filter((decision) => decision.source === 'ask').map((decision) => [decision.id, decision]));
     const askDecisions = session.decisions.filter((decision) => decision.source === 'ask').map((decision) => {
       const stored = storedAskDecisions.get(decision.id);
-      return stored && Date.parse(stored.updatedAt) > Date.parse(decision.updatedAt)
+      return stored && (stored.closedByUser || Date.parse(stored.updatedAt) > Date.parse(decision.updatedAt))
         ? cloneDecision(stored)
         : cloneDecision(decision);
     });
@@ -2685,7 +2685,14 @@ class DashboardState {
     if (!decision) return null;
     if (decision.awaitingAnswerUntil || !(decision.state === 'provisional' ||
       decision.state === 'waiting' && decision.source === 'mcp')) return false;
-    return this.updateDecision(sessionId, id, 'resolved', decision.resolution?.chosen || [], decision.resolution?.note || '', now, true);
+    const closed = this.updateDecision(sessionId, id, 'resolved', decision.resolution?.chosen || [], decision.resolution?.note || '', now, true);
+    // 未受領の配達記録は同じ要求の再送で配達条件を通らずに返るので、この回答を含むものを捨てて今の状態から作り直させる。
+    const records = this.pendingHookDeliveries.get(sessionId);
+    for (const [key, record] of records || []) {
+      if (!record.acknowledgedAt && record.answerVersions.some((item) => item.decisionId === decision.id)) records.delete(key);
+    }
+    if (records && !records.size) this.pendingHookDeliveries.delete(sessionId);
+    return closed;
   }
 
   updateDecision(sessionId, id, state, chosen, note, now = Date.now(), closedByUser = false) {
@@ -2783,7 +2790,8 @@ class DashboardState {
     const lifecycles = this.decisionLifecycles.get(sessionId);
     return [...eventDecisions, ...planDecisions.filter((decision) => !eventDecisionIds.has(decision.id))].map((decision) => {
       const override = overrides?.get(decision.id);
-      const withOverride = override && Date.parse(override.updatedAt) >= Date.parse(decision.updatedAt)
+      // 画面で解決した記録は、同じ呼び出しの遅れた終わりのイベントより後でも保つ。
+      const withOverride = override && (override.closedByUser || Date.parse(override.updatedAt) >= Date.parse(decision.updatedAt))
         ? { ...decision, ...override }
         : decision;
       const lifecycle = lifecycles?.get(decision.id);
@@ -2827,7 +2835,7 @@ class DashboardState {
     const sourceDecision = this.sessions.get(sessionId)?.decisions.find((decision) => decision.id === decisionId) ||
       this.plans.get(sessionId)?.decisions.find((decision) => decision.id === decisionId);
     const override = this.decisionOverrides.get(sessionId)?.get(decisionId);
-    const baseDecision = override && Date.parse(override.updatedAt) >= Date.parse(sourceDecision.updatedAt)
+    const baseDecision = override && (override.closedByUser || Date.parse(override.updatedAt) >= Date.parse(sourceDecision.updatedAt))
       ? { ...sourceDecision, ...override }
       : sourceDecision;
     const baseState = baseDecision.state;
