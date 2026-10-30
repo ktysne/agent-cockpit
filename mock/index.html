@@ -362,6 +362,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .stack-merge-prs { display: grid; gap: 6px; margin: 0; padding-left: 24px; }
 .stack-merge-prs li { padding-left: 2px; }
 .stack-merge-prs .meta { display: block; }
+.stack-merge-excluded-title { display: block; margin-top: 8px; }
 .stack-merge-progress { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 8px; }
 .stack-merge-progress .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
@@ -952,6 +953,15 @@ const DATA = {
             { worktree: 'D:/Develop/rec-studio/.claude/worktrees/current', round: 2, sha: 'f657abc', outcome: 'halted' },
             { worktree: 'D:/Develop/rec-studio/.claude/worktrees/old', round: 1, sha: 'f657abc', outcome: 'converged' },
           ] } },
+        // 146 から 148 は 3 段のスタック。147 は収束の後に base を取り込んだだけ(競合なし)、148 は収束の後の取り込みで競合を解消した。
+        // 一括マージは下から 2 件が対象になり、148 が対象の外の最初の段として理由つきで出る。
+        // 148 に「レビュー不要」を記録すると、3 件すべてが対象になる。
+        { number: 146, mergeRecordKey: 'ktysne/rec-studio#146', title: '拍子変更のデータ構造を分離する', head: 'refactor/meter-model', base: 'main', sha: 'b52e7a1', ci: 'pass', review: 'approved', mergeable: 'MERGEABLE', conflict: false, draft: false,
+          xr: { round: 2, reviewedSha: 'b52e7a1', dismissed: 0, triage: { round: 2, sha: 'b52e7a1', outcome: 'converged' } } },
+        { number: 147, mergeRecordKey: 'ktysne/rec-studio#147', title: '拍子変更を譜面の描画へ反映する', head: 'feat/meter-render', base: 'refactor/meter-model', sha: 'c63f8b2', ci: 'pass', review: 'approved', mergeable: 'MERGEABLE', conflict: false, draft: false,
+          xr: { round: 1, reviewedSha: 'c63f8a0', dismissed: 0, triage: { round: 1, sha: 'c63f8a0', outcome: 'converged' }, afterConvergence: { kind: 'clean' } } },
+        { number: 148, mergeRecordKey: 'ktysne/rec-studio#148', title: '拍子記号の入力欄を追加する', head: 'feat/meter-input', base: 'feat/meter-render', sha: 'd740c93', ci: 'pass', review: 'approved', mergeable: 'MERGEABLE', conflict: false, draft: false,
+          xr: { round: 2, reviewedSha: 'd740b71', dismissed: 0, triage: { round: 2, sha: 'd740b71', outcome: 'converged' }, afterConvergence: { kind: 'resolved', files: 3, insertions: 42, deletions: 17 } } },
         { number: 145, staleHead: { prHead: 'd38b6a1', branchHead: 'e49c7b2' }, title: '拍子記号の表示を整える', head: 'feat/meter-label', base: 'main', sha: 'd38b6a1', ci: 'pass', review: 'required', conflict: false, draft: true,
           xr: null },
       ],
@@ -2953,33 +2963,40 @@ function stackMergeKey(p, root) {
   return `${p.id}#${root.number}`;
 }
 
+// 一括マージの対象は、鎖の下から段ごとの条件を満たす段が続く範囲に限る。
+function stackMergeStageStopReason(p, pr, index) {
+  if (!pr.mergeRecordKey) return `#${pr.number} は登録されていない`;
+  if (pr.isCrossRepository === true) return `#${pr.number} は fork からの PR`;
+  if (pr.conflict || pr.mergeable === 'CONFLICTING') return `#${pr.number} のコンフリクト`;
+  if (pr.staleHead) return `#${pr.number} の head が変わっている`;
+  if (pr.draft) return `#${pr.number} はドラフト`;
+  if (effective(p, pr).needsRestack) return `#${pr.number} は積み直しが必要`;
+  if (pr.ci === 'fail') return `#${pr.number} の CI が失敗`;
+  if (pr.ci === 'unknown') return `#${pr.number} の CI 状態が不明`;
+  if (pr.review === 'changes') return `#${pr.number} に変更要求がある`;
+  if (pr.review === 'required') return `#${pr.number} のレビュー承認待ち`;
+  if (pr.mergeIntent || pr.mergeInProgress || pullRequestMergeInFlight.has(prKey(p, pr.number))) return `#${pr.number} は別のマージ処理中`;
+  const operationBlocker = index === 0 ? mergeOperationBlocker(p, pr) : '';
+  if (operationBlocker && operationBlocker !== 'GitHub がマージできるかを計算中') return `#${pr.number} ${operationBlocker}`;
+  if (!crossReviewSettled(p, pr)) return `#${pr.number} は${crossReviewWaitReason(p, pr)}`;
+  return '';
+}
+
+// 鎖全体に効く条件。
 function stackMergeBlockingReason(p, members) {
-  const missingRegistration = members.find(pr => !pr.mergeRecordKey);
-  if (missingRegistration) return `#${missingRegistration.number} は登録されていない`;
-  const fork = members.find(pr => pr.isCrossRepository === true);
-  if (fork) return `#${fork.number} は fork からの PR`;
   const reserved = members.find(pr => ui.reserved[prKey(p, pr.number)]);
   if (reserved) return `#${reserved.number} は収束後マージを予約中`;
   if (!Array.isArray(p.repo.methods) || !p.repo.methods.includes('merge')) return 'マージコミットが許可されていない';
-  const conflict = [...members].reverse().find(pr => pr.conflict || pr.mergeable === 'CONFLICTING');
-  if (conflict) return `#${conflict.number} のコンフリクト`;
-  for (const pr of [...members].reverse()) {
-    const value = effective(p, pr);
-    if (pr.staleHead) return `#${pr.number} の head が変わっている`;
-    if (pr.draft) return `#${pr.number} はドラフト`;
-    if (value.needsRestack) return `#${pr.number} は積み直しが必要`;
-    if (pr.ci === 'fail') return `#${pr.number} の CI が失敗`;
-    if (pr.ci === 'unknown') return `#${pr.number} の CI 状態が不明`;
-    if (pr.review === 'changes') return `#${pr.number} に変更要求がある`;
-    if (pr.review === 'required') return `#${pr.number} のレビュー承認待ち`;
-    if (pr.mergeIntent || pr.mergeInProgress || pullRequestMergeInFlight.has(prKey(p, pr.number))) return `#${pr.number} は別のマージ処理中`;
-  }
-  const bottom = members[0];
-  const operationBlocker = mergeOperationBlocker(p, bottom);
-  if (operationBlocker && operationBlocker !== 'GitHub がマージできるかを計算中') {
-    return `#${bottom.number} ${operationBlocker}`;
-  }
   return '';
+}
+
+function stackMergePlan(p, members) {
+  const stopIndex = members.findIndex((pr, index) => stackMergeStageStopReason(p, pr, index));
+  const target = stopIndex < 0 ? members : members.slice(0, stopIndex);
+  const stopAt = stopIndex < 0 ? null : { number: members[stopIndex].number, reason: stackMergeStageStopReason(p, members[stopIndex], stopIndex) };
+  const excluded = members.slice(target.length).map((pr, index) => ({ number: pr.number, title: pr.title,
+    reason: index === 0 ? stopAt.reason : '下の段がマージできないため' }));
+  return { target, total: members.length, stopAt, excluded, blocker: stackMergeBlockingReason(p, members) };
 }
 
 function stackMergeRunFor(p, members) {
@@ -3005,17 +3022,26 @@ function stackMergeWait(p, run) {
 
 function stackMergeConfirmation(p, members, run) {
   const key = stackMergeKey(p, members[0]);
-  const reason = stackMergeBlockingReason(p, members);
-  const list = members.map((pr, index) => `<li><strong>#${pr.number}</strong> ${esc(pr.title)}
+  const plan = stackMergePlan(p, members);
+  const confirmed = run.members.map(member => p.prs.find(pr => pr.number === member.number));
+  const changed = plan.total !== run.total || plan.target.length !== confirmed.length ||
+    plan.target.some((pr, index) => pr.number !== confirmed[index]?.number || pr.sha !== run.members[index].sha);
+  const reason = changed ? 'スタックの構成または head が変わりました。確認欄を開き直してください' : plan.blocker;
+  const partial = confirmed.length < run.total;
+  const list = confirmed.map(pr => `<li><strong>#${pr.number}</strong> ${esc(pr.title)}
       <span class="meta">照合する head SHA: ${shortShaLabel(pr.sha)} ・ ${esc(stackMergePrStatus(pr))}</span></li>`).join('');
+  const excluded = run.excluded.length ? `<strong class="stack-merge-excluded-title">マージしない段</strong>
+    <ul class="stack-merge-prs stack-merge-excluded">${run.excluded.map(item => `<li><strong>#${item.number}</strong> ${esc(item.title)}
+      <span class="meta">${esc(item.reason)}</span></li>`).join('')}</ul>` : '';
   return `<div class="merge-confirm stack-merge-confirm" data-stack-merge="${esc(key)}">
-    <div><strong>スタックの ${members.length} 件を ${esc(p.repo.defaultBranch)} へ順にマージする</strong></div>
+    <div><strong>${partial ? `下から ${confirmed.length} 件を` : `スタックの ${confirmed.length} 件を`} ${esc(p.repo.defaultBranch)} へ順にマージする</strong></div>
     ${reason ? `<p class="stack-merge-reason" role="status">一括マージできない理由: ${esc(reason)}</p>` : ''}
     <ol class="stack-merge-prs">${list}</ol>
+    ${excluded}
     <ul class="effects"><li>方式: マージコミット(固定。子の head を変えずに続けるため)</li>
       <li>マージ後にリモートブランチを削除(固定。子の base を付け替えるため)</li>
       <li class="warn">どれかの PR で head の変化、CI の失敗、コンフリクトなどが出たら、残りの予約をすべて取り消します</li></ul>
-    <div class="row"><button type="button" class="merge-go" data-stack-merge-go="${esc(key)}" ${reason ? 'disabled' : ''}>すべてマージを実行</button>
+    <div class="row"><button type="button" class="merge-go" data-stack-merge-go="${esc(key)}" ${reason ? 'disabled' : ''}>${partial ? `${confirmed.length} 件のマージを実行` : 'すべてマージを実行'}</button>
       <button type="button" class="ghost" data-stack-merge-confirm-cancel="${esc(key)}">やめる</button></div>
   </div>`;
 }
@@ -3025,7 +3051,8 @@ function stackMergeControls(p, root) {
   if (!members) return '';
   const key = stackMergeKey(p, root);
   const run = stackMergeRunFor(p, members);
-  if (!run && members.length < 2) return '';
+  const plan = stackMergePlan(p, members);
+  if (!run && plan.target.length < 2) return '';
   if (run?.phase === 'confirm') return '';
   if (run?.phase === 'running') {
     const current = run.members[run.index];
@@ -3035,9 +3062,10 @@ function stackMergeControls(p, root) {
       <button type="button" class="link-btn" data-stack-merge-fail="${esc(runKey)}">モック: 途中で中止させる</button>
       <button type="button" class="ghost" data-stack-merge-stop="${esc(runKey)}">中止</button></span>`;
   }
-  const reason = stackMergeBlockingReason(p, members);
-  return `<button type="button" class="merge-btn" data-stack-merge-open="${esc(key)}" ${reason ? 'disabled' : ''}>スタックをすべてマージ (${members.length} 件)</button>
-    ${reason ? `<span class="stack-merge-reason">一括マージできない理由: ${esc(reason)}</span>` : ''}`;
+  const label = plan.stopAt ? `下から ${plan.target.length} 件をマージ (全 ${plan.total} 件)` : `スタックをすべてマージ (${plan.target.length} 件)`;
+  return `<button type="button" class="merge-btn" data-stack-merge-open="${esc(key)}" ${plan.blocker ? 'disabled' : ''}>${label}</button>
+    ${plan.stopAt ? `<span class="meta">${esc(plan.stopAt.reason)}</span>` : ''}
+    ${plan.blocker ? `<span class="stack-merge-reason">一括マージできない理由: ${esc(plan.blocker)}</span>` : ''}`;
 }
 
 function stackMergeResultRows(p) {
@@ -4305,9 +4333,10 @@ document.addEventListener('click', e => {
     const [pid, number] = key.split('#');
     const p = byId(pid), root = p?.prs.find(item => String(item.number) === number);
     const members = root && stackMembers(p, root);
-    if (!p || !members || members.length < 2 || stackMergeBlockingReason(p, members)) return;
-    mockStackMergeRuns.set(key, { key, productId: p.id, phase: 'confirm', index: 0,
-      members: members.map(pr => ({ number: pr.number, title: pr.title, sha: pr.sha })) });
+    const plan = members && stackMergePlan(p, members);
+    if (!p || !plan || plan.target.length < 2 || plan.blocker) return;
+    mockStackMergeRuns.set(key, { key, productId: p.id, phase: 'confirm', index: 0, total: plan.total, excluded: plan.excluded,
+      members: plan.target.map(pr => ({ number: pr.number, title: pr.title, sha: pr.sha })) });
     ui.confirm = null;
     save(); render();
     return;
@@ -4317,7 +4346,11 @@ document.addEventListener('click', e => {
     const p = run && byId(run.productId);
     const members = p && run.members.map(member => p.prs.find(pr => pr.number === member.number));
     if (!run || run.phase !== 'confirm' || !p || members.some(pr => !pr || isMerged(p, pr))) return;
-    if (stackMergeBlockingReason(p, members)) { save(); render(); return; }
+    const root = p.prs.find(pr => String(pr.number) === key.split('#')[1]);
+    const chain = root && stackMembers(p, root);
+    const plan = chain && stackMergePlan(p, chain);
+    if (!plan || plan.blocker || plan.total !== run.total || plan.target.length !== members.length ||
+      plan.target.some((pr, index) => pr.number !== members[index].number || pr.sha !== run.members[index].sha)) { save(); render(); return; }
     run.members = members.map(pr => ({ number: pr.number, title: pr.title, sha: pr.sha }));
     run.index = 0;
     run.phase = 'running';

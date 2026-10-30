@@ -4219,7 +4219,7 @@ test('fork の PR は利用者が取り直しても base リポジトリの同�
   assert.equal(calls.some(args => args[1]?.includes('/git/ref/heads/feature/fork')), false);
 });
 
-async function baseMergeReviewFixture(t, scenario) {
+async function baseMergeReviewFixture(t, scenario, mergedCandidatesOf) {
   const root = await temporaryDirectory(t);
   const git = (...args) => execFileSync('git', ['-C', root, ...args], {
     encoding: 'utf8', windowsHide: true,
@@ -4248,7 +4248,15 @@ async function baseMergeReviewFixture(t, scenario) {
     git('checkout', '-b', 'unrelated');
     git('commit', '--allow-empty', '-m', 'other branch');
   }
-  const source = scenario === 'other-base' ? 'unrelated' : 'main';
+  let parentSha;
+  if (scenario === 'stacked') {
+    git('checkout', '-b', 'parent');
+    await fs.writeFile(path.join(root, 'parent.txt'), 'parent\n');
+    git('add', '.');
+    git('commit', '-m', 'parent');
+    parentSha = git('rev-parse', 'HEAD');
+  }
+  const source = scenario === 'other-base' ? 'unrelated' : scenario === 'stacked' ? 'parent' : 'main';
   git('checkout', 'feature');
   if (conflicting) {
     assert.throws(() => git('merge', '--no-ff', source, '-m', 'merge'));
@@ -4274,12 +4282,30 @@ async function baseMergeReviewFixture(t, scenario) {
     url: 'https://github.com/example/project/pull/31', headRefName: 'feature', baseRefName: 'main', headRefOid,
   }, {
     observeReview: (_, report) => reports.push(report),
+    ...(mergedCandidatesOf ? { mergedCandidates: mergedCandidatesOf(parentSha) } : {}),
     execFileImpl: (file, args, options, callback) => {
       if (scenario === 'unsupported' && args.includes('--remerge-diff')) return callback(new Error('unknown option remerge-diff'));
       return execFile(file, args, options, callback);
     },
   });
   return { review, reports, headRefOid };
+}
+
+const mergedAt = '2026-10-03T11:00:00.000Z';
+for (const [name, kind, candidates] of [
+  ['追跡ブランチに無い下の段の head が base へマージ済みの PR の head なら clean', 'clean',
+    parentSha => [mergedPullRequest(30, parentSha, mergedAt, 'parent', 'main')]],
+  ['手元に無い新しいマージ済みの head があっても、その候補だけを外して clean', 'clean',
+    parentSha => [mergedPullRequest(30, parentSha, mergedAt, 'parent', 'main'),
+      mergedPullRequest(31, 'f'.repeat(40), '2026-10-04T11:00:00.000Z', 'gone', 'main')]],
+  ['マージ先が別のブランチのマージ済みの head では clean にならない', 'other',
+    parentSha => [mergedPullRequest(30, parentSha, mergedAt, 'parent', 'release')]],
+  ['マージ済みの head が無ければ other', 'other', undefined],
+]) {
+  test(`収束後に下の段の head を取り込んだ merge は、${name}`, async (t) => {
+    const { review } = await baseMergeReviewFixture(t, 'stacked', candidates);
+    assert.equal(review.afterConvergence.kind, kind);
+  });
 }
 
 for (const [scenario, kind] of [['clean', 'clean'], ['resolved', 'resolved'], ['double', 'clean'],

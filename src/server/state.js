@@ -320,6 +320,7 @@ function validMergedPullRequest(record) {
     (record.reservedHeadRefOid !== undefined && record.reservedHeadRefOid !== null && !isCompleteCommitSha(record.reservedHeadRefOid)) ||
     (record.mergedHeadRefOid !== undefined && record.mergedHeadRefOid !== null && !isCompleteCommitSha(record.mergedHeadRefOid)) ||
     (record.headMismatch !== undefined && typeof record.headMismatch !== 'boolean') ||
+    (record.historyMerged !== undefined && record.historyMerged !== true) ||
     (record.mergeResultClosedAt !== undefined && !validTimestamp(record.mergeResultClosedAt)) ||
     (record.historyDismissedAt !== undefined && !validTimestamp(record.historyDismissedAt)) ||
     (record.automaticResult !== undefined && !validPullRequestMergeResult(record.automaticResult))) return false;
@@ -1312,6 +1313,7 @@ class DashboardState {
       reservedHeadRefOid: record.reservedHeadRefOid || null,
       mergedHeadRefOid: record.mergedHeadRefOid || null,
       headMismatch: record.headMismatch === true,
+      ...(record.historyMerged === true ? { historyMerged: true } : {}),
       ...(record.automaticResult ? { automaticResult: { ...record.automaticResult, retargetedNumbers: [...record.automaticResult.retargetedNumbers] } } : {}),
     };
     if (!validMergedPullRequest(next)) return false;
@@ -1337,6 +1339,15 @@ class DashboardState {
     this.touch();
     this.requestStoreWrite();
     return true;
+  }
+
+  // squash と rebase では head の祖先が base に入らないので、マージコミットの親に head があると確かめた PR だけを返す。
+  mergeCommitMergedHeads(owner, repo) {
+    return [...this.mergedPullRequests.values()]
+      .filter((record) => record.historyMerged === true && !record.headMismatch
+        && isCompleteCommitSha(record.mergedHeadRefOid)
+        && record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
+      .map((record) => `${record.number}:${record.mergedHeadRefOid.toLowerCase()}`);
   }
 
   mergedPullRequestHistoryForRepo(owner, repo, now = Date.now(), deadline) {

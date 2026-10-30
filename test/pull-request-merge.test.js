@@ -71,6 +71,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     afterMerge: null,
     remoteBranchHeads: new Map(pullRequests.map((pr) => [pr.headRefName, pr.headRefOid])),
     crossReviewReader: null,
+    mergeCommitParents: null,
   };
   const execFileImpl = (_file, args, _options, callback) => {
     calls.push([...args]);
@@ -136,6 +137,10 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
       }
       return;
     }
+    if (args[0] === 'api' && args[1] === `repos/example/project/commits/${'e'.repeat(40)}`) {
+      finish(null, JSON.stringify({ sha: 'e'.repeat(40), parents: (control.mergeCommitParents || []).map((sha) => ({ sha })) }));
+      return;
+    }
     if (args[0] === 'api' && args[1].includes('/compare/')) {
       finish(null, JSON.stringify({ ahead_by: 0, commits: [] }));
       return;
@@ -178,7 +183,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
           if (current) github.views.set(number, { ...current, state: 'OPEN', mergedAt: null });
         } else {
           const current = github.openPullRequests.find((item) => item.number === number);
-          if (current) github.views.set(number, mergedView(current));
+          if (current) github.views.set(number, { ...mergedView(current), ...(control.mergeCommitParents ? { mergeCommit: { oid: 'e'.repeat(40) } } : {}) });
           github.openPullRequests = github.openPullRequests.filter((item) => item.number !== number);
         }
         await control.afterMerge?.();
@@ -232,7 +237,23 @@ function stackInput(fixture, numbers = [1, 2]) {
 }
 
 async function stackFixture(t, options = {}) {
-  return mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', options), ghPullRequest(2, 'feature/two', 'feature/one')]);
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', options), ghPullRequest(2, 'feature/two', 'feature/one')]);
+  for (const number of [1, 2]) fixture.control.crossReviews.set(number, convergedReview(number));
+  return fixture;
+}
+
+// 下から count 件の鎖。converged に挙げた番号だけクロスレビューが収束している。
+async function reviewedStackFixture(t, count, converged, overrides = {}) {
+  const numbers = Array.from({ length: count }, (_, index) => index + 1);
+  const fixture = await mergeFixture(t, numbers.map((number) => ghPullRequest(
+    number, `feature/n${number}`, number === 1 ? 'main' : `feature/n${number - 1}`, overrides[number] || {})));
+  for (const number of converged) fixture.control.crossReviews.set(number, convergedReview(number));
+  await fixture.tracker.refreshRepo('example', 'project');
+  return fixture;
+}
+
+function stackMergeOf(fixture) {
+  return fixture.tracker.snapshot()[0].trees[0].stackMerge;
 }
 
 test('一括マージは下から順に保存した SHA を照合してマージコミットで完了する', async (t) => {
@@ -445,6 +466,103 @@ test('一括予約の構成員が計算中なら通常の早い取得の上限�
   for (let index = 0; index < 4; index += 1) await fixture.tracker.refreshRepoFresh('example', 'project');
   assert.equal(scheduled.at(-1), 10_000);
   assert.equal(fixture.state.pullRequestMergeReservations().length, 2);
+});
+
+test('鎖の 1 件目だけ収束していると一括マージの対象は 1 件で、押せない', async (t) => {
+  for (const count of [2, 4]) {
+    const stackMerge = stackMergeOf(await reviewedStackFixture(t, count, [1]));
+    assert.deepEqual(stackMerge.members.map((member) => member.number), [1], `${count} 件`);
+    assert.equal(stackMerge.available, false, `${count} 件`);
+    assert.equal(stackMerge.total, count, `${count} 件`);
+    assert.deepEqual(stackMerge.stopAt, { number: 2, reason: '#2 はクロスレビュー未実施' }, `${count} 件`);
+  }
+});
+
+test('鎖の下の 2 件だけ収束していると、下から 2 件が対象になり、対象外の段と理由を持つ', async (t) => {
+  const stackMerge = stackMergeOf(await reviewedStackFixture(t, 4, [1, 2]));
+  assert.equal(stackMerge.available, true);
+  assert.deepEqual(stackMerge.members.map((member) => member.number), [1, 2]);
+  assert.equal(stackMerge.total, 4);
+  assert.deepEqual(stackMerge.stopAt, { number: 3, reason: '#3 はクロスレビュー未実施' });
+  assert.deepEqual(stackMerge.excluded.map(({ number, reason }) => [number, reason]),
+    [[3, '#3 はクロスレビュー未実施'], [4, '下の段がマージできないため']]);
+});
+
+test('鎖の全件が収束していると、全件が対象で、対象外の段は無い', async (t) => {
+  const stackMerge = stackMergeOf(await reviewedStackFixture(t, 3, [1, 2, 3]));
+  assert.equal(stackMerge.available, true);
+  assert.deepEqual(stackMerge.members.map((member) => member.number), [1, 2, 3]);
+  assert.equal(stackMerge.total, 3);
+  assert.equal(stackMerge.stopAt, null);
+  assert.deepEqual(stackMerge.excluded, []);
+});
+
+test('途中の段の CI が失敗していると、その段の手前までが対象になる', async (t) => {
+  const stackMerge = stackMergeOf(await reviewedStackFixture(t, 4, [1, 2, 3, 4], { 3: { ci: 'fail' } }));
+  assert.deepEqual(stackMerge.members.map((member) => member.number), [1, 2]);
+  assert.deepEqual(stackMerge.stopAt, { number: 3, reason: '#3 の CI が失敗' });
+});
+
+test('一括マージは鎖の下から続く一部を受け、指定の最上段より上の段をマージも付け替えもしない', async (t) => {
+  const fixture = await reviewedStackFixture(t, 4, [1, 2]);
+  const result = await fixture.manager.mergeStack(stackInput(fixture, [1, 2]));
+  assert.equal(result.ok, true);
+  const merges = fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge');
+  assert.deepEqual(merges.map((args) => [args[2], args[7]]), [['1', sha(1)], ['2', sha(2)]]);
+  const edits = fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'edit').map((args) => args[2]);
+  assert.deepEqual(edits, ['2', '3']);
+  assert.equal(fixture.state.stackMergeResultsForRepo('example', 'project')[0].message, 'スタックの 2 件を main にマージしました');
+});
+
+test('一括マージの予約は、対象に指定した件数を全体の件数として保存する', async (t) => {
+  const fixture = await reviewedStackFixture(t, 3, [1, 2], { 1: { ci: 'pending' } });
+  await fixture.manager.mergeStack(stackInput(fixture, [1, 2]));
+  assert.deepEqual(fixture.state.pullRequestMergeReservations().map((record) => [record.number, record.order, record.total]),
+    [[1, 1, 2], [2, 2, 2]]);
+});
+
+test('一括マージの確定は、クロスレビューが済んでいない段や、鎖の下から続かない指定を保存前に拒否する', async (t) => {
+  for (const [numbers, expected] of [[[1, 2, 3], '#3 はクロスレビュー未実施'], [[2, 3], null], [[1, 3], null]]) {
+    const fixture = await reviewedStackFixture(t, 3, [1, 2, 3].filter((number) => number !== 3 || expected === null));
+    const result = await fixture.manager.mergeStack(stackInput(fixture, numbers));
+    assert.equal(result.status, 409, numbers.join());
+    if (expected) assert.equal(result.error, expected);
+    assert.deepEqual(fixture.state.pullRequestMergeReservations(), [], numbers.join());
+    assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false, numbers.join());
+  }
+});
+
+test('予約の後にクロスレビューの条件が崩れた段があると、残りの予約をすべて取り消してマージしない', async (t) => {
+  for (const broken of [1, 2]) {
+    const fixture = await reviewedStackFixture(t, 3, [1, 2, 3], { 1: { ci: 'pending' } });
+    await fixture.manager.mergeStack(stackInput(fixture, [1, 2, 3]));
+    assert.equal(fixture.state.pullRequestMergeReservations().length, 3, `#${broken}`);
+    fixture.control.crossReviews.delete(broken);
+    await fixture.tracker.refreshRepo('example', 'project');
+    assert.equal(fixture.state.pullRequestMergeReservations().length, 0, `#${broken}`);
+    const notice = fixture.notices.find((item) => item.message.includes('一括マージを中止'));
+    assert.match(notice.message, new RegExp(`#${broken} の クロスレビューの条件を満たさなくなった`), `#${broken}`);
+    assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false, `#${broken}`);
+  }
+});
+
+test('単独の収束後マージ予約があるスタックは、一括マージの対象にしない', async (t) => {
+  const fixture = await reviewedStackFixture(t, 3, [1, 2, 3]);
+  await fixture.manager.reserve(mergeInput(3));
+  const stackMerge = stackMergeOf(fixture);
+  assert.equal(stackMerge.available, false);
+  assert.equal(stackMerge.blocker, '#3 は収束後マージを予約中');
+});
+
+test('確認後に対象外の上の段へ収束後マージが予約されると、一括マージを予約しない', async (t) => {
+  const fixture = await reviewedStackFixture(t, 3, [1, 2, 3]);
+  const input = stackInput(fixture, [1, 2]);
+  assert.equal((await fixture.manager.reserve(mergeInput(3))).ok, true);
+  const before = fixture.state.pullRequestMergeReservations();
+  const result = await fixture.manager.mergeStack(input);
+  assert.equal(result.status, 409);
+  assert.equal(result.error, '#3 は収束後マージを予約中');
+  assert.deepEqual(fixture.state.pullRequestMergeReservations(), before);
 });
 
 function holdNextOpenList(fixture) {
@@ -2566,3 +2684,34 @@ test('予約後にブランチだけ進んだ PR は収束の記録があって�
   assert.equal(f.calls.some(args => args[0] === 'pr' && args[1] === 'merge'), false);
   assert.ok(f.state.pullRequestMergeReservation('example', 'project', 1));
 });
+
+test('取り込みの根拠に使うマージ済みの head は、マージコミットの親に head があると確かめた記録だけに限り、保存をまたいで残す', async (t) => {
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-merged-heads-').directory;
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  const record = (number, method, extra = {}) => state.recordMergedPullRequest({
+    owner: 'example', repo: 'project', number, title: `#${number}`, url: `https://github.com/example/project/pull/${number}`,
+    mergedAt: new Date(NOW).toISOString(), method, automatic: false, mergedHeadRefOid: sha(number), ...extra,
+  }, NOW);
+  record(1, 'merge', { historyMerged: true });
+  record(2, 'squash');
+  record(3, 'rebase');
+  record(4, 'merge', { historyMerged: true, headMismatch: true });
+  record(5, 'merge');
+  const expected = [`1:${sha(1).toLowerCase()}`];
+  assert.deepEqual(state.mergeCommitMergedHeads('Example', 'Project'), expected);
+  await state.flushPersistence();
+  const reloaded = await DashboardState.load(homeDir, { now: NOW });
+  assert.deepEqual(reloaded.mergeCommitMergedHeads('example', 'project'), expected);
+});
+
+for (const [name, parents, expected] of [['マージコミット', (head) => ['f'.repeat(40), head], true], ['squash', () => ['f'.repeat(40)], false]]) {
+  test(`${name}でマージされた head だけを、取り込みの根拠として記録する`, async (t) => {
+    const fixture = await mergeFixture(t);
+    const head = fixture.github.openPullRequests[0].headRefOid;
+    fixture.control.mergeCommitParents = parents(head);
+    await fixture.tracker.refreshAll();
+    const result = await fixture.manager.merge(mergeInput(1, { method: 'merge' }));
+    assert.equal(result.ok, true);
+    assert.deepEqual(fixture.state.mergeCommitMergedHeads('example', 'project'), expected ? [`1:${head.toLowerCase()}`] : []);
+  });
+}
