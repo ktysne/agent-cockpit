@@ -72,6 +72,12 @@ function validStoredSessionId(value) {
   return isStoredSessionId(value);
 }
 
+// 画面で解決した記録は、解決した時点の呼び出しが遅れて終わったときだけイベントより優先する。
+// 出し直した別の呼び出しの待ちや終わりは、開発者が新しく答えたものなのでイベントに従う。
+function closedByUserOutlasts(record, decision) {
+  return Boolean(record.closedByUser && record.closedToolUseId && decision.finishedByToolUseId === record.closedToolUseId);
+}
+
 function validTimestamp(value, nullable = false) {
   return (nullable && value === null) || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
 }
@@ -167,6 +173,7 @@ function validStoredPlan(plan) {
         question.options.every(option => option.next === undefined || validText(option.next, 2000, true))) &&
       (decision.verify === undefined || validVerify(decision.verify, true)) &&
       (decision.closedByUser === undefined || typeof decision.closedByUser === 'boolean') &&
+      (decision.closedToolUseId === undefined || validText(decision.closedToolUseId, 256)) &&
       (decision.launchRequestedAt === undefined || validTimestamp(decision.launchRequestedAt)) &&
       validTimestamp(decision.createdAt) && validTimestamp(decision.updatedAt) &&
       (decision.provisionalAt === undefined || validTimestamp(decision.provisionalAt)) &&
@@ -2052,7 +2059,7 @@ class DashboardState {
       .filter((decision) => decision.source === 'ask').map((decision) => [decision.id, decision]));
     const askDecisions = session.decisions.filter((decision) => decision.source === 'ask').map((decision) => {
       const stored = storedAskDecisions.get(decision.id);
-      return stored && (stored.closedByUser || Date.parse(stored.updatedAt) > Date.parse(decision.updatedAt))
+      return stored && (closedByUserOutlasts(stored, decision) || Date.parse(stored.updatedAt) > Date.parse(decision.updatedAt))
         ? cloneDecision(stored)
         : cloneDecision(decision);
     });
@@ -2685,17 +2692,21 @@ class DashboardState {
     if (!decision) return null;
     if (decision.awaitingAnswerUntil || !(decision.state === 'provisional' ||
       decision.state === 'waiting' && decision.source === 'mcp')) return false;
-    const closed = this.updateDecision(sessionId, id, 'resolved', decision.resolution?.chosen || [], decision.resolution?.note || '', now, true);
+    const bindings = { ...Object.fromEntries(this.askDecisionBindings.get(sessionId) || []), ...this.sessions.get(sessionId)?.decisionBindings };
+    const boundToolUseIds = Object.keys(bindings).filter((toolUseId) => bindings[toolUseId] === decision.id);
+    const closedToolUseId = decision.source === 'ask' ? boundToolUseIds.at(-1) || decision.id : null;
+    const closed = this.updateDecision(sessionId, id, 'resolved', decision.resolution?.chosen || [], decision.resolution?.note || '', now, { closedToolUseId });
     // 未受領の配達記録は同じ要求の再送で配達条件を通らずに返るので、この回答を含むものを捨てて今の状態から作り直させる。
     const records = this.pendingHookDeliveries.get(sessionId);
     for (const [key, record] of records || []) {
       if (!record.acknowledgedAt && record.answerVersions.some((item) => item.decisionId === decision.id)) records.delete(key);
     }
     if (records && !records.size) this.pendingHookDeliveries.delete(sessionId);
+    this.requestStoreWrite();
     return closed;
   }
 
-  updateDecision(sessionId, id, state, chosen, note, now = Date.now(), closedByUser = false) {
+  updateDecision(sessionId, id, state, chosen, note, now = Date.now(), closedBy = null) {
     const decisions = this.decisionsFor(sessionId);
     const decision = decisions.find((item) => item.id === id) || decisions.find((item) => (
       item.id === this.sessions.get(sessionId)?.decisionBindings?.[id]
@@ -2709,7 +2720,7 @@ class DashboardState {
       ...(state === 'provisional' && decision.state !== 'provisional' ? { provisionalAt: timestamp } : decision.provisionalAt ? { provisionalAt: decision.provisionalAt } : {}),
       resolvedAt: state === 'resolved' ? timestamp : null,
       resolution: { chosen, note },
-      ...(closedByUser ? { closedByUser: true } : {}),
+      ...(closedBy ? { closedByUser: true, ...(closedBy.closedToolUseId ? { closedToolUseId: closedBy.closedToolUseId } : {}) } : {}),
     };
     const plan = this.plans.get(sessionId);
     const stored = plan?.decisions.find((item) => item.id === decision.id);
@@ -2730,6 +2741,7 @@ class DashboardState {
         resolvedAt: updated.resolvedAt,
         resolution: cloneResolution(updated.resolution),
         ...(updated.closedByUser ? { closedByUser: true } : {}),
+        ...(updated.closedToolUseId ? { closedToolUseId: updated.closedToolUseId } : {}),
       });
       this.decisionOverrides.set(sessionId, overrides);
     }
@@ -2790,8 +2802,7 @@ class DashboardState {
     const lifecycles = this.decisionLifecycles.get(sessionId);
     return [...eventDecisions, ...planDecisions.filter((decision) => !eventDecisionIds.has(decision.id))].map((decision) => {
       const override = overrides?.get(decision.id);
-      // 画面で解決した記録は、同じ呼び出しの遅れた終わりのイベントより後でも保つ。
-      const withOverride = override && (override.closedByUser || Date.parse(override.updatedAt) >= Date.parse(decision.updatedAt))
+      const withOverride = override && (closedByUserOutlasts(override, decision) || Date.parse(override.updatedAt) >= Date.parse(decision.updatedAt))
         ? { ...decision, ...override }
         : decision;
       const lifecycle = lifecycles?.get(decision.id);
@@ -2835,7 +2846,7 @@ class DashboardState {
     const sourceDecision = this.sessions.get(sessionId)?.decisions.find((decision) => decision.id === decisionId) ||
       this.plans.get(sessionId)?.decisions.find((decision) => decision.id === decisionId);
     const override = this.decisionOverrides.get(sessionId)?.get(decisionId);
-    const baseDecision = override && (override.closedByUser || Date.parse(override.updatedAt) >= Date.parse(sourceDecision.updatedAt))
+    const baseDecision = override && (closedByUserOutlasts(override, sourceDecision) || Date.parse(override.updatedAt) >= Date.parse(sourceDecision.updatedAt))
       ? { ...sourceDecision, ...override }
       : sourceDecision;
     const baseState = baseDecision.state;

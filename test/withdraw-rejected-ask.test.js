@@ -260,6 +260,33 @@ test('同じ質問の出し直しは判断事項を引き継ぎ、その後の�
   assert.equal(decision(state).finishedByToolUseId, 'ask-2');
 });
 
+test('画面で解決した仮適用の質問を別の呼び出しで出し直すと回答できる待ちに戻る', () => {
+  const state = new DashboardState();
+  state.addEvent(ask());
+  state.setDecisionLifecycle('session-a', 'ask-1', { state: 'provisional' }, NOW + 5);
+  assert.ok(state.closeDecision('session-a', 'ask-1', NOW + 6));
+  state.addEvent(ask('ask-2', NOW + 10));
+  assert.equal(state.decisionIdForToolUse('session-a', 'ask-2'), 'ask-1');
+  assert.equal(decision(state).state, 'waiting');
+  assert.notEqual(decision(state).closedByUser, true);
+});
+
+test('画面で解決した後に出し直した質問へ端末で答えると、画面の解決ではなくその回答を出す', async () => {
+  const state = new DashboardState();
+  state.addEvent(ask());
+  state.setDecisionLifecycle('session-a', 'ask-1', { state: 'provisional' }, NOW + 5);
+  assert.ok(state.closeDecision('session-a', 'ask-1', NOW + 6));
+  state.addEvent(ask('ask-2', NOW + 10));
+  state.addEvent({ session_id: 'session-a', hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'ask-2',
+    decisionResolution: { chosen: ['JSON'], note: '' }, hookAt: NOW + 20 });
+  for (const current of [state, await restart(state)]) {
+    assert.equal(decision(current).state, 'resolved');
+    assert.equal(decision(current).finishedByToolUseId, 'ask-2');
+    assert.deepEqual(decision(current).resolution.chosen, ['JSON']);
+    assert.notEqual(decision(current).closedByUser, true);
+  }
+});
+
 test('別の質問の開始は元の質問を取り下げる', () => {
   const state = new DashboardState();
   state.addEvent(ask());

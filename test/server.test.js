@@ -3136,6 +3136,8 @@ test('画面で解決した回答は未受領の配達記録の再送で返ら�
   const closed = await request(runtime.info.port, { method: 'POST', path: '/api/closed-decisions', headers,
     body: JSON.stringify({ session_id: sessionId, id: decision.id }) });
   assert.equal(closed.status, 200);
+  const saved = await fs.readFile(path.join(runtime.homeDir, 'store.json'), 'utf8');
+  assert.doesNotMatch(saved, /lost-response/);
   assert.doesNotMatch(JSON.stringify(await deliver()), /確認した/);
 });
 
