@@ -2307,7 +2307,7 @@ function pullRequestMergeOptionsFor(group, pullRequest) {
   };
 }
 
-function appendPullRequestMergeConfirmation(target, group, pullRequest) {
+function appendPullRequestMergeConfirmation(target, group, pullRequest, stackOperating = false) {
   const key = pullRequestMergeKey(pullRequest);
   const options = pullRequestMergeOptionsFor(group, pullRequest);
   const waiting = pullRequestMergeConditionWaits(pullRequest);
@@ -2392,7 +2392,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   go.type = 'button';
   go.dataset.mergeGo = key;
   go.dataset.mergeKey = key;
-  go.disabled = !options.method;
+  go.disabled = !options.method || stackOperating;
   go.setAttribute('aria-disabled', String(pullRequestMergeInFlight.has(key)));
   const cancel = element('button', 'ghost', 'やめる');
   cancel.type = 'button';
@@ -2529,7 +2529,9 @@ function hasCodexOrigin(state) {
     || (state.sinceSeen || []).some((entry) => (entry.items || []).some((item) => hasCodexProvider(item.providers ?? item.provider)));
 }
 
-function appendPullRequestTree(target, group, pullRequest, showOriginBands = true) {
+// stackOperating は、この PR を含むスタックで一括マージの確認、送信、順次マージのどれかが進んでいることを表す。
+// その間に単体でマージすると、一括マージの照合する鎖が途中で変わる。
+function appendPullRequestTree(target, group, pullRequest, showOriginBands = true, stackOperating = false) {
   if (pullRequest.hidden) return;
   const reservation = pullRequest.reservation || null;
   const bulkReserved = reservation?.kind === 'stack';
@@ -2595,13 +2597,14 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
     merge.type = 'button';
     merge.dataset.openMerge = mergeKey;
     merge.dataset.mergeKey = mergeKey;
-    merge.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey);
+    merge.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey) || stackOperating;
+    if (stackOperating) merge.title = 'スタックの一括マージを操作している間は、単体ではマージできません';
     actions.append(merge);
     // 予約は収束の記録が無いと実行されないので、道具が無い PR には予約が残っているときだけ出す。
     if (reservation || pullRequest.review.reservation.showCheckbox) {
       // 方式が取れないときに塞ぐのは新しい予約だけにする。既存の予約は方式が分からなくても取り消せる必要がある。
       const mergeInFlight = pullRequestMergeInFlight.has(mergeKey);
-      const reservationDisabled = mergeInFlight || (!reservation && !(group.mergeMethods || []).length);
+      const reservationDisabled = mergeInFlight || (!reservation && (stackOperating || !(group.mergeMethods || []).length));
       const reservationChoice = element('label', `reservation-toggle ${reservationDisabled ? 'disabled' : ''}`.trim());
       const reservationToggle = element('input');
       reservationToggle.type = 'checkbox';
@@ -2645,7 +2648,7 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   item.append(body);
   if (pullRequest.conflict) appendPullRequestConflictControls(actions, text, item, group, pullRequest);
   if (actions.children.length) body.append(actions);
-  if (mergeKey && confirmation && !mergeIntent) appendPullRequestMergeConfirmation(item, group, pullRequest);
+  if (mergeKey && confirmation && !mergeIntent) appendPullRequestMergeConfirmation(item, group, pullRequest, stackOperating);
   const mergeMessage = mergeKey ? pullRequestMergeMessages.get(mergeKey) : null;
   if (mergeMessage && !pullRequestTransientNoticeExpired(mergeMessage.shownAt)) {
     const message = element('div', 'merge-error', mergeMessage.message);
@@ -2659,7 +2662,7 @@ function appendPullRequestTree(target, group, pullRequest, showOriginBands = tru
   }
   if (pullRequest.children.some(child => !child.hidden)) {
     const children = element('div', 'stack-level');
-    for (const child of pullRequest.children) appendPullRequestTree(children, group, child, showOriginBands);
+    for (const child of pullRequest.children) appendPullRequestTree(children, group, child, showOriginBands, stackOperating);
     item.append(children);
   }
   target.append(item);
@@ -2721,6 +2724,11 @@ const repositoryUnregisterConfirmations = new Map();
 
 function stackMergeKey(group, root) {
   return `${pullRequestRepositoryKey(group)}#${root.number}`;
+}
+
+function stackMergeOperating(group, root) {
+  const key = stackMergeKey(group, root);
+  return Boolean(root.stackMerge?.run) || stackMergeConfirmations.has(key) || stackMergeInFlight.has(key);
 }
 
 function appendStackMergeControls(base, stack, group, tree) {
@@ -2887,7 +2895,7 @@ function appendPullRequestBlock(target, group, withTag = false, showOriginBands 
     if (tree.children.some(child => !child.hidden)) base.append(element('span', '', `スタック ${tree.stackPosition.total} 段`));
     stack.append(base);
     if (tree.stackMerge) appendStackMergeControls(base, stack, group, tree);
-    appendPullRequestTree(stack, group, tree, showOriginBands);
+    appendPullRequestTree(stack, group, tree, showOriginBands, Boolean(tree.stackMerge) && stackMergeOperating(group, tree));
     content.append(stack);
   }
   const appendFoldedPrLine = (kind, heading, label, items, appendItem) => {

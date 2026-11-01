@@ -3034,6 +3034,13 @@ function stackMergeRunFor(p, members) {
     ['confirm', 'running'].includes(run.phase) && run.members.some(member => numbers.has(member.number))) || null;
 }
 
+// 一括マージの確認中と実行中は、鎖が途中で変わらないよう同じスタックの単体マージを塞ぐ。
+function stackMergeOperating(p, pr) {
+  let root = pr;
+  while (parentPr(p, root)) root = parentPr(p, root);
+  return ['confirm', 'running'].includes(mockStackMergeRuns.get(stackMergeKey(p, root))?.phase);
+}
+
 function stackMergePrStatus(pr) {
   if (pr.mergeable === 'UNKNOWN') return 'GitHub の計算中・待ってからマージ';
   if (pr.ci === 'pending') return 'CI 実行中・待ってからマージ';
@@ -3114,10 +3121,7 @@ function advanceMockStackMerge(p, run) {
   if (pr.ci === 'pending') pr.ci = 'pass';
   if (pr.mergeable === 'UNKNOWN') pr.mergeable = 'MERGEABLE';
   run.index++;
-  if (run.index === run.members.length) {
-    run.phase = 'complete';
-    run.result = `スタックの ${run.members.length} 件を ${p.repo.defaultBranch} にマージしました`;
-  }
+  if (run.index === run.members.length) mockStackMergeRuns.delete(run.key);
   finishMockMerge(p, pr, { method: 'merge', del: true });
 }
 
@@ -3252,7 +3256,7 @@ function prBadges(p, pr) {
   ].join('');
 }
 
-function mergeConfirm(p, pr) {
+function mergeConfirm(p, pr, stackOperating = false) {
   const o = mergeOpts(p, pr);
   const merging = pullRequestMergeInFlight.has(prKey(p, pr.number));
   const key = prKey(p, pr.number);
@@ -3281,7 +3285,7 @@ function mergeConfirm(p, pr) {
     ${mergeMethodFixed(p, pr) ? '<span class="meta">集約ブランチと同期 PR はマージコミットで入れます</span>' : p.repo.methods.length === 1 ? '<span class="meta">リポジトリで許可されている方式です</span>' : ''}</div>
     ${pr.head === p.repo.defaultBranch || p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''} ${merging ? 'disabled' : ''}>マージ後にリモートブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
-    <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${!o.method ? 'disabled' : ''} ${merging ? 'aria-disabled="true"' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
+    <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${!o.method || stackOperating ? 'disabled' : ''} ${merging ? 'aria-disabled="true"' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
       ${o.del && !pr.isCrossRepository && p.repo.autoDeleteBranch !== true ? `<button type="button" class="link-btn" data-mock-branch-update="${key}" ${merging ? 'disabled' : ''}>モック: 削除前に別の head へ更新</button>` : ''}
       ${kids.length && branchDeleted ? `<button type="button" class="link-btn" data-mock-retarget-failure="${key}" ${merging ? 'disabled' : ''}>モック: 子 PR の base 変更に失敗</button>` : ''}
       <button type="button" class="link-btn" data-mock-merge-failure="${prKey(p, pr.number)}">モック: 失敗の知らせを表示</button>
@@ -3366,6 +3370,7 @@ function prItem(p, pr, showOriginBands = true, visiblePosition = null) {
   const bulkRun = stackMergeRunFor(p, [pr]);
   const bulkIndex = bulkRun?.members.findIndex(member => member.number === pr.number) ?? -1;
   const bulkReserved = bulkRun?.phase === 'running' && bulkIndex >= bulkRun.index;
+  const stackOperating = stackMergeOperating(p, pr);
   const origin = showOriginBands ? providerOrigin(pr.providers ?? ['claude']) : '';
   const classes = ['pr', rsv || bulkReserved ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : '', origin ? `origin-${origin}` : '']
     .filter(Boolean).join(' ');
@@ -3376,8 +3381,8 @@ function prItem(p, pr, showOriginBands = true, visiblePosition = null) {
     : `<button type="button" class="link-btn" data-hide-pr="${esc(k)}"${originalPos.total > originalPos.depth ? ' title="上に積んだ PR も一緒に隠します"' : ''}>非表示にする</button>`;
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
-    !bulkReserved && !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
-      ${reservationToggleShown ? `<label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'aria-disabled="true"' : ''}>収束後マージ</label>` : ''}` : '',
+    !bulkReserved && !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) || stackOperating ? 'disabled' : ''}${stackOperating ? ' title="スタックの一括マージを操作している間は、単体ではマージできません"' : ''}>マージする</button>
+      ${reservationToggleShown ? `<label class="reservation-toggle${stackOperating && !rsv ? ' disabled' : ''}"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'aria-disabled="true"' : stackOperating && !rsv ? 'disabled' : ''}>収束後マージ</label>` : ''}` : '',
     conflictButton(p, pr),
   ].join('').trim();
   return `<div class="${classes}"${origin ? ` data-origin="${origin}"` : ''}>
@@ -3399,7 +3404,7 @@ function prItem(p, pr, showOriginBands = true, visiblePosition = null) {
     </div>${actions ? `<div class="pr-actions">${actions}</div>` : ''}</div>
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
     ${transientMessageVisible(ui.mergeErrors[k]) ? `<div class="merge-error" role="status">${esc(ui.mergeErrors[k].message)}</div>` : ''}
-    ${confirmManual && (!operationBlocker || rsv) ? mergeConfirm(p, pr) : ''}
+    ${confirmManual && (!operationBlocker || rsv) ? mergeConfirm(p, pr, stackOperating) : ''}
   </div>`;
 }
 

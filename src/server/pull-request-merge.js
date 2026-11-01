@@ -1158,12 +1158,6 @@ class PullRequestMergeManager {
     ].filter(Boolean);
     const recipients = this.notifyMerge(owner, repo, pullRequest, targetBranch || '既定ブランチ', method, stackedPullRequests, sessionIds, warning, headMismatch, branchKept, retargetedChildren);
     await this.state.waitForPersistence?.();
-    if (reservation?.kind === 'stack' && confirmedIntent && !headMismatch && !this.stackReservations(reservation).length &&
-      !this.state.stackMergeResults.has(reservation.runId)) {
-      this.state.recordStackMergeResult({ owner, repo, runId: reservation.runId, at: new Date(this.now()).toISOString(),
-        message: `スタックの ${reservation.total} 件を ${reservation.targetBranch} にマージしました` });
-      await this.state.waitForPersistence?.();
-    }
     const outcome = { branchDeleted, warning };
     this.mergeOutcomes.set(mergeKey, outcome);
     if (this.state.getDisplayPreferences().pullDefaultBranchAfterMerge === true && validBranchName(defaultBranch) && pullRequest.baseRefName === defaultBranch) {
