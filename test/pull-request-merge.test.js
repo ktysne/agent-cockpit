@@ -256,14 +256,14 @@ function stackMergeOf(fixture) {
   return fixture.tracker.snapshot()[0].trees[0].stackMerge;
 }
 
-test('一括マージは下から順に保存した SHA を照合してマージコミットで完了する', async (t) => {
+test('一括マージは下から順に保存した SHA を照合してマージコミットで完了し、完了の結果行を残さない', async (t) => {
   const fixture = await stackFixture(t);
   const result = await fixture.manager.mergeStack(stackInput(fixture));
   assert.equal(result.ok, true);
   const merges = fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge');
   assert.deepEqual(merges.map((args) => [args[2], args[5], args[7]]), [['1', '--merge', sha(1)], ['2', '--merge', sha(2)]]);
   assert.equal(fixture.state.pullRequestMergeReservations().length, 0);
-  assert.equal(fixture.state.stackMergeResultsForRepo('example', 'project')[0].message, 'スタックの 2 件を main にマージしました');
+  assert.deepEqual(fixture.state.stackMergeResultsForRepo('example', 'project'), []);
 });
 
 test('確認後にマージ先が変わると一括マージを予約しない', async (t) => {
@@ -511,7 +511,6 @@ test('一括マージは鎖の下から続く一部を受け、指定の最上�
   assert.deepEqual(merges.map((args) => [args[2], args[7]]), [['1', sha(1)], ['2', sha(2)]]);
   const edits = fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'edit').map((args) => args[2]);
   assert.deepEqual(edits, ['2', '3']);
-  assert.equal(fixture.state.stackMergeResultsForRepo('example', 'project')[0].message, 'スタックの 2 件を main にマージしました');
 });
 
 test('一括マージの予約は、対象に指定した件数を全体の件数として保存する', async (t) => {

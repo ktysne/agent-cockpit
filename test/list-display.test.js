@@ -81,6 +81,47 @@ test('一括マージのボタン、無効理由、確認欄、最後の一件�
   assert.ok(draw().some((node) => node.dataset.stackMergeStop === 'run-id'));
 });
 
+test('一括マージの確認欄、送信中、順次マージ中は、同じスタックのどの段の単体マージも押せない', () => {
+  const sources = ['stackMergeKey', 'stackMergeOperating', 'appendPullRequestTree', 'queuedPullRequestMerge', 'pullRequestResultUnconfirmed']
+    .map((name) => functionSource(web, name));
+  assert.ok(sources.every(Boolean));
+  const context = pageContext(web, {
+    element: fakeElement,
+    providerOrigin: () => '',
+    document: { createTextNode: (text) => fakeElement('#text', '', text) },
+    pullRequestRepositoryKey: () => 'example/project',
+    stackMergeConfirmations: new Map(), stackMergeInFlight: new Set(),
+    pullRequestMergeKey: (pullRequest) => `repo#${pullRequest.number}`,
+    pullRequestMergeConfirmations: new Map(),
+    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
+    pullRequestMergeMessages: new Map(),
+    pullRequestUnconfirmedResults: new Map(),
+    queuedPullRequestMerges: new Map(),
+    pullRequestMergeConditionWaits: () => [],
+    badge: (label, tone = '') => fakeElement('span', tone, label),
+    appendPullRequestBadges() {},
+    pullRequestTransientNoticeExpired: () => false,
+  });
+  vm.runInContext(sources.join('\n'), context);
+  const pullRequest = (number, children = []) => reviewPr({ number, title: `PR ${number}`, url: `https://example.test/pr/${number}`,
+    headRefName: `feature/${number}`, effectiveBase: 'main', mergeSessionId: 'session-1', canMerge: true, headRefOid: 'abc', children });
+  const tree = { ...pullRequest(1, [pullRequest(2)]), stackMerge: { run: null } };
+  const mergeButtons = () => {
+    const target = fakeElement('div');
+    context.appendPullRequestTree(target, {}, tree, true, context.stackMergeOperating({}, tree));
+    return descendants(target).filter((node) => node.dataset.openMerge);
+  };
+  assert.deepEqual(mergeButtons().map((node) => node.disabled), [false, false]);
+  context.stackMergeConfirmations.set('example/project#1', {});
+  assert.deepEqual(mergeButtons().map((node) => node.disabled), [true, true]);
+  context.stackMergeConfirmations.clear();
+  context.stackMergeInFlight.add('example/project#1');
+  assert.deepEqual(mergeButtons().map((node) => node.disabled), [true, true]);
+  context.stackMergeInFlight.clear();
+  tree.stackMerge.run = { runId: 'run-id' };
+  assert.deepEqual(mergeButtons().map((node) => node.disabled), [true, true]);
+});
+
 test('一括マージが鎖の一部だけを対象にするときは、件数と対象外の最初の段の理由を示し、確認欄に対象外の段を並べる', () => {
   const confirmations = new Map();
   const context = pageContext(web, { element: fakeElement, document: { createTextNode: (text) => fakeElement('text', '', text) },
@@ -460,6 +501,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     prTree: () => '<div class="pr">オープン #1</div>',
     stackMembers: () => null,
     stackMergeRunFor: () => null,
+    stackMergeOperating: () => false,
     stackMergeConfirmation: () => '',
     stackMergeControls: () => '',
     stackMergeResultRows: () => '',
@@ -914,6 +956,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
     esc: (value) => String(value ?? ''),
     pullRequestMergeInFlight: new Set(),
     stackMergeRunFor: () => null,
+    stackMergeOperating: () => false,
     mergeConfirm: () => '<div class="merge-confirm">処理中…</div>',
   });
   vm.runInContext(`${mockItem}\nthis.renderPullRequest = prItem;`, mockContext);
@@ -1060,6 +1103,7 @@ test('モックの予約チェックは PR 行にあり、確認欄は即時マ�
     transientMessageVisible: () => false,
     mergeConfirm: () => '<div class="merge-confirm" data-action="shared"></div>',
     stackMergeRunFor: () => null,
+    stackMergeOperating: () => false,
     conflictButton: () => '',
     prBadges: () => '',
     crossReviewLine: () => '',
