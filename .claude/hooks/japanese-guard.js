@@ -65,21 +65,35 @@ function readGlobalGuardEvents(environment = process.env) {
   }
 }
 
-function proseOf(text) {
-  return String(text || '')
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`[^`\n]*`/g, ' ')
-    .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[A-Za-z]:[\\/][^\s)]*/g, ' ')
-    .replace(/(?:\.{0,2}\/)?[\w.-]+(?:\/[\w.-]+)+/g, ' ');
+// 判定は Python 版 japanese-guard.py の is_english と同じにする。手元とクラウドで差し戻しの有無がずれないため。
+// 除外はこの順で行う。URL を先に消すと、Markdown リンクの閉じ括弧まで消えてラベルが残る。
+const IGNORED_PATTERNS = [
+  /```[\s\S]*?```/g,
+  /`[^`\n]*`/g,
+  /\[[^\]]*\]\([^)]*\)/g,
+  /https?:\/\/\S+/g,
+  /[\p{L}\p{N}_.+-]+@[\p{L}\p{N}_-]+\.[\p{L}\p{N}_.-]+/gu,
+];
+const MIN_LATIN = 25;
+const LATIN_TO_JAPANESE_RATIO = 3;
+
+function isMostlyEnglish(text) {
+  const prose = IGNORED_PATTERNS.reduce((rest, pattern) => rest.replace(pattern, ''), String(text || ''));
+  const japanese = (prose.match(/[ぁ-んァ-ヶ一-龥]/g) || []).length;
+  const latin = (prose.match(/[A-Za-z]/g) || []).length;
+  return latin >= MIN_LATIN && latin > japanese * LATIN_TO_JAPANESE_RATIO;
 }
 
-// 英語の単語が十分にあり、日本語の文字がその 4 分の 1 に満たないときを英語とみなす。
-function isMostlyEnglish(text) {
-  const prose = proseOf(text);
-  const japanese = (prose.match(/[぀-ヿ㐀-鿿]/g) || []).length;
-  const latin = (prose.match(/[A-Za-z]/g) || []).length;
-  return latin >= 40 && japanese * 4 < latin;
+// JSON の値だけの返答はスクリプトが読む出力なので、書き直させると JSON として読めなくなる。
+function looksLikeJson(text) {
+  const body = String(text || '').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+  if (!body || !'[{'.includes(body[0])) return false;
+  try {
+    JSON.parse(body);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function context(event, text) {
@@ -92,7 +106,8 @@ function output(input, { globalEvents = new Set() } = {}) {
   if (event === 'UserPromptSubmit' || event === 'PostToolBatch') return context(event, REMINDER);
   if (event === 'SessionStart' && input.source === 'compact') return context(event, COMPACT_REMINDER);
   // stop_hook_active はいずれかの Stop フックで続行したターンを表す。ここでも止めると書き直しが終わらなくなる場合がある。
-  if (event === 'Stop' && !input.stop_hook_active && isMostlyEnglish(input.last_assistant_message)) {
+  const message = input.last_assistant_message;
+  if (event === 'Stop' && !input.stop_hook_active && !looksLikeJson(message) && isMostlyEnglish(message)) {
     return { decision: 'block', reason: REWRITE_REASON };
   }
   return null;
