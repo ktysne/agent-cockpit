@@ -11,6 +11,8 @@ const REWRITE_REASON = '最後の返答が英語で書かれている。同じ�
 const GLOBAL_GUARD_EVENTS = {
   'japanese-guard.js': ['UserPromptSubmit', 'PostToolBatch', 'Stop'],
   'compact-language.js': ['SessionStart'],
+  // minorun365/claude-code-japanese-guard の Python 版。英語の返答の書き直しだけを担う。
+  'japanese-guard.py': ['Stop'],
 };
 
 function globalSettingsPath(environment = process.env) {

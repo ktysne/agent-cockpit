@@ -70,10 +70,24 @@ test('SessionStart は matcher が compact に当たる登録だけをグロー�
   }
 });
 
+test('Python 版の japanese-guard.py を Stop に登録した設定では Stop だけをグローバル版として数える', () => {
+  const python = ['-X', 'utf8', 'C:/Users/me/.claude/hooks/japanese-guard.py'];
+  const events = globalGuardEvents(settingsWith({
+    Stop: hookGroup('C:/Python312/python.exe', python),
+    PreToolUse: [{ matcher: 'mcp__.*__wrap_up', hooks: [{ type: 'command', command: 'C:/Python312/python.exe', args: python }] }],
+    UserPromptSubmit: hookGroup('node', ['C:/Users/me/.claude/hooks/japanese-guard.js']),
+    PostToolBatch: hookGroup('node', ['C:/Users/me/.claude/hooks/japanese-guard.js']),
+  }));
+  assert.deepEqual([...events].sort(), ['PostToolBatch', 'Stop', 'UserPromptSubmit']);
+  assert.equal(globalGuardEvents(settingsWith({ Stop: hookGroup('python3 ~/.claude/hooks/japanese-guard.py') })).has('Stop'), true);
+});
+
 test('グローバル版のスクリプトが本来出力しないイベントの登録は数えない', () => {
   const events = globalGuardEvents(settingsWith({
     SessionStart: hookGroup('node', ['/home/me/.claude/hooks/japanese-guard.js']),
     Stop: hookGroup('node', ['/home/me/.claude/hooks/compact-language.js']),
+    UserPromptSubmit: hookGroup('python', ['/home/me/.claude/hooks/japanese-guard.py']),
+    PostToolBatch: hookGroup('python', ['/home/me/.claude/hooks/japanese-guard.py']),
   }));
   assert.equal(events.size, 0);
 });
