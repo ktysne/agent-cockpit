@@ -36,11 +36,34 @@ test('Stop は英語の返答を一度だけ書き直させる', () => {
   assert.equal(output({ hook_event_name: 'Stop', last_assistant_message: 'テストはすべて通りました。' }), null);
 });
 
-test('コードブロック、インラインコード、URL、パスは英語の判定から外す', () => {
+test('コードブロック、インラインコード、Markdown リンク、URL、メールアドレスは英語の判定から外す', () => {
   const text = '確認しました。\n```js\nconst value = computeSomethingVeryLongForTheTest();\n```\n`npm run test:inprocess` と https://example.com/some/long/path/for/test を見ました。';
   assert.equal(isMostlyEnglish(text), false);
+  assert.equal(isMostlyEnglish('[Fix the duplicated Stop hook in the guard](https://github.com/o/r/pull/1) を出した。'), false);
+  assert.equal(isMostlyEnglish('連絡先は someone.with.long.name@example-company.com にある。'), false);
   assert.equal(isMostlyEnglish('Done.'), false);
   assert.equal(isMostlyEnglish(ENGLISH), true);
+});
+
+test('英字が 25 字以上で、日本語の文字の 3 倍を超えたら英語とみなす', () => {
+  // 英字 28 字と 22 字。
+  assert.equal(isMostlyEnglish('All of the tests passed on main now.'), true);
+  assert.equal(isMostlyEnglish('All of the tests passed now.'), false);
+  // 日本語 7 字に英字 26 字、日本語 9 字に英字 27 字(ちょうど 3 倍)。
+  assert.equal(isMostlyEnglish('結果を確認した。All of the tests have passed now.'), true);
+  assert.equal(isMostlyEnglish('結果を確認した上で。All of the tests had passed today.'), false);
+});
+
+test('バッククォートで囲まないパスは英字として数える', () => {
+  assert.equal(isMostlyEnglish('src/server/dashboard/components/pull-requests.js を直した。'), true);
+});
+
+test('Stop は JSON だけの返答を書き直させない', () => {
+  for (const message of ['{"status":"ok","message":"All of the tests passed without any failures."}',
+    '```json\n[{"name":"build","result":"finished without any failures"}]\n```']) {
+    assert.equal(output({ hook_event_name: 'Stop', last_assistant_message: message }), null);
+  }
+  assert.equal(output({ hook_event_name: 'Stop', last_assistant_message: `{ ${ENGLISH}` }).decision, 'block');
 });
 
 test('グローバル版が登録されたイベントだけ何も出さない', () => {
