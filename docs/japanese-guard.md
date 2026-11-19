@@ -4,7 +4,7 @@
 
 ## 目的
 
-手元の Claude Code は、`~/.claude/hooks/japanese-guard.js` をグローバル設定に登録して、返答を日本語に保っている。
+手元の Claude Code は、グローバル設定に登録したフックで返答を日本語に保っている。決まりの差し込みは `~/.claude/hooks/japanese-guard.js` が、英語の返答の書き直しは `~/.claude/hooks/japanese-guard.py`(Python 版)が担う。
 クラウドセッション(claude.ai/code)は `~/.claude` を読まないので、グローバル版が効かない。
 そこで、同じ役目のフックをリポジトリの `.claude/` に置き、クラウドでも効かせる。
 
@@ -29,6 +29,7 @@
 そこでリポジトリ版は、ユーザー設定(`$CLAUDE_CONFIG_DIR/settings.json`、未設定なら `~/.claude/settings.json`)を読み、グローバル版を登録しているイベントでは何も出力しない。
 グローバル版の登録は、スクリプトとイベントの組で見分ける。
 `UserPromptSubmit`、`PostToolBatch`、`Stop` はフックのコマンドか引数に `/japanese-guard.js` が、`SessionStart` は `/compact-language.js` が含まれるときに数える。
+`Stop` は、[minorun365/claude-code-japanese-guard](https://github.com/minorun365/claude-code-japanese-guard) の Python 版 `/japanese-guard.py` が含まれるときにも数える。Python 版は書き直しだけを担うので、ほかのイベントでは数えない。
 `SessionStart` は、matcher が `compact` に当たる登録だけを数える。
 `${CLAUDE_PROJECT_DIR}` を含む登録はリポジトリ版なので数えない。
 イベントごとに見分けるので、グローバル版を一部のイベントにだけ登録した環境や、スクリプトを残したまま登録を外した環境でも、ガードが抜けない。
